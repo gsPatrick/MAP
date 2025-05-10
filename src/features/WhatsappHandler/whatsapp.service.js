@@ -23,10 +23,10 @@ async function findFinancialCategoryIdByName(name, financialAccountId, transacti
     if (foundCategory) return foundCategory.id;
     foundCategory = await systemService.findFinancialCategoryByName(name, financialAccountId);
     if (foundCategory) {
-        logger.info(`[WHATSAPP SERVICE] Categoria por nome "${name}" (tipo ${transactionType || 'qualquer'}) não encontrada exat. Usando parcial: "${foundCategory.name}" (ID: ${foundCategory.id})`);
+        logger.info(`[WHATSAPP SERVICE] Cat por nome "${name}" (tipo ${transactionType||'any'}) ñ exata. Usando parcial: "${foundCategory.name}" (ID: ${foundCategory.id})`);
         return foundCategory.id;
     }
-    logger.warn(`[WHATSAPP SERVICE] Categoria com nome "${name}" não encontrada.`);
+    logger.warn(`[WHATSAPP SERVICE] Cat com nome "${name}" não encontrada.`);
     return null;
 }
 
@@ -37,10 +37,10 @@ async function findCreditCardIdByName(name, financialAccountId) {
     if (found) return found.id;
     const partialFound = cards.find(card => card.name.toLowerCase().includes(name.toLowerCase()));
     if (partialFound) {
-        logger.info(`[WHATSAPP SERVICE] Cartão por nome "${name}" não encontrado exat. Usando parcial: "${partialFound.name}" (ID: ${partialFound.id})`);
+        logger.info(`[WHATSAPP SERVICE] Cartão "${name}" ñ exato. Usando parcial: "${partialFound.name}" (ID: ${partialFound.id})`);
         return partialFound.id;
     }
-    logger.warn(`[WHATSAPP SERVICE] Cartão com nome "${name}" não encontrado para conta ${financialAccountId}.`);
+    logger.warn(`[WHATSAPP SERVICE] Cartão "${name}" não encontrado para conta ${financialAccountId}.`);
     return null;
 }
 
@@ -50,15 +50,15 @@ async function findProductIdByNameOrCode(nameOrCode, financialAccountId) {
     if (products && products.length > 0) {
         const exactMatch = products.find(p => p.name.toLowerCase() === nameOrCode.toLowerCase() || (p.code && p.code.toLowerCase() === nameOrCode.toLowerCase()));
         if (exactMatch) return exactMatch.id;
-        logger.info(`[WHATSAPP SERVICE] Produto por nome/cód "${nameOrCode}" não encontrado exat. Usando busca: "${products[0].name}" (ID: ${products[0].id})`);
+        logger.info(`[WHATSAPP SERVICE] Prod "${nameOrCode}" ñ exato. Usando busca: "${products[0].name}" (ID: ${products[0].id})`);
         return products[0].id;
     }
-    logger.warn(`[WHATSAPP SERVICE] Produto com nome/cód "${nameOrCode}" não encontrado para conta ${financialAccountId}.`);
+    logger.warn(`[WHATSAPP SERVICE] Prod "${nameOrCode}" não encontrado para conta ${financialAccountId}.`);
     return null;
 }
 
 function initializeState(client, defaultAccount = null) {
-    const clientName = client ? (client.name || "pessoa incrível") : "pessoa incrível";
+    const clientName = client ? (client.name || "pessoa de visão") : "pessoa de visão";
     const newState = {
         currentAction: null, data: {},
         activeFinancialAccountId: defaultAccount?.id || null,
@@ -67,7 +67,11 @@ function initializeState(client, defaultAccount = null) {
         clientName: clientName, messageHistory: [], pendingConfirmation: null,
         editingResource: null, lastAiResponse: null,
     };
-    const initialGreeting = `Olá ${clientName}! 😊 ${defaultAccount ? `Bem-vindo(a) de volta à sua conta "${newState.activeFinancialAccountName}". ` : ''}Como posso te ajudar hoje?`;
+    let initialGreeting = `Olá ${clientName}! 👋 Bem-vindo(a) ao ${aiModelService.ASSISTANT_NAME}! `;
+    if (defaultAccount) {
+        initialGreeting += `Notei que já temos sua conta "${newState.activeFinancialAccountName}" (${newState.activeFinancialAccountType}) por aqui. `;
+    }
+    initialGreeting += `Como posso te ajudar a organizar suas finanças ou sua agenda hoje? Estou pronto para começar! 🚀`;
     newState.messageHistory.push({ role: 'assistant', content: initialGreeting });
     return newState;
 }
@@ -85,64 +89,78 @@ function translatePeriod(periodKey) {
     return map[periodKey.toLowerCase()] || periodKey;
 }
 
-function formatFinancialTransactionSummary(transaction, forMulti = false) {
+function formatFinancialTransactionSummary(transaction, clientName, forMulti = false) {
     const dateFormatted = transaction.transactionDate ? new Date(transaction.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'N/I';
-    let statusText = transaction.type === 'Entrada' ? "✅ recebido" : "✅ pago";
+    let statusText = transaction.type === 'Entrada' ? "Status: ✅ Recebido!" : "Status: ✅ Pago!";
     if (transaction.isPayableOrReceivable) {
         const dueDateFormatted = transaction.dueDate ? new Date(transaction.dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'N/A';
-        statusText = transaction.isPaidOrReceived ? (transaction.type === 'Entrada' ? "✅ recebido" : "✅ pago") : `🗓️ ${transaction.type === 'Entrada' ? 'a receber' : 'a pagar'} em ${dueDateFormatted}`;
+        statusText = transaction.isPaidOrReceived
+            ? `Status: ✅ ${transaction.type === 'Entrada' ? "Recebido" : "Pago"}!`
+            : `Status: 🗓️ ${transaction.type === 'Entrada' ? 'A receber em' : 'A pagar em'} ${dueDateFormatted}`;
     }
-    let categoryEmoji = transaction.type === 'Entrada' ? '📥' : '💸';
+
+    let categoryEmoji = transaction.type === 'Entrada' ? '💰' : '💸';
+    let categoryText = "Sem Categoria";
     if (transaction.category?.name) {
-        const catNameLower = transaction.category.name.toLowerCase();
-        if (catNameLower.includes('lazer') || catNameLower.includes('jogo') || catNameLower.includes('entretenimento')) categoryEmoji = '🎮';
-        else if (catNameLower.includes('alimentação') || catNameLower.includes('restaurante') || catNameLower.includes('doce')) categoryEmoji = '🍔';
-        else if (catNameLower.includes('salário') || catNameLower.includes('recebimento') || catNameLower.includes('pai')) categoryEmoji = '💰';
+        categoryText = transaction.category.name;
+        const catNameLower = categoryText.toLowerCase();
+        if (catNameLower.includes('lazer') || catNameLower.includes('jogo') || catNameLower.includes('entretenimento') || catNameLower.includes('doce')) categoryEmoji = '🥳';
+        else if (catNameLower.includes('alimentação') || catNameLower.includes('restaurante')) categoryEmoji = '🍔';
+        else if (catNameLower.includes('salário') || catNameLower.includes('recebimento') || catNameLower.includes('pai')) categoryEmoji = '🎉';
         else if (catNameLower.includes('transporte')) categoryEmoji = '🚗';
+        else if (catNameLower.includes('investimento')) categoryEmoji = '📈';
+        else if (catNameLower.includes('saúde') || catNameLower.includes('farmácia')) categoryEmoji = '💊';
+        else if (catNameLower.includes('casa') || catNameLower.includes('aluguel')) categoryEmoji = '🏡';
     }
-    let summary = !forMulti ? "📜 Resumo da Transação:\n\n" : "";
-    summary += `${categoryEmoji} Descrição: ${transaction.description}\n💰 Valor: R$ ${parseFloat(transaction.value).toFixed(2)}\n`;
-    if (transaction.category?.name) summary += `🏷️ Categoria: ${transaction.category.name}\n`;
-    summary += `📅 Data: ${dateFormatted}\n\n${statusText}`;
+
+    let summary = "";
+    if (!forMulti) summary += "📝 *Resumo da Transação:*\n\n";
+    summary += `${categoryEmoji} *Descrição:* ${transaction.description}\n`;
+    summary += `💰 *Valor:* R$ ${parseFloat(transaction.value).toFixed(2)}\n`;
+    if (transaction.category?.name) summary += `🏷️ *Categoria:* ${categoryText}\n`;
+    summary += `📅 *Data:* ${dateFormatted}\n\n`;
+    summary += `${statusText}`;
     return summary;
 }
 
-function formatAppointmentSummary(appointment, forMulti = false) {
+function formatAppointmentSummary(appointment, clientName, forMulti = false) {
     const eventDateTime = new Date(appointment.eventDateTime);
     const tz = process.env.TZ || 'America/Sao_Paulo';
-    // const eventDateFormatted = eventDateTime.toLocaleDateString('pt-BR', { timeZone: tz });
-    // const eventTimeFormatted = eventDateTime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second:'2-digit', timeZone: tz });
-    const eventDateTimeFormatted = eventDateTime.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: tz })
+    const eventDateTimeFormatted = eventDateTime.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: tz });
 
-    let summary = !forMulti ? "📅 Resumo do Compromisso:\n\n" : "";
-    summary += `📝 Título: ${appointment.title}\n🗓️ Data e Hora: ${eventDateTimeFormatted}\n`;
-    if (appointment.durationMinutes) summary += `⏳ Duração: ${appointment.durationMinutes} min\n`;
-    if (appointment.location) summary += `📍 Local: ${appointment.location}\n`;
+    let summary = "";
+    if (!forMulti) summary += "🗓️ *Resumo do Compromisso:*\n\n";
+    summary += `📝 *Título:* ${appointment.title}\n`;
+    summary += `⏰ *Data e Hora:* ${eventDateTimeFormatted}\n`;
+    if (appointment.durationMinutes) summary += `⏳ *Duração:* ${appointment.durationMinutes} min\n`;
+    if (appointment.location) summary += `📍 *Local:* ${appointment.location}\n`;
     if (appointment.associatedValue && appointment.associatedTransactionType) {
-        summary += `💸 Valor Associado: R$ ${parseFloat(appointment.associatedValue).toFixed(2)} (${appointment.associatedTransactionType})\n`
+        summary += `💸 *Valor Associado:* R$ ${parseFloat(appointment.associatedValue).toFixed(2)} (${appointment.associatedTransactionType})\n`;
     }
-    summary += `🚦 Status: ${appointment.status}`;
+    summary += `🚦 *Status:* ${appointment.status}`;
     return summary;
 }
 
-function formatRecurringRuleSummary(rule, forMulti = false) {
+function formatRecurringRuleSummary(rule, clientName, forMulti = false) {
     const startDateFormatted = rule.startDate ? new Date(rule.startDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'N/I';
     const nextDateFormatted = rule.nextDueDate ? new Date(rule.nextDueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'N/A';
-    let categoryEmoji = rule.type === 'Entrada' ? '📥' : '💸';
+    let categoryEmoji = rule.type === 'Entrada' ? '🔄💰' : '🔄💸';
      if (rule.category?.name) {
         const catNameLower = rule.category.name.toLowerCase();
-        if (catNameLower.includes('lazer') || catNameLower.includes('netflix') || catNameLower.includes('entretenimento')) categoryEmoji = '🎬';
+        if (catNameLower.includes('lazer') || catNameLower.includes('netflix') || catNameLower.includes('entretenimento')) categoryEmoji = '🎬🍿';
         else if (catNameLower.includes('assinatura')) categoryEmoji = '📰';
+        else if (catNameLower.includes('aluguel')) categoryEmoji = '🏠';
     }
-    let summary = !forMulti ? "🔄 Resumo da Recorrência:\n\n" : "";
-    summary += `📜 Descrição: ${rule.description}\n💰 Valor: R$ ${parseFloat(rule.value).toFixed(2)} (${rule.type})\n`;
-    if (rule.category?.name) summary += `${categoryEmoji} Categoria: ${rule.category.name}\n`;
-    summary += `📅 Data Inicial: ${startDateFormatted}\n`;
-    if(rule.endDate) summary += `🏁 Data Final: ${new Date(rule.endDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' })}\n`;
-    summary += `🔁 Frequência: ${translatePeriod(rule.frequency)} (a cada ${rule.interval})\n`;
-    if (rule.dayOfMonth) summary += `🗓️ Dia do Mês: ${rule.dayOfMonth}\n`;
-    if (rule.dayOfWeek !== null) summary += `🗓️ Dia da Semana: ${['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'][rule.dayOfWeek]}\n`;
-    summary += `➡️ Próximo Vencimento: ${nextDateFormatted}\n✍️ Criação Automática: ${rule.autoCreateTransaction ? 'Sim' : 'Não (Apenas Lembrete)'}\n🚦 Status: ${rule.isActive ? 'Ativa' : 'Inativa'}`;
+    let summary = "";
+    if(!forMulti) summary += "🔄 *Resumo da Recorrência:*\n\n";
+    summary += `📜 *Descrição:* ${rule.description}\n💰 *Valor:* R$ ${parseFloat(rule.value).toFixed(2)} (${rule.type})\n`;
+    if (rule.category?.name) summary += `${categoryEmoji} *Categoria:* ${rule.category.name}\n`;
+    summary += `📅 *Início:* ${startDateFormatted}\n`;
+    if(rule.endDate) summary += `🏁 *Fim:* ${new Date(rule.endDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' })}\n`;
+    summary += `🔁 *Frequência:* ${translatePeriod(rule.frequency)} (a cada ${rule.interval})\n`;
+    if (rule.dayOfMonth) summary += `🗓️ *Dia do Mês:* ${rule.dayOfMonth}\n`;
+    if (rule.dayOfWeek !== null && rule.dayOfWeek !== undefined) summary += `🗓️ *Dia da Semana:* ${['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'][rule.dayOfWeek]}\n`;
+    summary += `➡️ *Próximo Lançamento/Lembrete:* ${nextDateFormatted}\n🤖 *Ação Automática:* ${rule.autoCreateTransaction ? 'Registrar Transação' : 'Apenas Lembrete'}\n🚦 *Status da Regra:* ${rule.isActive ? 'Ativa' : 'Inativa'}`;
     return summary;
 }
 
@@ -199,7 +217,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
     try {
         const client = await clientService.findOrCreateClientByPhone(senderPhone, { name: pushName }, true);
         if (!client) {
-             await sendWhatsappMessage(senderPhone, "Desculpe, estou com um problema para identificar você no momento. Por favor, tente mais tarde. 😕");
+            await sendWhatsappMessage(senderPhone, "Desculpe, estou com um problema para identificar você no momento. Por favor, tente mais tarde. 😕");
             return;
         }
 
@@ -226,8 +244,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     state.activeFinancialAccountId = accountToSet.id; state.activeFinancialAccountName = accountToSet.accountName; state.activeFinancialAccountType = accountToSet.accountType;
                 } else { state = initializeState(client, accountToSet); }
                 state.messageHistory = state.messageHistory.filter(m => m.role !== 'user' && m.content !== messageText);
-                const currentAssistantGreeting = state.messageHistory.length > 0 && state.messageHistory[state.messageHistory.length -1].role === 'assistant' ? state.messageHistory[state.messageHistory.length -1].content : `Olá ${state.clientName}! 😊 Conta "${state.activeFinancialAccountName}" (${state.activeFinancialAccountType}) selecionada. Como posso te ajudar?`;
-                state.messageHistory = state.messageHistory.filter(m => !(m.role === 'assistant' && m.content.includes("Como posso te ajudar hoje?"))); // Evita duplicar saudação
+                const currentAssistantGreeting = (state.messageHistory.length > 0 && state.messageHistory[state.messageHistory.length -1].role === 'assistant' && state.messageHistory[state.messageHistory.length -1].content.includes(state.activeFinancialAccountName)) ? state.messageHistory[state.messageHistory.length -1].content : `Olá ${state.clientName}! 😊 Conta "${state.activeFinancialAccountName}" (${state.activeFinancialAccountType}) selecionada. Como posso te ajudar?`;
+                state.messageHistory = state.messageHistory.filter(m => !(m.role === 'assistant' && m.content.includes("Como posso te ajudar hoje?") && !m.content.includes(state.activeFinancialAccountName)));
                 state.messageHistory.push({ role: 'assistant', content: currentAssistantGreeting });
                 state.messageHistory.push({ role: 'user', content: messageText });
             } else {
@@ -265,20 +283,81 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 let actionExecutedDirectly = false;
                 if (lowerMsg === 'sim' || lowerMsg === 's' || lowerMsg.includes('correto') || lowerMsg.includes('ok') || lowerMsg.includes('pode')) {
                     state.currentAction = null; state.pendingConfirmation = null;
-                    if (actionToConfirm === 'CONFIRM_DELETE_TRANSACTION') { /* ... */ actionExecutedDirectly = true; }
-                    else if (actionToConfirm === 'CONFIRM_DELETE_APPOINTMENT') { /* ... */ actionExecutedDirectly = true; }
-                    else if (actionToConfirm === 'CONFIRM_CREATE_FINANCIAL_ACCOUNT') { /* ... */ actionExecutedDirectly = true; }
-                    else { replyForPreProcessing = `Entendido, ${state.clientName}! Vou prosseguir com isso.`; }
+                    if (actionToConfirm === 'CONFIRM_DELETE_TRANSACTION') {
+                        const success = await financialService.deleteTransaction(state.activeFinancialAccountId, paramsToConfirm.transactionId);
+                        replyForPreProcessing = success ? `Missão cumprida, ${state.clientName}! A transação foi excluída com sucesso. 👍 Algo mais?` : `Hmm, ${state.clientName}, não consegui excluir essa transação. Pode ser que ela já tenha sido removida ou algo inesperado aconteceu. 😬`;
+                        actionExecutedDirectly = true;
+                    } else if (actionToConfirm === 'CONFIRM_DELETE_APPOINTMENT') {
+                        const success = await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, paramsToConfirm.appointmentId, true);
+                        replyForPreProcessing = success ? `Compromisso cancelado e removido da agenda, ${state.clientName}! ✅ Agenda limpa! Mais alguma coisa?` : `Eita, ${state.clientName}, não rolou excluir o compromisso. Será que ele já foi pro espaço? 🤔`;
+                        actionExecutedDirectly = true;
+                    } else if (actionToConfirm === 'CONFIRM_CREATE_FINANCIAL_ACCOUNT') {
+                         const existingAccounts = await clientService.getClientFinancialAccounts(client.id, {isActive: true});
+                         const createdAcc = await clientService.createFinancialAccount(client.id, { accountName: paramsToConfirm.accountName, accountType: paramsToConfirm.accountType, isDefault: existingAccounts.length === 0 });
+                        state.activeFinancialAccountId = createdAcc.id; state.activeFinancialAccountName = createdAcc.accountName; state.activeFinancialAccountType = createdAcc.accountType;
+                        replyForPreProcessing = `✨ Conta "${createdAcc.accountName}" (${createdAcc.accountType}) novinha em folha e prontinha para uso, ${state.clientName}! Já está selecionada. O que vamos organizar primeiro nela? 🚀`;
+                        actionExecutedDirectly = true;
+                    } else {
+                        replyForPreProcessing = `Show de bola, ${state.clientName}! Confirmado! Deixa comigo que eu vou cuidar disso agora mesmo. 😉`;
+                    }
                     stateHandledInPreProcessing = true;
-                    if(replyForPreProcessing && actionExecutedDirectly) { /* ... envia e retorna ... */ }
-                    else if (replyForPreProcessing) { /* ... envia e continua para IA ...*/ }
-                } else if (lowerMsg === 'não' || lowerMsg === 'n' || lowerMsg.includes('incorreto') || lowerMsg.includes('cancela')) { /* ... cancela e retorna ... */ }
+                    if(replyForPreProcessing) {
+                         state.messageHistory.push({ role: 'assistant', content: replyForPreProcessing });
+                         await sendWhatsappMessage(senderPhone, replyForPreProcessing);
+                         conversationState.set(senderPhone, state);
+                         if (actionExecutedDirectly) return;
+                    }
+                } else if (lowerMsg === 'não' || lowerMsg === 'n' || lowerMsg.includes('incorreto') || lowerMsg.includes('cancela')) {
+                    replyForPreProcessing = `Sem problemas, ${state.clientName}! Cancelamos essa operação. 👍 Bola pra frente! O que você gostaria de fazer então? Estou aqui para ajudar! 😊`;
+                    state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
+                    stateHandledInPreProcessing = true;
+                    state.messageHistory.push({ role: 'assistant', content: replyForPreProcessing });
+                    conversationState.set(senderPhone, state);
+                    await sendWhatsappMessage(senderPhone, replyForPreProcessing);
+                    return;
+                }
             }
-            else if (state.currentAction === 'creating_first_account_type') { /* ... */ }
-            else if (state.currentAction === 'awaiting_first_account_name') { /* ... */ }
-            else if (state.currentAction === 'selecting_initial_financial_account') { /* ... */ }
-            if (stateHandledInPreProcessing && replyForPreProcessing && (state.currentAction === null && !state.pendingConfirmation)) return;
-            else if (stateHandledInPreProcessing && replyForPreProcessing) { /* ... envia e retorna se ainda no estado ... */ }
+            else if (state.currentAction === 'creating_first_account_type') {
+                const typeChosen = messageText.toLowerCase(); let accountTypeToCreate = null;
+                if (typeChosen.includes('pessoal') || typeChosen.includes('pf')) accountTypeToCreate = 'PF';
+                else if (typeChosen.includes('empresa') || typeChosen.includes('pj')) accountTypeToCreate = 'PJ';
+                else if (typeChosen.includes('mei')) accountTypeToCreate = 'MEI';
+                if (accountTypeToCreate) {
+                    state.data.accountTypeToCreate = accountTypeToCreate; state.currentAction = 'awaiting_first_account_name';
+                    replyForPreProcessing = `Perfeito, ${state.clientName}! Uma conta do tipo ${accountTypeToCreate} então. E qual nome charmoso a gente vai dar para ela? (Algo como "Minhas Finanças Pessoais" ou "Empresa Super Produtiva" ficaria ótimo!) ✨`;
+                } else { replyForPreProcessing = `Hmm, ${state.clientName}, não captei bem o tipo. Poderia me dizer se é para suas finanças Pessoais (PF), para uma Empresa (PJ) ou para seu MEI? 🤔`; }
+                stateHandledInPreProcessing = true;
+            } else if (state.currentAction === 'awaiting_first_account_name') {
+                const accountName = messageText.trim();
+                if (accountName.length > 2 && accountName.length < 100) {
+                    const newAccount = await clientService.createFinancialAccount(client.id, { accountName: accountName, accountType: state.data.accountTypeToCreate, isDefault: true });
+                    state.activeFinancialAccountId = newAccount.id; state.activeFinancialAccountName = newAccount.accountName; state.activeFinancialAccountType = newAccount.accountType;
+                    replyForPreProcessing = `🎉 Fantástico, ${state.clientName}! Sua conta "${newAccount.accountName}" (${newAccount.accountType}) foi criada com sucesso e já está selecionada! Estou pronto para te ajudar a organizar tudo por aqui. O que vamos fazer primeiro?`;
+                    state.currentAction = null; state.data = {};
+                } else { replyForPreProcessing = `Esse nome parece um pouquinho curto (ou talvez um épico muito longo!). Que tal um nome com pelo menos 3 letras e menos de 100 para sua conta, ${state.clientName}? 😊`; }
+                stateHandledInPreProcessing = true;
+            } else if (state.currentAction === 'selecting_initial_financial_account') {
+                 const chosenAccountNameRaw = messageText.trim();
+                 const accountToSelect = state.data.accountsToList.find(acc => acc.name.toLowerCase() === chosenAccountNameRaw.toLowerCase() || acc.name.toLowerCase().includes(chosenAccountNameRaw.toLowerCase()));
+                 if (accountToSelect) {
+                    state.activeFinancialAccountId = accountToSelect.id; state.activeFinancialAccountName = accountToSelect.name; state.activeFinancialAccountType = accountToSelect.type;
+                    replyForPreProcessing = `Maravilha, ${state.clientName}! Selecionei a conta "${state.activeFinancialAccountName}". Tudo pronto para começarmos! O que você manda? 🫡`;
+                    state.currentAction = null; state.data = {};
+                 } else {
+                    let errorReply = `Hmm, ${state.clientName}, dei uma procurada aqui mas não achei uma conta com nome parecido com "${chosenAccountNameRaw}". 🧐 Você tem estas opções:\n`;
+                    state.data.accountsToList.forEach(acc => {errorReply += `\n- *${acc.name}* (${acc.type})`});
+                    errorReply += "\n\nQual delas seria?"
+                    replyForPreProcessing = errorReply;
+                 }
+                 stateHandledInPreProcessing = true;
+            }
+
+            if (stateHandledInPreProcessing && replyForPreProcessing) {
+                state.messageHistory.push({ role: 'assistant', content: replyForPreProcessing });
+                conversationState.set(senderPhone, state);
+                await sendWhatsappMessage(senderPhone, replyForPreProcessing);
+                if (state.currentAction === null && !state.pendingConfirmation) return;
+            }
         }
 
         const aiContext = {
@@ -292,7 +371,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
         let finalReplyParts = [];
         if (aiResponse.overall_summary_suggestion) {
-            finalReplyParts.push(aiResponse.overall_summary_suggestion.replace("[Nome do Usuário]", state.clientName));
+            finalReplyParts.push(aiResponse.overall_summary_suggestion.replace("[Nome do Usuário]", state.clientName).replace("[Nome do Usuário]", state.clientName)); // Dupla substituição caso IA use ambos
         }
 
         let requiresConfirmationByAI = false;
@@ -300,10 +379,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         let multipleActionFormattedResults = [];
 
         if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
-            finalReplyParts = [aiResponse.clarifications_needed[0].clarification_question.replace("[Nome do Usuário]", state.clientName)];
+            finalReplyParts = [aiResponse.clarifications_needed[0].clarification_question.replace("[Nome do Usuário]", state.clientName).replace("[Nome do Usuário]", state.clientName)];
             state.pendingConfirmation = (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) ? aiResponse.detected_actions[0] : { action: aiResponse.clarifications_needed[0].original_intent_action_suggestion , parameters: { original_text: aiResponse.clarifications_needed[0].segment_text } };
             state.currentAction = 'awaiting_clarification_response';
-            state.data.clarificationContext = { intent: state.pendingConfirmation?.action, segment: state.pendingConfirmation?.parameters?.original_text };
         } else if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
             for (const detectedAction of aiResponse.detected_actions) {
                 const params = detectedAction.parameters || {};
@@ -316,17 +394,16 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     switch (detectedAction.action) {
                         case 'CREATE_FINANCIAL_TRANSACTION': {
                             if (params.isPayableOrReceivable === true || params.dueDate) {
-                                // CONVERTER PARA SCHEDULE_APPOINTMENT
                                 logger.warn(`[WHATSAPP SERVICE] IA sugeriu CREATE_FINANCIAL_TRANSACTION para conta futura. Convertendo para SCHEDULE_APPOINTMENT.`);
                                 const nowForCalc = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
                                 let eventDT;
                                 if (params.dueDate) eventDT = `${params.dueDate} 09:00`;
                                 else if (params.transactionDate && params.transactionDate !== nowForCalc.toISOString().split('T')[0]) eventDT = `${params.transactionDate} 09:00`;
                                 else { nowForCalc.setMinutes(nowForCalc.getMinutes() + 15); eventDT = nowForCalc.toISOString().slice(0, 16).replace('T', ' '); }
-                                const appParams = { title: `Lembrete: ${params.description}`, eventDateTime: eventDT, associatedValue: parseFloat(params.value), associatedTransactionType: params.type };
+                                const appParams = { title: `Lembrete: ${params.description}`, eventDateTime: eventDT, associatedValue: parseFloat(params.value), associatedTransactionType: params.type, reminderLeadTimeMinutes: 0 };
                                 const newAppFromTx = await appointmentService.scheduleAppointment(state.activeFinancialAccountId, appParams);
                                 const reloadedAppFromTx = await appointmentService.getAppointmentById(state.activeFinancialAccountId, newAppFromTx.id);
-                                currentActionFormatted = formatAppointmentSummary(reloadedAppFromTx, aiResponse.detected_actions.length > 1);
+                                currentActionFormatted = formatAppointmentSummary(reloadedAppFromTx, state.clientName, aiResponse.detected_actions.length > 1);
                                 if (aiResponse.detected_actions.length === 1) state.editingResource = { type: 'appointment', id: newAppFromTx.id };
                                 break;
                             }
@@ -339,30 +416,32 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             };
                             const newTx = await financialService.createTransaction(state.activeFinancialAccountId, txData);
                             const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, newTx.id);
-                            currentActionFormatted = formatFinancialTransactionSummary(reloadedTx, aiResponse.detected_actions.length > 1);
+                            currentActionFormatted = formatFinancialTransactionSummary(reloadedTx, state.clientName, aiResponse.detected_actions.length > 1);
                             if (aiResponse.detected_actions.length === 1) state.editingResource = { type: 'transaction', id: newTx.id };
                             break;
                         }
                         case 'SCHEDULE_APPOINTMENT': {
                             let eventDateTime = params.eventDateTime;
                             if (params.eventDateTime && typeof params.eventDateTime === 'string') {
-                                if (params.eventDateTime.length === 10) eventDateTime += ' 09:00'; // YYYY-MM-DD
+                                if (params.eventDateTime.length === 10) eventDateTime += ' 09:00';
                                 else if (params.eventDateTime.toLowerCase().startsWith("daqui")) {
                                     const matchMinutes = params.eventDateTime.match(/daqui (\d+) minutos?/i);
                                     const matchHours = params.eventDateTime.match(/daqui (\d+) horas?/i);
-                                    const nowLocale = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
-                                    if (matchMinutes) { nowLocale.setMinutes(nowLocale.getMinutes() + parseInt(matchMinutes[1])); eventDateTime = nowLocale.toISOString().slice(0, 19).replace('T', ' ');}
-                                    else if (matchHours) { nowLocale.setHours(nowLocale.getHours() + parseInt(matchHours[1])); eventDateTime = nowLocale.toISOString().slice(0, 19).replace('T', ' '); }
+                                    let nowLocale = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
+                                    if (matchMinutes) { nowLocale.setMinutes(nowLocale.getMinutes() + parseInt(matchMinutes[1])); }
+                                    else if (matchHours) { nowLocale.setHours(nowLocale.getHours() + parseInt(matchHours[1])); }
+                                    eventDateTime = nowLocale.toISOString().slice(0, 19).replace('T', ' ');
                                 }
                             }
                             const appData = { title: params.title, eventDateTime: eventDateTime,
-                                durationMinutes: params.durationMinutes, location: params.location,
-                                reminderLeadTimeMinutes: params.reminderLeadTimeMinutes,
+                                durationMinutes: params.durationMinutes || (params.associatedValue ? null : 60), // Duração padrão se não for só lembrete financeiro
+                                location: params.location,
+                                reminderLeadTimeMinutes: (params.reminderLeadTimeMinutes && params.reminderLeadTimeMinutes >= 1) ? params.reminderLeadTimeMinutes : null,
                                 associatedValue: params.associatedValue, associatedTransactionType: params.associatedTransactionType
                             };
                             const newApp = await appointmentService.scheduleAppointment(state.activeFinancialAccountId, appData);
                             const reloadedApp = await appointmentService.getAppointmentById(state.activeFinancialAccountId, newApp.id);
-                            currentActionFormatted = formatAppointmentSummary(reloadedApp, aiResponse.detected_actions.length > 1);
+                            currentActionFormatted = formatAppointmentSummary(reloadedApp, state.clientName, aiResponse.detected_actions.length > 1);
                             if (aiResponse.detected_actions.length === 1) state.editingResource = { type: 'appointment', id: newApp.id };
                             break;
                         }
@@ -377,8 +456,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 financialCategoryId: catRecId };
                             const newRule = await recurringTransactionService.createRecurringRule(state.activeFinancialAccountId, ruleData);
                             const reloadedRule = await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, newRule.id);
-                            currentActionFormatted = formatRecurringRuleSummary(reloadedRule, aiResponse.detected_actions.length > 1);
-                            // No buttons for recurring rules for now
+                            currentActionFormatted = formatRecurringRuleSummary(reloadedRule, state.clientName, aiResponse.detected_actions.length > 1);
                             break;
                         }
                         case 'GET_FINANCIAL_SUMMARY': {
@@ -398,7 +476,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             }
                             const summary = await financialService.getFinancialSummary(state.activeFinancialAccountId, filterParams);
                             let periodText = params.period ? translatePeriod(params.period) : (filterParams.dateStart && filterParams.dateEnd ? `${new Date(filterParams.dateStart+'T00:00:00Z').toLocaleDateString('pt-BR')} a ${new Date(filterParams.dateEnd+'T00:00:00Z').toLocaleDateString('pt-BR')}` : "geral");
-                            currentActionFormatted = `📊 Resumo Financeiro (${periodText} para ${state.activeFinancialAccountName}):\n\n` +
+                            currentActionFormatted = `📊 *Resumo Financeiro (${periodText} para ${state.activeFinancialAccountName})*\n\n` +
                                           `🟢 Entradas: R$ ${summary.totalEntradas.toFixed(2)}\n🔴 Saídas: R$ ${summary.totalSaidas.toFixed(2)}\n` +
                                           `💰 *Saldo Efetivado: R$ ${summary.saldoEfetivado.toFixed(2)}*\n\n` +
                                           `📈 A Receber (Pend.): R$ ${summary.totalAReceberPendente.toFixed(2)}\n📉 A Pagar (Pend.): R$ ${summary.totalAPagarPendente.toFixed(2)}`;
@@ -408,68 +486,39 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                              const filterParamsList = { dateStart: params.dateStart, dateEnd: params.dateEnd, type: params.type,
                                 financialCategoryId: params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type) : null,
                                 isPaidOrReceived: params.isPaidOrReceived, searchTerm: params.searchTerm, limit: 5, page: 1 };
-                            if (params.period && params.period !== "personalizado") { /* ... lógica de período completa como em GET_FINANCIAL_SUMMARY ... */
+                            if (params.period && params.period !== "personalizado") {
                                 const todayLocale = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})); todayLocale.setHours(0,0,0,0);
                                 const periodKey = params.period.toLowerCase();
                                 if (periodKey === 'hoje') { filterParamsList.dateStart = filterParamsList.dateEnd = todayLocale.toISOString().split('T')[0]; }
-                                // ... (outros períodos)
-                                else if (periodKey === 'ultimos_7_dias' || periodKey === 'last_7_days') {
-                                    const sevenDaysAgo = new Date(todayLocale); sevenDaysAgo.setDate(todayLocale.getDate() - 6); // Inclui hoje
-                                    filterParamsList.dateStart = sevenDaysAgo.toISOString().split('T')[0];
-                                    filterParamsList.dateEnd = todayLocale.toISOString().split('T')[0];
-                                }
+                                else if (periodKey === 'ultimos_7_dias' || periodKey === 'last_7_days') { const s = new Date(todayLocale); s.setDate(todayLocale.getDate() - 6); filterParamsList.dateStart = s.toISOString().split('T')[0]; filterParamsList.dateEnd = todayLocale.toISOString().split('T')[0]; }
+                                // Adicionar outros períodos
                             }
                             const { transactions, totalItems } = await financialService.getAllTransactions(state.activeFinancialAccountId, filterParamsList);
-                            if (totalItems === 0) currentActionFormatted = "Nenhuma transação encontrada para os filtros que você pediu. 👍";
+                            if (totalItems === 0) currentActionFormatted = `Nenhuma transação encontrada para os filtros que você pediu, ${state.clientName}. 👍 Que tal registrar algo novo?`;
                             else {
-                                let listText = `📜 Encontrei ${totalItems} transações. As mais recentes são:\n`;
-                                for (const t of transactions) {
-                                    const catName = t.category ? t.category.name : 'Sem Categoria';
-                                    const emoji = t.type === 'Entrada' ? '🟢' : '🔴';
-                                    const date = new Date(t.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'});
-                                    listText += `\n${emoji} ${t.description} - R$ ${parseFloat(t.value).toFixed(2)}\n    (${catName} em ${date})`;
-                                    if (t.isPayableOrReceivable) listText += t.isPaidOrReceived ? " (Liquidada)" : ` (Vence ${new Date(t.dueDate+'T00:00:00Z').toLocaleDateString('pt-BR',{timeZone:'UTC'})})`;
-                                }
-                                if (totalItems > 5) listText += `\n\nE mais ${totalItems - 5} transações.`;
-                                currentActionFormatted = listText;
+                                currentActionFormatted = `📜 ${state.clientName}, encontrei ${totalItems} transações para você! As mais recentes são:\n`;
+                                transactions.forEach(t => { currentActionFormatted += "\n" + formatFinancialTransactionSummary(t, state.clientName, true); });
+                                if (totalItems > 5) currentActionFormatted += `\n\n✨ ... e mais ${totalItems - 5} transações.`;
                             }
                             break;
                         }
                         case 'MARK_TRANSACTION_AS_PAID_RECEIVED': {
-                            // Esta ação requer que o sistema encontre a transação original.
-                            // A IA fornece 'transactionDescription' e opcionalmente 'transactionValue'.
-                            // O ideal seria o sistema pedir confirmação se múltiplas transações corresponderem.
-                            // Por simplicidade, tentaremos encontrar a mais recente pendente que corresponda.
-                            const potentialTransactions = await financialService.getAllTransactions(state.activeFinancialAccountId, {
-                                search: params.transactionDescription,
-                                isPayableOrReceivable: true,
-                                isPaidOrReceived: false,
-                                limit: 5, // Busca algumas para tentar achar a correta
-                                sortOrder: 'DESC', // Mais recentes primeiro
-                                sortBy: 'dueDate'
-                            });
+                            const potentialTransactions = await financialService.getAllTransactions(state.activeFinancialAccountId, { search: params.transactionDescription, isPayableOrReceivable: true, isPaidOrReceived: false, limit: 5, sortOrder: 'DESC', sortBy: 'dueDate' });
                             let targetTx = null;
                             if (potentialTransactions.transactions.length > 0) {
-                                if (params.transactionValue) {
-                                    targetTx = potentialTransactions.transactions.find(tx => parseFloat(tx.value) === parseFloat(params.transactionValue));
-                                }
-                                if (!targetTx) targetTx = potentialTransactions.transactions[0]; // Pega a primeira se não achar por valor ou valor não fornecido
+                                if (params.transactionValue) targetTx = potentialTransactions.transactions.find(tx => parseFloat(tx.value) === parseFloat(params.transactionValue));
+                                if (!targetTx) targetTx = potentialTransactions.transactions[0];
                             }
-
                             if (targetTx) {
                                 const updatedTx = await financialService.markAsPaidOrReceived(state.activeFinancialAccountId, targetTx.id, params.paymentDate);
-                                currentActionFormatted = `Conta "${updatedTx.description}" (R$ ${parseFloat(updatedTx.value).toFixed(2)}) marcada como ${updatedTx.type === 'Entrada' ? 'recebida' : 'paga'}! ✅`;
-                            } else {
-                                currentActionFormatted = `Não consegui encontrar a conta pendente "${params.transactionDescription}" para marcar como paga/recebida. 🤔 Poderia ser mais específico ou verificar se ela já foi quitada?`;
-                            }
+                                currentActionFormatted = `Conta "${updatedTx.description}" (R$ ${parseFloat(updatedTx.value).toFixed(2)}) marcada como ${updatedTx.type === 'Entrada' ? 'recebida' : 'paga'}! ✅ Show de bola, ${state.clientName}!`;
+                            } else { currentActionFormatted = `Não consegui encontrar a conta pendente "${params.transactionDescription}" para marcar como paga/recebida, ${state.clientName}. 🤔 Poderia ser mais específico ou verificar se ela já foi quitada?`; }
                             break;
                         }
                         case 'CREATE_PRODUCT': {
-                            if (state.activeFinancialAccountType === 'PF') {
-                                currentActionFormatted = `Desculpe, ${state.clientName}, o cadastro de produtos é para contas PJ ou MEI. Sua conta atual é PF.`; break;
-                            }
+                            if (state.activeFinancialAccountType === 'PF') { currentActionFormatted = `Desculpe, ${state.clientName}, o cadastro de produtos é para contas PJ ou MEI. Sua conta atual é PF. Gostaria de trocar ou criar uma conta empresarial?`; break; }
                             const newProd = await productService.createProduct(state.activeFinancialAccountId, params);
-                            currentActionFormatted = `📦 Produto "${newProd.name}" (R$ ${parseFloat(newProd.salePrice).toFixed(2)}) cadastrado com ${newProd.quantity || 0} unidades em estoque!`;
+                            currentActionFormatted = `📦 Sucesso, ${state.clientName}! Produto "${newProd.name}" (R$ ${parseFloat(newProd.salePrice).toFixed(2)}) cadastrado com ${newProd.quantity || 0} unidades em estoque! Pronto para vender! 🚀`;
                             break;
                         }
                         case 'GET_STOCK_INFO': {
@@ -477,7 +526,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const prodId = await findProductIdByNameOrCode(params.productNameOrCode, state.activeFinancialAccountId);
                             if(prodId) {
                                 const balance = await stockService.getProductStockBalance(prodId);
-                                currentActionFormatted = balance ? `Temos ${balance.quantity} ${balance.unit || 'un.'} de "${balance.name}" em estoque. ✨` : `Produto "${params.productNameOrCode}" não encontrado.`;
+                                currentActionFormatted = balance ? `No estoque do produto "${balance.name}", ${state.clientName}, temos ${balance.quantity} ${balance.unit || 'un.'}. ✨` : `Produto "${params.productNameOrCode}" não encontrado em seus registros, ${state.clientName}.`;
                             } else { currentActionFormatted = `Produto "${params.productNameOrCode}" não encontrado para consulta de estoque.`; }
                             break;
                         }
@@ -487,46 +536,44 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             if(prodIdMov) {
                                 const movData = {type: params.movementType, quantity: parseInt(params.quantity), reason: params.reason};
                                 const movement = await stockService.recordStockMovement(prodIdMov, movData);
-                                const updatedProduct = await productService.getProductById(state.activeFinancialAccountId, prodIdMov); // Pega saldo atualizado
-                                currentActionFormatted = `Movimentação de ${movement.quantity} un. de "${updatedProduct.name}" (${movement.type}) registrada! Novo saldo: ${updatedProduct.quantity} un.`;
-                            } else { currentActionFormatted = `Produto "${params.productNameOrCode}" não encontrado para movimentar.`;}
+                                const updatedProduct = await productService.getProductById(state.activeFinancialAccountId, prodIdMov);
+                                currentActionFormatted = `Ok, ${state.clientName}! Movimentação de ${movement.quantity} unidade(s) de "${updatedProduct.name}" (${movement.type === 'Entrada' ? 'entrada no' : 'saída do'} estoque) registrada! Novo saldo: ${updatedProduct.quantity} un. 👍`;
+                            } else { currentActionFormatted = `Produto "${params.productNameOrCode}" não encontrado para movimentar o estoque.`;}
                             break;
                         }
                         case 'LIST_APPOINTMENTS': {
                             const appFilterParams = { dateStart: params.dateStart, dateEnd: params.dateEnd, status: params.status, limit: 5 };
                             if (params.period && params.period !== "personalizado") { /* ... lógica de período completa ... */ }
                             const { appointments, totalItems: totalApps } = await appointmentService.getAllAppointments(state.activeFinancialAccountId, appFilterParams);
-                            if (totalApps === 0) currentActionFormatted = "Nenhum compromisso encontrado para os filtros informados. 👍";
+                            if (totalApps === 0) currentActionFormatted = `Agenda limpa por aqui, ${state.clientName}! Nenhum compromisso encontrado para os filtros que você pediu. 👍`;
                             else {
-                                currentActionFormatted = `🗓️ Encontrei ${totalApps} compromissos. Os próximos são:\n`;
+                                currentActionFormatted = `🗓️ ${state.clientName}, encontrei ${totalApps} compromissos na sua agenda. Os próximos são:\n`;
                                 appointments.forEach(a => { currentActionFormatted += `\n- ${a.title} em ${new Date(a.eventDateTime).toLocaleString('pt-BR', {timeStyle:'short', dateStyle:'short', timeZone: process.env.TZ || 'America/Sao_Paulo'})} (${a.status})`;});
-                                if (totalApps > 5) currentActionFormatted += `\n\nE mais ${totalApps - 5}.`;
+                                if (totalApps > 5) currentActionFormatted += `\n\n✨ ... e mais ${totalApps - 5} agendamentos.`;
                             }
                             break;
                         }
                         case 'CREATE_CREDIT_CARD': {
                             const newCard = await creditCardService.createCreditCard(state.activeFinancialAccountId, params);
-                            currentActionFormatted = `💳 Cartão "${newCard.name}" com limite de R$ ${parseFloat(newCard.limit).toFixed(2)} cadastrado! Fecha dia ${newCard.closingDay} e vence dia ${newCard.paymentDay}.`;
+                            currentActionFormatted = `💳 Novo cartão na área, ${state.clientName}! O "${newCard.name}" com limite de R$ ${parseFloat(newCard.limit).toFixed(2)} foi cadastrado. Ele fecha fatura dia ${newCard.closingDay} e o pagamento é dia ${newCard.paymentDay}. Use com sabedoria! 😉`;
                             break;
                         }
                         case 'LIST_CREDIT_CARDS': {
                             const cards = await creditCardService.getAllCreditCards(state.activeFinancialAccountId, {isActive: true});
-                            if(cards.length === 0) currentActionFormatted = "Você ainda não tem cartões de crédito cadastrados nesta conta.";
+                            if(cards.length === 0) currentActionFormatted = `Você ainda não tem nenhum cartão de crédito cadastrado aqui na conta "${state.activeFinancialAccountName}", ${state.clientName}. Que tal adicionar um?`;
                             else {
-                                currentActionFormatted = "💳 Seus cartões cadastrados são:\n";
-                                cards.forEach(c => { currentActionFormatted += `\n- ${c.name} (final ${c.lastFourDigits || '****'}), Limite R$ ${parseFloat(c.limit).toFixed(2)}${c.isDefault ? ' (Padrão)' : ''}`;});
+                                currentActionFormatted = `💳 ${state.clientName}, seus cartões de crédito cadastrados para a conta "${state.activeFinancialAccountName}" são:\n`;
+                                cards.forEach(c => { currentActionFormatted += `\n- *${c.name}* (final ${c.lastFourDigits || '****'}), Limite R$ ${parseFloat(c.limit).toFixed(2)}${c.isDefault ? ' *(Padrão)*' : ''}`;});
                             }
                             break;
                         }
                          case 'LIST_RECURRING_RULES': {
                             const rules = await recurringTransactionService.getAllRecurringRules(state.activeFinancialAccountId, {isActive: true});
-                            if(rules.length === 0) currentActionFormatted = "Nenhuma regra de recorrência ativa encontrada para esta conta.";
+                            if(rules.length === 0) currentActionFormatted = `Nenhuma regra de recorrência ativa por aqui, ${state.clientName}. Tudo manual por enquanto! 😉`;
                             else {
-                                currentActionFormatted = "🔄 Suas regras de recorrência ativas:\n";
-                                rules.slice(0,3).forEach(r => { // Limita para não ficar muito longo
-                                    currentActionFormatted += `\n- "${r.description}" (R$ ${parseFloat(r.value).toFixed(2)} ${r.frequency}, próx. ${new Date(r.nextDueDate+'T00:00:00Z').toLocaleDateString('pt-BR')})`;
-                                });
-                                if(rules.length > 3) currentActionFormatted += `\n\nE mais ${rules.length - 3} regra(s).`;
+                                currentActionFormatted = `🔄 ${state.clientName}, estas são suas regras de recorrência ativas para a conta "${state.activeFinancialAccountName}":\n`;
+                                rules.slice(0,3).forEach(r => { currentActionFormatted += `\n- "${r.description}" (R$ ${parseFloat(r.value).toFixed(2)} ${translatePeriod(r.frequency)}, próx. ${new Date(r.nextDueDate+'T00:00:00Z').toLocaleDateString('pt-BR')})`; });
+                                if(rules.length > 3) currentActionFormatted += `\n\n✨ ... e mais ${rules.length - 3} regra(s).`;
                             }
                             break;
                         }
@@ -536,19 +583,17 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 const target = accountsAvail.find(acc => acc.accountName.toLowerCase().includes(params.targetAccountNameOrType.toLowerCase()) || acc.accountType === params.targetAccountNameOrType.toUpperCase());
                                 if (target) {
                                     state.activeFinancialAccountId = target.id; state.activeFinancialAccountName = target.accountName; state.activeFinancialAccountType = target.accountType;
-                                    currentActionFormatted = `Prontinho, ${state.clientName}! Mudei para a sua conta "${target.accountName}" (${target.accountType}). O que você gostaria de fazer nela?`;
+                                    currentActionFormatted = `Prontinho, ${state.clientName}! 🚀 Estamos agora na sua conta "${target.accountName}" (${target.accountType}). O que você gostaria de fazer por aqui?`;
                                 } else {
-                                    currentActionFormatted = `Não encontrei uma conta com nome ou tipo parecido com "${params.targetAccountNameOrType}", ${state.clientName}. Você tem as contas: ${accountsAvail.map(a => `"${a.accountName}" (${a.accountType})`).join(', ')}. Qual delas gostaria de usar?`;
-                                    state.currentAction = 'awaiting_account_switch_choice';
-                                    state.data = { accountsToList: accountsAvail.map(a => ({id: a.id, name: a.accountName, type: a.accountType})) };
+                                    currentActionFormatted = `Hmm, ${state.clientName}, não encontrei uma conta com nome ou tipo parecido com "${params.targetAccountNameOrType}". 😅 Você tem estas: ${accountsAvail.map(a => `"${a.accountName}" (${a.accountType})`).join(', ')}. Qual delas gostaria de usar?`;
+                                    state.currentAction = 'awaiting_account_switch_choice'; state.data = { accountsToList: accountsAvail.map(a => ({id: a.id, name: a.accountName, type: a.accountType})) };
                                 }
                             } else {
-                                let opts = `Você tem as seguintes contas, ${state.clientName}:\n`;
+                                let opts = `Com certeza, ${state.clientName}! Você tem as seguintes contas:\n`;
                                 accountsAvail.forEach((acc) => { opts += `\n- *${acc.accountName}* (${acc.accountType})`;});
-                                opts += "\n\nPara qual delas você gostaria de mudar? Só me dizer o nome. 😉";
+                                opts += "\n\nPara qual delas você gostaria de mudar? É só me dizer o nome. 😉";
                                 currentActionFormatted = opts;
-                                state.currentAction = 'awaiting_account_switch_choice';
-                                state.data = { accountsToList: accountsAvail.map(a => ({id: a.id, name: a.accountName, type: a.accountType})) };
+                                state.currentAction = 'awaiting_account_switch_choice'; state.data = { accountsToList: accountsAvail.map(a => ({id: a.id, name: a.accountName, type: a.accountType})) };
                             }
                             break;
                         }
@@ -556,80 +601,75 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             state.currentAction = 'awaiting_new_account_type_from_ia';
                             state.data = { accountTypeToCreateSuggestion: params.accountTypeToCreate, newAccountNameSuggestion: params.newAccountName };
                             if(params.accountTypeToCreate && params.newAccountName){
-                                currentActionFormatted = `Legal, ${state.clientName}! Então vamos criar uma conta ${params.accountTypeToCreate} chamada "${params.newAccountName}", correto? (Sim/Não)`;
+                                currentActionFormatted = `Que demais, ${state.clientName}! Então vamos criar uma conta ${params.accountTypeToCreate} chamada "${params.newAccountName}", isso mesmo? (Sim/Não) ✨`;
                                 state.pendingConfirmation = {action: 'CONFIRM_CREATE_FINANCIAL_ACCOUNT', parameters: {accountType: params.accountTypeToCreate, accountName: params.newAccountName}};
                                 requiresConfirmationByAI = true;
                             } else if (params.accountTypeToCreate) {
-                                currentActionFormatted = `Ok, uma conta ${params.accountTypeToCreate}! Que nome você gostaria de dar para ela, ${state.clientName}?`;
+                                currentActionFormatted = `Legal, ${state.clientName}! Uma conta do tipo ${params.accountTypeToCreate}. E que nome super criativo vamos dar para ela? 🤔`;
                             } else {
-                                currentActionFormatted = `Certo, ${state.clientName}! Sua nova conta será Pessoal (PF), Empresa (PJ) ou MEI?`;
+                                currentActionFormatted = `Com certeza, ${state.clientName}! Para sua nova conta, ela será para uso Pessoal (PF), Empresarial (PJ) ou para seu MEI? 🏢🏠`;
                             }
                             break;
                         }
                         default:
-                            if (aiResponse.detected_actions.length === 1 && aiResponse.reply_to_user_suggestion && !aiResponse.overall_summary_suggestion) {
-                                currentActionFormatted = aiResponse.reply_to_user_suggestion.replace("[Nome do Usuário]", state.clientName);
-                            } else {
-                                currentActionFormatted = `Ação "${detectedAction.action}" ${params.description ? `para "${params.description}"` : ''} foi entendida.`;
-                            }
-                            if ((detectedAction.action === "GENERAL_GREETING_OR_SMALLTALK" || detectedAction.action === "GENERAL_QUESTION_OR_HELP") && aiResponse.reply_to_user_suggestion) {
-                                finalReplyParts = [aiResponse.reply_to_user_suggestion.replace("[Nome do Usuário]", state.clientName)];
-                                multipleActionFormattedResults = [];
+                            const defaultReply = aiResponse.reply_to_user_suggestion || `Entendido, ${state.clientName}. Processando sua solicitação para "${detectedAction.action}".`;
+                            currentActionFormatted = defaultReply.replace("[Nome do Usuário]", state.clientName);
+                            if ((detectedAction.action === "GENERAL_GREETING_OR_SMALLTALK" || detectedAction.action === "GENERAL_QUESTION_OR_HELP")) {
+                                finalReplyParts = [currentActionFormatted]; // Usa a resposta completa da IA
+                                multipleActionFormattedResults = []; // Limpa outros se for só conversa
                                 break;
                             }
                             break;
                     }
-                    if (currentActionFormatted) {
-                        if (aiResponse.detected_actions.length === 1 && !requiresConfirmationByAI) singleActionFormattedResult = currentActionFormatted;
-                        else if (!requiresConfirmationByAI) multipleActionFormattedResults.push(currentActionFormatted);
+                    if (currentActionFormatted && !requiresConfirmationByAI) { // Só adiciona se não for pedir confirmação
+                        if (aiResponse.detected_actions.length === 1) singleActionFormattedResult = currentActionFormatted;
+                        else multipleActionFormattedResults.push(currentActionFormatted);
                     }
                 } catch (e) {
                     logger.error(`[WHATSAPP HANDLER] Erro executando "${detectedAction.action}" para ${senderPhone}: ${e.message}`, { stack: e.stack, params: params });
-                    const errorMsgPart = `Ops! Tive um problema ao tentar processar "${params.description || detectedAction.action}". (${e.message.length < 70 ? e.message : 'Erro interno'})`;
+                    const errorMsgPart = `Ops! 🌩️ Tive um probleminha ao tentar processar "${params.description || detectedAction.action}". (${e.message.length < 70 ? e.message : 'Por favor, tente de novo ou fale com o suporte.'})`;
                     if (aiResponse.detected_actions.length === 1) singleActionFormattedResult = errorMsgPart;
                     else multipleActionFormattedResults.push(errorMsgPart);
                 }
             }
         }
 
+        // --- Construção da Resposta Final ---
         if (requiresConfirmationByAI && state.pendingConfirmation) {
-            finalReplyParts = [aiResponse.reply_to_user_suggestion || `Hmm, ${state.clientName}, entendi que você quer fazer algo como "${state.pendingConfirmation.parameters.description || state.pendingConfirmation.action}". É isso mesmo? (Sim/Não)`];
+            const confirmQuestion = aiResponse.reply_to_user_suggestion || `Hmm, ${state.clientName}, para prosseguir com "${state.pendingConfirmation.parameters.description || state.pendingConfirmation.action}", preciso de uma confirmação. Está tudo certo? (Sim/Não) 😉`;
+            finalReplyParts = [confirmQuestion.replace("[Nome do Usuário]", state.clientName)];
             state.currentAction = 'awaiting_confirmation';
         } else if (singleActionFormattedResult) {
             if (finalReplyParts.length > 0) finalReplyParts.push("\n\n" + singleActionFormattedResult); else finalReplyParts.push(singleActionFormattedResult);
         } else if (multipleActionFormattedResults.length > 0) {
-            if (finalReplyParts.length === 0 && multipleActionFormattedResults.length > 0) finalReplyParts.push(`${state.clientName}, aqui está o que eu fiz pra você: 😉`);
+            if (finalReplyParts.length === 0 && multipleActionFormattedResults.length > 0) finalReplyParts.push(`${state.clientName}, aqui está o resumo do que fizemos por aqui: 👇`);
             finalReplyParts.push(multipleActionFormattedResults.join("\n\n---\n\n"));
         }
-        else if (aiResponse.reply_to_user_suggestion) { // Nenhuma ação formatada, nenhuma confirmação, NENHUMA CLARIFICAÇÃO (já tratado)
-            const suggestion = aiResponse.reply_to_user_suggestion.replace("[Nome do Usuário]", state.clientName);
-            if (!(finalReplyParts.length > 0 && finalReplyParts[0] === aiResponse.overall_summary_suggestion?.replace("[Nome do Usuário]", state.clientName))) {
-                 if (finalReplyParts.length > 0 && !finalReplyParts.join(" ").includes(suggestion)) finalReplyParts.push(suggestion);
-                 else if (finalReplyParts.length === 0) finalReplyParts.push(suggestion);
-            } else if (finalReplyParts.length === 0) finalReplyParts.push(suggestion);
+        else if (aiResponse.reply_to_user_suggestion) { // Nenhuma ação formatada, nenhuma confirmação, NENHUMA CLARIFICAÇÃO
+            const suggestion = aiResponse.reply_to_user_suggestion.replace("[Nome do Usuário]", state.clientName).replace("[Nome do Usuário]", state.clientName);
+             if (!(finalReplyParts.length > 0 && finalReplyParts[0].toLowerCase().includes(suggestion.substring(0, Math.min(suggestion.length, 20)).toLowerCase() ) )) { // Evita duplicar se overall_summary já é a resposta
+                if (finalReplyParts.length > 0 && !finalReplyParts.join(" ").toLowerCase().includes(suggestion.substring(0, Math.min(suggestion.length, 30)).toLowerCase())) finalReplyParts.push(suggestion);
+                else if (finalReplyParts.length === 0) finalReplyParts.push(suggestion);
+            }
         } else if (finalReplyParts.length === 0) {
-            finalReplyParts.push(`Entendido, ${state.clientName}! Se precisar de mais alguma coisa, é só chamar. 😊`);
+            finalReplyParts.push(`Entendido, ${state.clientName}! Se precisar de mais alguma coisa, é só me dar um alô. 😊 Estou sempre por aqui!`);
         }
 
         const performedConcreteAction = singleActionFormattedResult || multipleActionFormattedResults.length > 0;
         if (performedConcreteAction && !requiresConfirmationByAI && !(aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) ) {
             const platformUrl = process.env.PLATFORM_URL || 'SEU_SITE_AQUI';
-            if (platformUrl !== 'SEU_SITE_AQUI') finalReplyParts.push(`\n📊 Para visualizar mais detalhes e relatórios, acesse a plataforma em ${platformUrl}`);
-            if (!finalReplyParts.some(p => p.toLowerCase().includes("mais alguma coisa") || p.toLowerCase().includes("só chamar"))) {
-                 finalReplyParts.push("Se precisar de algo a mais é só me chamar! 😄");
+            let closingRemark = (aiResponse.reply_to_user_suggestion && aiResponse.reply_to_user_suggestion.length > 30 && !aiResponse.reply_to_user_suggestion.toLowerCase().includes("buscando")) ? aiResponse.reply_to_user_suggestion.replace("[Nome do Usuário]", state.clientName) : `Que seus próximos passos sejam de pura organização e sucesso, ${state.clientName}! ✨ Se pintar mais alguma dúvida ou precisar de uma mãozinha, estou a postos! 😉`;
+            if (platformUrl !== 'SEU_SITE_AQUI') finalReplyParts.push(`\n📊 Para visualizar relatórios completos e mais detalhes, você pode acessar nossa plataforma em ${platformUrl}`);
+            if (!finalReplyParts.join(" ").toLowerCase().includes(closingRemark.substring(0, Math.min(closingRemark.length, 30)).toLowerCase())) {
+                 finalReplyParts.push(closingRemark);
             }
         }
 
         const completeFinalReply = finalReplyParts.join("\n\n").trim();
         state.messageHistory.push({ role: 'assistant', content: completeFinalReply });
 
-        if (!requiresConfirmationByAI && state.currentAction !== 'awaiting_clarification_response' &&
-            state.currentAction !== 'selecting_initial_financial_account' &&
-            !state.currentAction?.startsWith('creating_first_account') &&
-            !state.currentAction?.startsWith('awaiting_') &&
-            state.currentAction !== 'awaiting_confirmation'
-            ) {
-            // state.currentAction = null;
+        if (!requiresConfirmationByAI && state.currentAction !== 'awaiting_clarification_response' && state.currentAction !== 'selecting_initial_financial_account' && !state.currentAction?.startsWith('creating_first_account') && !state.currentAction?.startsWith('awaiting_') && state.currentAction !== 'awaiting_confirmation') {
+            // state.currentAction = null; // Comentar para manter o fluxo de edição, por exemplo
             // state.data = {};
         }
         conversationState.set(senderPhone, state);
@@ -638,8 +678,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             const resourceForButtons = state.editingResource;
             if (resourceForButtons && !requiresConfirmationByAI && aiResponse.detected_actions?.length === 1 && performedConcreteAction) {
                 let buttons = [];
-                const itemDescriptionForButton = (aiResponse.detected_actions[0].parameters.description || aiResponse.detected_actions[0].parameters.title || "este item").substring(0,20);
-                const buttonTitle = `Opções para "${itemDescriptionForButton}":`;
+                const itemDescForBtn = (aiResponse.detected_actions[0].parameters.description || aiResponse.detected_actions[0].parameters.title || "item").substring(0,20);
+                const buttonTitle = `Opções para: "${itemDescForBtn}"`;
                 if (resourceForButtons.type === 'transaction') buttons = [ { id: `edit_transaction_${resourceForButtons.id}`, label: "Editar transação" }, { id: `delete_transaction_${resourceForButtons.id}`, label: "Excluir transação" }];
                 else if (resourceForButtons.type === 'appointment') buttons = [ { id: `edit_appointment_${resourceForButtons.id}`, label: "Editar compromisso" }, { id: `delete_appointment_${resourceForButtons.id}`, label: "Excluir compromisso" }];
                 if (buttons.length > 0) await sendButtonListMessage(senderPhone, completeFinalReply, buttons, buttonTitle);
@@ -649,6 +689,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 await sendWhatsappMessage(senderPhone, completeFinalReply);
             }
         }
+
     } catch (error) {
         logger.error(`[WHATSAPP HANDLER] Erro CRÍTICO processando msg de ${senderPhone}: ${error.message}`, { stack: error.stack, messageText, rawPayload });
         const clientNameToUseInError = state?.clientName || pushName || "você";
