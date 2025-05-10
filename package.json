@@ -2,12 +2,13 @@
   "name": "seu-projeto-whatsapp-assessor",
   "version": "1.0.0",
   "description": "",
-  "main": "src/server.js",
+  "main": "app.js", 
   "scripts": {
-    "dev": "nodemon src/server.js",
-    "start": "node src/server.js",
+    "dev": "nodemon app.js", 
+    "start": "node app.js", 
     "db:migrate": "sequelize db:migrate",
     "db:seed:all": "sequelize db:seed:all"
+    
   },
   "keywords": [],
   "author": "",
