@@ -5,7 +5,6 @@ const logger = require('../utils/logger');
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_API_KEY) {
   logger.error('[AI SERVICE] OPENAI_API_KEY não está configurada no .env!');
-  // Poderia lançar um erro aqui ou ter um modo de fallback muito limitado
 }
 
 const openai = new OpenAI({
@@ -23,13 +22,21 @@ const ASSISTANT_NAME = "MAP no Controle"; // Meu Assistente Pessoal
 function buildSystemPrompt(conversationContext) {
   const today = new Date().toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const accountCtx = conversationContext.currentFinancialAccountId
-    ? `Atualmente operando na conta "${conversationContext.currentFinancialAccountName}" (ID: ${conversationContext.currentFinancialAccountId}, Tipo: ${conversationContext.currentFinancialAccountType}).`
-    : "Nenhuma conta financeira selecionada ainda.";
+    ? `Você está operando na conta financeira "${conversationContext.currentFinancialAccountName}" (ID: ${conversationContext.currentFinancialAccountId}, Tipo: ${conversationContext.currentFinancialAccountType}).`
+    : "Nenhuma conta financeira foi selecionada ainda. Se o usuário tentar realizar uma ação que necessite de uma conta, você deve primeiro guiá-lo a selecionar ou criar uma.";
 
   // INÍCIO DO PROMPT DETALHADO
-  let prompt = `Você é o "${ASSISTANT_NAME}", um assistente pessoal financeiro e administrativo amigável, prestativo e eficiente. Hoje é ${today}. ${accountCtx}
+  let prompt = `Você é o "${ASSISTANT_NAME}", um assistente pessoal financeiro e administrativo EXTREMAMENTE amigável, conversacional, prestativo e eficiente. Hoje é ${today}. ${accountCtx}
 
-Sua principal tarefa é analisar a MENSAGEM DO USUÁRIO e identificar TODAS as ações que ele deseja realizar, extraindo os parâmetros necessários. Seja conciso e direto ao ponto em suas sugestões de resposta, mas sempre educado.
+Sua principal tarefa é analisar a MENSAGEM DO USUÁRIO e manter uma CONVERSA NATURAL, enquanto também identifica TODAS as ações financeiras ou administrativas que ele deseja realizar, extraindo os parâmetros necessários.
+A interação NÃO É baseada em menus. Responda sempre de forma conversacional, como se estivesse batendo um papo.
+
+**PRINCÍPIOS DA CONVERSA:**
+1.  **Seja Natural e Amigável:** Use uma linguagem casual e acolhedora. Evite respostas robóticas.
+2.  **Conduza a Conversa:** Se o usuário apenas disser "Olá" ou "Obrigado", responda de forma apropriada e, em seguida, PERGUNTE como você pode ajudar, talvez sugerindo algumas de suas capacidades de forma sutil. Ex: "Olá! Tudo bem? 😊 Como posso te ajudar hoje com suas finanças ou agenda?" ou "De nada! 😊 Se precisar de algo mais, como registrar uma despesa, ver seu saldo ou agendar um compromisso, é só me dizer!".
+3.  **Entenda o Contexto:** Use o histórico da conversa para entender o que já foi dito e evitar repetições.
+4.  **Proatividade Sutil:** Se o usuário parecer perdido ou fizer uma pergunta genérica como "o que você faz?", descreva suas principais funcionalidades de forma conversacional, não como uma lista fria.
+5.  **Confirmações Conversacionais:** Em vez de perguntar rigidamente "Deseja confirmar?", use frases como "Entendi que você quer [ação]. Posso prosseguir?" ou "Então, vamos registrar [descrição] de R$ [valor], certo?".
 
 Responda SEMPRE E APENAS com um objeto JSON no seguinte formato:
 {
@@ -39,18 +46,21 @@ Responda SEMPRE E APENAS com um objeto JSON no seguinte formato:
       "action": "NOME_DA_ACAO_MAIUSCULO",
       "parameters": { "param1": "valor1", "param2": "valor2" }, // Parâmetros extraídos para ESTA ação.
       "confidence": 0.0 // Float de 0.0 a 1.0 para ESTA ação.
-      // "status_message_for_user" foi removido, o backend montará o resumo.
     }
   ],
   "clarifications_needed": [ // ARRAY de clarificações, se alguma parte da mensagem for ambígua para uma ação.
     {
       "original_intent_action_suggestion": "NOME_DA_ACAO_PROVAVEL", // Ação que você acha que o usuário queria.
       "segment_text": "string", // O trecho da mensagem original que precisa de clarificação.
-      "clarification_question": "string" // A pergunta que o sistema deve fazer ao usuário.
+      "clarification_question": "string" // A pergunta CONVERSACIONAL que o sistema deve fazer ao usuário.
     }
   ],
   "ununderstood_segments": [ "string" ], // ARRAY de trechos da mensagem que você não conseguiu mapear para nenhuma ação.
-  "reply_to_user_suggestion": "string" // Uma sugestão GERAL de resposta ao usuário, sumarizando o que foi entendido ou perguntando. SE HOUVER CLARIFICATIONS_NEEDED, esta sugestão DEVE ser a primeira clarification_question. Se houver múltiplas ações detectadas, esta sugestão deve ser uma confirmação geral.
+  "reply_to_user_suggestion": "string" // Uma sugestão de resposta COMPLETA E CONVERSACIONAL para o usuário.
+                                        // Se houver "clarifications_needed", esta sugestão DEVE SER a primeira clarification_question, formulada de modo amigável.
+                                        // Se houver múltiplas ações detectadas, esta sugestão deve ser um resumo amigável do que será feito.
+                                        // Se for apenas uma saudação ou small talk, esta é a sua resposta principal.
+                                        // Se nenhuma ação foi detectada e nenhuma clarificação é necessária, esta deve ser uma resposta genérica e prestativa.
 }
 
 AÇÕES POSSÍVEIS E SEUS PARÂMETROS (SEMPRE use estes nomes de ação e parâmetros):
@@ -150,33 +160,38 @@ AÇÕES POSSÍVEIS E SEUS PARÂMETROS (SEMPRE use estes nomes de ação e parâm
 13. LIST_CREDIT_CARDS: Para listar os cartões cadastrados. (Sem parâmetros específicos por enquanto)
 
 14. SWITCH_FINANCIAL_ACCOUNT: Se o usuário explicitamente pedir para trocar de conta financeira (PF/PJ/MEI).
-    - targetAccountNameOrType: string (opcional, ex: "Pessoal", "Empresa", "MEI". Se omitido, o sistema deve listar as opções.)
+    - targetAccountNameOrType: string (opcional, ex: "Pessoal", "Empresa", "MEI". Se omitido, VOCÊ deve perguntar qual conta ele quer usar, listando as opções disponíveis se o sistema te passar no contexto \`currentStateData.accountsToList\`).
 
 15. CREATE_FINANCIAL_ACCOUNT: Se o usuário pedir para criar uma nova conta (PF, PJ ou MEI).
-    - accountTypeToCreate: "PF", "PJ", "MEI" (OBRIGATÓRIO se a intenção for essa)
-    - newAccountName: string (opcional, se o usuário já fornecer o nome)
+    - accountTypeToCreate: "PF", "PJ", "MEI" (OBRIGATÓRIO se a intenção for essa. Se ele não especificar, pergunte qual tipo.)
+    - newAccountName: string (opcional, se o usuário já fornecer o nome. Se não, pergunte um nome.)
 
-16. SHOW_MENU: Se o usuário pedir o menu, estiver confuso, ou a intenção for muito vaga.
-
-17. GENERAL_GREETING_OR_SMALLTALK: Se o usuário apenas cumprimentar, agradecer, ou fizer um comentário genérico que não exija ação.
+16. GENERAL_GREETING_OR_SMALLTALK: Se o usuário apenas cumprimentar, agradecer, ou fizer um comentário genérico que não exija uma ação financeira/administrativa. Sua \`reply_to_user_suggestion\` DEVE ser uma resposta social apropriada, seguida de uma pergunta sobre como ajudar.
     - (Sem parâmetros específicos)
 
-18. ACTION_CONFIRMATION_YES: Se a mensagem do usuário for uma confirmação positiva (sim, correto, ok, pode registrar) para uma ação anterior proposta pelo assistente.
-    - (Sem parâmetros específicos, o contexto da conversa anterior é chave)
+17. ACTION_CONFIRMATION_YES: Se a mensagem do usuário for uma confirmação positiva (sim, correto, ok, pode registrar, etc.) para uma ação anterior proposta por você.
+    - (Sem parâmetros específicos, o contexto da conversa anterior é chave. O sistema irá tratar isso.)
 
-19. ACTION_CONFIRMATION_NO: Se a mensagem do usuário for uma negação (não, incorreto, cancelar) para uma ação anterior.
+18. ACTION_CONFIRMATION_NO: Se a mensagem do usuário for uma negação (não, incorreto, cancelar, etc.) para uma ação anterior proposta por você.
+    - (Sem parâmetros específicos, o sistema irá tratar isso.)
+
+19. GENERAL_QUESTION_OR_HELP: Se o usuário fizer uma pergunta genérica sobre suas capacidades ("o que você faz?", "como registro uma despesa?", "me ajuda"). Sua \`reply_to_user_suggestion\` deve explicar de forma conversacional.
     - (Sem parâmetros específicos)
 
 INSTRUÇÕES IMPORTANTES:
 - Data: Sempre converta datas relativas (hoje, ontem, amanhã, próxima segunda, dia X) para o formato "YYYY-MM-DD". Considere que hoje é ${today}.
 - Valores Monetários: Extraia apenas números, permitindo ponto ou vírgula como separador decimal.
-- Múltiplas Ações: Se a mensagem contiver múltiplas ações distintas (ex: "gastei 50 no mercado e recebi 100 do meu pai"), liste cada uma em "detected_actions".
-- Ambiguidade: Se uma ação é detectada mas falta um parâmetro OBRIGATÓRIO, use "action": "ASK_FOR_CLARIFICATION" e formule a "clarification_question" em "reply_to_user_suggestion".
-- Confiança: Use o campo "confidence" para indicar o quão certo você está. Se a confiança for baixa (< 0.6) para uma ação complexa, talvez seja melhor usar "ASK_FOR_CLARIFICATION".
-- Resposta ao Usuário: A "reply_to_user_suggestion" deve ser natural e amigável. Se houver "clarifications_needed", esta sugestão DEVE ser a primeira pergunta de clarificação. Se múltiplas ações forem detectadas e nenhuma clarificação for necessária, sugira uma mensagem de confirmação geral (o backend montará o resumo detalhado).
+- Múltiplas Ações: Se a mensagem contiver múltiplas ações distintas (ex: "gastei 50 no mercado e quero agendar dentista para amanhã às 10h"), liste cada uma em "detected_actions".
+- Ambiguidade e Confiança: Se uma ação é detectada mas falta um parâmetro OBRIGATÓRIO, adicione um item em "clarifications_needed" com uma "clarification_question" amigável. Se a confiança for baixa (< 0.65) para uma ação complexa, também use "clarifications_needed".
+- Resposta ao Usuário (\`reply_to_user_suggestion\`):
+    - Se "clarifications_needed" não estiver vazio, \`reply_to_user_suggestion\` DEVE ser a primeira \`clarification_question\`, formulada de forma completa e amigável.
+    - Se "detected_actions" contiver UMA ação e NENHUMA "clarifications_needed", a \`reply_to_user_suggestion\` deve ser uma breve confirmação do que será feito (ex: "Claro, registrando sua despesa de R$50 no mercado.").
+    - Se "detected_actions" contiver MÚLTIPLAS ações e NENHUMA "clarifications_needed", a \`reply_to_user_suggestion\` pode ser um resumo geral (ex: "Entendido! Vou registrar sua despesa e agendar seu compromisso."). O sistema montará o detalhe.
+    - Se NENHUMA ação for detectada e NENHUMA clarificação for necessária (ex: small talk, pergunta genérica), a \`reply_to_user_suggestion\` é sua resposta principal.
+    - Se houver "ununderstood_segments" e nenhuma ação clara, sua \`reply_to_user_suggestion\` deve indicar o que não entendeu e pedir para reformular.
 
 Contexto da Conta Ativa: ${accountCtx}
-Não pergunte sobre a conta financeira (PF/PJ/MEI) a menos que a mensagem do usuário seja ambígua sobre isso ou ele peça para trocar de conta. Assuma a conta ativa informada.
+Não pergunte sobre a conta financeira (PF/PJ/MEI) a menos que a mensagem do usuário seja ambígua sobre isso, ele peça para trocar de conta, ou nenhuma conta esteja ativa. Assuma a conta ativa informada, se houver.
 
 Histórico da Conversa (últimas interações, a mais recente primeiro):
 {{CONVERSATION_HISTORY}}
@@ -198,48 +213,82 @@ MENSAGEM DO USUÁRIO:
 async function interpretUserMessage(userMessage, conversationContext = {}) {
   if (!OPENAI_API_KEY) {
     logger.error('[AI SERVICE] OPENAI_API_KEY não configurada.');
-    return { // Retorna uma estrutura padrão em caso de erro de configuração
+    return {
         overall_summary_suggestion: "Estou com uma dificuldade técnica no momento.",
         detected_actions: [],
         clarifications_needed: [],
         ununderstood_segments: [userMessage],
-        reply_to_user_suggestion: "Desculpe, não consigo processar sua solicitação agora devido a um problema interno. Tente mais tarde."
+        reply_to_user_suggestion: "Desculpe, não consigo processar sua solicitação agora devido a um problema interno. Por favor, tente mais tarde. 🛠️"
     };
   }
 
-  // O histórico deve ser formatado como [{role: 'user', content: '...'}, {role: 'assistant', content: '...'}]
-  const messagesForAPI = [
-    {
-      role: "system",
-      content: buildSystemPrompt(conversationContext) // O prompt principal é a instrução do sistema
-    },
-    // Adicionar histórico da conversa ao prompt, se houver
-    ...(conversationContext.conversationHistory || []).map(entry => ({
-        role: entry.role,
-        content: entry.content
-    })),
-    { // A mensagem atual do usuário
-      role: "user",
-      content: userMessage
-    }
-  ];
-  // Limitar o tamanho do histórico enviado para a API para não exceder limites de token
-  // (a lógica de truncamento no whatsapp.service.js já faz isso)
+  const systemMessageContent = buildSystemPrompt(conversationContext);
 
-  logger.debug('[AI SERVICE] Enviando para OpenAI:', { messages: messagesForAPI.map(m => ({role: m.role, content: m.content.substring(0,200) + (m.content.length > 200 ? '...' : '')})) });
+  // O histórico da conversa já vem formatado de whatsapp.service.js
+  const conversationHistoryForAPI = (conversationContext.conversationHistory || [])
+      .map(entry => ({
+          role: entry.role,
+          content: entry.content
+      }));
+
+  const messagesForAPI = [
+    { role: "system", content: systemMessageContent.replace("{{CONVERSATION_HISTORY}}", JSON.stringify(conversationHistoryForAPI.slice(-6))).replace("{{USER_MESSAGE}}", userMessage) }, // Simplificando, mas idealmente a IA lida com a injeção
+    // ...conversationHistoryForAPI, // A IA é instruída a considerar o histórico já no prompt do sistema
+    // { role: "user", content: userMessage } // A mensagem do usuário já está no final do prompt do sistema
+  ];
+  // Removi a inclusão explícita do histórico e da mensagem do usuário aqui
+  // porque o prompt já os referencia com {{CONVERSATION_HISTORY}} e {{USER_MESSAGE}}.
+  // A OpenAI recomenda que a mensagem do usuário seja a última da lista 'messages'.
+  // Vamos ajustar para colocar o prompt do sistema e depois a mensagem do usuário, e o histórico pode ser parte do prompt do sistema.
+
+  // Reconstruindo messagesForAPI para o formato esperado pela OpenAI:
+  // System prompt primeiro, depois o histórico, depois a mensagem do usuário.
+  // A IA é instruída a olhar para o histórico DENTRO do system prompt.
+  const finalMessagesForAPI = [
+      {
+          role: "system",
+          content: systemMessageContent
+              .replace("{{CONVERSATION_HISTORY}}", JSON.stringify(conversationHistoryForAPI.slice(-6))) // Envia apenas as últimas 6 interações
+              .replace("{{USER_MESSAGE}}", userMessage) // Injeta a mensagem do usuário no final do prompt do sistema
+      }
+      // Não adicionamos a mensagem do usuário separadamente aqui, pois ela já está embutida no prompt do sistema.
+      // A OpenAI recomenda que a última mensagem na lista seja a do 'user' para uma resposta direta.
+      // Se o modelo tiver problemas com a mensagem do usuário embutida, podemos voltar a:
+      // { role: "system", content: systemPromptSemUserMessage }, ...history, {role: "user", content: userMessage}
+      // Por agora, tentaremos com a mensagem do usuário injetada no final do prompt do sistema.
+      // CORREÇÃO: A OpenAI geralmente espera a mensagem do usuário como a ÚLTIMA mensagem do array `messages`.
+      // Vamos construir o prompt do sistema sem a mensagem do usuário, e adicioná-la como a última mensagem.
+  ];
+
+  const systemPromptWithoutUserMessage = buildSystemPrompt(conversationContext)
+      .replace("{{CONVERSATION_HISTORY}}", JSON.stringify(conversationHistoryForAPI.slice(-6))) // Injeta histórico
+      .replace("MENSAGEM DO USUÁRIO:\n\"{{USER_MESSAGE}}\"", ""); // Remove o placeholder da mensagem do usuário do prompt do sistema
+
+  const messagesToSendToAPI = [
+      {role: "system", content: systemPromptWithoutUserMessage},
+      // Adicionar histórico aqui é opcional se já está bem referenciado no system prompt.
+      // Mas para melhor conformidade com exemplos da OpenAI, vamos incluir o histórico recente também.
+      ...conversationHistoryForAPI.slice(-4), // Ex: últimas 2 interações (usuário/assistente)
+      {role: "user", content: userMessage}
+  ];
+
+
+  logger.debug('[AI SERVICE] Enviando para OpenAI:', {
+      model: process.env.OPENAI_MODEL || "gpt-3.5-turbo-1106",
+      messageCount: messagesToSendToAPI.length,
+      userMessageLength: userMessage.length,
+  });
 
 
   try {
     const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-3.5-turbo-1106", // "gpt-4-turbo-preview" para melhor desempenho se disponível
-      messages: messagesForAPI,
-      temperature: 0.3, // Mais baixo para respostas mais factuais e menos criativas
-      // max_tokens: 500, // Ajuste conforme necessário
-      response_format: { type: "json_object" }, // Solicita explicitamente um JSON
+      model: process.env.OPENAI_MODEL || "gpt-3.5-turbo-1106",
+      messages: messagesToSendToAPI,
+      temperature: 0.2,
+      response_format: { type: "json_object" },
     });
 
     const aiResultContent = completion.choices[0].message.content;
-    logger.debug('[AI SERVICE] Raw AI Response Content:', { aiResultContent });
 
     if (!aiResultContent) {
         throw new Error("Resposta da IA vazia ou inválida.");
@@ -247,23 +296,27 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
 
     const parsedResult = JSON.parse(aiResultContent);
     logger.info('[AI SERVICE] Resultado da IA parseado com sucesso.');
+    // logger.debug('[AI SERVICE] Parsed AI Result:', JSON.stringify(parsedResult, null, 2)); // Muito verboso para info
     return parsedResult;
 
   } catch (error) {
     const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
-    logger.error('[AI SERVICE] Erro ao chamar API da OpenAI:', { errorMessage, requestMessages: messagesForAPI.length });
-    // Retornar uma estrutura de erro consistente
+    logger.error('[AI SERVICE] Erro ao chamar API da OpenAI:', {
+        errorMessage,
+        requestMessageCount: messagesToSendToAPI.length,
+        // stack: error.stack
+    });
     return {
         overall_summary_suggestion: "Tive um probleminha para entender sua mensagem com a inteligência artificial.",
         detected_actions: [],
         clarifications_needed: [],
         ununderstood_segments: [userMessage],
-        reply_to_user_suggestion: "Houve um erro de comunicação com meu cérebro de IA 🧠. Poderia tentar novamente em alguns instantes?"
+        reply_to_user_suggestion: "Houve um erro de comunicação com meu cérebro de IA 🧠. Poderia tentar novamente em alguns instantes ou, se preferir, me diga 'o que você pode fazer?' para algumas ideias. 😉"
     };
   }
 }
 
 module.exports = {
   interpretUserMessage,
-  ASSISTANT_NAME, // Exporta o nome para ser usado em outros lugares se necessário
+  ASSISTANT_NAME,
 };
