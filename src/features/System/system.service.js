@@ -15,7 +15,7 @@ async function getSystemPreferences() {
     let preferences = await UserPreference.findOne({ order: [['id', 'ASC']] });
     if (!preferences) {
       logger.info('Nenhuma preferência do sistema encontrada. Criando com valores padrão.');
-      preferences = await UserPreference.create({});
+      preferences = await UserPreference.create({}); // Cria com defaults do modelo
     }
     logger.info('Preferências do sistema recuperadas.');
     return preferences.toJSON();
@@ -36,26 +36,34 @@ async function updateSystemPreferences(updateData) {
     let preferences = await UserPreference.findOne({ order: [['id', 'ASC']], transaction: t });
     if (!preferences) {
       logger.info('Nenhuma preferência do sistema encontrada para atualizar. Criando uma nova.');
+      // Se criar aqui, garantir que todos os campos possíveis sejam passados ou que o modelo tenha defaults.
       preferences = await UserPreference.create(updateData, { transaction: t });
     } else {
+      // Lista de campos permitidos para atualização para evitar que campos indesejados sejam passados.
       const allowedUpdates = [
         'enableWaterReminder', 'waterReminderFrequencyType', 'waterReminderCustomIntervalMinutes',
         'waterReminderStartTime', 'waterReminderEndTime', 'enableMotivationMessage',
         'motivationMessageTime', 'dailySummaryTime', 'weeklySummaryDayOfWeek',
         'weeklySummaryTime', 'monthlyReportDayOfMonth', 'monthlyReportTime',
-        'defaultAppointmentReminderLeadTimeMinutes'
+        'defaultAppointmentReminderLeadTimeMinutes', 'recurringJobSchedule',
+        'appointmentReminderJobSchedule', 'alertsJobSchedule', 'dueAlertLeadDays', 'fiscalAlertLeadDaysMEI'
+        // Adicionar outros campos de UserPreference aqui se existirem
       ];
       const filteredData = {};
       for (const key of allowedUpdates) {
-        if (updateData[key] !== undefined) {
+        if (updateData.hasOwnProperty(key)) { // Usar hasOwnProperty para incluir valores como false ou 0
           filteredData[key] = updateData[key];
         }
       }
-      await preferences.update(filteredData, { transaction: t });
+      if (Object.keys(filteredData).length > 0) {
+        await preferences.update(filteredData, { transaction: t });
+      } else {
+        logger.info('[SYSTEM SERVICE] Nenhum dado válido para atualizar preferências do sistema.');
+      }
     }
     await t.commit();
     logger.info('Preferências do sistema atualizadas com sucesso.');
-    return preferences.toJSON();
+    return preferences.reload().then(p => p.toJSON()); // Recarregar para garantir dados mais recentes
   } catch (error) {
     await t.rollback();
     logger.error(`Erro ao atualizar preferências do sistema: ${error.message}`, { error, updateData });
@@ -77,13 +85,18 @@ async function createFinancialCategory(categoryData) {
       const error = new Error('Nome e Tipo são obrigatórios para a categoria financeira.');
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
+    if (!['Entrada', 'Saída', 'Ambos'].includes(type)) {
+        const error = new Error('Tipo de categoria inválido. Use Entrada, Saída ou Ambos.');
+        error.statusCode = 400; error.status = 'fail'; throw error;
+    }
 
     const finalParentId = parentId === undefined || parentId === null || parentId === '' ? null : parseInt(parentId, 10);
 
     const existingCategory = await FinancialCategory.findOne({
       where: {
-        name: name,
-        parentId: finalParentId
+        name: { [Op.iLike]: name }, // Verifica case-insensitive para evitar duplicidade de nomes parecidos
+        parentId: finalParentId,
+        // type: type // Descomentar se o tipo também fizer parte da unicidade com o pai
       }
     });
     if (existingCategory) {
@@ -98,6 +111,8 @@ async function createFinancialCategory(categoryData) {
         const error = new Error(`Categoria pai com ID ${finalParentId} não encontrada.`);
         error.statusCode = 404; error.status = 'fail'; throw error;
       }
+      // Opcional: Verificar se o tipo da subcategoria é compatível com o tipo da categoria pai
+      // Ex: Se pai é 'Saída', subcategoria não pode ser 'Entrada' (a menos que 'Ambos')
     }
 
     const category = await FinancialCategory.create({ name, type, parentId: finalParentId, isDefault, isActive });
@@ -116,7 +131,7 @@ async function createFinancialCategory(categoryData) {
  * @returns {Promise<Array<object>>}
  */
 async function getAllFinancialCategories(queryParams = {}) {
-  const { hierarchical = false, onlyTopLevel = false, isActive } = queryParams;
+  const { hierarchical = false, onlyTopLevel = false, isActive, type } = queryParams;
   try {
     const whereConditions = {};
     if (onlyTopLevel) {
@@ -125,12 +140,16 @@ async function getAllFinancialCategories(queryParams = {}) {
     if (isActive !== undefined) {
         whereConditions.isActive = (isActive === 'true' || isActive === true);
     }
+    if (type) {
+        whereConditions.type = { [Op.or]: [type, 'Ambos'] };
+    }
+
 
     if (!hierarchical) {
       const categories = await FinancialCategory.findAll({
         where: whereConditions,
         order: [
-            sequelize.literal('"parentId" IS NULL DESC'),
+            sequelize.literal('"parentId" IS NULL DESC'), // Principais primeiro
             ['parentId', 'ASC NULLS FIRST'],
             ['name', 'ASC']
         ],
@@ -138,9 +157,9 @@ async function getAllFinancialCategories(queryParams = {}) {
       });
       return categories.map(c => c.toJSON());
     } else {
-      const activeFilter = isActive !== undefined ? {isActive: (isActive === 'true' || isActive === true)} : {};
+      // Para a busca hierárquica, aplicamos o filtro isActive e type na busca inicial
       const allCategories = await FinancialCategory.findAll({
-          where: activeFilter, // Aplica filtro de isActive aqui
+          where: whereConditions, // whereConditions já inclui isActive e type se fornecidos
           order: [['name', 'ASC']]
         });
 
@@ -155,14 +174,14 @@ async function getAllFinancialCategories(queryParams = {}) {
 
       categoriesMap.forEach(category => {
         if (category.parentId && categoriesMap.has(category.parentId)) {
-          categoriesMap.get(category.parentId).subcategories.push(category);
+          // Adiciona apenas se a subcategoria estiver no mapa (ou seja, passou no filtro isActive/type)
+           if (categoriesMap.has(category.id)) { // Garante que a subcategoria em si também passou no filtro
+                categoriesMap.get(category.parentId).subcategories.push(category);
+           }
         } else if (!category.parentId) {
           rootCategories.push(category);
         }
       });
-      
-      // Se onlyTopLevel for true com hierarchical, retornamos apenas as raízes (que já contêm seus filhos)
-      // Se onlyTopLevel for false (padrão) com hierarchical, o resultado já é o desejado (raízes com filhos)
       return rootCategories;
     }
   } catch (error) {
@@ -183,11 +202,10 @@ async function getFinancialCategoryById(categoryId) {
                 {
                     model: FinancialCategory,
                     as: 'subcategories',
-                    include: [{ // Para ver o pai da subcategoria (que é a categoria atual) - opcional aqui
-                        model: FinancialCategory,
-                        as: 'parentCategory',
-                        attributes:['id','name']
-                    }]
+                    // Opcional: filtrar subcategorias ativas se necessário
+                    // where: { isActive: true },
+                    // required: false, // para não falhar se não tiver subcategorias
+                    include: [{ model: FinancialCategory, as: 'parentCategory', attributes:['id','name']}]
                 },
                 { model: FinancialCategory, as: 'parentCategory', attributes: ['id', 'name'] }
             ]
@@ -219,15 +237,17 @@ async function updateFinancialCategory(categoryId, updateData) {
       e.statusCode = 404; e.status = 'fail'; throw e;
     }
 
-    const { name } = updateData;
-    // Trata parentId: se "parentId" está no updateData, usa seu valor (null se string vazia/null/undefined). Senão, mantém o parentId atual.
-    const newParentId = updateData.hasOwnProperty('parentId') ? (updateData.parentId === null || updateData.parentId === undefined || updateData.parentId === '' ? null : parseInt(updateData.parentId,10) ) : category.parentId;
-    const newName = name !== undefined ? name : category.name;
+    const newName = updateData.hasOwnProperty('name') ? updateData.name : category.name;
+    const newParentId = updateData.hasOwnProperty('parentId')
+        ? (updateData.parentId === null || updateData.parentId === undefined || updateData.parentId === '' ? null : parseInt(updateData.parentId,10))
+        : category.parentId;
 
-    if ((name !== undefined && name !== category.name) || (updateData.hasOwnProperty('parentId') && newParentId !== category.parentId)) {
+    // Verifica unicidade de nome dentro do mesmo pai
+    if ((updateData.hasOwnProperty('name') && updateData.name !== category.name) ||
+        (updateData.hasOwnProperty('parentId') && newParentId !== category.parentId)) {
       const existingCategory = await FinancialCategory.findOne({
         where: {
-          name: newName,
+          name: { [Op.iLike]: newName },
           parentId: newParentId,
           id: { [Op.ne]: categoryId }
         },
@@ -235,29 +255,23 @@ async function updateFinancialCategory(categoryId, updateData) {
       });
       if (existingCategory) {
         const parentMsg = newParentId ? `dentro da categoria pai ID ${newParentId}` : 'como categoria principal';
-        const error = new Error(`Já existe uma categoria com o nome "${newName}" ${parentMsg}.`);
+        const error = new Error(`Já existe outra categoria com o nome "${newName}" ${parentMsg}.`);
         error.statusCode = 409; error.status = 'fail'; throw error;
       }
     }
-    
+
+    // Prevenção de ciclo de parentesco
     if (newParentId !== null && newParentId !== undefined) {
-        if (newParentId === categoryId) {
+        if (newParentId === categoryId) { // Categoria não pode ser pai de si mesma
             const error = new Error('Uma categoria não pode ser pai de si mesma.');
             error.statusCode = 400; error.status = 'fail'; throw error;
         }
-        // Lógica para prevenir ciclo: buscar todos os descendentes da categoria atual
-        // e verificar se newParentId é um deles.
-        // Esta é uma query recursiva ou um loop de busca. Para simplificar:
-        async function isDescendant(childId, ancestorId, transaction) {
-            let currentId = childId;
-            const visited = new Set();
-            while (currentId !== null && currentId !== undefined) {
-                if (currentId === ancestorId) return true; // Encontrou ciclo
-                if (visited.has(currentId)) break; // Ciclo detectado de outra forma ou já visitado
-                visited.add(currentId);
-                const currentCat = await FinancialCategory.findByPk(currentId, { attributes: ['parentId'], transaction });
-                if (!currentCat) break;
-                currentId = currentCat.parentId;
+        // Verifica se o novo pai proposto é um descendente da categoria atual
+        async function isDescendant(potentialChildId, ancestorIdToFind, transaction) {
+            let current = await FinancialCategory.findByPk(potentialChildId, { attributes: ['parentId'], transaction });
+            while (current && current.parentId !== null) {
+                if (current.parentId === ancestorIdToFind) return true; // Ciclo encontrado
+                current = await FinancialCategory.findByPk(current.parentId, { attributes: ['parentId'], transaction });
             }
             return false;
         }
@@ -267,23 +281,28 @@ async function updateFinancialCategory(categoryId, updateData) {
         }
     }
 
-    // Campos permitidos para atualização
     const allowedFields = ['name', 'type', 'parentId', 'isActive', 'isDefault'];
     const filteredUpdateData = {};
     for(const key of allowedFields){
         if(updateData.hasOwnProperty(key)){
             if(key === 'parentId'){
                 filteredUpdateData[key] = (updateData[key] === null || updateData[key] === undefined || updateData[key] === '') ? null : parseInt(updateData[key],10);
-            } else {
+            } else if (key === 'type' && !['Entrada', 'Saída', 'Ambos'].includes(updateData[key])) {
+                // Ignorar tipo inválido ou lançar erro
+                logger.warn(`Tipo de categoria inválido fornecido na atualização: ${updateData[key]}. Mantendo o tipo atual.`);
+            }
+            else {
                 filteredUpdateData[key] = updateData[key];
             }
         }
     }
 
-    await category.update(filteredUpdateData, { transaction: t });
+    if (Object.keys(filteredUpdateData).length > 0) {
+        await category.update(filteredUpdateData, { transaction: t });
+    }
+
     await t.commit();
     logger.info(`Categoria Financeira ID ${categoryId} atualizada: "${category.name}"`);
-    
     const reloadedCategory = await FinancialCategory.findByPk(categoryId, {
         include: [
             { model: FinancialCategory, as: 'subcategories' },
@@ -308,47 +327,51 @@ async function updateFinancialCategory(categoryId, updateData) {
  */
 async function deleteFinancialCategory(categoryId, options = {}) {
   const {
-    actionForSubcategories = 'restrict', // 'delete', 'promote', 'restrict'
-    actionForTransactions = 'restrict',  // 'delete', 'reassign', 'restrict'
+    actionForSubcategories = 'restrict', // 'delete', 'promote', 'reassign_children_to_grandparent', 'restrict'
+    actionForTransactions = 'restrict',  // 'delete', 'reassign', 'set_null', 'restrict'
     reassignToCategoryId = null
   } = options;
 
-  // Usar uma transação gerenciada externamente se options.transaction for fornecido (para chamadas recursivas)
-  // Senão, iniciar uma nova transação.
   const t = options.transaction || await sequelize.transaction();
 
   try {
     const category = await FinancialCategory.findByPk(categoryId, { transaction: t });
     if (!category) {
-      if (!options.transaction) await t.rollback(); // Só faz rollback se esta função iniciou a transação
+      if (!options.transaction) await t.rollback();
       logger.warn(`Categoria Financeira ID ${categoryId} não encontrada para exclusão.`);
       return false;
     }
 
-    // 1. Lidar com transações
-    const transactions = await FinancialTransaction.findAll({ where: { financialCategoryId: categoryId }, transaction: t });
-    if (transactions.length > 0) {
+    // 1. Lidar com transações associadas à categoria a ser deletada
+    const transactionsCount = await FinancialTransaction.count({ where: { financialCategoryId: categoryId }, transaction: t });
+    if (transactionsCount > 0) {
       if (actionForTransactions === 'restrict') {
-        const e = new Error(`Não é possível excluir a categoria "${category.name}" (ID ${categoryId}) pois está associada a ${transactions.length} transações. Ação: 'restrict'.`);
+        const e = new Error(`Categoria "${category.name}" (ID ${categoryId}) tem ${transactionsCount} transações. Ação 'restrict' impede a exclusão.`);
         e.statusCode = 409; e.status = 'fail'; throw e;
       } else if (actionForTransactions === 'reassign') {
         if (!reassignToCategoryId) {
-          const e = new Error('ID da categoria para reassociação de transações é obrigatório (reassignToCategoryId).');
+          const e = new Error('Para reassociar transações, "reassignToCategoryId" é obrigatório.');
           e.statusCode = 400; e.status = 'fail'; throw e;
         }
         const targetCategory = await FinancialCategory.findByPk(reassignToCategoryId, { transaction: t });
         if (!targetCategory || targetCategory.id === categoryId) {
-          const e = new Error(`Categoria de destino para reassociação (ID: ${reassignToCategoryId}) inválida ou é a mesma.`);
+          const e = new Error(`Categoria de destino para transações (ID: ${reassignToCategoryId}) é inválida ou é a mesma.`);
           e.statusCode = 400; e.status = 'fail'; throw e;
         }
         await FinancialTransaction.update(
           { financialCategoryId: reassignToCategoryId },
           { where: { financialCategoryId: categoryId }, transaction: t }
         );
-        logger.info(`${transactions.length} transações da categoria "${category.name}" reassociadas para "${targetCategory.name}".`);
+        logger.info(`${transactionsCount} transações da categoria "${category.name}" reassociadas para "${targetCategory.name}".`);
+      } else if (actionForTransactions === 'set_null') {
+        await FinancialTransaction.update(
+          { financialCategoryId: null },
+          { where: { financialCategoryId: categoryId }, transaction: t }
+        );
+        logger.info(`${transactionsCount} transações da categoria "${category.name}" agora estão sem categoria.`);
       } else if (actionForTransactions === 'delete') {
         await FinancialTransaction.destroy({ where: { financialCategoryId: categoryId }, transaction: t });
-        logger.warn(`${transactions.length} transações associadas à categoria "${category.name}" foram DELETADAS.`);
+        logger.warn(`${transactionsCount} transações associadas à categoria "${category.name}" foram DELETADAS.`);
       }
     }
 
@@ -356,31 +379,32 @@ async function deleteFinancialCategory(categoryId, options = {}) {
     const subcategories = await FinancialCategory.findAll({ where: { parentId: categoryId }, transaction: t });
     if (subcategories.length > 0) {
       if (actionForSubcategories === 'restrict') {
-        const e = new Error(`Não é possível excluir a categoria "${category.name}" (ID ${categoryId}) pois possui ${subcategories.length} subcategorias. Ação: 'restrict'.`);
+        const e = new Error(`Categoria "${category.name}" (ID ${categoryId}) tem ${subcategories.length} subcategorias. Ação 'restrict' impede a exclusão.`);
         e.statusCode = 409; e.status = 'fail'; throw e;
-      } else if (actionForSubcategories === 'promote') {
+      } else if (actionForSubcategories === 'promote') { // Promove para o nível da categoria deletada
         await FinancialCategory.update(
-          { parentId: null },
+          { parentId: category.parentId }, // Novo pai é o pai da categoria deletada
           { where: { parentId: categoryId }, transaction: t }
         );
-        logger.info(`${subcategories.length} subcategorias de "${category.name}" foram promovidas.`);
+        logger.info(`${subcategories.length} subcategorias de "${category.name}" foram promovidas para o nível do pai (ID: ${category.parentId || 'raiz'}).`);
       } else if (actionForSubcategories === 'delete') {
         for (const sub of subcategories) {
-          // Chamada recursiva, passando a mesma transação e opções
+          // Chamada recursiva, passando a mesma transação e as mesmas opções para consistência
           await deleteFinancialCategory(sub.id, { ...options, transaction: t });
         }
         logger.warn(`${subcategories.length} subcategorias de "${category.name}" foram DELETADAS recursivamente.`);
       }
+      // Opção 'reassign_children_to_grandparent' é a mesma que 'promote' neste contexto.
     }
 
-    // 3. Deletar a categoria
+    // 3. Deletar a categoria em si
     await category.destroy({ transaction: t });
-    
-    if (!options.transaction) await t.commit(); // Só faz commit se esta função iniciou a transação
-    logger.info(`Categoria Financeira ID ${categoryId} ("${category.name}") deletada.`);
+
+    if (!options.transaction) await t.commit();
+    logger.info(`Categoria Financeira ID ${categoryId} ("${category.name}") e seus dependentes (conforme opções) foram deletados.`);
     return true;
   } catch (error) {
-    if (!options.transaction) await t.rollback(); // Só faz rollback se esta função iniciou a transação
+    if (!options.transaction) await t.rollback();
     logger.error(`Erro ao deletar categoria financeira ID ${categoryId}: ${error.message}`, { error });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
@@ -388,13 +412,52 @@ async function deleteFinancialCategory(categoryId, options = {}) {
 }
 
 
-// --- Gerenciamento de Frases Motivacionais (Permanece o mesmo) ---
-async function createMotivationalPhrase(phraseData) { /* ...código anterior... */ }
-async function getAllMotivationalPhrases(queryParams = {}) { /* ...código anterior... */ }
-async function updateMotivationalPhrase(phraseId, updateData) { /* ...código anterior... */ }
-async function deleteMotivationalPhrase(phraseId) { /* ...código anterior... */ }
-// (Cole os códigos das funções de MotivationalPhrase aqui, eles não mudam)
-// COPIANDO AS FUNÇÕES DE MOTIVATIONALPHRASE PARA COMPLETUDE DO ARQUIVO:
+/**
+ * Busca uma categoria financeira pelo nome e opcionalmente pelo tipo.
+ * @param {string} name - Nome da categoria.
+ * @param {string|null} type - 'Entrada', 'Saída', ou null para não filtrar por tipo.
+ * @param {number|null} financialAccountId - Opcional, para futuras buscas com escopo por conta.
+ * @returns {Promise<object|null>} A categoria encontrada ou null.
+ */
+async function findFinancialCategoryByNameAndType(name, type = null, financialAccountId = null) {
+  if (!name || typeof name !== 'string' || name.trim() === '') return null;
+  try {
+    const whereConditions = {
+      // name: { [Op.iLike]: name }, // Busca exata case-insensitive
+      isActive: true
+    };
+    // Para busca exata, podemos usar LOWER diretamente no DB se suportado, ou buscar e filtrar no JS.
+    // Sequelize iLike funciona bem para PostgreSQL. Para outros, pode ser necessário Op.eq com name.toLowerCase() se o DB for case sensitive por padrão.
+
+    if (type) {
+      whereConditions.type = { [Op.or]: [type, 'Ambos'] };
+    }
+    // financialAccountId não está no modelo FinancialCategory, então não pode ser usado aqui.
+
+    const categories = await FinancialCategory.findAll({ where: whereConditions });
+    // Filtro case-insensitive no nome após a busca, se iLike não for suficiente ou para garantir
+    const foundCategory = categories.find(cat => cat.name.toLowerCase() === name.toLowerCase());
+
+    if (foundCategory) {
+      logger.info(`[SYSTEM SERVICE] Categoria encontrada: "${foundCategory.name}" (ID: ${foundCategory.id}) para nome "${name}" e tipo "${type || 'qualquer'}".`);
+      return foundCategory.toJSON();
+    }
+    logger.warn(`[SYSTEM SERVICE] Categoria não encontrada por nome exato "${name}" e tipo "${type || 'qualquer'}".`);
+    return null;
+  } catch (error) {
+    logger.error(`Erro ao buscar categoria por nome e tipo: ${error.message}`, { error, name, type });
+    return null;
+  }
+}
+
+// Função genérica para buscar por nome (usada como fallback ou se tipo não importa)
+async function findFinancialCategoryByName(name, financialAccountId = null) {
+    // financialAccountId não é usado aqui, pois FinancialCategory não está ligada diretamente a FinancialAccount
+    return findFinancialCategoryByNameAndType(name, null, null); // Passa null para type e financialAccountId
+}
+
+
+// --- Gerenciamento de Frases Motivacionais ---
 async function createMotivationalPhrase(phraseData) {
   try {
     if (!phraseData.text) {
@@ -433,7 +496,18 @@ async function updateMotivationalPhrase(phraseId, updateData) {
         const e = new Error('Frase motivacional não encontrada.');
         e.statusCode = 404; e.status = 'fail'; throw e;
     }
-    await phrase.update(updateData);
+    // Filtrar campos permitidos para atualização
+    const allowedFields = ['text', 'isActive'];
+    const filteredData = {};
+    for (const key of allowedFields) {
+        if (updateData.hasOwnProperty(key)) {
+            filteredData[key] = updateData[key];
+        }
+    }
+    if (Object.keys(filteredData).length === 0) {
+        return phrase.toJSON(); // Nada a atualizar
+    }
+    await phrase.update(filteredData);
     logger.info(`Frase Motivacional atualizada: ID ${phrase.id}`);
     return phrase.toJSON();
   } catch (error) {
@@ -468,7 +542,9 @@ module.exports = {
   getAllFinancialCategories,
   getFinancialCategoryById,
   updateFinancialCategory,
-  deleteFinancialCategory, // A chamada direta já usa a lógica interna de transação
+  deleteFinancialCategory,
+  findFinancialCategoryByNameAndType, // EXPORTADA
+  findFinancialCategoryByName,        // EXPORTADA
   createMotivationalPhrase,
   getAllMotivationalPhrases,
   updateMotivationalPhrase,
