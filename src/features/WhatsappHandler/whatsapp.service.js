@@ -37,9 +37,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, rawPay
   };
 
   try {
-    const clientNameFromPayload = rawPayload?.sender?.name || rawPayload?.notifyName || rawPayload?.pushName || `Usuário ${senderPhone.slice(-4)}`;
-    const client = await clientService.findOrCreateClientByPhone(senderPhone, { name: clientNameFromPayload }, true); // true para criar conta PF default
-
+    
+    const clientDisplayName = (pushName && pushName.trim() !== "⠀") ? pushName : `Usuário ${senderPhone.slice(-4)}`;
+    const client = await clientService.findOrCreateClientByPhone(senderPhone, { name: clientDisplayName }, true); // true para criar conta PF default
     if (!client) { /* ... erro fatal, log e talvez mensagem de erro ... */ return; }
 
     // Adiciona mensagem atual ao histórico (antes de qualquer processamento de estado)

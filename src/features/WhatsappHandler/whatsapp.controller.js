@@ -1,81 +1,58 @@
 // src/features/WhatsappHandler/whatsapp.controller.js
-const whatsappService = require('./whatsapp.service'); // O serviço que processa a lógica
+const whatsappService = require('./whatsapp.service');
 const logger = require('../../utils/logger');
 
-/**
- * Recebe notificações de webhook da Z-API (novas mensagens, status, etc.).
- */
 async function handleIncomingMessage(req, res, next) {
   try {
     const payload = req.body;
-    logger.info('[WHATSAPP CONTROLLER] Webhook da Z-API recebido:', { payload: JSON.stringify(payload).substring(0, 500) + '...' }); // Loga o payload (cuidado com dados sensíveis em prod)
-
-    // A Z-API pode enviar diferentes tipos de eventos.
-    // Precisamos identificar se é uma mensagem de texto de um cliente.
-    // A estrutura exata do payload da Z-API para 'message' precisa ser verificada na documentação deles.
-    // Exemplo comum:
-    // if (payload.type === 'message' && payload.message && payload.message.type === 'chat' && !payload.message.fromMe) {
-
-    // ASSUMINDO que o payload principal para uma nova mensagem seja algo como:
-    // { "messageId": "...", "timestamp": 123, "phone": "5511999999999", "message": "Texto da mensagem", "isGroup": false, ... }
-    // Ou pode estar aninhado: payload.data.message, payload.events[0].message etc.
-    // **VOCÊ PRECISARÁ AJUSTAR A EXTRAÇÃO DO NÚMERO E MENSAGEM CONFORME A DOCUMENTAÇÃO REAL DA Z-API**
+    // Log completo do payload (para depuração inicial, pode reduzir em produção ou mascarar dados)
+    logger.info('[WHATSAPP CONTROLLER] Webhook da Z-API recebido:', { payload }); // Logar o objeto inteiro
 
     let senderPhone = null;
     let messageText = null;
-    let isFromMe = false; // Para ignorar mensagens enviadas pelo próprio bot/número
+    let isFromMe = false;
+    let pushName = null; // Para o nome do contato
 
-    // Adapte esta lógica baseada no payload real da Z-API
-    // Exemplo 1: Payload direto
-    if (payload.phone && payload.message && typeof payload.message === 'string') {
-        senderPhone = payload.phone;
-        messageText = payload.message;
-        isFromMe = payload.fromMe || payload.isFromMe || false;
+    // Verificar se é um evento de mensagem recebida e extrair os dados
+    // Com base no seu payload:
+    if (payload.type === 'ReceivedCallback' && payload.text && typeof payload.text.message === 'string' && payload.phone) {
+      senderPhone = payload.phone;
+      messageText = payload.text.message;
+      isFromMe = payload.fromMe || false; // Z-API já fornece `fromMe` diretamente
+      pushName = payload.chatName || payload.senderName || null; // Tenta pegar o nome
+      if (pushName === "⠀") pushName = null; // Limpa se for só o caractere invisível
+    } else if (payload.type === 'MessageReceived' && payload.message?.body && payload.message?.sender) { // Outra estrutura possível que algumas APIs usam
+        senderPhone = payload.message.sender.replace('@c.us', ''); // Exemplo se vier com sufixo
+        messageText = payload.message.body;
+        isFromMe = payload.message.fromMe;
+        pushName = payload.message.notifyName || payload.message.senderName;
     }
-    // Exemplo 2: Payload aninhado comum em algumas APIs de WhatsApp
-    else if (payload.messages && payload.messages.length > 0 && payload.messages[0].type === 'text') {
-        const msgObj = payload.messages[0];
-        senderPhone = msgObj.from; // ou msgObj.author
-        messageText = msgObj.text.body;
-        isFromMe = msgObj.id.fromMe || false;
-    }
-    // Exemplo 3: Se a Z-API usar uma estrutura específica para eventos de mensagem
-    // else if (payload.event === 'onmessage' && payload.data?.message?.body) {
-    //     senderPhone = payload.data.sender.id; // ou similar
-    //     messageText = payload.data.message.body;
-    //     isFromMe = payload.data.message.fromMe;
-    // }
-    // Adicione mais 'else if' conforme a estrutura do payload da Z-API para diferentes tipos de mensagens (texto, imagem, etc.)
+    // Adicione mais 'else if' aqui se a Z-API tiver outras estruturas de payload para mensagens de texto
+    // ou para diferentes tipos de eventos que você queira tratar (ex: status de mensagem, cliques em botões).
+
 
     if (isFromMe) {
-        logger.info('[WHATSAPP CONTROLLER] Mensagem de mim mesmo, ignorando.');
-        return res.status(200).json({ status: 'success', message: 'Echo message ignored.' });
+      logger.info('[WHATSAPP CONTROLLER] Mensagem de mim mesmo (fromMe=true), ignorando.');
+      return res.status(200).json({ status: 'success', message: 'Echo message ignored.' });
     }
 
     if (senderPhone && messageText) {
-      // Remove caracteres não numéricos do telefone, se necessário, e garante DDI
-      senderPhone = senderPhone.replace(/\D/g, '');
-      if (!senderPhone.startsWith('55') && senderPhone.length > 9) { // Heurística para adicionar 55 se não tiver
-          // senderPhone = '55' + senderPhone; // Cuidado com essa lógica, pode ser falha.
-      }
+      // Normalizar telefone (remover não dígitos já é feito no service findOrCreateClientByPhone)
+      // senderPhone = senderPhone.replace(/\D/g, '');
 
-      await whatsappService.processIncomingMessage(senderPhone, messageText, payload);
+      // Passar o rawPayload também pode ser útil para o service ter acesso a outros campos se necessário
+      await whatsappService.processIncomingMessage(senderPhone, messageText, pushName, payload);
       res.status(200).json({ status: 'success', message: 'Message received and processing initiated.' });
     } else {
-      logger.warn('[WHATSAPP CONTROLLER] Payload de webhook não continha telefone ou texto de mensagem esperado.', { payload });
-      res.status(400).json({ status: 'fail', message: 'Payload not recognized as a processable message.' });
+      logger.warn('[WHATSAPP CONTROLLER] Payload de webhook não continha telefone ou texto de mensagem esperado na estrutura conhecida.', { type: payload.type });
+      // É importante retornar 200 OK para a Z-API para que ela não tente reenviar indefinidamente.
+      res.status(200).json({ status: 'fail_payload_structure', message: 'Payload structure not recognized for text message.' });
     }
 
   } catch (error) {
-    // Não envie o erro detalhado para a Z-API, apenas logue e retorne um status de erro genérico
-    // A Z-API geralmente espera um 200 OK para confirmar o recebimento do webhook.
-    // Se você retornar 500, ela pode tentar reenviar.
     logger.error('[WHATSAPP CONTROLLER] Erro ao processar webhook da Z-API:', { error: error.message, stack: error.stack });
-    // É importante retornar 200 para a Z-API para evitar retries, mesmo que haja um erro interno.
-    // O erro já foi logado.
-    res.status(200).json({ status: 'error_processing', message: 'Error processing webhook internally.' });
-    // Ou, se você quer que a Z-API saiba que houve um problema e talvez tente reenviar (verifique a doc da Z-API):
-    // next(error); // Isso usaria o errorHandler global e poderia retornar 500.
+    // Retornar 200 para a Z-API mesmo em erro interno para evitar retries excessivos.
+    res.status(200).json({ status: 'error_processing_internally', message: 'Error processing webhook.' });
   }
 }
 
