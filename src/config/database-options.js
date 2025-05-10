@@ -1,111 +1,76 @@
 // src/config/database-options.js
 require('dotenv').config(); // Carrega variáveis de ambiente do .env
+const fs = require('fs'); // Para ler arquivos de CA SSL, se necessário
+
+// Helper para parsear booleano de string do .env
+const parseEnvBoolean = (envVar) => envVar === 'true';
 
 module.exports = {
   development: {
-    username: process.env.DB_USER || 'postgres', // Usuário padrão do PostgreSQL
-    password: process.env.DB_PASS || 'docker',    // Senha padrão (exemplo para Docker, ajuste)
-    database: process.env.DB_NAME || 'assessor_dev', // Nome do banco para desenvolvimento
-    host: process.env.DB_HOST || 'localhost',      // Host do banco de dados
-    port: process.env.DB_PORT || 5432,             // Porta do PostgreSQL
+    username: process.env.DB_USER || 'postgres',
+    password: process.env.DB_PASS || 'docker',    // Senha padrão DEV
+    database: process.env.DB_NAME || 'assessor_dev',
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT, 10) || 5432,
     dialect: 'postgres',
     dialectOptions: {
-      // Opções específicas do dialeto PostgreSQL
-      // Exemplo: Configurações de SSL para conexões seguras em produção (descomente e ajuste se necessário)
-      // ssl: {
-      //   require: process.env.DB_SSL === 'true', // Ativar SSL baseado em variável de ambiente
-      //   rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true', // Importante para CAs auto-assinados
-      //   // ca: fs.readFileSync('/path/to/server-ca.pem').toString(), // Se precisar de um CA específico
-      // }
+      // Pode adicionar opções específicas de dev aqui se necessário
     },
-    logging: (msg) => {
-      // Log SQL customizado, só loga se DB_LOGGING for 'true'
-      if (process.env.DB_LOGGING === 'true') {
-        console.log(`[SEQUELIZE SQL] ${new Date().toISOString()}: ${msg.substring(0, 1000)}${msg.length > 1000 ? '...' : ''}`);
-      }
-    }, // Loga as queries SQL no console (pode ser console.log ou uma função customizada)
-    // Configurações de Pool de Conexões (importante para performance)
+    logging: parseEnvBoolean(process.env.DB_LOGGING) ? (msg) => logger.debug(`[SEQUELIZE DEV SQL]: ${msg.substring(0, 1000)}`) : false,
     pool: {
-      max: process.env.DB_POOL_MAX ? parseInt(process.env.DB_POOL_MAX, 10) : 5,        // Máximo de conexões no pool
-      min: process.env.DB_POOL_MIN ? parseInt(process.env.DB_POOL_MIN, 10) : 0,        // Mínimo de conexões no pool
-      acquire: process.env.DB_POOL_ACQUIRE ? parseInt(process.env.DB_POOL_ACQUIRE, 10) : 30000, // Timeout para adquirir conexão (ms)
-      idle: process.env.DB_POOL_IDLE ? parseInt(process.env.DB_POOL_IDLE, 10) : 10000,      // Timeout para conexão ociosa (ms)
+      max: parseInt(process.env.DB_POOL_MAX, 10) || 5,
+      min: parseInt(process.env.DB_POOL_MIN, 10) || 0,
+      acquire: parseInt(process.env.DB_POOL_ACQUIRE, 10) || 30000,
+      idle: parseInt(process.env.DB_POOL_IDLE, 10) || 10000,
     },
-    // define: {
-    //   // Opções globais para todos os modelos
-    //   // underscored: true, // se quiser nomes de tabela e colunas em snake_case (ex: created_at)
-    //   // freezeTableName: true, // impede o Sequelize de pluralizar nomes de tabelas
-    //   // timestamps: true, // já é o padrão, mas pode ser explicitado
-    // },
-    retry: { // Configurações de retry para conexão
-        max: process.env.DB_RETRY_MAX ? parseInt(process.env.DB_RETRY_MAX, 10) : 3, // Número máximo de tentativas
-        match: [ // Tipos de erro que devem acionar um retry
-            /SequelizeConnectionError/,
-            /SequelizeConnectionRefusedError/,
-            /SequelizeHostNotFoundError/,
-            /SequelizeHostNotReachableError/,
-            /SequelizeInvalidConnectionError/,
-            /SequelizeConnectionTimedOutError/,
-            /TimeoutError/, // Adicionado para cobrir erros de timeout genéricos na conexão
-        ],
-        backoffBase: 1000, // Tempo base para backoff exponencial (ms)
-        backoffExponent: 1.5, // Expoente para backoff
+    retry: {
+        max: parseInt(process.env.DB_RETRY_MAX, 10) || 2, // Menos retries em dev
+        match: [ /SequelizeConnectionError/, /SequelizeConnectionRefusedError/, /TimeoutError/ ],
+        backoffBase: 500,
+        backoffExponent: 1.2,
     },
-    seederStorage: 'sequelize', // Opcional: especifica a tabela para armazenar o estado dos seeders
-    seederStorageTableName: 'SequelizeDataSeed', // Opcional: nome da tabela de seeders
+    seederStorage: 'sequelize',
+    seederStorageTableName: 'SequelizeDataSeedDev',
   },
-  test: {
+  test: { // Configurações para ambiente de teste automatizado
     username: process.env.DB_USER_TEST || process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASS_TEST || process.env.DB_PASS || 'docker',
-    database: process.env.DB_NAME_TEST || 'assessor_test', // Banco de dados específico para testes
+    password: process.env.DB_PASS_TEST || process.env.DB_PASS || 'docker', // Use uma senha de teste
+    database: process.env.DB_NAME_TEST || 'assessor_test',
     host: process.env.DB_HOST_TEST || process.env.DB_HOST || 'localhost',
-    port: process.env.DB_PORT_TEST || process.env.DB_PORT || 5432,
+    port: parseInt(process.env.DB_PORT_TEST, 10) || 5433, // Porta diferente para evitar conflitos
     dialect: 'postgres',
-    logging: false, // Desabilitar logs SQL em testes para não poluir a saída
-    pool: {
-      max: 5,
-      min: 0,
-      acquire: 30000,
-      idle: 10000,
-    },
-    // define: {
-    //   timestamps: false, // Exemplo: desabilitar timestamps para tabelas de teste se não forem relevantes
-    // }
+    logging: false, // Geralmente desabilitado para testes
+    pool: { max: 5, min: 0, acquire: 30000, idle: 5000 },
+    retry: { max: 1 },
+    seederStorageTableName: 'SequelizeDataSeedTest',
   },
   production: {
     username: process.env.DB_USER_PROD || process.env.DB_USER,
-    password: process.env.DB_PASS_PROD || process.env.DB_PASS,
-    database: process.env.DB_NAME_PROD || 'assessor_prod',
-    host: process.env.DB_HOST_PROD || process.env.DB_HOST,
-    port: process.env.DB_PORT_PROD || process.env.DB_PORT || 5432,
+    password: process.env.DB_PASS_PROD || process.env.DB_PASS, // !! DEVE VIR DE SEGREDOS DO AMBIENTE !!
+    database: process.env.DB_NAME_PROD || process.env.DB_NAME,
+    host: process.env.DB_HOST_PROD || process.env.DB_HOST, // Ex: seu 'geral_agentewhatsappbd'
+    port: parseInt(process.env.DB_PORT_PROD, 10) || parseInt(process.env.DB_PORT, 10) || 5432,
     dialect: 'postgres',
     dialectOptions: {
-      ssl: { // Exemplo: Forçar SSL em produção
+      ssl: parseEnvBoolean(process.env.DB_SSL_PROD) ? {
         require: true,
-        // Em muitos serviços de DBaaS (AWS RDS, Heroku Postgres, etc.),
-        // rejectUnauthorized: false pode ser necessário se eles usam CAs que não estão no seu sistema local.
-        // Verifique a documentação do seu provedor de banco de dados.
-        rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true', // Defina como 'false' com cautela
-      },
+        // Se rejectUnauthorized for false, a conexão é vulnerável a ataques man-in-the-middle
+        // se o certificado do servidor não for de uma CA confiável.
+        // Use apenas se você souber EXATAMENTE o que está fazendo (ex: CAs internas e controladas).
+        rejectUnauthorized: parseEnvBoolean(process.env.DB_SSL_REJECT_UNAUTHORIZED_PROD),
+        // Exemplo de como carregar um CA se necessário (raro para DBaaS populares):
+        // ca: process.env.DB_SSL_CA_PATH ? fs.readFileSync(process.env.DB_SSL_CA_PATH).toString() : undefined,
+      } : undefined,
     },
-    logging: (msg) => { // Log mais controlado em produção
-        if (process.env.DB_LOGGING_PROD === 'true') { // Só loga SQL em produção se explicitamente habilitado
-            // Poderia enviar para um serviço de logging centralizado (ex: Sentry, Logstash)
-            console.log(`[PROD SQL] ${new Date().toISOString()}: ${msg.substring(0, 500)}...`);
-        }
+    logging: parseEnvBoolean(process.env.DB_LOGGING_PROD) ? (msg) => logger.info(`[SEQUELIZE PROD SQL]: ${msg.substring(0, 500)}`) : false,
+    pool: {
+      max: parseInt(process.env.DB_POOL_MAX_PROD, 10) || 20,
+      min: parseInt(process.env.DB_POOL_MIN_PROD, 10) || 5,
+      acquire: parseInt(process.env.DB_POOL_ACQUIRE_PROD, 10) || 60000,
+      idle: parseInt(process.env.DB_POOL_IDLE_PROD, 10) || 10000,
     },
-    pool: { // Pool de conexões mais robusto para produção
-      max: process.env.DB_POOL_MAX_PROD ? parseInt(process.env.DB_POOL_MAX_PROD, 10) : 20,
-      min: process.env.DB_POOL_MIN_PROD ? parseInt(process.env.DB_POOL_MIN_PROD, 10) : 5,
-      acquire: process.env.DB_POOL_ACQUIRE_PROD ? parseInt(process.env.DB_POOL_ACQUIRE_PROD, 10) : 60000,
-      idle: process.env.DB_POOL_IDLE_PROD ? parseInt(process.env.DB_POOL_IDLE_PROD, 10) : 10000,
-    },
-    // define: {
-    //   // Exemplo: freezeTableName pode ser útil para manter consistência
-    //   // freezeTableName: true,
-    // },
-    retry: { // Configurações de retry para produção
-        max: process.env.DB_RETRY_MAX_PROD ? parseInt(process.env.DB_RETRY_MAX_PROD, 10) : 5,
+    retry: {
+        max: parseInt(process.env.DB_RETRY_MAX_PROD, 10) || 5,
         match: [
             /SequelizeConnectionError/,
             /SequelizeConnectionRefusedError/,
@@ -114,9 +79,16 @@ module.exports = {
             /SequelizeInvalidConnectionError/,
             /SequelizeConnectionTimedOutError/,
             /TimeoutError/,
+            /ECONNREFUSED/ // Erro comum de conexão recusada
         ],
-        backoffBase: 2000,
-        backoffExponent: 2,
+        backoffBase: 1000, // Tempo base para backoff exponencial (ms)
+        backoffExponent: 1.5, // Expoente para backoff
     },
+    seederStorage: 'sequelize',
+    seederStorageTableName: 'SequelizeDataSeedProd', // Tabela de seeds específica para produção
   },
 };
+
+// Importar o logger aqui para ser usado na função de logging do Sequelize
+// Deve ser feito após a exportação para evitar dependências circulares se o logger usar .env também
+const logger = require('../utils/logger');
