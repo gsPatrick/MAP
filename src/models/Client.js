@@ -19,15 +19,15 @@ const Client = sequelize.define('Client', {
     unique: true, // Garante que cada número de telefone seja único
     comment: 'Número de telefone do WhatsApp do cliente (com DDI+DDD)',
   },
-  // email: { // Opcional, se o sistema coletar e usar email para algo além do WhatsApp
-  //   type: DataTypes.STRING,
-  //   allowNull: true,
-  //   unique: true, // Se presente, deve ser único
-  //   validate: {
-  //     isEmail: true,
-  //   },
-  //   comment: 'Email opcional do cliente',
-  // },
+  email: { // Opcional, se o sistema coletar e usar email para algo além do WhatsApp
+    type: DataTypes.STRING,
+    allowNull: true,
+    unique: true, // Se presente, deve ser único
+    validate: {
+      isEmail: true,
+    },
+    comment: 'Email opcional do cliente',
+  },
   status: { // Status do contato no sistema
     type: DataTypes.ENUM('Ativo', 'Inativo', 'Bloqueado'),
     defaultValue: 'Ativo',
