@@ -218,7 +218,7 @@ function formatCreditCardSummary(card, forMulti = false, forEdit = false) {
     else if (forEdit) summary += "✅ Cartão Atualizado:\n\n";
 
     summary += `✨ Nome: ${card.name}\n`;
-    if(card.lastFourDigits) summary += ` końcówka: **** ${card.lastFourDigits}\n`;
+    if(card.lastFourDigits) summary += `🔢 Final: **** ${card.lastFourDigits}\n`; // Corrigido label
     if(card.flag) summary += `🚩 Bandeira: ${card.flag}\n`;
     summary += `💰 Limite: R$ ${parseFloat(card.limit).toFixed(2)}\n`;
     summary += `🗓️ Dia Fechamento: ${card.closingDay}\n`;
@@ -237,33 +237,45 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
     try {
         const client = await clientService.findOrCreateClientByPhone(senderPhone, { name: pushName }, true);
         if (!client) {
-            await sendWhatsappMessage(senderPhone, "Desculpe, ${pushName || 'você'}, estou com um problema para identificar você no momento. Por favor, tente mais tarde. 😕");
+            await sendWhatsappMessage(senderPhone, `Desculpe, ${pushName || 'você'}, estou com um problema para identificar você no momento. Por favor, tente mais tarde. 😕`);
             return;
         }
 
         state = conversationState.get(senderPhone) || initializeState(client);
         if (client.name && state.clientName !== client.name) {
-            state.clientName = client.name; // Atualiza nome se mudou
+            state.clientName = client.name;
         }
-        const clientNameToUse = state.clientName; // Para consistência nas mensagens
+        const clientNameToUse = state.clientName;
 
         // Lógica para lidar com cliques em botões (ANTES de adicionar à história)
+        // A mensagem do botão já está em messageText vinda do controller
         if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
-            const buttonId = rawPayload.selectedButtonId;
-            logger.info(`[WHATSAPP SERVICE] Botão clicado por ${senderPhone} (${clientNameToUse}): ${buttonId}`);
-            let buttonClickHandled = true;
+            const buttonId = rawPayload.selectedButtonId; // Este é o ID que definimos
+            // messageText já contém o label do botão clicado
+
+            logger.info(`[WHATSAPP SERVICE] Botão clicado por ${senderPhone} (${clientNameToUse}): ID '${buttonId}', Texto: '${messageText}'`);
+            let buttonClickHandledByServiceLogic = true; // Se o serviço trata diretamente
             let replyForButtonClick = "";
 
             if (buttonId.startsWith('edit_transaction_')) {
                 const transactionId = buttonId.replace('edit_transaction_', '');
                 state.editingResource = { type: 'transaction', id: transactionId };
-                replyForButtonClick = `Claro, ${clientNameToUse}! 😉 Descreva na próxima mensagem o que você precisa que eu altere na transação (ID: ${transactionId}).`;
-                state.currentAction = 'awaiting_transaction_edit_details';
+                replyForButtonClick = `Claro, ${clientNameToUse}! 😉 Descreva na próxima mensagem o que você precisa que eu altere na transação (ID: ${transactionId}). Por exemplo: "mude a descrição para X e o valor para Y".`;
+                state.currentAction = 'awaiting_transaction_edit_details'; // Prepara para a IA processar a próxima mensagem como edição
             } else if (buttonId.startsWith('delete_transaction_')) {
                 const transactionId = buttonId.replace('delete_transaction_', '');
-                state.pendingConfirmation = { action: 'CONFIRM_DELETE_TRANSACTION', parameters: { transactionId: transactionId } };
-                state.currentAction = 'awaiting_confirmation';
-                replyForButtonClick = `Você tem certeza que quer excluir essa transação, ${clientNameToUse}? 😟 (Sim/Não)`;
+                // Direto para a exclusão, sem pedir confirmação textual aqui, já que o botão é uma intenção clara.
+                // A confirmação poderia ser um modal no WhatsApp se a API suportasse, ou um segundo botão "Confirmar Exclusão".
+                // Para simplificar e seguir o desejo de "fluidez", vamos excluir direto.
+                // Idealmente, teríamos um "undo" ou uma lixeira.
+                try {
+                    const success = await financialService.deleteTransaction(state.activeFinancialAccountId, transactionId);
+                    replyForButtonClick = success ? `Transação removida com sucesso, ${clientNameToUse}! 👍 Se precisar de mais alguma coisa, é só chamar.` : "Não consegui excluir a transação. Pode ter sido um erro ou ela já foi removida.";
+                } catch (e) {
+                    logger.error(`[WHATSAPP SERVICE] Erro ao excluir transação ${transactionId} por botão: ${e.message}`);
+                    replyForButtonClick = `Ops! Tive um problema ao tentar excluir a transação. (${e.message.substring(0,50)})`;
+                }
+                state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
             } else if (buttonId.startsWith('edit_appointment_')) {
                 const appointmentId = buttonId.replace('edit_appointment_', '');
                 state.editingResource = { type: 'appointment', id: appointmentId };
@@ -271,26 +283,34 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 state.currentAction = 'awaiting_appointment_edit_details';
             } else if (buttonId.startsWith('delete_appointment_')) {
                 const appointmentId = buttonId.replace('delete_appointment_', '');
-                state.pendingConfirmation = { action: 'CONFIRM_DELETE_APPOINTMENT', parameters: { appointmentId: appointmentId } };
-                state.currentAction = 'awaiting_confirmation';
-                replyForButtonClick = `Tem certeza que deseja excluir este compromisso, ${clientNameToUse}? 🤔 (Sim/Não)`;
+                try {
+                    const success = await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, appointmentId, true); // true para deletar
+                    replyForButtonClick = success ? `Compromisso removido da sua agenda, ${clientNameToUse}! ✅ Fico à disposição se precisar de algo mais.` : "Não foi possível excluir o compromisso.";
+                } catch (e) {
+                     logger.error(`[WHATSAPP SERVICE] Erro ao excluir compromisso ${appointmentId} por botão: ${e.message}`);
+                    replyForButtonClick = `Ops! Tive um problema ao tentar excluir o compromisso. (${e.message.substring(0,50)})`;
+                }
+                state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
             }
-            // Adicionar para recorrências, produtos, cartões se tiver botões de editar/excluir para eles
             else {
-                buttonClickHandled = false;
+                buttonClickHandledByServiceLogic = false; // Deixa a IA tentar interpretar o texto do botão se não for um ID conhecido
             }
 
-            if (buttonClickHandled) {
-                state.messageHistory.push({ role: 'user', content: `[CLIQUE NO BOTÃO: ${rawPayload.message || buttonId}]` }); // Loga o clique
+            if (buttonClickHandledByServiceLogic) {
+                state.messageHistory.push({ role: 'user', content: messageText }); // Adiciona o TEXTO do botão à história
                 state.messageHistory.push({ role: 'assistant', content: replyForButtonClick });
                 conversationState.set(senderPhone, state);
                 await sendWhatsappMessage(senderPhone, replyForButtonClick);
-                return;
+                return; // Ação do botão tratada, não precisa da IA por agora.
             }
+            // Se não foi tratado aqui, a messageText (label do botão) segue para a IA
         }
 
-        // Adiciona mensagem atual ao histórico
-        state.messageHistory.push({ role: 'user', content: messageText });
+
+        // Adiciona mensagem atual ao histórico (se não for clique de botão já adicionado)
+        if (!(rawPayload && rawPayload.selectedButtonId)) {
+            state.messageHistory.push({ role: 'user', content: messageText });
+        }
         if (state.messageHistory.length > MAX_STATE_HISTORY) {
             state.messageHistory = state.messageHistory.slice(-MAX_STATE_HISTORY);
         }
@@ -309,25 +329,16 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 return;
             } else if (accounts.length === 1 || (defaultAccount && accounts.length > 0)) {
                 const accountToSet = defaultAccount || accounts[0];
-                if(conversationState.has(senderPhone)){
+                if(conversationState.has(senderPhone)){ // Se estado já existe, só atualiza
                     state.activeFinancialAccountId = accountToSet.id;
                     state.activeFinancialAccountName = accountToSet.accountName;
                     state.activeFinancialAccountType = accountToSet.accountType;
-                } else {
-                    state = initializeState(client, accountToSet); // Inicializa com a conta
+                } else { // Senão, inicializa novo estado com a conta
+                    state = initializeState(client, accountToSet);
                 }
-                // Remove a última mensagem do usuário para não ser duplicada se esta for a primeira interação real
-                // e a saudação de seleção de conta já vai guiar.
-                const lastUserMsgIndex = state.messageHistory.map(m => m.role).lastIndexOf('user');
-                if (lastUserMsgIndex > 0 && state.messageHistory[lastUserMsgIndex-1]?.role === 'assistant' && state.messageHistory[lastUserMsgIndex-1]?.content.includes("Como posso te ajudar")) {
-                    // Não remove, pois a saudação já aconteceu
-                } else if (lastUserMsgIndex !== -1) {
-                     state.messageHistory.splice(lastUserMsgIndex, 1);
-                }
-
+                // A mensagem do usuário já está no histórico. A saudação de seleção de conta é adicionada.
                 const greetingWithAccount = `Olá ${clientNameToUse}! 😊 Conta "${state.activeFinancialAccountName}" (${state.activeFinancialAccountType}) selecionada! Como posso te ajudar agora? Manda a braba! 🎤`;
                 state.messageHistory.push({ role: 'assistant', content: greetingWithAccount });
-                // Não adiciona a mensagem do usuário de novo aqui, ela já foi adicionada no início da função.
 
             } else { // Múltiplas contas, nenhuma default, precisa escolher
                 state.currentAction = 'selecting_initial_financial_account';
@@ -341,7 +352,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 return;
             }
         }
-        // Garante que nome e tipo da conta ativa estejam no estado
         if (state.activeFinancialAccountId && (!state.activeFinancialAccountName || !state.activeFinancialAccountType || state.data?.accountsToList)) {
             const accDetails = await clientService.getFinancialAccountById(state.activeFinancialAccountId);
             if (accDetails && accDetails.isActive) {
@@ -356,51 +366,27 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         }
 
         logger.info(`[WHATSAPP HANDLER] Cliente: ${client.id} (${clientNameToUse}), Conta: ${state.activeFinancialAccountName || 'N/A'}, Msg: "${messageText}"`);
-        conversationState.set(senderPhone, state); // Salva estado antes da IA
+        conversationState.set(senderPhone, state);
 
-        // === Lógica de Estado da Conversa (ANTES da IA) ===
+        // === Lógica de Estado da Conversa (ANTES da IA) - Simplificada ===
+        // (A lógica de awaiting_confirmation e criação de conta foi mantida pois são fluxos guiados específicos)
         if (state.currentAction) {
             let stateHandledInPreProcessing = false;
             let replyForPreProcessing = "";
 
             if (state.currentAction === 'awaiting_confirmation' && state.pendingConfirmation) {
                 const lowerMsg = messageText.toLowerCase().trim();
-                const actionToConfirm = state.pendingConfirmation.action;
-                const paramsToConfirm = state.pendingConfirmation.parameters;
-
-                if (lowerMsg === 'sim' || lowerMsg === 's' || lowerMsg.includes('correto') || lowerMsg.includes('ok') || lowerMsg.includes('pode')) {
+                // ... (lógica de confirmação mantida como estava, pois é um passo explícito)
+                 if (lowerMsg === 'sim' || lowerMsg === 's' || lowerMsg.includes('correto') || lowerMsg.includes('ok') || lowerMsg.includes('pode')) {
                     state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                     conversationState.set(senderPhone, state);
-
-                    if (actionToConfirm === 'CONFIRM_DELETE_TRANSACTION') {
-                        const success = await financialService.deleteTransaction(state.activeFinancialAccountId, paramsToConfirm.transactionId);
-                        replyForPreProcessing = success ? `Transação removida com sucesso, ${clientNameToUse}! 👍 Se precisar de mais alguma coisa, é só chamar.` : "Não consegui excluir a transação. Pode ter sido um erro ou ela já foi removida.";
-                    } else if (actionToConfirm === 'CONFIRM_DELETE_APPOINTMENT') {
-                        const success = await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, paramsToConfirm.appointmentId, true);
-                        replyForPreProcessing = success ? `Compromisso removido da sua agenda, ${clientNameToUse}! ✅ Fico à disposição se precisar de algo mais.` : "Não foi possível excluir o compromisso.";
-                    } else if (actionToConfirm === 'CONFIRM_CREATE_FINANCIAL_ACCOUNT') {
-                         const createdAcc = await clientService.createFinancialAccount(client.id, {
-                            accountName: paramsToConfirm.accountName,
-                            accountType: paramsToConfirm.accountType,
-                            isDefault: (await clientService.getClientFinancialAccounts(client.id, {isActive: true})).length === 0
-                        });
-                        state.activeFinancialAccountId = createdAcc.id;
-                        state.activeFinancialAccountName = createdAcc.accountName;
-                        state.activeFinancialAccountType = createdAcc.accountType;
-                        replyForPreProcessing = `Conta "${createdAcc.accountName}" (${createdAcc.accountType}) criada e já está selecionada, ${clientNameToUse}! 🎉 Como posso te ajudar agora?`;
-                    }
-                    // Adicionar mais 'else if' para outras ações que precisam de confirmação
-                    else {
-                        replyForPreProcessing = `Entendido, ${clientNameToUse}! Confirmado! 👍 Vou prosseguir.`;
-                        // A IA reprocessará com o "sim" no histórico.
-                    }
+                    // Ações de deleção já são tratadas na lógica de botões.
+                    // Este bloco de confirmação seria para ações iniciadas pela IA que requerem confirmação.
+                    // Como queremos fluidez, vamos minimizar isso. A IA deve ser instruída a não pedir confirmação se confiante.
+                    // Por agora, se cair aqui, é porque a IA pediu uma confirmação.
+                    replyForPreProcessing = `Entendido, ${clientNameToUse}! Confirmado! 👍 Vou prosseguir com base nisso.`;
                     stateHandledInPreProcessing = true;
-                    if(replyForPreProcessing) {
-                         state.messageHistory.push({ role: 'assistant', content: replyForPreProcessing });
-                         await sendWhatsappMessage(senderPhone, replyForPreProcessing);
-                         if (state.currentAction === null && !state.pendingConfirmation) return;
-                    }
-
+                    // Deixa a IA reprocessar com o "sim" no histórico
                 } else if (lowerMsg === 'não' || lowerMsg === 'n' || lowerMsg.includes('incorreto') || lowerMsg.includes('cancela')) {
                     replyForPreProcessing = `Ok, ${clientNameToUse}, cancelado! Sem problemas. O que gostaria de fazer então? 😊`;
                     state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
@@ -411,7 +397,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     return;
                 }
             }
-            else if (state.currentAction === 'creating_first_account_type') {
+            else if (state.currentAction === 'creating_first_account_type') { // Mantido
                 const typeChosen = messageText.toLowerCase();
                 let accountTypeToCreate = null;
                 if (typeChosen.includes('pessoal') || typeChosen.includes('pf')) accountTypeToCreate = 'PF';
@@ -426,7 +412,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 } else {
                     replyForPreProcessing = `Não entendi bem o tipo, ${clientNameToUse}. 🤔 Pode ser Pessoal (PF), Empresa (PJ) ou MEI?`;
                 }
-            } else if (state.currentAction === 'awaiting_first_account_name') {
+            } else if (state.currentAction === 'awaiting_first_account_name') { // Mantido
                 const accountName = messageText.trim();
                 if (accountName.length > 2 && accountName.length < 100) {
                     const newAccount = await clientService.createFinancialAccount(client.id, {
@@ -443,7 +429,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 } else {
                     replyForPreProcessing = `Esse nome parece um pouco curto ou longo demais, ${clientNameToUse}. Poderia me dizer um nome entre 3 e 100 letras para sua conta? ✍️`;
                 }
-            } else if (state.currentAction === 'selecting_initial_financial_account') {
+            } else if (state.currentAction === 'selecting_initial_financial_account') { // Mantido
                  const chosenAccountNameRaw = messageText.trim();
                  const accountToSelect = state.data.accountsToList.find(acc => acc.name.toLowerCase() === chosenAccountNameRaw.toLowerCase() || acc.name.toLowerCase().includes(chosenAccountNameRaw.toLowerCase()));
                  if (accountToSelect) {
@@ -460,15 +446,10 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     replyForPreProcessing = errorReply;
                  }
             }
-            // Adicionar aqui tratamento para awaiting_transaction_edit_details, awaiting_appointment_edit_details, etc.
-            // Se o currentAction for um desses, a mensagem atual é a descrição da alteração.
-            // A IA deve pegar essa mensagem e o state.editingResource para processar a edição.
-            // Não precisa de replyForPreProcessing aqui, a IA vai lidar.
+            // Se for um estado de edição, a IA deve tratar a mensagem como os detalhes da edição
             else if (state.currentAction === 'awaiting_transaction_edit_details' || state.currentAction === 'awaiting_appointment_edit_details') {
-                // Não faz nada aqui, deixa a IA processar a mensagem como a descrição da edição.
-                // A IA usará state.editingResource.id e state.editingResource.type
-                stateHandledInPreProcessing = false; // Importante para que a IA seja chamada
-                state.currentAction = null; // Limpa para a IA detectar a ação UPDATE
+                stateHandledInPreProcessing = false; // Deixa a IA processar
+                // O currentAction será limpo APÓS a IA, para que ela saiba que a próxima mensagem é de edição.
             }
 
 
@@ -476,6 +457,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 state.messageHistory.push({ role: 'assistant', content: replyForPreProcessing });
                 conversationState.set(senderPhone, state);
                 await sendWhatsappMessage(senderPhone, replyForPreProcessing);
+                // Se a ação de pré-processamento limpou currentAction e não há confirmação pendente, retorna.
                 if (state.currentAction === null && !state.pendingConfirmation) return;
             }
         }
@@ -486,39 +468,39 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             currentFinancialAccountId: state.activeFinancialAccountId,
             currentFinancialAccountType: state.activeFinancialAccountType,
             currentFinancialAccountName: state.activeFinancialAccountName,
-            clientName: clientNameToUse, // Usar o nome do estado
+            clientName: clientNameToUse,
             conversationHistory: state.messageHistory.slice(-MAX_HISTORY_FOR_AI * 2),
             currentStateData: state.data,
-            editingResource: state.editingResource, // Passa para a IA saber se está editando algo
+            editingResource: state.editingResource, // Passa o ID e tipo do que está sendo editado
         };
         const aiResponse = await aiModelService.interpretUserMessage(messageText, aiContext);
         logger.info(`[WHATSAPP HANDLER] AI Response for ${senderPhone}:`, {aiResponse: JSON.stringify(aiResponse).substring(0,500) + "..."});
         state.lastAiResponse = aiResponse;
+
+        // Se a IA estava processando uma edição, limpa o estado de edição AGORA.
+        if(state.currentAction === 'awaiting_transaction_edit_details' || state.currentAction === 'awaiting_appointment_edit_details') {
+            state.currentAction = null;
+        }
+
 
         let finalReplyParts = [];
         if (aiResponse.overall_summary_suggestion) {
             finalReplyParts.push(aiResponse.overall_summary_suggestion);
         }
 
-        let requiresConfirmationByAI = false;
+        // Não usaremos mais `requiresConfirmationByAI` daqui, a IA foi instruída a agir ou pedir clarificação.
+        // state.pendingConfirmation só será setado se a IA explicitamente pedir.
+        state.pendingConfirmation = null; // Limpa confirmações antigas
+
         let singleActionFormattedResult = null;
         let multipleActionFormattedResults = [];
-        let actionWasAnEdit = false; // Flag para saber se a ação principal foi uma edição
+        let actionWasAnEdit = false;
 
         if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
             for (const detectedAction of aiResponse.detected_actions) {
                 const params = detectedAction.parameters || {};
-                const MIN_CONFIDENCE_FOR_AUTO_ACTION = 0.70;
-
-                if (detectedAction.confidence < MIN_CONFIDENCE_FOR_AUTO_ACTION &&
-                    !['GENERAL_GREETING_OR_SMALLTALK', 'GENERAL_QUESTION_OR_HELP', 'ACTION_CONFIRMATION_YES', 'ACTION_CONFIRMATION_NO'].includes(detectedAction.action)) {
-                    requiresConfirmationByAI = true;
-                    state.pendingConfirmation = detectedAction;
-                    break;
-                }
-
                 let currentActionFormatted = "";
-                let resourceForButtons = null; // Para armazenar o recurso criado/editado para os botões
+                let resourceForButtons = null;
                 let isEditAction = false;
 
                 try {
@@ -542,25 +524,25 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         }
                         case 'UPDATE_FINANCIAL_TRANSACTION': {
                             isEditAction = true;
-                            const transactionIdToUpdate = params.transactionIdToUpdate || state.editingResource?.id;
-                            if (!transactionIdToUpdate) throw new Error("ID da transação para atualizar não encontrado.");
+                            const transactionIdToUpdate = params.transactionIdToUpdate || state.editingResource?.id; // A IA DEVE retornar transactionIdToUpdate
+                            if (!transactionIdToUpdate) throw new Error("ID da transação para atualizar não foi fornecido pela IA.");
 
-                            const updateTxData = { ...params }; // Copia todos os params
+                            const updateTxData = { ...params };
                             if (params.financialCategoryName) updateTxData.financialCategoryId = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type || null);
                             if (params.creditCardName) updateTxData.creditCardId = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
                             delete updateTxData.transactionIdToUpdate; delete updateTxData.financialCategoryName; delete updateTxData.creditCardName;
 
                             const updatedTx = await financialService.updateTransaction(state.activeFinancialAccountId, transactionIdToUpdate, updateTxData);
                             const reloadedUpdatedTx = await financialService.getTransactionById(state.activeFinancialAccountId, updatedTx.id);
-                            // A IA já deve ter gerado a mensagem caprichada, mas podemos ter um fallback aqui.
-                            currentActionFormatted = aiResponse.reply_to_user_suggestion || formatFinancialTransactionSummary(reloadedUpdatedTx, false, true);
-                            actionWasAnEdit = true; // Sinaliza que foi uma edição
+                            currentActionFormatted = aiResponse.reply_to_user_suggestion || formatFinancialTransactionSummary(reloadedUpdatedTx, false, true); // Usa a resposta caprichada da IA
+                            actionWasAnEdit = true;
+                            state.editingResource = null; // Limpa o recurso de edição
                             break;
                         }
                         case 'SCHEDULE_APPOINTMENT': {
                             let eventDateTime = params.eventDateTime;
-                            if (params.eventDateTime && params.eventDateTime.length === 10) {
-                                eventDateTime += ' 09:00';
+                            if (params.eventDateTime && params.eventDateTime.length === 10) { // YYYY-MM-DD
+                                eventDateTime += ' 09:00'; // Adiciona horário padrão
                             }
                             const appData = {
                                 title: params.title, eventDateTime: eventDateTime,
@@ -576,7 +558,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         case 'UPDATE_APPOINTMENT': {
                             isEditAction = true;
                             const appointmentIdToUpdate = params.appointmentIdToUpdate || state.editingResource?.id;
-                            if (!appointmentIdToUpdate) throw new Error("ID do compromisso para atualizar não encontrado.");
+                            if (!appointmentIdToUpdate) throw new Error("ID do compromisso para atualizar não fornecido pela IA.");
 
                             const updateAppData = { ...params };
                             delete updateAppData.appointmentIdToUpdate;
@@ -584,8 +566,10 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const reloadedUpdatedApp = await appointmentService.getAppointmentById(state.activeFinancialAccountId, updatedApp.id);
                             currentActionFormatted = aiResponse.reply_to_user_suggestion || formatAppointmentSummary(reloadedUpdatedApp, false, true);
                             actionWasAnEdit = true;
+                            state.editingResource = null;
                             break;
                         }
+                        // ... (outros cases CREATE_, LIST_, GET_ permanecem os mesmos)
                         case 'CREATE_RECURRING_RULE': {
                             const catRecId = params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type) : null;
                             let ruleValue = parseFloat(params.value);
@@ -603,7 +587,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const newRule = await recurringTransactionService.createRecurringRule(state.activeFinancialAccountId, ruleData);
                             const reloadedRule = await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, newRule.id);
                             currentActionFormatted = formatRecurringRuleSummary(reloadedRule, aiResponse.detected_actions.length > 1);
-                            // if (aiResponse.detected_actions.length === 1) resourceForButtons = { type: 'recurring_rule', id: newRule.id, description: newRule.description }; // Se tiver botões
+                            // if (aiResponse.detected_actions.length === 1) resourceForButtons = { type: 'recurring_rule', id: newRule.id, description: newRule.description };
                             break;
                         }
                          case 'CREATE_PRODUCT': {
@@ -635,7 +619,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             // if (aiResponse.detected_actions.length === 1) resourceForButtons = { type: 'credit_card', id: newCard.id, description: newCard.name };
                             break;
                         }
-                        // ... Outros cases (GET_FINANCIAL_SUMMARY, LIST_*, MARK_AS_PAID, etc.)
                         case 'GET_FINANCIAL_SUMMARY': {
                             const filterParams = {
                                 dateStart: params.dateStart, dateEnd: params.dateEnd, type: params.type,
@@ -644,7 +627,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             if (params.period) {
                                 const todayLocale = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
                                 todayLocale.setHours(0,0,0,0);
-                                switch(params.period.toLowerCase()) { // Normaliza para minúsculas
+                                switch(params.period.toLowerCase()) {
                                     case 'hoje': filterParams.dateStart = filterParams.dateEnd = todayLocale.toISOString().split('T')[0]; break;
                                     case 'ontem': const y = new Date(todayLocale); y.setDate(y.getDate() - 1); filterParams.dateStart = filterParams.dateEnd = y.toISOString().split('T')[0]; break;
                                     case 'esta_semana': case 'esta semana':
@@ -671,10 +654,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                              const filterParamsList = {
                                 dateStart: params.dateStart, dateEnd: params.dateEnd, type: params.type,
                                 financialCategoryId: params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type) : null,
-                                isPaidOrReceived: params.isPaidOrReceived, searchTerm: params.searchTerm || params.description, // A IA pode usar 'description' como searchTerm
+                                isPaidOrReceived: params.isPaidOrReceived, searchTerm: params.searchTerm || params.description,
                                 limit: 5, page: 1, sortBy: params.sortBy || 'transactionDate', sortOrder: params.sortOrder || 'DESC'
                             };
-                            // Adicionar lógica de período se necessário
                             const { transactions, totalItems } = await financialService.getAllTransactions(state.activeFinancialAccountId, filterParamsList);
                             if (totalItems === 0) {
                                 currentActionFormatted = `Nenhuma transação encontrada para os filtros que você pediu, ${clientNameToUse}. 👍 Tente outros filtros!`;
@@ -695,21 +677,16 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             break;
                         }
                         case 'MARK_TRANSACTION_AS_PAID_RECEIVED': {
-                            // A IA deve fornecer transactionDescription ou algo para identificar a transação.
-                            // Idealmente, o usuário clicaria em um botão "Marcar como Paga" em uma transação listada.
-                            // Se for por descrição, pode ser impreciso.
-                            // Vamos assumir que a IA passou um ID se o fluxo de edição/botão estiver ativo
-                            // Ou que ela está confiante na descrição para encontrar UMA transação.
                             let transactionToMark = null;
-                            if (state.editingResource && state.editingResource.type === 'transaction') {
+                            if (state.editingResource && state.editingResource.type === 'transaction') { // Se a IA está marcando após listar e o usuário selecionou implicitamente
                                 transactionToMark = await financialService.getTransactionById(state.activeFinancialAccountId, state.editingResource.id);
                             } else if (params.transactionDescription) {
                                 const searchResults = await financialService.getAllTransactions(state.activeFinancialAccountId, {
                                     search: params.transactionDescription,
                                     isPayableOrReceivable: true,
-                                    isPaidOrReceived: false, // Só pode marcar o que está pendente
+                                    isPaidOrReceived: false,
                                     limit: 1,
-                                    value: params.transactionValue // Filtra por valor se fornecido, para maior precisão
+                                    value: params.transactionValue
                                 });
                                 if (searchResults.transactions.length === 1) {
                                     transactionToMark = searchResults.transactions[0];
@@ -723,38 +700,41 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 currentActionFormatted = `Não encontrei uma transação pendente clara para "${params.transactionDescription || 'a transação mencionada'}" para marcar como paga/recebida, ${clientNameToUse}. 😕`;
                             } else {
                                 const updatedTx = await financialService.markAsPaidOrReceived(state.activeFinancialAccountId, transactionToMark.id, params.paymentDate);
-                                currentActionFormatted = ` oba, ${clientNameToUse}! 🎉 Transação "${updatedTx.description}" marcada como ${updatedTx.type === 'Entrada' ? 'recebida' : 'paga'} com sucesso!`;
+                                currentActionFormatted = ` Oba, ${clientNameToUse}! 🎉 Transação "${updatedTx.description}" marcada como ${updatedTx.type === 'Entrada' ? 'recebida' : 'paga'} com sucesso!`;
                             }
                             break;
                         }
 
 
-                        default:
+                        default: // Ações de conversa ou não mapeadas para execução direta aqui
                             if (aiResponse.detected_actions.length === 1 && aiResponse.reply_to_user_suggestion && !aiResponse.overall_summary_suggestion) {
-                                currentActionFormatted = aiResponse.reply_to_user_suggestion;
-                            } else {
+                                currentActionFormatted = aiResponse.reply_to_user_suggestion; // Resposta direta da IA
+                            } else if (detectedAction.action.startsWith("GENERAL_") || detectedAction.action.startsWith("ACTION_CONFIRMATION_")) {
+                                currentActionFormatted = aiResponse.reply_to_user_suggestion; // Resposta de conversa da IA
+                            }
+                             else {
                                 currentActionFormatted = `Ação "${detectedAction.action}" ${params.description ? `para "${params.description}"` : ''} foi entendida, ${clientNameToUse}.`;
                             }
+                            // Se for uma saudação ou pergunta geral, a resposta da IA é a principal
                             if ((detectedAction.action === "GENERAL_GREETING_OR_SMALLTALK" || detectedAction.action === "GENERAL_QUESTION_OR_HELP") && aiResponse.reply_to_user_suggestion) {
-                                finalReplyParts = [aiResponse.reply_to_user_suggestion]; // Substitui a saudação se houver
-                                multipleActionFormattedResults = []; // Limpa outras ações se for só conversa
+                                finalReplyParts = [aiResponse.reply_to_user_suggestion];
+                                multipleActionFormattedResults = []; // Limpa outras possíveis ações
                                 break; // Sai do loop de ações
                             }
                             break;
                     }
 
                     if (currentActionFormatted) {
-                        if (aiResponse.detected_actions.length === 1 && !isEditAction) { // Se for edição, a IA já formatou a mensagem inteira
+                        if (aiResponse.detected_actions.length === 1 && !isEditAction) {
                             singleActionFormattedResult = currentActionFormatted;
                         } else if (!isEditAction) {
                             multipleActionFormattedResults.push(currentActionFormatted);
                         } else { // Foi uma edição, e a IA já deu a resposta completa
-                            singleActionFormattedResult = currentActionFormatted; // Assume que a IA já fez o capricho
+                            singleActionFormattedResult = currentActionFormatted;
                         }
                     }
-                    // Armazena o recurso para botões se aplicável
                     if (resourceForButtons && aiResponse.detected_actions.length === 1) {
-                        state.editingResource = resourceForButtons; // Salva para possível uso de botões
+                        state.editingResource = resourceForButtons;
                     }
 
                 } catch (e) {
@@ -767,42 +747,40 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         }
 
         // --- Construção da Resposta Final ---
-        if (requiresConfirmationByAI && state.pendingConfirmation) {
-            const descToConfirm = state.pendingConfirmation.parameters?.description || state.pendingConfirmation.parameters?.title || state.pendingConfirmation.action;
-            finalReplyParts = [aiResponse.reply_to_user_suggestion || `Hmm, ${clientNameToUse}, entendi que você quer fazer algo como "${descToConfirm}". É isso mesmo? (Sim/Não) 🤔`];
-            state.currentAction = 'awaiting_confirmation';
+        if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
+            // A IA já deve ter formatado a reply_to_user_suggestion com a clarification_question.
+            finalReplyParts = [aiResponse.reply_to_user_suggestion || `Opa, ${clientNameToUse}! Para continuarmos, preciso de um detalhe: ${aiResponse.clarifications_needed[0].clarification_question}`];
+            state.currentAction = 'awaiting_clarification_response'; // Prepara para a próxima mensagem ser a resposta da clarificação
+            state.data.clarificationContext = { action: aiResponse.clarifications_needed[0].original_intent_action_suggestion, original_message: messageText };
         } else if (singleActionFormattedResult) {
-            if (finalReplyParts.length > 0 && !actionWasAnEdit) { // Se já tem saudação e não é edição
-                finalReplyParts.push(aiResponse.reply_to_user_suggestion || "Anotado! 📝"); // Frase de transição da IA ou fallback
+            if (finalReplyParts.length > 0 && !actionWasAnEdit) {
+                finalReplyParts.push(aiResponse.reply_to_user_suggestion || "Anotado! 📝");
                 finalReplyParts.push(singleActionFormattedResult);
-            } else { // Se não tem saudação, ou é uma edição (IA já formatou tudo)
+            } else {
                 finalReplyParts = [singleActionFormattedResult];
             }
         } else if (multipleActionFormattedResults.length > 0) {
-            if (finalReplyParts.length === 0) { // Se não houve saudação da IA (overall_summary_suggestion)
+            if (finalReplyParts.length === 0) {
                 finalReplyParts.push(`${clientNameToUse}, aqui está o que eu fiz pra você! 😉`);
-            } else { // Já tem a saudação
-                 finalReplyParts.push(aiResponse.reply_to_user_suggestion || "Olha só o que aprontamos: ✨"); // Transição
+            } else {
+                 finalReplyParts.push(aiResponse.reply_to_user_suggestion || "Olha só o que aprontamos: ✨");
             }
             finalReplyParts.push(multipleActionFormattedResults.join("\n\n---\n\n"));
-        } else if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
-            finalReplyParts = [aiResponse.reply_to_user_suggestion || `Opa, ${clientNameToUse}! Para continuarmos, preciso de um detalhe: ${aiResponse.clarifications_needed[0].clarification_question}`];
-            state.currentAction = 'awaiting_clarification_response';
-            state.data.clarificationContext = { action: aiResponse.clarifications_needed[0].original_intent_action_suggestion };
-        } else if (aiResponse.reply_to_user_suggestion) {
+        } else if (aiResponse.reply_to_user_suggestion) { // Nenhuma ação, apenas resposta conversacional
             if (finalReplyParts.length === 0 || (finalReplyParts.length === 1 && finalReplyParts[0] === aiResponse.overall_summary_suggestion)) {
                 finalReplyParts = [aiResponse.reply_to_user_suggestion];
-            } else if (!finalReplyParts.join(" ").includes(aiResponse.reply_to_user_suggestion)) {
+            } else if (!finalReplyParts.join(" ").includes(aiResponse.reply_to_user_suggestion)) { // Evita duplicar se já estiver
                  finalReplyParts.push(aiResponse.reply_to_user_suggestion);
             }
         } else {
             finalReplyParts.push(`Entendido, ${clientNameToUse}! Se precisar de mais alguma coisa, é só chamar. 😊 Estou por aqui!`);
         }
 
-        const performedConcreteAction = (singleActionFormattedResult || multipleActionFormattedResults.length > 0) && !aiResponse.clarifications_needed?.length && !requiresConfirmationByAI;
+        const performedConcreteAction = (singleActionFormattedResult || multipleActionFormattedResults.length > 0) && !aiResponse.clarifications_needed?.length;
         if (performedConcreteAction) {
             const platformUrl = process.env.PLATFORM_URL || 'app.meuassessor.com';
-            if (platformUrl !== 'app.meuassessor.com' || process.env.PLATFORM_URL) { // Evita URL padrão se não configurada
+            // Verifica se a URL não é a string placeholder E se PLATFORM_URL está definida
+            if (platformUrl !== 'app.meuassessor.com' || process.env.PLATFORM_URL) {
                  finalReplyParts.push(`\n📊 Para visualizar mais detalhes e relatórios, acesse a plataforma em https://${platformUrl}`);
             }
             if (!finalReplyParts.some(p => p.toLowerCase().includes("algo a mais") || p.toLowerCase().includes("só chamar") || p.toLowerCase().includes("à disposição"))) {
@@ -813,28 +791,33 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         const completeFinalReply = finalReplyParts.join("\n\n").trim();
         state.messageHistory.push({ role: 'assistant', content: completeFinalReply });
 
-        // Lógica de limpeza de estado
-        if (!requiresConfirmationByAI && state.currentAction !== 'awaiting_clarification_response' &&
+        // Limpeza de estado mais conservadora para edições e clarificações
+        if (state.currentAction !== 'awaiting_clarification_response' &&
             !state.currentAction?.startsWith('selecting_initial_financial_account') &&
             !state.currentAction?.startsWith('creating_first_account') &&
-            !state.currentAction?.startsWith('awaiting_') && // Mantém estados de edição explícitos
-            !state.editingResource // Não limpa se acabou de setar para botões
+            !state.editingResource // Não limpa se acabou de setar para botões ou aguarda detalhes da edição
             ) {
-            if (state.currentAction !== 'awaiting_confirmation') {
-                // state.currentAction = null; // Limpar com cautela, a IA pode precisar do contexto
-                // state.data = {};
-            }
+            // state.currentAction = null; // Comentar por enquanto para não quebrar fluxos de edição da IA
+            // state.data = {};
         }
-        if (actionWasAnEdit) state.editingResource = null; // Limpa após uma edição bem sucedida pela IA
+         if (actionWasAnEdit) state.editingResource = null; // Limpa após uma edição bem sucedida
 
         conversationState.set(senderPhone, state);
 
         // Envio de Resposta Final
         if (completeFinalReply) {
-            const resourceForButtonsContext = state.editingResource; // Pega o que foi setado antes de limpar se for o caso
-            if (resourceForButtonsContext && !requiresConfirmationByAI && aiResponse.detected_actions?.length === 1 && !actionWasAnEdit) {
+            const resourceForButtonsContext = state.editingResource;
+            // Envia botões SE UMA ÚNICA ação foi feita, NÃO foi uma edição (pois a IA já deu a resposta caprichada)
+            // E a IA não está pedindo clarificação.
+            if (resourceForButtonsContext && aiResponse.detected_actions?.length === 1 && !actionWasAnEdit && !aiResponse.clarifications_needed?.length) {
                 let buttons = [];
-                const buttonTitle = `Opções para "${(resourceForButtonsContext.description || "item").substring(0,20)}":`;
+                // Garante que a descrição usada no título do botão seja curta
+                let buttonItemDesc = "item";
+                if (resourceForButtonsContext.description && typeof resourceForButtonsContext.description === 'string') {
+                    buttonItemDesc = resourceForButtonsContext.description.length > 20 ? resourceForButtonsContext.description.substring(0, 17) + "..." : resourceForButtonsContext.description;
+                }
+                const buttonTitle = `Opções para "${buttonItemDesc}":`;
+
                 if (resourceForButtonsContext.type === 'transaction') {
                     buttons = [
                         { id: `edit_transaction_${resourceForButtonsContext.id}`, label: "Editar Transação ✍️" },
@@ -846,7 +829,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         { id: `delete_appointment_${resourceForButtonsContext.id}`, label: "Excluir Compromisso 🗑️" },
                     ];
                 }
-                // Adicionar para recorrência, produto, cartão se tiver botões
+                // Adicionar outros tipos de recurso aqui
 
                 if (buttons.length > 0) {
                     await sendButtonListMessage(senderPhone, completeFinalReply, buttons, buttonTitle);
@@ -862,7 +845,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
     } catch (error) {
         logger.error(`[WHATSAPP HANDLER] Erro CRÍTICO processando msg de ${senderPhone}: ${error.message}`, { stack: error.stack, messageText, rawPayload });
         const clientNameToUseInError = state ? state.clientName : (pushName || "você");
-        conversationState.delete(senderPhone); // Limpa estado em erro crítico para recomeçar
+        conversationState.delete(senderPhone);
         try {
             await sendWhatsappMessage(senderPhone, `Puxa vida, ${clientNameToUseInError}! 😬 Parece que tive um curto-circuito aqui e não consegui processar sua mensagem. Minha equipe de engenheiros já está de olho nisso! 👩‍💻👨‍💻 Por favor, tente de novo em um momentinho. Desculpe o transtorno!`);
         } catch (sendError) {
