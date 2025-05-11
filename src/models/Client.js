@@ -1,7 +1,12 @@
 // src/models/Client.js
-const { DataTypes } = require('sequelize');
+const { DataTypes, Op } = require('sequelize'); 
 const sequelize = require('../config/database');
-const bcrypt = require('bcryptjs'); // <<< ADICIONADO
+const bcrypt = require('bcryptjs');
+
+// Mock do validator para o exemplo (ou use `npm install validator`)
+const validator = {
+  isEmail: (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+};
 
 const Client = sequelize.define('Client', {
   id: {
@@ -20,49 +25,48 @@ const Client = sequelize.define('Client', {
     unique: true,
     comment: 'Número de telefone do WhatsApp do cliente (com DDI+DDD)',
   },
-  email: { // <<< TORNANDO MAIS ROBUSTO PARA LOGIN WEB
+  email: {
     type: DataTypes.STRING,
-    allowNull: true, // Inicialmente pode ser nulo, mas obrigatório para registro no dashboard
+    allowNull: true,
     unique: true,
     validate: {
-      isEmailOrNull(value) { // Permite nulo ou um email válido
-        if (value !== null && value !== '' && !validator.isEmail(value)) { // Usar 'validator' se disponível ou uma regex
+      isEmailOrNull(value) {
+        if (value !== null && value !== '' && !validator.isEmail(value)) {
           throw new Error('Forneça um email válido ou deixe o campo vazio.');
         }
       }
     },
     comment: 'Email do cliente, usado para login no dashboard web',
   },
-  passwordHash: { // <<< NOVO CAMPO
+  passwordHash: {
     type: DataTypes.STRING,
-    allowNull: true, // Nulo até que o cliente defina uma senha (para o dashboard)
+    allowNull: true,
     comment: 'Hash da senha do cliente para acesso ao dashboard web',
   },
   status: {
-    type: DataTypes.ENUM('Ativo', 'Inativo', 'Bloqueado', 'Aguardando Pagamento', 'Pagamento Falhou'), // <<< ADICIONADO STATUS DE PAGAMENTO
-    defaultValue: 'Ativo', // Pode mudar para 'Aguardando Pagamento' após primeiro contato
+    type: DataTypes.ENUM('Ativo', 'Inativo', 'Bloqueado', 'Aguardando Pagamento', 'Pagamento Falhou'),
+    defaultValue: 'Ativo',
     allowNull: false,
     comment: 'Status do cliente no sistema',
   },
-  // Outros campos
 }, {
   tableName: 'clients',
   timestamps: true,
   comment: 'Representa o contato do WhatsApp e usuário do dashboard',
-  defaultScope: { // <<< ADICIONADO DEFAULT SCOPE
+  defaultScope: {
     attributes: { exclude: ['passwordHash'] },
   },
-  scopes: { // <<< ADICIONADO SCOPE
+  scopes: {
     withPassword: {
       attributes: { include: ['passwordHash'] },
     }
   },
-  hooks: { // <<< ADICIONADO HOOKS
+  hooks: {
     beforeCreate: async (client) => {
-      if (client.email) { // Normalizar email para minúsculas
-          client.email = client.email.toLowerCase();
+      if (client.email) {
+        client.email = client.email.toLowerCase();
       }
-      if (client.passwordHash) { // Hashear senha se fornecida na criação
+      if (client.passwordHash) {
         client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
       }
     },
@@ -70,7 +74,6 @@ const Client = sequelize.define('Client', {
       if (client.changed('email') && client.email) {
         client.email = client.email.toLowerCase();
       }
-      // Hashear a senha apenas se ela foi modificada e não é já um hash longo
       if (client.changed('passwordHash') && client.passwordHash && client.passwordHash.length < 60) {
         client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
       }
@@ -78,17 +81,17 @@ const Client = sequelize.define('Client', {
   },
   indexes: [
     { unique: true, fields: ['phone'] },
-    // Adicionado para garantir que o email (se não nulo) seja único
-    { unique: true, fields: ['email'], where: { email: { [DataTypes.Op.ne]: null } } } // Correção: Op do DataTypes
+    { unique: true, fields: ['email'], where: { email: { [Op.ne]: null } } } 
   ]
 });
 
-// Método de instância para verificar a senha (para Client) <<< ADICIONADO
+// Método de instância para verificar a senha
 Client.prototype.isValidPassword = async function(password) {
-  if (!this.passwordHash) return false; // Se não há hash, não há como validar
+  if (!this.passwordHash) return false;
   return bcrypt.compare(password, this.passwordHash);
 };
 
+// Associações
 Client.associate = (models) => {
   Client.hasMany(models.FinancialAccount, {
     foreignKey: 'clientId',
@@ -100,16 +103,11 @@ Client.associate = (models) => {
     as: 'interactionLogs',
     onDelete: 'CASCADE',
   });
-  Client.hasMany(models.Subscription, { // <<< NOVA ASSOCIAÇÃO
+  Client.hasMany(models.Subscription, {
     foreignKey: 'clientId',
     as: 'subscriptions',
     onDelete: 'CASCADE',
   });
 };
-
-// Para usar validator.isEmail, você precisaria instalar 'validator': npm install validator
-// Por simplicidade, aqui a validação de email é básica. Para produção, use uma biblioteca.
-// Mock do validator para o exemplo:
-const validator = { isEmail: (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) }; // Regex simples
 
 module.exports = Client;
