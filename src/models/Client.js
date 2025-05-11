@@ -1,6 +1,7 @@
 // src/models/Client.js
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
+const bcrypt = require('bcryptjs'); // <<< ADICIONADO
 
 const Client = sequelize.define('Client', {
   id: {
@@ -8,59 +9,107 @@ const Client = sequelize.define('Client', {
     autoIncrement: true,
     primaryKey: true,
   },
-  name: { // Nome da pessoa/contato do WhatsApp
-    type: DataTypes.STRING,
-    allowNull: true, // Pode ser preenchido após o primeiro contato, ou vir do WhatsApp (pushName)
-    comment: 'Nome do contato do WhatsApp (pessoa física)',
-  },
-  phone: { // Número do WhatsApp, identificador principal do contato
-    type: DataTypes.STRING,
-    allowNull: false,
-    unique: true, // Garante que cada número de telefone seja único
-    comment: 'Número de telefone do WhatsApp do cliente (com DDI+DDD)',
-  },
-  email: { // Opcional, se o sistema coletar e usar email para algo além do WhatsApp
+  name: {
     type: DataTypes.STRING,
     allowNull: true,
-    unique: true, // Se presente, deve ser único
-    validate: {
-      isEmail: true,
-    },
-    comment: 'Email opcional do cliente',
+    comment: 'Nome do contato do WhatsApp (pessoa física)',
   },
-  status: { // Status do contato no sistema
-    type: DataTypes.ENUM('Ativo', 'Inativo', 'Bloqueado'),
-    defaultValue: 'Ativo',
+  phone: {
+    type: DataTypes.STRING,
     allowNull: false,
-    comment: 'Status do cliente no sistema (ex: Ativo, Bloqueado)',
+    unique: true,
+    comment: 'Número de telefone do WhatsApp do cliente (com DDI+DDD)',
   },
-  // O campo 'type' (PF/PJ) foi movido para FinancialAccount.js
-  // Outros campos que eram do Cliente e agora são da FinancialAccount (document, fantasyName) também foram movidos.
+  email: { // <<< TORNANDO MAIS ROBUSTO PARA LOGIN WEB
+    type: DataTypes.STRING,
+    allowNull: true, // Inicialmente pode ser nulo, mas obrigatório para registro no dashboard
+    unique: true,
+    validate: {
+      isEmailOrNull(value) { // Permite nulo ou um email válido
+        if (value !== null && value !== '' && !validator.isEmail(value)) { // Usar 'validator' se disponível ou uma regex
+          throw new Error('Forneça um email válido ou deixe o campo vazio.');
+        }
+      }
+    },
+    comment: 'Email do cliente, usado para login no dashboard web',
+  },
+  passwordHash: { // <<< NOVO CAMPO
+    type: DataTypes.STRING,
+    allowNull: true, // Nulo até que o cliente defina uma senha (para o dashboard)
+    comment: 'Hash da senha do cliente para acesso ao dashboard web',
+  },
+  status: {
+    type: DataTypes.ENUM('Ativo', 'Inativo', 'Bloqueado', 'Aguardando Pagamento', 'Pagamento Falhou'), // <<< ADICIONADO STATUS DE PAGAMENTO
+    defaultValue: 'Ativo', // Pode mudar para 'Aguardando Pagamento' após primeiro contato
+    allowNull: false,
+    comment: 'Status do cliente no sistema',
+  },
+  // Outros campos
 }, {
   tableName: 'clients',
-  timestamps: true, // createdAt, updatedAt
-  comment: 'Representa o contato do WhatsApp (a pessoa física/usuário do bot)',
+  timestamps: true,
+  comment: 'Representa o contato do WhatsApp e usuário do dashboard',
+  defaultScope: { // <<< ADICIONADO DEFAULT SCOPE
+    attributes: { exclude: ['passwordHash'] },
+  },
+  scopes: { // <<< ADICIONADO SCOPE
+    withPassword: {
+      attributes: { include: ['passwordHash'] },
+    }
+  },
+  hooks: { // <<< ADICIONADO HOOKS
+    beforeCreate: async (client) => {
+      if (client.email) { // Normalizar email para minúsculas
+          client.email = client.email.toLowerCase();
+      }
+      if (client.passwordHash) { // Hashear senha se fornecida na criação
+        client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
+      }
+    },
+    beforeUpdate: async (client) => {
+      if (client.changed('email') && client.email) {
+        client.email = client.email.toLowerCase();
+      }
+      // Hashear a senha apenas se ela foi modificada e não é já um hash longo
+      if (client.changed('passwordHash') && client.passwordHash && client.passwordHash.length < 60) {
+        client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
+      }
+    }
+  },
   indexes: [
-    { unique: true, fields: ['phone'] }
+    { unique: true, fields: ['phone'] },
+    // Adicionado para garantir que o email (se não nulo) seja único
+    { unique: true, fields: ['email'], where: { email: { [DataTypes.Op.ne]: null } } } // Correção: Op do DataTypes
   ]
 });
 
+// Método de instância para verificar a senha (para Client) <<< ADICIONADO
+Client.prototype.isValidPassword = async function(password) {
+  if (!this.passwordHash) return false; // Se não há hash, não há como validar
+  return bcrypt.compare(password, this.passwordHash);
+};
+
 Client.associate = (models) => {
-  // Um Cliente (pessoa) pode ter várias Contas Financeiras (PF, PJ, MEI)
   Client.hasMany(models.FinancialAccount, {
     foreignKey: 'clientId',
     as: 'financialAccounts',
-    onDelete: 'CASCADE', // Se o cliente for deletado, suas contas financeiras também são
+    onDelete: 'CASCADE',
   });
-
-  // Log de interações do WhatsApp com este cliente
   Client.hasMany(models.ClientInteractionLog, {
     foreignKey: 'clientId',
     as: 'interactionLogs',
     onDelete: 'CASCADE',
   });
-
-  // Outras associações diretas com Client, se houver (ex: preferências de notificação globais do Client)
+  Client.hasMany(models.Subscription, { // <<< NOVA ASSOCIAÇÃO
+    foreignKey: 'clientId',
+    as: 'subscriptions',
+    onDelete: 'CASCADE',
+  });
 };
+
+// Para usar validator.isEmail, você precisaria instalar 'validator': npm install validator
+// Por simplicidade, aqui a validação de email é básica. Para produção, use uma biblioteca.
+// Mock do validator para o exemplo:
+const validator = { isEmail: (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) }; // Regex simples
 
 module.exports = Client;

@@ -2,35 +2,29 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'seuSuperSegredoJWTComplexoAqui!'; // Mova para .env em produção!
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1d'; // Token expira em 1 dia
+const JWT_SECRET = process.env.JWT_SECRET || 'seuSuperSegredoJWTComplexoAqui!';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1d';
 
 /**
- * Gera um token JWT para um usuário.
- * @param {object} user - Objeto do usuário (geralmente { id, email, role }).
+ * Gera um token JWT.
+ * @param {object} payloadData - Objeto com dados para o payload (ex: id, email, role).
+ * @param {string} type - Tipo de token ('user_admin' ou 'client').
  * @returns {string} O token JWT gerado.
  */
-function generateToken(user) {
+function generateToken(payloadData, type = 'user_admin') { // Adicionado parâmetro type
   const payload = {
-    id: user.id,
-    email: user.email,
-    role: user.role, // Inclui o role no payload para fácil verificação de autorização
+    ...payloadData,
+    type: type, // Adiciona o tipo ao payload
   };
   return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 }
 
-/**
- * Compara uma senha fornecida com um hash armazenado.
- * @param {string} plainPassword - A senha em texto plano.
- * @param {string} hashedPassword - A senha hasheada do banco de dados.
- * @returns {Promise<boolean>} True se as senhas corresponderem.
- */
 async function comparePasswords(plainPassword, hashedPassword) {
   return bcrypt.compare(plainPassword, hashedPassword);
 }
 
 module.exports = {
   generateToken,
-  comparePasswords, // Embora o modelo User possa ter seu próprio método, pode ser útil aqui
-  JWT_SECRET, // Exportado para o middleware de autenticação
+  comparePasswords,
+  JWT_SECRET,
 };
