@@ -7,8 +7,6 @@ const appointmentService = require('../Appointment/appointment.service');
 const recurringTransactionService = require('../RecurringTransaction/recurringTransaction.service');
 const creditCardService = require('../CreditCardManagement/creditCard.service');
 const systemService = require('../System/system.service'); // Para categorias
-// const { Plan } = require('../../database'); // REMOVIDO
-// const subscriptionService = require('../Subscription/subscription.service'); // REMOVIDO - Assumindo que não é mais usado
 
 const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
 const aiModelService = require('../../services/aiModelService');
@@ -63,20 +61,24 @@ async function findProductIdByNameOrCode(nameOrCode, financialAccountId) {
 function initializeState(client, defaultAccount = null) {
     const clientName = client ? (client.name || "pessoa incrível") : "pessoa incrível";
 
-    // Lógica para hasPaidAccess e accessLevelText
     let hasPaidAccess = false;
-    let accessLevelText = 'gratuito'; // Padrão se client for null
+    let accessLevelText = 'gratuito';
 
     if (client) {
         accessLevelText = client.accessLevel || 'gratuito';
         if (client.accessLevel === 'mensal' || client.accessLevel === 'anual' || client.accessLevel === 'vitalicio') {
             hasPaidAccess = true;
             if (client.accessExpiresAt && (client.accessLevel === 'mensal' || client.accessLevel === 'anual')) {
-                if (new Date(client.accessExpiresAt + 'T00:00:00Z') < new Date()) { // Adiciona 'T00:00:00Z' para comparar como data UTC
-                    hasPaidAccess = false; // Expirou
+                // Adiciona 'T00:00:00Z' para garantir que a data seja comparada como UTC meia-noite
+                const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
+                const today = new Date();
+                today.setUTCHours(0,0,0,0); // Compara com o início do dia UTC de hoje
+
+                if (expiryDate < today) {
+                    hasPaidAccess = false;
                     accessLevelText = `expirado (era ${client.accessLevel})`;
                 } else {
-                    accessLevelText += ` (expira em ${new Date(client.accessExpiresAt + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone: 'UTC'})})`;
+                    accessLevelText += ` (expira em ${expiryDate.toLocaleDateString('pt-BR', {timeZone: 'UTC'})})`;
                 }
             }
         }
@@ -106,9 +108,13 @@ function initializeState(client, defaultAccount = null) {
         newState.currentAction = 'awaiting_plan_interest';
     } else if (defaultAccount && client && newState.hasPaidAccess) {
         newState.messageHistory.push({ role: 'assistant', content: `Olá ${clientName}! 😊 Bem-vindo(a) de volta à sua conta "${newState.activeFinancialAccountName}" (Acesso: ${accessLevelText}). Como posso te ajudar hoje? Estou pronto para anotar tudo! 📝` });
-    } else if (client && newState.hasPaidAccess) {
+    } else if (client && newState.hasPaidAccess) { // Se não tem conta default mas tem acesso
         newState.messageHistory.push({ role: 'assistant', content: `Olá ${clientName}! 😊 (Acesso: ${accessLevelText}). Como posso te ajudar hoje? Estou aqui para o que precisar! ✨` });
+    } else if (!client) { // Se o client for nulo por algum motivo (não deveria acontecer após findOrCreate)
+        newState.messageHistory.push({ role: 'assistant', content: `Olá! Como posso te ajudar hoje?` });
     }
+    // Se client existe, mas não tem acesso pago e não tem conta default (ex: acabou de ser criado e pulou o fluxo de planos)
+    // A lógica principal cuidará de direcionar para criação de contas ou seleção.
     return newState;
 }
 
@@ -291,7 +297,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
     let state;
 
     try {
-        // 1. BUSCAR OU CRIAR CLIENTE
         let client = await clientService.findOrCreateClientByPhone(senderPhone, { name: pushName });
         if (!client) {
             await sendWhatsappMessage(senderPhone, `Desculpe, ${pushName || 'você'}, estou com um problema para identificar/registrar você. Por favor, tente mais tarde. 😕`);
@@ -299,52 +304,64 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         }
         const clientNameToUse = client.name || "pessoa incrível";
 
-        // 2. INICIALIZAR/RECUPERAR ESTADO DA CONVERSA
-        // A função initializeState agora usa client.accessLevel e client.accessExpiresAt
-        state = conversationState.get(senderPhone) || initializeState(client, null);
+        // Garante que o defaultAccount seja obtido aqui se necessário
+        const defaultAccount = await clientService.getActiveOrDefaultFinancialAccount(client.id);
+        state = conversationState.get(senderPhone) || initializeState(client, defaultAccount);
 
-        // Atualiza estado do acesso e nome do cliente no state, caso tenha mudado
         state.currentAccessLevel = client.accessLevel;
         state.accessExpiresAt = client.accessExpiresAt;
         state.hasPaidAccess = client.accessLevel && (client.accessLevel === 'mensal' || client.accessLevel === 'anual' || client.accessLevel === 'vitalicio');
         
-        // Verifica expiração
         if (client.accessLevel === 'mensal' || client.accessLevel === 'anual') {
-            if (client.accessExpiresAt && new Date(client.accessExpiresAt + 'T00:00:00Z') < new Date()) {
-                state.hasPaidAccess = false; // Expirou
-                // Opcional: Reverter accessLevel no banco e recarregar cliente
-                // Se fizer isso, precisa re-inicializar parte do 'state' que depende do client atualizado
-                // Por simplicidade, apenas marcamos como sem acesso pago no estado atual.
-                // A próxima interação do usuário pegaria o estado atualizado do cliente do banco.
-                logger.info(`[WHATSAPP SERVICE] Cliente ${client.id} com acesso ${client.accessLevel} expirado em ${client.accessExpiresAt}. No estado atual, considerado como sem acesso pago.`);
+            if (client.accessExpiresAt) {
+                const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
+                const today = new Date();
+                today.setUTCHours(0,0,0,0);
+                if (expiryDate < today) {
+                    state.hasPaidAccess = false;
+                    logger.info(`[WHATSAPP SERVICE] Cliente ${client.id} com acesso ${client.accessLevel} expirado em ${client.accessExpiresAt}. No estado atual, considerado como sem acesso pago.`);
+                    // Se o estado foi inicializado antes e agora o acesso expirou, atualiza a mensagem inicial se necessário
+                    if (state.messageHistory.length === 0 || (state.messageHistory.length > 0 && !state.messageHistory[0].content.includes("você precisa de um acesso"))) {
+                        // Recria a mensagem inicial baseada no novo status de acesso
+                        const accessLevelText = `expirado (era ${client.accessLevel})`;
+                        if (defaultAccount) {
+                             state.messageHistory = [{ role: 'assistant', content: `Olá ${clientNameToUse}! 😊 Seu acesso '${accessLevelText}' expirou. Para continuar usando todas as funcionalidades na sua conta "${defaultAccount.accountName}", você precisa renovar seu acesso 'mensal' ou 'anual'. Gostaria de saber como? (Responda 'sim')` }];
+                        } else {
+                             state.messageHistory = [{ role: 'assistant', content: `Olá ${clientNameToUse}! 😊 Seu acesso '${accessLevelText}' expirou. Para continuar usando todas as funcionalidades, você precisa renovar seu acesso 'mensal' ou 'anual'. Gostaria de saber como? (Responda 'sim')` }];
+                        }
+                        state.currentAction = 'awaiting_plan_interest'; // Direciona para o fluxo de planos
+                    }
+                }
+            } else if (client.accessLevel === 'mensal' || client.accessLevel === 'anual') {
+                // Se é mensal/anual mas não tem data de expiração, considera como sem acesso pago (configuração inválida)
+                state.hasPaidAccess = false;
+                logger.warn(`[WHATSAPP SERVICE] Cliente ${client.id} com acesso ${client.accessLevel} mas sem data de expiração. Considerado como sem acesso pago.`);
             }
         }
 
+
         if (client.name && state.clientName !== client.name) state.clientName = client.name;
 
-
-        // Adiciona a mensagem atual ao histórico do estado ANTES de qualquer lógica de bloqueio ou ação
         if (!(rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string')) {
             state.messageHistory.push({ role: 'user', content: messageText });
         }
         if (state.messageHistory.length > MAX_STATE_HISTORY) {
             state.messageHistory = state.messageHistory.slice(-MAX_STATE_HISTORY);
         }
-        conversationState.set(senderPhone, state); // Salva o estado inicial e a msg do user
+        conversationState.set(senderPhone, state);
 
-        // 3. SE NÃO TIVER ACESSO PAGO ATIVO
         if (!state.hasPaidAccess) {
-            if (state.currentAction === 'awaiting_plan_interest') {
+            if (state.currentAction === 'awaiting_plan_interest' || !state.currentAction) { // Se já não estiver mostrando planos, ou se a ação for essa
                 const lowerMsg = messageText.toLowerCase().trim();
-                if (lowerMsg === 'sim' || lowerMsg === 's' || lowerMsg.includes('quero') || lowerMsg.includes('planos') || lowerMsg.includes('obter')) {
-                    // Informações fixas sobre os níveis de acesso
+                // Só mostra planos se o usuário pedir explicitamente ou se for a primeira mensagem de "sem acesso"
+                if (state.currentAction === 'awaiting_plan_interest' && (lowerMsg === 'sim' || lowerMsg === 's' || lowerMsg.includes('quero') || lowerMsg.includes('planos') || lowerMsg.includes('obter'))) {
                     let planInfoMessage = `Que demais, ${clientNameToUse}! 🎉 Temos estas opções de acesso para você:\n\n`;
                     planInfoMessage += `*Acesso Mensal*\n`;
                     planInfoMessage += `Libera todas as funcionalidades por 30 dias.\n`;
-                    planInfoMessage += `Preço: R$ 39,90\n\n`; // Exemplo de preço
+                    planInfoMessage += `Preço: R$ 39,90\n\n`;
                     planInfoMessage += `*Acesso Anual*\n`;
                     planInfoMessage += `Libera todas as funcionalidades por 365 dias com um super desconto.\n`;
-                    planInfoMessage += `Preço: R$ 399,00\n\n`; // Exemplo de preço
+                    planInfoMessage += `Preço: R$ 399,00\n\n`;
 
                     const siteUrl = process.env.PLAN_SITE_URL || "https://mapnocontrole.com.br/planos";
                     planInfoMessage += `Para obter seu acesso, visite nosso site: ${siteUrl}\n\nApós confirmar, me mande um "oi" aqui para continuarmos! 😉`;
@@ -353,41 +370,51 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     state.currentAction = 'showing_plans';
                     await sendWhatsappMessage(senderPhone, planInfoMessage);
 
-                } else {
+                } else if (state.currentAction === 'awaiting_plan_interest' && !(lowerMsg === 'sim' || lowerMsg === 's' || lowerMsg.includes('quero') || lowerMsg.includes('planos') || lowerMsg.includes('obter'))) {
+                    // Se estava esperando interesse mas o usuário não confirmou
                     const noInterestReply = `Tudo bem, ${clientNameToUse}! Se mudar de ideia sobre as opções de acesso, é só me chamar. 😊 Lembre-se que sem um acesso 'mensal' ou 'anual', as funcionalidades ficam limitadas. Para obter, acesse nosso site: ${process.env.PLAN_SITE_URL || "https://mapnocontrole.com.br/planos"}`;
                     state.messageHistory.push({ role: 'assistant', content: noInterestReply });
                     state.currentAction = null;
                     await sendWhatsappMessage(senderPhone, noInterestReply);
+                } else if (state.currentAction !== 'showing_plans' && state.currentAction !== 'awaiting_plan_interest') { // Se não estava mostrando planos nem esperando interesse
+                    // Envia a mensagem inicial de "sem acesso" se ainda não foi enviada (verificado pela condição de entrada no if !state.hasPaidAccess)
+                    // A mensagem já foi adicionada ao histórico pelo initializeState se necessário.
+                    // Apenas envia a última mensagem do assistente no histórico.
+                    const lastAssistantMessage = state.messageHistory.filter(m => m.role === 'assistant').pop();
+                    if (lastAssistantMessage && (lastAssistantMessage.content.includes("você precisa de um acesso") || lastAssistantMessage.content.includes("Seu acesso"))) {
+                         await sendWhatsappMessage(senderPhone, lastAssistantMessage.content);
+                         state.currentAction = 'awaiting_plan_interest'; // Garante que a próxima resposta seja para interesse no plano
+                    } else {
+                        // Fallback genérico se algo deu errado com a msg inicial
+                        const siteUrl = process.env.PLAN_SITE_URL || "https://mapnocontrole.com.br/planos";
+                        const genericNoAccessMsg = `Olá ${clientNameToUse}! 😊 Para usar todas as funcionalidades do ${aiModelService.ASSISTANT_NAME}, você precisa de um acesso 'mensal' ou 'anual'. Acesse ${siteUrl} para obter o seu!`;
+                        state.messageHistory.push({ role: 'assistant', content: genericNoAccessMsg });
+                        state.currentAction = 'awaiting_plan_interest';
+                        await sendWhatsappMessage(senderPhone, genericNoAccessMsg);
+                    }
                 }
-            } else if (state.currentAction !== 'showing_plans') {
-                const siteUrl = process.env.PLAN_SITE_URL || "https://mapnocontrole.com.br/planos";
-                const noAccessMessage = `Olá ${clientNameToUse}! 😊 Notei que você está no acesso '${client.accessLevel}'. Para usar todas as funcionalidades incríveis do ${aiModelService.ASSISTANT_NAME}, você precisa de um acesso 'mensal' ou 'anual'! Acesse ${siteUrl} para conhecer e escolher o seu. Depois me chame aqui! ✨`;
-                state.messageHistory.push({ role: 'assistant', content: noAccessMessage });
-                state.currentAction = 'awaiting_plan_interest';
-                await sendWhatsappMessage(senderPhone, noAccessMessage);
             }
             conversationState.set(senderPhone, state);
-            return; // Interrompe o fluxo aqui se não tem acesso pago
+            return;
         }
 
-        // 4. SE TEM ACESSO PAGO - VERIFICAR CONTAS FINANCEIRAS
         const clientFinancialAccounts = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
 
-        if (clientFinancialAccounts.length === 0 && !state.data.accountsSetupCompleted) {
+        if (clientFinancialAccounts.length === 0 && !state.data.accountsSetupCompleted && state.hasPaidAccess) {
             state.isFirstInteractionWithAccounts = true;
             state.data.accountsSetupCompleted = false;
         }
 
         if (state.isFirstInteractionWithAccounts && state.currentAction !== 'awaiting_financial_account_selection') {
-            if (!state.currentAction || state.currentAction.startsWith('creating_guided_account_')) {
+            if (!state.currentAction || (typeof state.currentAction === 'string' && state.currentAction.startsWith('creating_guided_account_'))) {
                 let replyMsg = "";
-                let nextStepAction = null;
+                let nextStepAction = state.currentAction; // Manter a ação atual por padrão
                 let accountTypeToCreateNow = null;
 
-                if (!state.data.askedAboutAccountTypes) {
+                if (!state.data.askedAboutAccountTypes && state.currentAction !== 'creating_guided_account_confirm_setup') { // Evitar reenviar se já estiver esperando a confirmação
                     replyMsg = `Eba, ${clientNameToUse}! Que bom ter você por aqui com seu acesso '${state.currentAccessLevel}'! 🎉\n\nPara organizar tudo direitinho, o ${aiModelService.ASSISTANT_NAME} trabalha com diferentes tipos de "contas financeiras". Você pode ter uma para suas finanças:\n\n🧑‍💼 *Pessoais (PF)*\n🏢 *Da sua Empresa (PJ)*\n🚀 *Do seu MEI*\n\nVamos configurar as que você precisa? (Responda "sim" para começar ou "não" para pular por agora)`;
                     state.data.askedAboutAccountTypes = true;
-                    state.currentAction = 'creating_guided_account_confirm_setup';
+                    nextStepAction = 'creating_guided_account_confirm_setup';
                 } else if (state.currentAction === 'creating_guided_account_confirm_setup') {
                     if (messageText.toLowerCase().includes('sim') || messageText.toLowerCase().includes('s')) {
                         state.accountsToCreate = ['PF', 'PJ', 'MEI'];
@@ -398,9 +425,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         replyMsg = `Sem problemas, ${clientNameToUse}! Você pode configurar suas contas financeiras a qualquer momento depois, ok? 😊 Por enquanto, como posso te ajudar?`;
                         state.isFirstInteractionWithAccounts = false;
                         state.data.accountsSetupCompleted = true;
-                        state.currentAction = null;
+                        nextStepAction = null;
                     }
-                } else if (state.currentAction.startsWith('creating_guided_account_name_')) {
+                } else if (state.currentAction && typeof state.currentAction === 'string' && state.currentAction.startsWith('creating_guided_account_name_')) {
                     const currentTypeBeingNamed = state.currentAction.replace('creating_guided_account_name_', '');
                     const accountName = messageText.trim();
                     if (accountName.length > 2 && accountName.length < 100) {
@@ -432,15 +459,15 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         } catch (createError) {
                             logger.error(`[WHATSAPP SERVICE] Erro ao criar conta guiada ${currentTypeBeingNamed}: ${createError.message}`);
                             replyMsg = `Ops! Tive um problema ao criar a conta ${currentTypeBeingNamed} chamada "${accountName}". (${createError.message.substring(0,60)}). Que tal tentar outro nome ou pular esta por agora?`;
-                            nextStepAction = state.currentAction;
+                            // nextStepAction = state.currentAction; // Mantém a ação atual para tentar de novo
                         }
                     } else {
                         replyMsg = `Esse nome parece um pouco curto ou longo demais. Para a conta de ${currentTypeBeingNamed}, poderia me dizer um nome entre 3 e 100 letras? Ou diga "pular". ✍️`;
-                        nextStepAction = state.currentAction;
+                        // nextStepAction = state.currentAction; // Mantém a ação atual
                     }
                 }
 
-                if (messageText.toLowerCase().includes('pular') && state.currentAction.startsWith('creating_guided_account_name_')) {
+                if (messageText.toLowerCase().includes('pular') && state.currentAction && typeof state.currentAction === 'string' && state.currentAction.startsWith('creating_guided_account_name_')) {
                      const typeSkipped = state.currentAction.replace('creating_guided_account_name_', '');
                      logger.info(`[WHATSAPP SERVICE] Cliente ${client.id} pulou criação da conta ${typeSkipped}.`);
                      if (state.accountsToCreate.length > 0) {
@@ -456,7 +483,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     }
                 }
 
-                if (replyMsg) {
+                if (replyMsg) { // Envia a mensagem apenas se uma foi definida
                     state.currentAction = nextStepAction;
                     state.messageHistory.push({ role: 'assistant', content: replyMsg });
                     await sendWhatsappMessage(senderPhone, replyMsg);
@@ -466,7 +493,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
         }
 
-        // 5. SELEÇÃO DE CONTA FINANCEIRA
         if (!state.activeFinancialAccountId && clientFinancialAccounts.length > 0) {
             if (clientFinancialAccounts.length === 1) {
                 const acc = clientFinancialAccounts[0];
@@ -517,7 +543,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
             conversationState.set(senderPhone, state);
             if (state.currentAction === 'selecting_initial_financial_account' || !state.activeFinancialAccountId) return;
-        } else if (!state.activeFinancialAccountId && clientFinancialAccounts.length === 0) {
+        } else if (!state.activeFinancialAccountId && clientFinancialAccounts.length === 0 && state.hasPaidAccess) {
             const noAccountsMsg = `Olá ${clientNameToUse}! Você tem acesso '${state.currentAccessLevel}', mas parece que ainda não configuramos nenhuma conta financeira (PF, PJ ou MEI). Diga "criar conta" para começarmos! 😉`;
             state.messageHistory.push({ role: 'assistant', content: noAccountsMsg });
             state.currentAction = null;
@@ -526,7 +552,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             return;
         }
 
-        // 6. PROCESSAR CLIQUES EM BOTÕES
         if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
             const buttonId = rawPayload.selectedButtonId;
             logger.info(`[WHATSAPP SERVICE] Botão clicado por ${senderPhone} (${clientNameToUse}): ID '${buttonId}', Texto: '${messageText}'`);
@@ -576,7 +601,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
         }
 
-        // 7. TRATAR ESTADOS DE AÇÕES PENDENTES
         if (state.currentAction) {
             let stateHandledInPreProcessing = false;
             let replyForPreProcessing = "";
@@ -608,9 +632,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
         }
 
-        // 8. CHAMAR A IA PARA INTERPRETAR A MENSAGEM
         logger.info(`[WHATSAPP HANDLER] Cliente: ${client.id} (${clientNameToUse}), Conta Ativa: ${state.activeFinancialAccountName || 'N/A'} (ID: ${state.activeFinancialAccountId || 'N/A'}), Msg: "${messageText}"`);
-        if(!state.activeFinancialAccountId && state.hasPaidAccess) { // Mudança aqui: state.hasActiveSubscription para state.hasPaidAccess
+        if(!state.activeFinancialAccountId && state.hasPaidAccess) {
             logger.warn(`[WHATSAPP HANDLER] Cliente ${client.id} tem acesso pago mas NENHUMA conta financeira ativa no estado para IA. Isso não deveria acontecer se o fluxo de seleção/criação estiver correto.`);
         }
 
@@ -622,8 +645,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             conversationHistory: state.messageHistory.slice(-MAX_HISTORY_FOR_AI * 2),
             currentStateData: state.data,
             editingResource: state.editingResource,
-            currentAccessLevel: state.currentAccessLevel, // NOVO
-            hasPaidAccess: state.hasPaidAccess,           // NOVO
+            currentAccessLevel: state.currentAccessLevel,
+            hasPaidAccess: state.hasPaidAccess,
         };
         const aiResponse = await aiModelService.interpretUserMessage(messageText, aiContext);
         logger.info(`[WHATSAPP HANDLER] AI Response for ${senderPhone}:`, {aiResponsePreview: JSON.stringify(aiResponse).substring(0,500) + "..."});
@@ -635,7 +658,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
         }
 
-        // 9. PROCESSAR AÇÕES DETECTADAS PELA IA
         let finalReplyParts = [];
         if (aiResponse.overall_summary_suggestion) {
             finalReplyParts.push(aiResponse.overall_summary_suggestion);
@@ -653,14 +675,13 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 const params = detectedAction.parameters || {};
                 let currentActionFormatted = "";
                 let isEditActionCurrentLoop = false;
-                let actionBlockedNoAccessLoop = false; // Mudou o nome da flag
+                let actionBlockedNoAccessLoop = false;
 
                 const publicActions = ['GENERAL_GREETING_OR_SMALLTALK', 'GENERAL_QUESTION_OR_HELP', 'ACTION_CONFIRMATION_YES', 'ACTION_CONFIRMATION_NO', 'SWITCH_FINANCIAL_ACCOUNT', 'CREATE_FINANCIAL_ACCOUNT'];
-                // if (!state.hasActiveSubscription && !publicActions.includes(detectedAction.action)) { // ANTIGO
-                if (!state.hasPaidAccess && !publicActions.includes(detectedAction.action)) { // NOVO
+                if (!state.hasPaidAccess && !publicActions.includes(detectedAction.action)) {
                     currentActionFormatted = `Sinto muito, ${clientNameToUse}, mas para realizar a ação de "${detectedAction.action}", você precisa de um acesso 'mensal' ou 'anual'. Para obter, acesse nosso site: ${process.env.PLAN_SITE_URL || "https://mapnocontrole.com.br/planos"} e depois me chame aqui! 😉`;
                     state.currentAction = 'awaiting_plan_interest';
-                    actionBlockedNoAccessLoop = true; // Mudou o nome da flag
+                    actionBlockedNoAccessLoop = true;
                 }
                 const accountRequiredActions = [
                     'CREATE_FINANCIAL_TRANSACTION', 'SCHEDULE_APPOINTMENT', 'CREATE_PARCELLED_ACCOUNT',
@@ -1135,7 +1156,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
         }
 
-        // 10. CONSTRUIR E ENVIAR RESPOSTA FINAL
         if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
             finalReplyParts = [aiResponse.reply_to_user_suggestion || `Opa, ${clientNameToUse}! Para continuarmos, preciso de um detalhe: ${aiResponse.clarifications_needed[0].clarification_question}`];
             state.currentAction = 'awaiting_clarification_response';
@@ -1176,7 +1196,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                        !(aiResponse.detected_actions?.some(a => a.action.startsWith("GENERAL_"))) &&
                                        (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0);
 
-        if (performedConcreteAction && state.hasPaidAccess) { // Mudou aqui: state.hasActiveSubscription para state.hasPaidAccess
+        if (performedConcreteAction && state.hasPaidAccess) {
             const platformUrl = process.env.PLATFORM_URL || 'app.meuassessor.com';
             const dashboardMessage = `\n📊 Para visualizar mais detalhes e relatórios, acesse a plataforma em https://${platformUrl}`;
             if (!finalReplyParts.join(" ").includes(platformUrl)) {
@@ -1187,9 +1207,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             if (!finalReplyParts.some(p => closingMessages.some(cm => p.toLowerCase().includes(cm)))) {
                  finalReplyParts.push(`Se precisar de algo a mais é só me chamar, ${clientNameToUse}! 😄`);
             }
-        } else if (!state.hasPaidAccess && state.currentAction === 'showing_plans'){ // Mudou aqui: state.hasActiveSubscription para state.hasPaidAccess
-            // Já mostrou os planos, não adiciona mais nada
-        } else if (!state.hasPaidAccess && performedConcreteAction){ // Mudou aqui: state.hasActiveSubscription para state.hasPaidAccess
+        } else if (!state.hasPaidAccess && state.currentAction === 'showing_plans'){
+            // Nada mais a adicionar
+        } else if (!state.hasPaidAccess && performedConcreteAction){
             logger.warn(`[WHATSAPP HANDLER] Ação concreta ${aiResponse.detected_actions[0]?.action} processada SEM acesso pago para ${client.id}. Revisar lógica.`);
         }
 
