@@ -41,7 +41,7 @@ async function testSendButtonList(req, res, next) {
   }
 }
 
-async function activateTestSubscription(req, res, next) {
+async function activateTestAccess(req, res, next) {
   try {
       const clientId = parseInt(req.params.clientId, 10);
       // O planId agora é opcional na rota, então pode ser undefined.
@@ -79,5 +79,5 @@ async function activateTestSubscription(req, res, next) {
 
 module.exports = {
   testSendButtonList,
-  activateTestSubscription
+  activateTestAccess
 };  
