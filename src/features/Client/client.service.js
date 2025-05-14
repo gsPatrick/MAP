@@ -21,6 +21,73 @@ async function findClientByPhone(phone) {
 }
 
 /**
+ * Busca um cliente pelo telefone. Se não existir, cria um novo.
+ * Esta função é destinada ao uso pelo WhatsappHandler.
+ * @param {string} phone - Número de telefone do cliente.
+ * @param {object} defaultData - Dados para usar na criação se o cliente não existir (ex: { name }).
+ * @returns {Promise<object>} O objeto Client encontrado ou criado (toJSON).
+ */
+async function findOrCreateClientByPhone(phone, defaultData = {}) {
+  const normalizedPhone = phone.replace(/\D/g, '');
+  const t = await sequelize.transaction();
+  try {
+    let client = await Client.findOne({
+      where: { phone: normalizedPhone },
+      transaction: t
+    });
+
+    if (client) {
+      // Cliente encontrado, verificar se precisa atualizar o nome
+      let clientNeedsUpdate = false;
+      if (defaultData.name && client.name !== defaultData.name && defaultData.name.trim() !== "") {
+        // Não atualiza se o nome existente for mais completo que o pushName (Ex: "Nome Completo" vs "Nome")
+        // Ou se o pushName for genérico como "My Contact"
+        const existingNameWords = client.name ? client.name.split(' ').length : 0;
+        const newNameWords = defaultData.name.split(' ').length;
+        // Atualiza se o novo nome tiver mais palavras ou se o existente for nulo/vazio
+        if (newNameWords > existingNameWords || !client.name) {
+            client.name = defaultData.name;
+            clientNeedsUpdate = true;
+        }
+      }
+      // Adicionar outras lógicas de atualização se necessário (ex: status, email se vierem no defaultData)
+
+      if(clientNeedsUpdate) {
+        await client.save({ transaction: t });
+        logger.info(`Cliente ${normalizedPhone} encontrado e nome atualizado para "${client.name}".`);
+      } else {
+        logger.info(`Cliente ${normalizedPhone} encontrado (ID: ${client.id}). Nenhum dado para atualizar.`);
+      }
+
+    } else {
+      // Cliente não encontrado, criar novo
+      logger.info(`Cliente com telefone ${normalizedPhone} não encontrado. Criando novo...`);
+      client = await Client.create({
+        phone: normalizedPhone,
+        name: defaultData.name || null, // Usa o nome do WhatsApp se fornecido
+        email: defaultData.email || null, // Permite email se fornecido
+        status: defaultData.status || 'Ativo',
+      }, { transaction: t });
+      logger.info(`Novo Cliente criado via findOrCreate: ID ${client.id}, Telefone: ${client.phone}, Nome: ${client.name}`);
+    }
+
+    await t.commit();
+    return client.toJSON();
+  } catch (error) {
+    await t.rollback();
+    logger.error(`Erro em findOrCreateClientByPhone para ${normalizedPhone}: ${error.message}`, { error, defaultData });
+    if (error.name === 'SequelizeValidationError') {
+      const valError = new Error(error.errors.map(e => e.message).join(', '));
+      valError.statusCode = 400; valError.status = 'fail';
+      throw valError;
+    }
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
+}
+
+
+/**
  * Cria um novo Client (contato do WhatsApp) com nome e telefone.
  * Usado durante o onboarding explícito via WhatsApp.
  * @param {object} clientData - { phone (OBRIGATÓRIO), name (OBRIGATÓRIO), email (opcional) }
@@ -518,6 +585,7 @@ async function getActiveOrDefaultFinancialAccount(clientId) {
 
 module.exports = {
   findClientByPhone,
+  findOrCreateClientByPhone, // <<< ADICIONADO À EXPORTAÇÃO
   createClient,
   createClientContact,
   getAllClientContacts,
