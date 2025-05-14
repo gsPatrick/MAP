@@ -33,10 +33,10 @@ mainApiRouter.use('/whatsapp-zapi', whatsappWebhookRoutes); // Webhook da Z-API 
 
 // --- ROTAS DE ADMINISTRAÇÃO DO SISTEMA (protegidas para Users com role 'admin') ---
 // Aplicar authenticateToken (admin) e authorizeRole(['admin']) aqui
-mainApiRouter.use('/users', authenticateToken, authorizeRole(['admin']), userRoutes); // Gerenciamento de Users (admins)
-mainApiRouter.use('/clients', authenticateToken, authorizeRole(['admin']), clientRoutes); // Gerenciamento de Clients por Admins
-mainApiRouter.use('/system', authenticateToken, authorizeRole(['admin']), systemRoutes); // Configs do sistema, categorias globais, planos
-mainApiRouter.use('/dev-tools', authenticateToken, authorizeRole(['admin']), devToolsRoutes); // Ferramentas de desenvolvimento
+mainApiRouter.use('/users',  userRoutes); // Gerenciamento de Users (admins)
+mainApiRouter.use('/clients',  clientRoutes); // Gerenciamento de Clients por Admins
+mainApiRouter.use('/system',  systemRoutes); // Configs do sistema, categorias globais, planos
+mainApiRouter.use('/dev-tools',  devToolsRoutes); // Ferramentas de desenvolvimento
 
 
 // --- ROTAS PARA CLIENTS LOGADOS (protegidas para Clients com token válido e assinatura ativa) ---
