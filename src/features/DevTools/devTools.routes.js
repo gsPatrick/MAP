@@ -10,5 +10,6 @@ const router = Router();
 // router.use(authorizeRole(['admin']));
 
 router.post('/test-send-button-list', devToolsController.testSendButtonList);
+router.post('/activate-subscription/:clientId/:planId?', devToolsController.activateTestSubscription);
 
 module.exports = router;

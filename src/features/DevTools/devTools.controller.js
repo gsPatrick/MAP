@@ -40,6 +40,43 @@ async function testSendButtonList(req, res, next) {
   }
 }
 
+async function activateTestSubscription(req, res, next) {
+  try {
+      const clientId = parseInt(req.params.clientId, 10);
+      // O planId agora é opcional na rota, então pode ser undefined.
+      // Se presente, deve ser um número.
+      let planId = req.params.planId ? parseInt(req.params.planId, 10) : null;
+      const days = req.query.days ? parseInt(req.query.days, 10) : null;
+
+      if (isNaN(clientId)) {
+          const error = new Error('ID do Cliente inválido na rota.');
+          error.statusCode = 400; error.status = 'fail'; return next(error);
+      }
+      if (req.params.planId && isNaN(planId)) { // Valida planId apenas se foi fornecido e não é um número
+           const error = new Error('ID do Plano inválido na rota.');
+          error.statusCode = 400; error.status = 'fail'; return next(error);
+      }
+      if (req.query.days && (isNaN(days) || days <= 0) ) {
+           const error = new Error('Parâmetro "days" (duração em dias) inválido.');
+          error.statusCode = 400; error.status = 'fail'; return next(error);
+      }
+
+      const result = await devToolsService.activateClientSubscriptionForTesting(clientId, planId, days);
+      res.status(200).json({
+          status: 'success',
+          message: `Assinatura de teste ativada para cliente ID ${clientId} com plano ID ${result.plan.id} ("${result.plan.name}"). Válida por ${days || result.plan.durationDays} dias.`,
+          data: {
+              client: result.client,
+              subscription: result.subscription,
+              plan: result.plan
+          }
+      });
+  } catch (error) {
+      next(error);
+  }
+}
+
 module.exports = {
   testSendButtonList,
+  activateTestSubscription
 };  
