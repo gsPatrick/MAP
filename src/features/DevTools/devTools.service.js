@@ -8,7 +8,7 @@ const logger = require('../../utils/logger');
  * @param {string} accessLevel - O nível de acesso a ser definido (ex: 'mensal', 'anual', 'vitalicio', 'gratuito').
  * @returns {Promise<object>} O objeto do cliente atualizado.
  */
-async function activateTestAccess(req, res, next) {
+async function activateClientTestAccess(req, res, next) {
     try {
       const clientId = parseInt(req.params.clientId, 10);
       // O nível de acesso pode vir do query param ou do corpo da requisição
@@ -41,5 +41,5 @@ async function activateTestAccess(req, res, next) {
     }
   }
 module.exports = {
-    activateTestAccess,
+    activateClientTestAccess,
 };

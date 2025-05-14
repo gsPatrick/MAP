@@ -62,7 +62,7 @@ async function activateTestAccess(req, res, next) {
           error.statusCode = 400; error.status = 'fail'; return next(error);
       }
 
-      const result = await devToolsService.activateClientSubscriptionForTesting(clientId, planId, days);
+      const result = await devToolsService.activateClientTestAccess(clientId, planId, days);
       res.status(200).json({
           status: 'success',
           message: `Assinatura de teste ativada para cliente ID ${clientId} com plano ID ${result.plan.id} ("${result.plan.name}"). Válida por ${days || result.plan.durationDays} dias.`,
