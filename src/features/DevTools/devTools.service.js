@@ -1,74 +1,45 @@
 // src/features/DevTools/devTools.service.js
-const { Client, Plan, Subscription, sequelize } = require('../../database');
-const logger =require('../../utils/logger');
+const { Client, sequelize } = require('../../database'); // Ajuste o caminho se necessário
+const logger = require('../../utils/logger');
 
-async function activateClientSubscriptionForTesting(clientId, planId = null, daysOverride = null) {
-    const t = await sequelize.transaction();
+/**
+ * Ativa um nível de acesso de teste para um cliente específico.
+ * @param {number} clientId - O ID do cliente.
+ * @param {string} accessLevel - O nível de acesso a ser definido (ex: 'mensal', 'anual', 'vitalicio', 'gratuito').
+ * @returns {Promise<object>} O objeto do cliente atualizado.
+ */
+async function activateTestAccess(req, res, next) {
     try {
-        const client = await Client.findByPk(clientId, { transaction: t });
-        if (!client) {
-            throw new Error(`Cliente com ID ${clientId} não encontrado.`);
-        }
-
-        let targetPlanId = planId;
-        if (!targetPlanId) {
-            const defaultPlan = await Plan.findOne({ where: { isActive: true }, order: [['price', 'ASC']], transaction: t });
-            if (!defaultPlan) {
-                throw new Error('Nenhum plano ativo encontrado para usar como padrão.');
-            }
-            targetPlanId = defaultPlan.id;
-            logger.info(`[DEV-TOOLS] Nenhum planId fornecido para cliente ${clientId}. Usando plano padrão ID: ${targetPlanId}`);
-        }
-
-        const plan = await Plan.findByPk(targetPlanId, { transaction: t });
-        if (!plan) {
-            throw new Error(`Plano com ID ${targetPlanId} não encontrado.`);
-        }
-
-        // Cancela assinaturas ativas existentes para este cliente, para evitar duplicidade
-        const existingActiveSubscriptions = await Subscription.findAll({
-            where: { clientId: clientId, status: 'Ativa' },
-            transaction: t
-        });
-
-        const todayForCancellation = new Date().toISOString().split('T')[0];
-        for (const sub of existingActiveSubscriptions) {
-            await sub.update({ status: 'Cancelada', endDate: todayForCancellation }, { transaction: t });
-            logger.info(`[DEV-TOOLS] Assinatura ativa anterior (ID: ${sub.id}) para cliente ${clientId} cancelada.`);
-        }
-
-        const startDate = new Date();
-        const endDate = new Date(startDate);
-        const durationDays = daysOverride !== null && daysOverride > 0 ? daysOverride : plan.durationDays;
-        endDate.setDate(startDate.getDate() + durationDays);
-
-        const newSubscription = await Subscription.create({
-            clientId,
-            planId: targetPlanId,
-            startDate: startDate.toISOString().split('T')[0],
-            endDate: endDate.toISOString().split('T')[0],
-            status: 'Ativa',
-            autoRenew: plan.durationDays > 31 ? true : false, // Lógica simples de autoRenew
-        }, { transaction: t });
-
-        logger.info(`[DEV-TOOLS] Nova assinatura de teste (ID: ${newSubscription.id}) criada para Cliente ID ${clientId} com Plano ID ${targetPlanId}. Válida por ${durationDays} dias, até ${newSubscription.endDate}.`);
-
-        // Se o cliente estava Aguardando Pagamento ou Inativo, atualiza para Ativo.
-        if (client.status === 'Aguardando Pagamento' || client.status === 'Pagamento Falhou' || client.status === 'Inativo') {
-            await client.update({ status: 'Ativo' }, { transaction: t });
-            logger.info(`[DEV-TOOLS] Status do cliente ${clientId} atualizado para Ativo.`);
-        }
-
-        await t.commit();
-        return { client: client.toJSON(), subscription: newSubscription.toJSON(), plan: plan.toJSON() };
-
+      const clientId = parseInt(req.params.clientId, 10);
+      // O nível de acesso pode vir do query param ou do corpo da requisição
+      const accessLevel = req.query.level || req.body.accessLevel || 'mensal'; // Padrão para 'mensal' se não especificado
+  
+      if (isNaN(clientId)) {
+        const error = new Error('ID do Cliente inválido na rota.');
+        error.statusCode = 400;
+        error.status = 'fail';
+        return next(error);
+      }
+  
+      const updatedClient = await devToolsService.activateClientTestAccess(clientId, accessLevel);
+  
+      res.status(200).json({
+        status: 'success',
+        message: `Nível de acesso de teste '${accessLevel}' ativado para cliente ID ${clientId}.`,
+        data: updatedClient,
+      });
+  
     } catch (error) {
-        await t.rollback();
-        logger.error(`[DEV-TOOLS] Erro ao ativar assinatura de teste para cliente ${clientId}: ${error.message}`, { error });
-        throw error;
+      // Se o erro não tiver statusCode, o errorHandler global pode definir como 500.
+      // Ou você pode ser mais específico aqui.
+      if (!error.statusCode && error.message.includes('não encontrado')) {
+          error.statusCode = 404;
+      } else if (!error.statusCode && error.message.includes('inválido')) {
+          error.statusCode = 400;
+      }
+      next(error); // Passa para o middleware de tratamento de erros
     }
-}
-
+  }
 module.exports = {
-    activateClientSubscriptionForTesting,
+    activateTestAccess,
 };
