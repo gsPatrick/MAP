@@ -6,7 +6,6 @@ const bcrypt = require('bcryptjs');
 // Mock do validator para o exemplo (ou use `npm install validator`)
 const validator = {
   isEmail: (value) => {
-    // Adiciona uma verificação para garantir que 'value' seja uma string antes de testar
     if (typeof value !== 'string') {
       return false;
     }
@@ -37,12 +36,9 @@ const Client = sequelize.define('Client', {
     unique: true,
     validate: {
       isEmailOrNull(value) {
-        // Se value for null ou uma string vazia, a validação deve passar.
         if (value === null || value === '') {
-          return; // Indica sucesso para o validador do Sequelize (nenhum erro lançado)
+          return;
         }
-        // Se value não for null nem uma string vazia, ele deve ser um email válido.
-        // Neste ponto, 'value' é garantidamente uma string não vazia.
         if (!validator.isEmail(value)) {
           throw new Error('Forneça um email válido ou deixe o campo vazio.');
         }
@@ -61,6 +57,19 @@ const Client = sequelize.define('Client', {
     allowNull: false,
     comment: 'Status do cliente no sistema',
   },
+  // NOVO CAMPO PARA O "PLANO" COMO ROLE
+  accessLevel: {
+    type: DataTypes.ENUM('gratuito', 'mensal', 'anual', 'vitalicio'), // Defina seus "planos" fixos aqui
+    allowNull: false,
+    defaultValue: 'gratuito', // Ou o que fizer sentido como padrão
+    comment: 'Nível de acesso/plano do cliente (gratuito, mensal, anual, vitalicio)',
+  },
+  // OPCIONAL: Se ainda precisar de uma data de expiração para os planos pagos
+  accessExpiresAt: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+      comment: 'Data em que o nível de acesso pago expira (para mensal, anual)',
+  }
 }, {
   tableName: 'clients',
   timestamps: true,
@@ -81,6 +90,16 @@ const Client = sequelize.define('Client', {
       if (client.passwordHash) {
         client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
       }
+      // Lógica para definir accessExpiresAt ao criar um cliente com plano pago
+      if (client.accessLevel && client.accessLevel !== 'gratuito' && client.accessLevel !== 'vitalicio' && !client.accessExpiresAt) {
+        const now = new Date();
+        if (client.accessLevel === 'mensal') {
+          now.setMonth(now.getMonth() + 1);
+        } else if (client.accessLevel === 'anual') {
+          now.setFullYear(now.getFullYear() + 1);
+        }
+        client.accessExpiresAt = now.toISOString().split('T')[0];
+      }
     },
     beforeUpdate: async (client) => {
       if (client.changed('email') && client.email) {
@@ -89,11 +108,25 @@ const Client = sequelize.define('Client', {
       if (client.changed('passwordHash') && client.passwordHash && client.passwordHash.length < 60) {
         client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
       }
+      // Lógica para atualizar accessExpiresAt se o accessLevel mudar para um plano pago
+      if (client.changed('accessLevel') && client.accessLevel !== 'gratuito' && client.accessLevel !== 'vitalicio') {
+        const now = new Date();
+        if (client.accessLevel === 'mensal') {
+          now.setMonth(now.getMonth() + 1);
+        } else if (client.accessLevel === 'anual') {
+          now.setFullYear(now.getFullYear() + 1);
+        }
+        client.accessExpiresAt = now.toISOString().split('T')[0];
+      } else if (client.changed('accessLevel') && (client.accessLevel === 'gratuito' || client.accessLevel === 'vitalicio')) {
+        client.accessExpiresAt = null; // Remove data de expiração para gratuito/vitalício
+      }
     }
   },
   indexes: [
     { unique: true, fields: ['phone'] },
-    { unique: true, fields: ['email'], where: { email: { [Op.ne]: null } } }
+    { unique: true, fields: ['email'], where: { email: { [Op.ne]: null } } },
+    { fields: ['accessLevel'] },
+    { fields: ['accessExpiresAt'] },
   ]
 });
 
@@ -115,11 +148,12 @@ Client.associate = (models) => {
     as: 'interactionLogs',
     onDelete: 'CASCADE',
   });
-  Client.hasMany(models.Subscription, {
-    foreignKey: 'clientId',
-    as: 'subscriptions',
-    onDelete: 'CASCADE',
-  });
+  // REMOVER A ASSOCIAÇÃO COM SUBSCRIPTION SE VOCÊ REMOVER O MODELO SUBSCRIPTION
+  // Client.hasMany(models.Subscription, {
+  //   foreignKey: 'clientId',
+  //   as: 'subscriptions',
+  //   onDelete: 'CASCADE',
+  // });
 };
 
 module.exports = Client;
