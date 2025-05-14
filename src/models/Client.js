@@ -1,11 +1,17 @@
 // src/models/Client.js
-const { DataTypes, Op } = require('sequelize'); 
+const { DataTypes, Op } = require('sequelize');
 const sequelize = require('../config/database');
 const bcrypt = require('bcryptjs');
 
 // Mock do validator para o exemplo (ou use `npm install validator`)
 const validator = {
-  isEmail: (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+  isEmail: (value) => {
+    // Adiciona uma verificação para garantir que 'value' seja uma string antes de testar
+    if (typeof value !== 'string') {
+      return false;
+    }
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  }
 };
 
 const Client = sequelize.define('Client', {
@@ -31,7 +37,13 @@ const Client = sequelize.define('Client', {
     unique: true,
     validate: {
       isEmailOrNull(value) {
-        if (value !== null && value !== '' && !validator.isEmail(value)) {
+        // Se value for null ou uma string vazia, a validação deve passar.
+        if (value === null || value === '') {
+          return; // Indica sucesso para o validador do Sequelize (nenhum erro lançado)
+        }
+        // Se value não for null nem uma string vazia, ele deve ser um email válido.
+        // Neste ponto, 'value' é garantidamente uma string não vazia.
+        if (!validator.isEmail(value)) {
           throw new Error('Forneça um email válido ou deixe o campo vazio.');
         }
       }
@@ -81,7 +93,7 @@ const Client = sequelize.define('Client', {
   },
   indexes: [
     { unique: true, fields: ['phone'] },
-    { unique: true, fields: ['email'], where: { email: { [Op.ne]: null } } } 
+    { unique: true, fields: ['email'], where: { email: { [Op.ne]: null } } }
   ]
 });
 
