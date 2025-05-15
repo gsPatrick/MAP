@@ -1,5 +1,3 @@
-
-```javascript
 // src/features/WhatsappHandler/whatsapp.service.js
 const clientService = require('../Client/client.service');
 const financialService = require('../Financial/financial.service');
@@ -13,6 +11,7 @@ const systemService = require('../System/system.service'); // Para categorias
 const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
 const aiModelService = require('../../services/aiModelService');
 const logger = require('../../utils/logger');
+const { ASSISTANT_NAME } = require('../../services/aiModelService'); // Para usar o nome do assistente consistentemente
 
 const conversationState = new Map();
 const MAX_HISTORY_FOR_AI = 8; // Pares de mensagens (usuário/assistente)
@@ -21,23 +20,26 @@ const MAX_STATE_HISTORY = 20; // Total de mensagens no estado
 // --- Helper Functions ---
 async function findFinancialCategoryIdByName(name, financialAccountId, transactionType = null) {
     if (!name || typeof name !== 'string' || name.trim() === '') return null;
+    // CORREÇÃO AQUI: Removido o "SERVICE" extra
     logger.debug(`[WHATSAPP SERVICE] Buscando categoria financeira por nome: "${name}" para conta ${financialAccountId}, tipo ${transactionType}`);
     let foundCategory = await systemService.findFinancialCategoryByNameAndType(name, transactionType, financialAccountId);
     if (foundCategory) return foundCategory.id;
-    foundCategory = await systemService.findFinancialCategoryByName(name, financialAccountId); // Fallback sem tipo
+    
+    // Fallback: Tentar buscar sem tipo, ou com tipo "Ambos" se o tipo específico não foi encontrado
+    // Isso ajuda se a IA não especificar o tipo ou se a categoria for genérica.
+    foundCategory = await systemService.findFinancialCategoryByNameAndType(name, null, financialAccountId); // Tenta sem tipo
     if (foundCategory) {
-        logger.info(`[WHATSAPP SERVICE] Categoria por nome "${name}" (tipo ${transactionType || 'qualquer'}) não encontrada exatamente. Usando correspondência por nome: "${foundCategory.name}" (ID: ${foundCategory.id})`);
+        logger.info(`[WHATSAPP SERVICE] Categoria por nome "${name}" (tipo ${transactionType || 'qualquer'}) não encontrada exatamente. Usando correspondência por nome sem tipo: "${foundCategory.name}" (ID: ${foundCategory.id})`);
         return foundCategory.id;
     }
-    logger.warn(`[WHATSAPP SERVICE] Categoria financeira com nome "${name}" não encontrada.`);
+    logger.warn(`[WHATSAPP SERVICE] Categoria financeira com nome "${name}" não encontrada para conta ${financialAccountId}.`);
     return null;
 }
 
 async function findCreditCardIdByName(name, financialAccountId) {
     if (!name || typeof name !== 'string' || name.trim() === '') return null;
-    // A função findCreditCardByName do creditCardService já lida com a busca e erros
     try {
-        const card = await creditCardService.findCreditCardByName(financialAccountId, name); // Este método deve existir no creditCardService
+        const card = await creditCardService.findCreditCardByName(financialAccountId, name);
         return card.id;
     } catch (e) {
         logger.warn(`[WHATSAPP SERVICE] Cartão de crédito com nome "${name}" não encontrado para a conta ${financialAccountId} via creditCardService: ${e.message}`);
@@ -58,8 +60,9 @@ async function findProductIdByNameOrCode(nameOrCode, financialAccountId) {
     return null;
 }
 
-// --- Funções de Formatação de Resumo (Caprichadas) ---
-function formatFinancialTransactionSummary(transaction, forMulti = false, forEdit = false) {
+// --- Funções de Formatação de Resumo (Caprichadas e seguindo os padrões) ---
+
+function formatFinancialTransactionSummary(transaction, clientName = "você", forMulti = false, forEdit = false) {
     const dateFormatted = transaction.transactionDate
         ? new Date(transaction.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' })
         : 'Data não informada';
@@ -75,8 +78,8 @@ function formatFinancialTransactionSummary(transaction, forMulti = false, forEdi
             statusText = ` ${transaction.type === 'Entrada' ? 'A receber' : 'A pagar'} em ${dueDateFormatted}`;
             statusEmoji = "🗓️";
         }
-    } else { // Transações não "PayableOrReceivable" são consideradas efetivadas
-        statusText = transaction.type === 'Entrada' ? "Recebido!" : "Pago!"; // Ou "Registrada!" para clareza
+    } else {
+        statusText = transaction.type === 'Entrada' ? "Recebido!" : "Pago!";
         statusEmoji = "✅";
     }
 
@@ -84,25 +87,26 @@ function formatFinancialTransactionSummary(transaction, forMulti = false, forEdi
     if (transaction.category && transaction.category.name) {
         const catNameLower = transaction.category.name.toLowerCase();
         if (catNameLower.includes('lazer') || catNameLower.includes('jogo') || catNameLower.includes('entretenimento')) categoryEmoji = '🎮';
-        else if (catNameLower.includes('alimentação') || catNameLower.includes('restaurante') || catNameLower.includes('ifood') || catNameLower.includes('mercado')) categoryEmoji = '🍔';
-        else if (catNameLower.includes('salário') || catNameLower.includes('recebimento') || catNameLower.includes('presente')) categoryEmoji = '💰';
-        else if (catNameLower.includes('transporte') || catNameLower.includes('uber') || catNameLower.includes('gasolina')) categoryEmoji = '🚗';
+        else if (catNameLower.includes('alimentação') || catNameLower.includes('restaurante') || catNameLower.includes('ifood') || catNameLower.includes('mercado') || catNameLower.includes('comida')) categoryEmoji = '🍔';
+        else if (catNameLower.includes('salário') || catNameLower.includes('recebimento') || catNameLower.includes('presente') || catNameLower.includes('venda')) categoryEmoji = '💰';
+        else if (catNameLower.includes('transporte') || catNameLower.includes('uber') || catNameLower.includes('gasolina') || catNameLower.includes('viagem')) categoryEmoji = '🚗';
         else if (catNameLower.includes('saúde') || catNameLower.includes('farmácia') || catNameLower.includes('médico')) categoryEmoji = '🩺';
-        else if (catNameLower.includes('casa') || catNameLower.includes('aluguel') || catNameLower.includes('moradia')) categoryEmoji = '🏡';
+        else if (catNameLower.includes('casa') || catNameLower.includes('aluguel') || catNameLower.includes('moradia') || catNameLower.includes('condomínio')) categoryEmoji = '🏡';
         else if (catNameLower.includes('educação') || catNameLower.includes('curso')) categoryEmoji = '📚';
         else if (catNameLower.includes('pet')) categoryEmoji = '🐾';
         else if (catNameLower.includes('investimento')) categoryEmoji = '📈';
-        else if (catNameLower.includes('doação') || catNameLower.includes('dívida')) categoryEmoji = '👐';
-        else if (catNameLower.includes('outros')) categoryEmoji = '📎';
+        else if (catNameLower.includes('dívida') || catNameLower.includes('empréstimo')) categoryEmoji = '🏦';
+        else if (catNameLower.includes('imposto') || catNameLower.includes('taxa')) categoryEmoji = '🧾';
+        else if (catNameLower.includes('outros') || catNameLower.includes('geral')) categoryEmoji = '📎';
     }
     if (transaction.creditCard && transaction.creditCard.name) categoryEmoji = '💳';
 
+    // Exemplo do padrão: "Tudo certo, amigão! Registramos sua despesa de transporte com sucesso. Aqui estão os detalhes:"
+    // A IA já vai fornecer a parte "Tudo certo, amigão! Registramos sua despesa...".
+    // Esta função só precisa do "📋 Resumo da Despesa/Receita:" em diante.
 
-    let summary = "";
-    if (!forMulti && !forEdit) summary += "📋 Resumo da Transação:\n\n";
-    else if (forEdit) summary += "✅ Transação Editada:\n\n";
-
-
+    let summary = forEdit ? `✨ Transação Editada, ${clientName}! Seguem os novos dados:\n\n` : "";
+    summary += `📋 Resumo da ${transaction.type === 'Entrada' ? 'Receita' : 'Despesa'}:\n\n`;
     summary += `${categoryEmoji} Descrição: ${transaction.description}\n`;
     summary += `💰 Valor: R$ ${parseFloat(transaction.value).toFixed(2)}\n`;
     if (transaction.category && transaction.category.name) {
@@ -113,11 +117,14 @@ function formatFinancialTransactionSummary(transaction, forMulti = false, forEdi
     }
     summary += `📅 Data: ${dateFormatted}\n`;
     summary += `\n${statusEmoji} Status: ${statusText}`;
+    if (transaction.paymentDate && transaction.isPaidOrReceived) {
+        summary += ` (em ${new Date(transaction.paymentDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' })})`;
+    }
     if (transaction.notes) summary += `\n📝 Obs: ${transaction.notes}`;
     return summary;
 }
 
-function formatAppointmentSummary(appointment, forMulti = false, forEdit = false) {
+function formatAppointmentSummary(appointment, clientName = "você", forMulti = false, forEdit = false) {
     const displayTimeZone = process.env.TZ || 'America/Sao_Paulo';
     const eventDateTime = new Date(appointment.eventDateTime);
 
@@ -128,16 +135,18 @@ function formatAppointmentSummary(appointment, forMulti = false, forEdit = false
         hour: '2-digit', minute: '2-digit', timeZone: displayTimeZone
     });
 
-    let summary = "";
-    if (!forMulti && !forEdit) summary += "📅 Resumo do Compromisso:\n\n";
-    else if (forEdit) summary += "✅ Compromisso Atualizado:\n\n";
+    let summary = forEdit ? `✨ Compromisso Atualizado, ${clientName}! Veja como ficou:\n\n` : "";
+    summary += "📅 Resumo do Compromisso:\n\n";
 
     let titleEmoji = "📝";
     const titleLower = appointment.title?.toLowerCase() || "";
-    if(titleLower.includes("pagar") || titleLower.includes("dívida") || appointment.associatedValue) titleEmoji = "💸";
-    else if(titleLower.includes("receber")) titleEmoji = "💰";
+    if(titleLower.includes("pagar") || titleLower.includes("dívida") || (appointment.associatedValue && appointment.associatedTransactionType === 'Saída')) titleEmoji = "💸";
+    else if(titleLower.includes("receber") || (appointment.associatedValue && appointment.associatedTransactionType === 'Entrada')) titleEmoji = "💰";
     else if(titleLower.includes("reunião")) titleEmoji = "🤝";
-    else if(titleLower.includes("médico") || titleLower.includes("dentista")) titleEmoji = "🩺";
+    else if(titleLower.includes("médico") || titleLower.includes("dentista") || titleLower.includes("exame")) titleEmoji = "🩺";
+    else if(titleLower.includes("aniversário") || titleLower.includes("festa")) titleEmoji = "🥳";
+    else if(titleLower.includes("viagem")) titleEmoji = "✈️";
+    else if(titleLower.includes("academia") || titleLower.includes("treino")) titleEmoji = "💪";
 
 
     summary += `${titleEmoji} Descrição: ${appointment.title}\n`;
@@ -159,16 +168,16 @@ function formatAppointmentSummary(appointment, forMulti = false, forEdit = false
     if(appointment.reminderEnabled && appointment.reminderLeadTimeMinutes) {
         summary += `\n🔔 Lembrete: Sim (${appointment.reminderLeadTimeMinutes} min antes)`;
     } else if (appointment.reminderEnabled && !appointment.reminderLeadTimeMinutes) {
-        summary += `\n🔔 Lembrete: Sim (Padrão)`;
+        summary += `\n🔔 Lembrete: Sim (Padrão do sistema)`;
     }
     if (appointment.notes) summary += `\n💬 Notas: ${appointment.notes}`;
     return summary;
 }
 
-function formatRecurringRuleSummary(rule, forMulti = false, forEdit = false) {
+function formatRecurringRuleSummary(rule, clientName = "você", forMulti = false, forEdit = false) {
     const startDateFormatted = rule.startDate ? new Date(rule.startDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'N/I';
     const endDateFormatted = rule.endDate ? new Date(rule.endDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'Sem data final';
-    const nextDateFormatted = rule.nextDueDate ? new Date(rule.nextDueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'N/A';
+    const nextDateFormatted = rule.nextDueDate ? new Date(rule.nextDueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'N/A (Finalizada)';
 
     let categoryEmoji = rule.type === 'Entrada' ? '💰' : '💸';
      if (rule.category && rule.category.name) {
@@ -176,13 +185,11 @@ function formatRecurringRuleSummary(rule, forMulti = false, forEdit = false) {
         if (catNameLower.includes('assinatura') || catNameLower.includes('streaming') || catNameLower.includes('netflix')) categoryEmoji = '🎬';
         else if (catNameLower.includes('aluguel') || catNameLower.includes('condomínio')) categoryEmoji = '🏡';
         else if (catNameLower.includes('salário')) categoryEmoji = '💼';
+        else if (catNameLower.includes('mei') || catNameLower.includes('imposto')) categoryEmoji = '🧾';
     }
 
-    let summary = "";
-    if(!forMulti && !forEdit) summary += "🔄 Resumo da Recorrência:\n\n";
-    else if (forEdit) summary += "✅ Recorrência Atualizada:\n\n";
-
-
+    let summary = forEdit ? `✨ Recorrência Atualizada, ${clientName}! Dá uma olhada:\n\n` : "";
+    summary += "🔄 Resumo da Recorrência:\n\n";
     summary += `${categoryEmoji} Descrição: ${rule.description}\n`;
     summary += `💰 Valor: R$ ${parseFloat(rule.value).toFixed(2)} (${rule.type})\n`;
     if (rule.category && rule.category.name) {
@@ -196,29 +203,27 @@ function formatRecurringRuleSummary(rule, forMulti = false, forEdit = false) {
     summary += `➡️ Próximo Vencimento: ${nextDateFormatted}\n`;
     summary += `🤖 Automático: ${rule.autoCreateTransaction ? 'Sim (Cria Transação)' : 'Não (Apenas Lembrete)'}\n`;
     summary += `🚦 Status da Regra: ${rule.isActive ? 'Ativa ✔️' : 'Inativa ❌'}`;
+    if (rule.notes) summary += `\n💬 Notas: ${rule.notes}`;
     return summary;
 }
 
-function formatProductSummary(product, forMulti = false, forEdit = false) {
-    let summary = "";
-    if(!forMulti && !forEdit) summary += "📦 Resumo do Produto:\n\n";
-    else if (forEdit) summary += "✅ Produto Atualizado:\n\n";
-
+function formatProductSummary(product, clientName = "você", forMulti = false, forEdit = false) {
+    let summary = forEdit ? `✨ Produto Atualizado, ${clientName}! Confira os detalhes:\n\n` : "";
+    summary += "📦 Resumo do Produto:\n\n";
     summary += `🏷️ Nome: ${product.name}\n`;
     if (product.code) summary += `🔢 Código: ${product.code}\n`;
     summary += `💲 Preço Venda: R$ ${parseFloat(product.salePrice).toFixed(2)}\n`;
     if (product.costPrice) summary += `📉 Preço Custo: R$ ${parseFloat(product.costPrice).toFixed(2)}\n`;
     summary += `📊 Estoque Atual: ${product.quantity} ${product.unit || 'UN'}\n`;
-    if (product.minimumStock) summary += `🔔 Estoque Mínimo: ${product.minimumStock} ${product.unit || 'UN'}\n`;
+    if (product.minimumStock && product.minimumStock > 0) summary += `🔔 Estoque Mínimo: ${product.minimumStock} ${product.unit || 'UN'}\n`;
     summary += `🚦 Status: ${product.isActive ? 'Ativo ✔️' : 'Inativo ❌'}`;
+    if (product.description) summary += `\n📄 Descrição: ${product.description}`;
     return summary;
 }
 
-function formatCreditCardSummary(card, forMulti = false, forEdit = false) {
-    let summary = "";
-    if(!forMulti && !forEdit) summary += "💳 Resumo do Cartão de Crédito:\n\n";
-    else if (forEdit) summary += "✅ Cartão Atualizado:\n\n";
-
+function formatCreditCardSummary(card, clientName = "você", forMulti = false, forEdit = false) {
+    let summary = forEdit ? `✨ Cartão Atualizado, ${clientName}! Veja só:\n\n` : "";
+    summary += "💳 Resumo do Cartão de Crédito:\n\n";
     summary += `✨ Nome: ${card.name}\n`;
     if(card.lastFourDigits) summary += `🔢 Final: **** ${card.lastFourDigits}\n`;
     if(card.flag) summary += `🚩 Bandeira: ${card.flag}\n`;
@@ -230,15 +235,15 @@ function formatCreditCardSummary(card, forMulti = false, forEdit = false) {
     return summary;
 }
 
-function formatCreditCardInvoiceSummary(invoiceDetails, listTransactions = true) {
-    let summary = `🧾 Fatura do Cartão: *${invoiceDetails.cardName}*\n`;
-    summary += `🗓️ Período: ${invoiceDetails.invoicePeriodDescription}\n`;
+function formatCreditCardInvoiceSummary(invoiceDetails, clientName = "você", listTransactions = true) {
+    let summary = `🧾 Fatura do Cartão: *${invoiceDetails.cardName}* para ${clientName}!\n`;
+    summary += `🗓️ Período da Fatura: ${invoiceDetails.invoicePeriodDescription}\n`;
     summary += `💸 Vencimento: ${new Date(invoiceDetails.paymentDueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' })}\n`;
     summary += `💰 *Valor Total: R$ ${invoiceDetails.totalAmount.toFixed(2)}*\n`;
 
     if (listTransactions && invoiceDetails.transactions && invoiceDetails.transactions.length > 0) {
-        summary += "\n--- Lançamentos ---\n";
-        const maxTxToList = 7;
+        summary += "\n--- Lançamentos desta Fatura ---\n";
+        const maxTxToList = 7; // Limite para não poluir a mensagem
         invoiceDetails.transactions.slice(0, maxTxToList).forEach(tx => {
             const txDate = new Date(tx.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
             summary += `\n- ${txDate}: ${tx.description} (R$ ${parseFloat(tx.value).toFixed(2)})`;
@@ -247,18 +252,35 @@ function formatCreditCardInvoiceSummary(invoiceDetails, listTransactions = true)
         if (invoiceDetails.transactions.length > maxTxToList) {
             summary += `\n... e mais ${invoiceDetails.transactions.length - maxTxToList} lançamentos.`;
         }
+        summary += "\n\nSe quiser ver todos, peça a lista completa! 😉"
     } else if (listTransactions && (!invoiceDetails.transactions || invoiceDetails.transactions.length === 0)) {
-        summary += "\nNenhum lançamento neste período. 🎉";
+        summary += "\n🎉 Boa notícia! Nenhum lançamento nesta fatura ainda. Parece que você economizou este mês ou os gastos ainda não entraram! 😉";
     }
     return summary;
 }
 
-function formatAvailableLimitSummary(limitInfo) {
-    let summary = `💳 Limite do Cartão: *${limitInfo.cardName}*\n\n`;
-    summary += `Total: R$ ${limitInfo.totalLimit.toFixed(2)}\n`;
-    summary += `Utilizado (Fatura Aberta): R$ ${limitInfo.usedAmount.toFixed(2)}\n`;
-    summary += `*Disponível: R$ ${limitInfo.availableLimit.toFixed(2)}* ✨`;
+function formatAvailableLimitSummary(limitInfo, clientName = "você") {
+    let summary = `💳 Limite do Cartão: *${limitInfo.cardName}* para ${clientName}, saca só:\n\n`;
+    summary += `💰 Limite Total: R$ ${limitInfo.totalLimit.toFixed(2)}\n`;
+    summary += `🔥 Usado na Fatura Aberta: R$ ${limitInfo.usedAmount.toFixed(2)}\n`;
+    if(limitInfo.paymentsMadeForOpenInvoice > 0) {
+        summary += `👍 Pagamentos para esta fatura: R$ ${limitInfo.paymentsMadeForOpenInvoice.toFixed(2)}\n`;
+        summary += `🧾 Saldo Devedor da Fatura Aberta: R$ ${limitInfo.netUsedAmount.toFixed(2)}\n`;
+    }
+    summary += `✨ *Limite Disponível Agora: R$ ${limitInfo.availableLimit.toFixed(2)}* ✨\n\n`;
+    summary += `Pode usar à vontade (com moderação, claro! 😉)!`;
     return summary;
+}
+
+function formatMarkedAsPaidSummary(transaction, clientName = "você"){
+    const emoji = transaction.type === 'Entrada' ? '🎉 Recebido!' : '💸 Pago!';
+    return `Ok, ${clientName}! ${emoji}\n\nA transação "${transaction.description}" (R$ ${parseFloat(transaction.value).toFixed(2)}) foi marcada como ${transaction.type === 'Entrada' ? 'recebida' : 'paga'} em ${new Date(transaction.paymentDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'})}. Contas em dia, que alívio! 😌`;
+}
+
+function formatStockMovementSummary(movement, productName, newBalance, unit, clientName = "você"){
+    const movementTypeEmoji = movement.type === 'Entrada' ? '📥' : '📤';
+    const reasonText = movement.reason ? ` (Motivo: ${movement.reason})` : '';
+    return `📝 Estoque atualizado para "${productName}", ${clientName}!\n\n${movementTypeEmoji} ${movement.type} de ${movement.quantity} ${unit || 'UN'}${reasonText}.\nNovo saldo em estoque: ${newBalance} ${unit || 'UN'}. Tudo nos conformes! 👍`;
 }
 
 
@@ -273,11 +295,8 @@ function initializeState(client, defaultAccount = null) {
         if (client.accessLevel === 'mensal' || client.accessLevel === 'anual' || client.accessLevel === 'vitalicio') {
             hasPaidAccess = true;
             if (client.accessExpiresAt && (client.accessLevel === 'mensal' || client.accessLevel === 'anual')) {
-                // Adiciona 'T00:00:00Z' para garantir que a data seja comparada como UTC meia-noite
                 const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
-                const today = new Date();
-                today.setUTCHours(0,0,0,0); // Compara com o início do dia UTC de hoje
-
+                const today = new Date(); today.setUTCHours(0,0,0,0);
                 if (expiryDate < today) {
                     hasPaidAccess = false;
                     accessLevelText = `expirado (era ${client.accessLevel})`;
@@ -308,13 +327,13 @@ function initializeState(client, defaultAccount = null) {
     };
 
     if (!newState.hasPaidAccess && client) {
-        newState.messageHistory.push({ role: 'assistant', content: `Olá ${clientName}! 😊 Para aproveitar ao máximo o ${aiModelService.ASSISTANT_NAME}, você precisa de um acesso 'mensal' ou 'anual'. Gostaria de saber como obtê-los? É rapidinho! ✨ (Responda 'sim' para saber mais)` });
+        newState.messageHistory.push({ role: 'assistant', content: `Olá ${clientName}! 😊 Para aproveitar ao máximo o ${ASSISTANT_NAME}, você precisa de um acesso 'mensal' ou 'anual'. Gostaria de saber como obtê-los? É rapidinho! ✨ (Responda 'sim' para saber mais)` });
         newState.currentAction = 'awaiting_plan_interest';
     } else if (defaultAccount && client && newState.hasPaidAccess) {
-        newState.messageHistory.push({ role: 'assistant', content: `Olá ${clientName}! 😊 Bem-vindo(a) de volta à sua conta "${newState.activeFinancialAccountName}" (Acesso: ${accessLevelText}). Como posso te ajudar hoje? Estou pronto para anotar tudo! 📝` });
-    } else if (client && newState.hasPaidAccess) { // Se não tem conta default mas tem acesso
-        newState.messageHistory.push({ role: 'assistant', content: `Olá ${clientName}! 😊 (Acesso: ${accessLevelText}). Como posso te ajudar hoje? Estou aqui para o que precisar! ✨` });
-    } else if (!client) { // Se o client for nulo por algum motivo (não deveria acontecer após findOrCreate)
+        newState.messageHistory.push({ role: 'assistant', content: `Oii, ${clientName}! Tudo certinho por aí? 😊 Notei que estamos na sua conta "${newState.activeFinancialAccountName}" (${accessLevelText}). Como posso te ajudar hoje? Manda a braba! 🚀` });
+    } else if (client && newState.hasPaidAccess) {
+        newState.messageHistory.push({ role: 'assistant', content: `Olá ${clientName}! 👋 (Acesso: ${accessLevelText}). Em que posso ser útil hoje? Estou aqui para o que precisar! ✨` });
+    } else if (!client) {
         newState.messageHistory.push({ role: 'assistant', content: `Olá! Como posso te ajudar hoje?` });
     }
     return newState;
@@ -334,48 +353,40 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         }
         const clientNameToUse = client.name || "pessoa incrível";
 
-        // Garante que o defaultAccount seja obtido aqui se necessário
         const defaultAccount = await clientService.getActiveOrDefaultFinancialAccount(client.id);
         state = conversationState.get(senderPhone) || initializeState(client, defaultAccount);
 
-        // Atualiza estado de acesso baseado nos dados mais recentes do cliente
+        // Atualiza estado de acesso e nome do cliente com os dados mais recentes
         state.currentAccessLevel = client.accessLevel;
         state.accessExpiresAt = client.accessExpiresAt;
         state.hasPaidAccess = client.accessLevel && (client.accessLevel === 'mensal' || client.accessLevel === 'anual' || client.accessLevel === 'vitalicio');
         let accessLevelTextForState = client.accessLevel || 'gratuito';
-
         if (client.accessLevel === 'mensal' || client.accessLevel === 'anual') {
             if (client.accessExpiresAt) {
                 const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
-                const today = new Date();
-                today.setUTCHours(0,0,0,0);
+                const today = new Date(); today.setUTCHours(0,0,0,0);
                 if (expiryDate < today) {
                     state.hasPaidAccess = false;
                     accessLevelTextForState = `expirado (era ${client.accessLevel})`;
                 } else {
                      accessLevelTextForState += ` (expira em ${expiryDate.toLocaleDateString('pt-BR', {timeZone: 'UTC'})})`;
                 }
-            } else { // Mensal/Anual sem data de expiração é considerado inválido/sem acesso
-                state.hasPaidAccess = false;
-                logger.warn(`[WHATSAPP SERVICE] Cliente ${client.id} com acesso ${client.accessLevel} mas sem data de expiração. Considerado como sem acesso pago.`);
-            }
+            } else { state.hasPaidAccess = false; }
         }
-
-
         if (client.name && state.clientName !== client.name) state.clientName = client.name;
 
-        // Adiciona mensagem do usuário ao histórico (exceto se for clique de botão que será tratado diferente)
+
         if (!(rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string')) {
             state.messageHistory.push({ role: 'user', content: messageText });
         }
-        // Limita o tamanho do histórico de mensagens no estado
         if (state.messageHistory.length > MAX_STATE_HISTORY) {
             state.messageHistory = state.messageHistory.slice(-MAX_STATE_HISTORY);
         }
-        conversationState.set(senderPhone, state); // Salva o estado inicial
+        conversationState.set(senderPhone, state);
 
-        // Lógica para quando não tem acesso pago
+        // Fluxo de Acesso Pago
         if (!state.hasPaidAccess) {
+            // ... (lógica de plano já existente, pode ser mantida) ...
             if (state.currentAction === 'awaiting_plan_interest' || !state.currentAction) {
                 const lowerMsg = messageText.toLowerCase().trim();
                 if (state.currentAction === 'awaiting_plan_interest' && (lowerMsg === 'sim' || lowerMsg === 's' || lowerMsg.includes('quero') || lowerMsg.includes('planos') || lowerMsg.includes('obter'))) {
@@ -399,7 +410,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                          state.currentAction = 'awaiting_plan_interest';
                     } else {
                         const siteUrl = process.env.PLAN_SITE_URL || "https://mapnocontrole.com.br/planos";
-                        const genericNoAccessMsg = `Olá ${clientNameToUse}! 😊 Para usar todas as funcionalidades do ${aiModelService.ASSISTANT_NAME}, você precisa de um acesso 'mensal' ou 'anual'. Acesse ${siteUrl} para obter o seu!`;
+                        const genericNoAccessMsg = `Olá ${clientNameToUse}! 😊 Para usar todas as funcionalidades do ${ASSISTANT_NAME}, você precisa de um acesso 'mensal' ou 'anual'. Acesse ${siteUrl} para obter o seu!`;
                         state.messageHistory.push({ role: 'assistant', content: genericNoAccessMsg });
                         state.currentAction = 'awaiting_plan_interest';
                         await sendWhatsappMessage(senderPhone, genericNoAccessMsg);
@@ -410,32 +421,31 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             return;
         }
 
-        // Lógica de configuração inicial de contas financeiras
+        // Fluxo de Configuração Inicial de Contas
         const clientFinancialAccounts = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
         if (clientFinancialAccounts.length === 0 && !state.data.accountsSetupCompleted && state.hasPaidAccess) {
             state.isFirstInteractionWithAccounts = true;
-            state.data.accountsSetupCompleted = false; // Marca que o setup não foi completado
+            state.data.accountsSetupCompleted = false;
         }
-
+        // ... (lógica de setup guiado de contas já existente, pode ser mantida ou simplificada se a IA for lidar com "criar conta") ...
+        // Por ora, vamos manter a lógica de setup guiado existente.
         if (state.isFirstInteractionWithAccounts && state.currentAction !== 'awaiting_financial_account_selection') {
-            // Este bloco lida com a criação guiada de contas (PF, PJ, MEI)
-            // Se o currentAction indicar que estamos neste fluxo, ele será tratado aqui.
             let replyMsgGuiada = "";
             let nextStepActionGuiada = state.currentAction;
 
             if (!state.data.askedAboutAccountTypes && state.currentAction !== 'creating_guided_account_confirm_setup') {
-                replyMsgGuiada = `Eba, ${clientNameToUse}! Que bom ter você por aqui com seu acesso '${accessLevelTextForState}'! 🎉\n\nPara organizar tudo direitinho, o ${aiModelService.ASSISTANT_NAME} trabalha com diferentes tipos de "contas financeiras". Você pode ter uma para suas finanças:\n\n🧑‍💼 *Pessoais (PF)*\n🏢 *Da sua Empresa (PJ)*\n🚀 *Do seu MEI*\n\nVamos configurar as que você precisa? (Responda "sim" para começar ou "não" para pular por agora)`;
+                replyMsgGuiada = `Eba, ${clientNameToUse}! Que bom ter você por aqui com seu acesso '${accessLevelTextForState}'! 🎉\n\nPara organizar tudo direitinho, o ${ASSISTANT_NAME} trabalha com diferentes tipos de "contas financeiras". Você pode ter uma para suas finanças:\n\n🧑‍💼 *Pessoais (PF)*\n🏢 *Da sua Empresa (PJ)*\n🚀 *Do seu MEI*\n\nVamos configurar as que você precisa? (Responda "sim" para começar ou "não" para pular por agora)`;
                 state.data.askedAboutAccountTypes = true;
                 nextStepActionGuiada = 'creating_guided_account_confirm_setup';
             } else if (state.currentAction === 'creating_guided_account_confirm_setup') {
                 if (messageText.toLowerCase().includes('sim') || messageText.toLowerCase().includes('s')) {
-                    state.accountsToCreate = ['PF', 'PJ', 'MEI']; // Ordem da criação
+                    state.accountsToCreate = ['PF', 'PJ', 'MEI']; 
                     const accountTypeToCreateNow = state.accountsToCreate.shift();
                     replyMsgGuiada = `Ótimo! Vamos começar com a conta de *Pessoa Física (PF)*. Qual nome você gostaria de dar para ela? (Ex: "Minhas Finanças", "Pessoal")`;
                     nextStepActionGuiada = `creating_guided_account_name_${accountTypeToCreateNow}`;
                 } else {
                     replyMsgGuiada = `Sem problemas, ${clientNameToUse}! Você pode configurar suas contas financeiras a qualquer momento depois, ok? 😊 Por enquanto, como posso te ajudar?`;
-                    state.isFirstInteractionWithAccounts = false; // Sai do fluxo de setup
+                    state.isFirstInteractionWithAccounts = false; 
                     state.data.accountsSetupCompleted = true;
                     nextStepActionGuiada = null;
                 }
@@ -461,15 +471,15 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         const newFA = await clientService.createFinancialAccount(client.id, {
                             accountName: accountName,
                             accountType: currentTypeBeingNamed,
-                            isDefault: clientFinancialAccounts.length === 0 && !state.activeFinancialAccountId // Define como default se for a primeira conta
+                            isDefault: clientFinancialAccounts.length === 0 && !state.activeFinancialAccountId 
                         });
                         logger.info(`[WHATSAPP SERVICE] Conta guiada ${currentTypeBeingNamed} "${accountName}" criada para cliente ${client.id}`);
-                        if (!state.activeFinancialAccountId) { // Se nenhuma conta estava ativa, ativa esta
+                        if (!state.activeFinancialAccountId) { 
                             state.activeFinancialAccountId = newFA.id;
                             state.activeFinancialAccountName = newFA.accountName;
                             state.activeFinancialAccountType = newFA.accountType;
                         }
-                        clientFinancialAccounts.push(newFA); // Adiciona à lista local para evitar nova busca
+                        clientFinancialAccounts.push(newFA); 
 
                         if (state.accountsToCreate.length > 0) {
                             const nextType = state.accountsToCreate.shift();
@@ -479,18 +489,15 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         } else {
                             replyMsgGuiada = `Perfeito! Conta "${accountName}" (${currentTypeBeingNamed}) criada! 👍\n\nTodas as contas que você indicou foram configuradas. Estou pronto para te ajudar a organizar suas finanças! O que você gostaria de fazer primeiro na sua conta "${state.activeFinancialAccountName || accountName}"?`;
                             state.isFirstInteractionWithAccounts = false;
-                            state.data.accountsSetupCompleted = true; // Marca que o setup foi concluído
+                            state.data.accountsSetupCompleted = true; 
                             nextStepActionGuiada = null;
                         }
                     } catch (createError) {
                         logger.error(`[WHATSAPP SERVICE] Erro ao criar conta guiada ${currentTypeBeingNamed}: ${createError.message}`);
                         replyMsgGuiada = `Ops! Tive um problema ao criar a conta ${currentTypeBeingNamed} chamada "${accountName}". (${createError.message.substring(0,60)}). Que tal tentar outro nome ou pular esta por agora?`;
-                        // Mantém a ação atual para tentar de novo ou pular
-                        // nextStepActionGuiada = state.currentAction;
                     }
                 } else {
                     replyMsgGuiada = `Esse nome parece um pouco curto ou longo demais. Para a conta de ${currentTypeBeingNamed}, poderia me dizer um nome entre 3 e 100 letras? Ou diga "pular". ✍️`;
-                    // nextStepActionGuiada = state.currentAction; // Mantém a ação atual
                 }
             }
 
@@ -499,12 +506,14 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 state.messageHistory.push({ role: 'assistant', content: replyMsgGuiada });
                 await sendWhatsappMessage(senderPhone, replyMsgGuiada);
                 conversationState.set(senderPhone, state);
-                return; // Interrompe o processamento aqui para aguardar a resposta do usuário ao fluxo guiado
+                return; 
             }
         }
 
-        // Lógica para selecionar uma conta financeira se nenhuma estiver ativa no estado
+
+        // Seleção de Conta Financeira
         if (!state.activeFinancialAccountId && clientFinancialAccounts.length > 0) {
+            // ... (lógica de seleção de conta já existente, pode ser mantida) ...
             if (clientFinancialAccounts.length === 1) {
                 const acc = clientFinancialAccounts[0];
                 state.activeFinancialAccountId = acc.id;
@@ -522,7 +531,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 accountOptionsText += `\n\nQual delas você gostaria de usar agora? Me diga o *nome* ou o *número* da conta. 😉 Estou no aguardo!`;
                 state.messageHistory.push({ role: 'assistant', content: accountOptionsText });
                 await sendWhatsappMessage(senderPhone, accountOptionsText);
-            } else { // Usuário está respondendo à pergunta de qual conta selecionar
+            } else { 
                  const chosenIdentifier = messageText.trim();
                  let accountToSelect = null;
                  const chosenNumber = parseInt(chosenIdentifier, 10);
@@ -553,20 +562,20 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                  }
             }
             conversationState.set(senderPhone, state);
-            // Se ainda estiver no processo de seleção ou não tiver conta ativa, retorna
             if (state.currentAction === 'selecting_initial_financial_account' || !state.activeFinancialAccountId) return;
+
         } else if (!state.activeFinancialAccountId && clientFinancialAccounts.length === 0 && state.hasPaidAccess) {
-            // Se tem acesso pago mas NENHUMA conta, e o fluxo de setup não iniciou ou foi pulado.
             const noAccountsMsg = `Olá ${clientNameToUse}! Você tem acesso '${accessLevelTextForState}', mas parece que ainda não configuramos nenhuma conta financeira (PF, PJ ou MEI). Diga "criar conta" para começarmos! 😉`;
             state.messageHistory.push({ role: 'assistant', content: noAccountsMsg });
-            state.currentAction = null; // Limpa ação para que "criar conta" seja pego pela IA
+            state.currentAction = null;
             await sendWhatsappMessage(senderPhone, noAccountsMsg);
             conversationState.set(senderPhone, state);
             return;
         }
 
-        // Processamento de cliques em botões (se houver)
+        // Tratamento de Cliques em Botões
         if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
+            // ... (lógica de botões já existente, pode ser mantida) ...
             const buttonId = rawPayload.selectedButtonId;
             logger.info(`[WHATSAPP SERVICE] Botão clicado por ${senderPhone} (${clientNameToUse}): ID '${buttonId}', Texto: '${messageText}'`);
             let buttonClickHandledByServiceLogic = true;
@@ -605,31 +614,28 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
             // Adicionar mais tratamentos de botões se necessário
             else {
-                buttonClickHandledByServiceLogic = false; // Se não for um botão conhecido, a IA processará o texto do botão
+                buttonClickHandledByServiceLogic = false; 
             }
 
             if (buttonClickHandledByServiceLogic) {
-                state.messageHistory.push({ role: 'assistant', content: replyForButtonClick }); // Adiciona resposta ao histórico
+                state.messageHistory.push({ role: 'assistant', content: replyForButtonClick }); 
                 conversationState.set(senderPhone, state);
                 await sendWhatsappMessage(senderPhone, replyForButtonClick);
-                return; // Interrompe aqui pois o clique do botão foi tratado
+                return; 
             }
         }
 
-        // Lógica para estados de confirmação ou edição pendentes
+
+        // Tratamento de Ações Pendentes (confirmação, edição, etc.)
         if (state.currentAction) {
+            // ... (lógica de currentAction já existente, pode ser mantida e adaptada se necessário) ...
             let stateHandledInPreProcessing = false;
             let replyForPreProcessing = "";
 
             if (state.currentAction === 'awaiting_confirmation' && state.pendingConfirmation) {
                  const lowerMsg = messageText.toLowerCase().trim();
                  if (lowerMsg === 'sim' || lowerMsg === 's' || lowerMsg.includes('correto') || lowerMsg.includes('ok') || lowerMsg.includes('pode')) {
-                    // A IA deve reprocessar a intenção original com a confirmação.
-                    // Por simplicidade aqui, podemos apenas limpar o estado e deixar a IA decidir o próximo passo.
                     replyForPreProcessing = `Entendido, ${clientNameToUse}! Confirmado! 👍 Vou prosseguir com base nisso. O que mais posso fazer?`;
-                    // Idealmente, a IA deveria agora EXECUTAR a ação que estava pendente.
-                    // Para isso, a IA precisaria de um contexto de "ação_confirmada".
-                    // Ou, o `state.pendingConfirmation` conteria os dados da ação para ser executada aqui.
                     state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                     stateHandledInPreProcessing = true;
                 } else if (lowerMsg === 'não' || lowerMsg === 'n' || lowerMsg.includes('incorreto') || lowerMsg.includes('cancela')) {
@@ -637,16 +643,12 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                     stateHandledInPreProcessing = true;
                 }
-                // Se não for sim/não, deixa a IA tratar a resposta.
             }
             else if (state.currentAction === 'awaiting_transaction_edit_details' || state.currentAction === 'awaiting_appointment_edit_details') {
-                // Se estamos esperando detalhes da edição, a mensagem atual do usuário SÃO esses detalhes.
-                // A IA deve detectar uma ação UPDATE_*
-                stateHandledInPreProcessing = false; // Deixa a IA processar
+                stateHandledInPreProcessing = false; 
             }
             else if (state.currentAction === 'awaiting_clarification_response'){
-                // Se estávamos esperando um esclarecimento, a mensagem atual é a resposta.
-                stateHandledInPreProcessing = false; // Deixa a IA processar
+                stateHandledInPreProcessing = false; 
             }
 
 
@@ -654,15 +656,15 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 state.messageHistory.push({ role: 'assistant', content: replyForPreProcessing });
                 conversationState.set(senderPhone, state);
                 await sendWhatsappMessage(senderPhone, replyForPreProcessing);
-                // Se a ação foi resolvida (confirmada/cancelada), não precisa passar pela IA novamente para esta mensagem específica.
                 if (state.currentAction === null && !state.pendingConfirmation) return;
             }
         }
 
 
+        // Chamada à IA
         logger.info(`[WHATSAPP HANDLER] Cliente: ${client.id} (${clientNameToUse}), Conta Ativa: ${state.activeFinancialAccountName || 'N/A'} (ID: ${state.activeFinancialAccountId || 'N/A'}), Msg: "${messageText}"`);
         if(!state.activeFinancialAccountId && state.hasPaidAccess) {
-            logger.warn(`[WHATSAPP HANDLER] Cliente ${client.id} tem acesso pago mas NENHUMA conta financeira ativa no estado para IA. Isso não deveria acontecer se o fluxo de seleção/criação estiver correto.`);
+            logger.warn(`[WHATSAPP HANDLER] Cliente ${client.id} tem acesso pago mas NENHUMA conta financeira ativa no estado para IA.`);
         }
 
         const aiContext = {
@@ -670,21 +672,19 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             currentFinancialAccountType: state.activeFinancialAccountType,
             currentFinancialAccountName: state.activeFinancialAccountName,
             clientName: clientNameToUse,
-            conversationHistory: state.messageHistory.slice(-MAX_HISTORY_FOR_AI * 2), // Envia últimos N pares
-            currentStateData: state.data, // Dados coletados em interações multi-passo
-            editingResource: state.editingResource, // Se estiver editando algo
-            currentAccessLevel: state.currentAccessLevel, // Para a IA saber as permissões
+            conversationHistory: state.messageHistory.slice(-MAX_HISTORY_FOR_AI * 2),
+            editingResource: state.editingResource,
+            currentAccessLevel: state.currentAccessLevel,
             hasPaidAccess: state.hasPaidAccess,
         };
         const aiResponse = await aiModelService.interpretUserMessage(messageText, aiContext);
         logger.info(`[WHATSAPP HANDLER] AI Response for ${senderPhone}:`, {aiResponsePreview: JSON.stringify(aiResponse).substring(0,500) + "..."});
-        state.lastAiResponse = aiResponse; // Guarda a última resposta da IA no estado
+        state.lastAiResponse = aiResponse;
 
-        // Limpa currentAction se a IA não pedir mais esclarecimentos e não for um estado de edição
-        if(state.currentAction && typeof state.currentAction === 'string' &&
-           (state.currentAction.startsWith('awaiting_') || state.currentAction.startsWith('creating_guided_account_') || state.currentAction === 'selecting_initial_financial_account') ) {
+        // Limpa currentAction se a IA não pedir mais esclarecimentos
+        if(state.currentAction && (state.currentAction.startsWith('awaiting_') || state.currentAction.startsWith('creating_guided_account_') || state.currentAction === 'selecting_initial_financial_account') ) {
             if (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0) {
-                 state.currentAction = null; // Limpa a ação se o esclarecimento foi resolvido ou o fluxo terminou
+                 state.currentAction = null;
             }
         }
 
@@ -694,25 +694,25 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             finalReplyParts.push(aiResponse.overall_summary_suggestion);
         }
 
-        state.pendingConfirmation = null; // Limpa confirmação pendente após IA processar
+        state.pendingConfirmation = null;
 
         let singleActionFormattedResult = null;
         let multipleActionFormattedResults = [];
-        let actionWasAnEdit = false; // Flag para saber se uma ação de edição foi processada
-        let resourceForButtonsContext = null; // Para adicionar botões de Editar/Excluir
+        let actionWasAnEdit = false;
+        let resourceForButtonsContext = null;
 
         if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
             for (const detectedAction of aiResponse.detected_actions) {
                 const params = detectedAction.parameters || {};
                 let currentActionFormatted = "";
                 let isEditActionCurrentLoop = false;
-                let actionBlockedNoAccessLoop = false;
+                let actionBlockedNoAccessLoop = false; // Flag para interrupção por falta de acesso/conta
 
-                // Verifica se a ação é pública ou requer acesso/conta
+                // Verificações de Acesso e Conta Ativa
                 const publicActions = ['GENERAL_GREETING_OR_SMALLTALK', 'GENERAL_QUESTION_OR_HELP', 'ACTION_CONFIRMATION_YES', 'ACTION_CONFIRMATION_NO', 'SWITCH_FINANCIAL_ACCOUNT', 'CREATE_FINANCIAL_ACCOUNT'];
                 if (!state.hasPaidAccess && !publicActions.includes(detectedAction.action)) {
                     currentActionFormatted = `Sinto muito, ${clientNameToUse}, mas para realizar a ação de "${detectedAction.action.toLowerCase().replace(/_/g, " ")}", você precisa de um acesso 'mensal' ou 'anual'. Para obter, acesse nosso site: ${process.env.PLAN_SITE_URL || "https://mapnocontrole.com.br/planos"} e depois me chame aqui! 😉`;
-                    state.currentAction = 'awaiting_plan_interest'; // Direciona para o fluxo de planos
+                    state.currentAction = 'awaiting_plan_interest';
                     actionBlockedNoAccessLoop = true;
                 }
                 const accountRequiredActions = [
@@ -726,16 +726,20 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 ];
                 if (accountRequiredActions.includes(detectedAction.action) && !state.activeFinancialAccountId) {
                     currentActionFormatted = `Opa, ${clientNameToUse}! Para eu poder "${detectedAction.action.toLowerCase().replace(/_/g, " ")}", preciso que você selecione uma conta financeira primeiro. Se você já configurou alguma, me diga o nome dela. Se não, diga "criar conta"! 😊`;
-                    state.currentAction = 'selecting_initial_financial_account'; // Direciona para seleção de conta
+                    state.currentAction = 'selecting_initial_financial_account';
                     actionBlockedNoAccessLoop = true;
                 }
 
                 if (actionBlockedNoAccessLoop) {
                     if (aiResponse.detected_actions.length === 1) singleActionFormattedResult = currentActionFormatted;
                     else multipleActionFormattedResults.push(currentActionFormatted);
-                    break; // Interrompe o loop de ações se uma for bloqueada
+                    if (finalReplyParts.length > 0 && finalReplyParts[0] === aiResponse.overall_summary_suggestion) { // Se já tem saudação
+                        finalReplyParts = [aiResponse.overall_summary_suggestion, currentActionFormatted]; // Adiciona o bloqueio após a saudação
+                    } else {
+                        finalReplyParts = [currentActionFormatted]; // Se não tem saudação, o bloqueio é a única mensagem
+                    }
+                    break; // Interrompe o loop de ações
                 }
-
 
                 try {
                     switch (detectedAction.action) {
@@ -751,43 +755,35 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 isPaidOrReceived: params.isPaidOrReceived !== undefined ? params.isPaidOrReceived : (cardId ? true : (!params.dueDate))
                             };
                             const newTx = await financialService.createTransaction(state.activeFinancialAccountId, txData);
-                            const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, newTx.id); // Recarrega para ter joins
-                            currentActionFormatted = formatFinancialTransactionSummary(reloadedTx, aiResponse.detected_actions.length > 1);
+                            const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, newTx.id);
+                            currentActionFormatted = formatFinancialTransactionSummary(reloadedTx, clientNameToUse, aiResponse.detected_actions.length > 1);
                             if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'transaction', id: newTx.id, description: newTx.description };
                             break;
                         }
                         case 'UPDATE_FINANCIAL_TRANSACTION': {
-                            isEditActionCurrentLoop = true;
-                            actionWasAnEdit = true;
+                            isEditActionCurrentLoop = true; actionWasAnEdit = true;
                             const transactionIdToUpdate = params.transactionIdToUpdate || state.editingResource?.id;
-                            if (!transactionIdToUpdate) throw new Error("ID da transação para atualizar não foi fornecido pela IA ou não estava no contexto de edição.");
+                            if (!transactionIdToUpdate) throw new Error("ID da transação para atualizar não fornecido.");
 
-                            const updateTxData = { ...params }; // Clona para não modificar o original da IA
+                            const updateTxData = { ...params };
                             if (params.financialCategoryName) updateTxData.financialCategoryId = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type || null);
                             if (params.creditCardName) updateTxData.creditCardId = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
                             delete updateTxData.transactionIdToUpdate; delete updateTxData.financialCategoryName; delete updateTxData.creditCardName;
 
                             const updatedTx = await financialService.updateTransaction(state.activeFinancialAccountId, transactionIdToUpdate, updateTxData);
                             const reloadedUpdatedTx = await financialService.getTransactionById(state.activeFinancialAccountId, updatedTx.id);
-                            currentActionFormatted = aiResponse.reply_to_user_suggestion || formatFinancialTransactionSummary(reloadedUpdatedTx, false, true);
-                            state.editingResource = null; // Limpa contexto de edição
+                            // Usa a sugestão da IA como prioridade para a mensagem de edição, senão formata.
+                            currentActionFormatted = aiResponse.reply_to_user_suggestion || formatFinancialTransactionSummary(reloadedUpdatedTx, clientNameToUse, false, true);
+                            state.editingResource = null;
                             break;
                         }
                         case 'SCHEDULE_APPOINTMENT': {
                             let eventDateTime = params.eventDateTime;
-                            // Lógica para ajustar eventDateTime se for apenas data ou tiver 'T' e 'Z'
-                            if (params.eventDateTime && params.eventDateTime.length === 10) { // Apenas data YYYY-MM-DD
-                                eventDateTime += ' 09:00'; // Adiciona horário padrão
-                            } else if (params.eventDateTime && params.eventDateTime.includes("T") && params.eventDateTime.endsWith("Z")) {
-                                const d = new Date(params.eventDateTime); // Converte de UTC string
-                                const year = d.getFullYear();
-                                const month = String(d.getMonth() + 1).padStart(2, '0');
-                                const day = String(d.getDate()).padStart(2, '0');
-                                const hour = String(d.getHours()).padStart(2, '0');
-                                const minute = String(d.getMinutes()).padStart(2, '0');
-                                eventDateTime = `${year}-${month}-${day} ${hour}:${minute}`; // Formato local para o serviço
+                            if (params.eventDateTime && params.eventDateTime.length === 10) eventDateTime += ' 09:00';
+                            else if (params.eventDateTime && params.eventDateTime.includes("T") && params.eventDateTime.endsWith("Z")) {
+                                const d = new Date(params.eventDateTime);
+                                eventDateTime = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
                             }
-
                             const appData = {
                                 title: params.title, eventDateTime: eventDateTime,
                                 durationMinutes: params.durationMinutes, location: params.location,
@@ -796,32 +792,27 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 associatedTransactionType: params.associatedTransactionType || null,
                             };
                             const newApp = await appointmentService.scheduleAppointment(state.activeFinancialAccountId, appData);
-                            const reloadedApp = await appointmentService.getAppointmentById(state.activeFinancialAccountId, newApp.id); // Recarrega
-                            currentActionFormatted = formatAppointmentSummary(reloadedApp, aiResponse.detected_actions.length > 1);
+                            const reloadedApp = await appointmentService.getAppointmentById(state.activeFinancialAccountId, newApp.id);
+                            currentActionFormatted = formatAppointmentSummary(reloadedApp, clientNameToUse, aiResponse.detected_actions.length > 1);
                             if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'appointment', id: newApp.id, description: newApp.title };
                             break;
                         }
                         case 'UPDATE_APPOINTMENT': {
-                            isEditActionCurrentLoop = true;
-                            actionWasAnEdit = true;
+                            isEditActionCurrentLoop = true; actionWasAnEdit = true;
                             const appointmentIdToUpdate = params.appointmentIdToUpdate || state.editingResource?.id;
-                            if (!appointmentIdToUpdate) throw new Error("ID do compromisso para atualizar não fornecido pela IA ou não estava no contexto de edição.");
-
+                            if (!appointmentIdToUpdate) throw new Error("ID do compromisso para atualizar não fornecido.");
                             const updateAppData = { ...params };
-                            if (params.eventDateTime && params.eventDateTime.length === 10) {
-                                updateAppData.eventDateTime += ' 09:00';
-                            } else if (params.eventDateTime && params.eventDateTime.includes("T") && params.eventDateTime.endsWith("Z")) {
+                            if (params.eventDateTime && params.eventDateTime.length === 10) updateAppData.eventDateTime += ' 09:00';
+                            else if (params.eventDateTime && params.eventDateTime.includes("T") && params.eventDateTime.endsWith("Z")) {
                                const d = new Date(params.eventDateTime);
-                                const year = d.getFullYear(); const month = String(d.getMonth() + 1).padStart(2, '0'); const day = String(d.getDate()).padStart(2, '0');
-                                const hour = String(d.getHours()).padStart(2, '0'); const minute = String(d.getMinutes()).padStart(2, '0');
-                                updateAppData.eventDateTime = `${year}-${month}-${day} ${hour}:${minute}`;
+                               updateAppData.eventDateTime = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
                             }
                             delete updateAppData.appointmentIdToUpdate;
                             if (params.hasOwnProperty('associatedValue')) updateAppData.associatedValue = params.associatedValue ? parseFloat(params.associatedValue) : null;
 
                             const updatedApp = await appointmentService.updateAppointment(state.activeFinancialAccountId, appointmentIdToUpdate, updateAppData);
                             const reloadedUpdatedApp = await appointmentService.getAppointmentById(state.activeFinancialAccountId, updatedApp.id);
-                            currentActionFormatted = aiResponse.reply_to_user_suggestion || formatAppointmentSummary(reloadedUpdatedApp, false, true);
+                            currentActionFormatted = aiResponse.reply_to_user_suggestion || formatAppointmentSummary(reloadedUpdatedApp, clientNameToUse, false, true);
                             state.editingResource = null;
                             break;
                         }
@@ -835,11 +826,11 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0],
                             };
                             const parcelResult = await financialService.createParcelledAccount(state.activeFinancialAccountId, parcelData);
-                            currentActionFormatted = `Conta parcelada "${params.description}" (${parcelResult.parcels.length}x) registrada com sucesso! 🥳`;
+                            currentActionFormatted = `Uhuuul, ${clientNameToUse}! 🎉 Sua compra parcelada "${params.description}" (${parcelResult.parcels.length}x de R$ ${parseFloat(parcelResult.parcels[0].value).toFixed(2)}) foi registrada com sucesso!`;
                             if (parcelResult.parcels.length > 0 && parcelResult.parcels[0].dueDate) {
-                                currentActionFormatted += ` A primeira parcela vence em ${new Date(parcelResult.parcels[0].dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'})}.`;
+                                currentActionFormatted += ` A primeira parcela já está na mira para ${new Date(parcelResult.parcels[0].dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'})}. 🎯`;
                             }
-                            if(cardIdParcel) currentActionFormatted += `\n(Lançada no cartão ${params.creditCardName})`;
+                            if(cardIdParcel) currentActionFormatted += `\n(Lançada no seu cartão ${params.creditCardName}, chique demais! 💳)`;
                             break;
                         }
                         case 'GET_FINANCIAL_SUMMARY': {
@@ -847,6 +838,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 dateStart: params.dateStart, dateEnd: params.dateEnd, type: params.type,
                                 financialCategoryId: params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type) : null,
                             };
+                            // Lógica de período (hoje, ontem, etc.)
                             if (params.period) {
                                 const todayLocale = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
                                 todayLocale.setHours(0,0,0,0);
@@ -854,13 +846,13 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     case 'hoje': filterParams.dateStart = filterParams.dateEnd = todayLocale.toISOString().split('T')[0]; break;
                                     case 'ontem': const y = new Date(todayLocale); y.setDate(y.getDate() - 1); filterParams.dateStart = filterParams.dateEnd = y.toISOString().split('T')[0]; break;
                                     case 'esta semana':
-                                        const day = todayLocale.getDay(); const diff = todayLocale.getDate() - day + (day === 0 ? -6 : 1); // Dom=0, Seg=1...
+                                        const day = todayLocale.getDay(); const diff = todayLocale.getDate() - day + (day === 0 ? -6 : 1); 
                                         const first = new Date(todayLocale.setDate(diff));
                                         const last = new Date(first); last.setDate(first.getDate() + 6);
                                         filterParams.dateStart = first.toISOString().split('T')[0]; filterParams.dateEnd = last.toISOString().split('T')[0]; break;
                                     case 'semana passada':
-                                        const prevWeekEnd = new Date(todayLocale); prevWeekEnd.setDate(todayLocale.getDate() - todayLocale.getDay() -1); // Sábado passado
-                                        const prevWeekStart = new Date(prevWeekEnd); prevWeekStart.setDate(prevWeekEnd.getDate() - 6); // Domingo retrasado
+                                        const prevWeekEnd = new Date(todayLocale); prevWeekEnd.setDate(todayLocale.getDate() - todayLocale.getDay() -1); 
+                                        const prevWeekStart = new Date(prevWeekEnd); prevWeekStart.setDate(prevWeekEnd.getDate() - 6); 
                                         filterParams.dateStart = prevWeekStart.toISOString().split('T')[0]; filterParams.dateEnd = prevWeekEnd.toISOString().split('T')[0]; break;
                                     case 'este mes': case 'este mês':
                                         filterParams.dateStart = new Date(todayLocale.getFullYear(), todayLocale.getMonth(), 1).toISOString().split('T')[0];
@@ -875,40 +867,42 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             }
                             const summaryData = await financialService.getFinancialSummary(state.activeFinancialAccountId, filterParams);
                             let periodText = params.period ? params.period.replace("_", " ") : (filterParams.dateStart && filterParams.dateEnd ? `${new Date(filterParams.dateStart+'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'})} a ${new Date(filterParams.dateEnd+'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'})}` : "geral");
-                            currentActionFormatted = `📊 Resumo Financeiro (${periodText} para ${state.activeFinancialAccountName}):\n\n` +
-                                          `🟢 Entradas: R$ ${summaryData.totalEntradas.toFixed(2)}\n` +
-                                          `🔴 Saídas: R$ ${summaryData.totalSaidas.toFixed(2)}\n` +
-                                          `💰 *Saldo Efetivado: R$ ${summaryData.saldoEfetivado.toFixed(2)}*\n\n` +
+                            currentActionFormatted = `📊 Resumo Financeiro (${periodText} para ${state.activeFinancialAccountName}), ${clientNameToUse}:\n\n` +
+                                          `🟢 Entradas (caixa): R$ ${summaryData.totalEntradas.toFixed(2)}\n` +
+                                          `🔴 Saídas (caixa): R$ ${summaryData.totalSaidas.toFixed(2)}\n` +
+                                          `💰 *Saldo Efetivado (caixa): R$ ${summaryData.saldoEfetivado.toFixed(2)}*\n\n` +
                                           `📈 A Receber (Pend.): R$ ${summaryData.totalAReceberPendente.toFixed(2)}\n` +
-                                          `📉 A Pagar (Pend.): R$ ${summaryData.totalAPagarPendente.toFixed(2)}`;
+                                          `📉 A Pagar (Pend.): R$ ${summaryData.totalAPagarPendente.toFixed(2)}\n\n`+
+                                          `Show de bola, né? Mantenha o controle! 😉`;
                             break;
                         }
-                         case 'LIST_FINANCIAL_TRANSACTIONS': {
+                        case 'LIST_FINANCIAL_TRANSACTIONS': {
                              const filterParamsList = {
                                 dateStart: params.dateStart, dateEnd: params.dateEnd, type: params.type,
                                 financialCategoryId: params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type) : null,
                                 creditCardId: params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null,
                                 isPayableOrReceivable: params.isPayableOrReceivable,
                                 isPaidOrReceived: params.isPaidOrReceived,
-                                search: params.searchTerm || params.description, // IA pode usar searchTerm ou description
-                                limit: params.limit || 5, page: params.page || 1,
+                                search: params.searchTerm || params.description,
+                                limit: params.limit || 7, page: params.page || 1, // Aumentado limite padrão
                                 sortBy: params.sortBy || 'transactionDate', sortOrder: params.sortOrder || 'DESC'
                             };
                             const { transactions, totalItems } = await financialService.getAllTransactions(state.activeFinancialAccountId, filterParamsList);
                             if (totalItems === 0) {
-                                currentActionFormatted = `Nenhuma transação encontrada para os filtros que você pediu, ${clientNameToUse}. 👍 Tente outros filtros!`;
+                                currentActionFormatted = `Nenhuma transação encontrada para os filtros que você pediu, ${clientNameToUse}. 👍 Tente outros filtros ou quem sabe registrar algo novo? 😄`;
                             } else {
-                                let listText = `📜 Encontrei ${totalItems} transações. As ${transactions.length > 1 ? transactions.length + " " : ""}mais recentes são:\n`;
+                                let listText = `📜 Encontrei ${totalItems} transações, ${clientNameToUse}. As ${transactions.length > 1 ? transactions.length + " " : ""}mais recentes são:\n`;
                                 for (const t of transactions) {
                                     const catName = t.category ? t.category.name : 'Sem Categoria';
                                     const emoji = t.type === 'Entrada' ? '🟢' : (t.creditCardId ? '💳' : '🔴');
                                     const date = new Date(t.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'});
                                     listText += `\n${emoji} ${t.description} - R$ ${parseFloat(t.value).toFixed(2)}\n    (Cat: ${catName}, Data: ${date}, ID: ${t.id})`;
                                     if (t.isPayableOrReceivable) {
-                                        listText += t.isPaidOrReceived ? " (Liquidada ✅)" : ` (Vence ${new Date(t.dueDate+'T00:00:00Z').toLocaleDateString('pt-BR',{timeZone:'UTC'})} 🗓️)`;
+                                        listText += t.isPaidOrReceived ? ` (Liquidada ✅ em ${new Date(t.paymentDate+'T00:00:00Z').toLocaleDateString('pt-BR',{timeZone:'UTC'})})` : ` (Vence ${new Date(t.dueDate+'T00:00:00Z').toLocaleDateString('pt-BR',{timeZone:'UTC'})} 🗓️)`;
                                     }
                                 }
                                 if (totalItems > transactions.length) listText += `\n\nE mais ${totalItems - transactions.length} transações. Peça para ver mais se quiser! 😉`;
+                                else listText += "\n\nÉ isso aí! Tudo na ponta do lápis (ou do app!). 📝"
                                 currentActionFormatted = listText;
                             }
                             break;
@@ -917,7 +911,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             let transactionToMark = null;
                             if (params.transactionIdToUpdate && !isNaN(parseInt(params.transactionIdToUpdate))) {
                                 transactionToMark = await financialService.getTransactionById(state.activeFinancialAccountId, parseInt(params.transactionIdToUpdate));
-                            } else if (state.editingResource && state.editingResource.type === 'transaction') {
+                            } else if (state.editingResource && state.editingResource.type === 'transaction' && state.editingResource.id) {
                                 transactionToMark = await financialService.getTransactionById(state.activeFinancialAccountId, state.editingResource.id);
                             } else if (params.transactionDescription) {
                                 const searchResults = await financialService.getAllTransactions(state.activeFinancialAccountId, {
@@ -931,7 +925,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     transactionToMark = searchResults.transactions[0];
                                 } else if (searchResults.transactions.length > 1) {
                                     currentActionFormatted = `Encontrei várias transações pendentes com essa descrição, ${clientNameToUse}. 🤔 Poderia ser mais específico (ex: mencionar o valor ou ID) ou usar a plataforma para marcar?`;
-                                    break; // Sai do switch para esta ação
+                                    break; 
                                 }
                             }
 
@@ -939,8 +933,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 currentActionFormatted = `Não encontrei uma transação pendente clara para "${params.transactionDescription || 'a transação mencionada'}" para marcar como paga/recebida, ${clientNameToUse}. 😕 (ID Pesquisado: ${params.transactionIdToUpdate || 'N/A'})`;
                             } else {
                                 const updatedTx = await financialService.markAsPaidOrReceived(state.activeFinancialAccountId, transactionToMark.id, params.paymentDate);
-                                currentActionFormatted = ` Oba, ${clientNameToUse}! 🎉 Transação "${updatedTx.description}" marcada como ${updatedTx.type === 'Entrada' ? 'recebida' : 'paga'} com sucesso!`;
-                                state.editingResource = null; // Limpa se estava editando
+                                // A saudação inicial virá da IA. Aqui só o resumo da ação.
+                                currentActionFormatted = formatMarkedAsPaidSummary(updatedTx, clientNameToUse);
+                                state.editingResource = null; 
                             }
                             break;
                         }
@@ -948,7 +943,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const catRecId = params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type) : null;
                             let ruleValue = parseFloat(params.value);
                             if ((isNaN(ruleValue) || ruleValue <= 0) && params.description && params.description.toLowerCase().includes('netflix')) {
-                                ruleValue = 55.90; // Exemplo de valor padrão
+                                ruleValue = 55.90; 
                                 logger.info(`[WHATSAPP SERVICE] Valor para Netflix não fornecido, usando padrão ${ruleValue}`);
                             }
                             const ruleData = {
@@ -957,16 +952,16 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 interval: params.interval || 1, dayOfMonth: params.dayOfMonth, dayOfWeek: params.dayOfWeek,
                                 endDate: params.endDate, autoCreateTransaction: params.autoCreateTransaction === undefined ? false : params.autoCreateTransaction,
                                 financialCategoryId: catRecId, notes: params.notes,
-                                isPayableOrReceivable: true, // Recorrências são geralmente contas
+                                isPayableOrReceivable: true, 
                             };
                             const newRule = await recurringTransactionService.createRecurringRule(state.activeFinancialAccountId, ruleData);
-                            const reloadedRule = await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, newRule.id); // Recarrega com includes
-                            currentActionFormatted = formatRecurringRuleSummary(reloadedRule, aiResponse.detected_actions.length > 1);
+                            const reloadedRule = await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, newRule.id);
+                            currentActionFormatted = formatRecurringRuleSummary(reloadedRule, clientNameToUse, aiResponse.detected_actions.length > 1);
                             break;
                         }
                          case 'CREATE_PRODUCT': {
                             if (!['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
-                                currentActionFormatted = `Desculpe, ${clientNameToUse}, mas o cadastro de produtos é apenas para contas PJ ou MEI. Sua conta "${state.activeFinancialAccountName}" é do tipo ${state.activeFinancialAccountType}.`;
+                                currentActionFormatted = `Desculpe, ${clientNameToUse}, mas o cadastro de produtos é apenas para contas PJ ou MEI. Sua conta "${state.activeFinancialAccountName}" é do tipo ${state.activeFinancialAccountType}. Quer mudar de conta ou criar uma nova? 😉`;
                                 break;
                             }
                             const productData = {
@@ -974,48 +969,47 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 costPrice: params.costPrice ? parseFloat(params.costPrice) : null,
                                 quantity: params.initialQuantity !== undefined ? parseInt(params.initialQuantity) : 0,
                                 minimumStock: params.minimumStock !== undefined ? parseInt(params.minimumStock) : 0,
-                                unit: params.unit
+                                unit: params.unit, description: params.description
                             };
                             const newProd = await productService.createProduct(state.activeFinancialAccountId, productData);
-                            currentActionFormatted = formatProductSummary(newProd, aiResponse.detected_actions.length > 1);
+                            currentActionFormatted = formatProductSummary(newProd, clientNameToUse, aiResponse.detected_actions.length > 1);
                             break;
                         }
                         case 'GET_STOCK_INFO': {
                              if (!['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
-                                currentActionFormatted = `Ops, ${clientNameToUse}, a consulta de estoque é só para contas PJ ou MEI.`;
+                                currentActionFormatted = `Ops, ${clientNameToUse}, a consulta de estoque é só para contas PJ ou MEI. Sua conta "${state.activeFinancialAccountName}" é do tipo ${state.activeFinancialAccountType}.`;
                                 break;
                             }
                             const productId = await findProductIdByNameOrCode(params.productNameOrCode, state.activeFinancialAccountId);
                              if(!productId) {
-                                currentActionFormatted = `Hum... não encontrei nenhum produto parecido com "${params.productNameOrCode}" na sua conta ${state.activeFinancialAccountName}, ${clientNameToUse}. 🧐`;
+                                currentActionFormatted = `Hum... não encontrei nenhum produto parecido com "${params.productNameOrCode}" na sua conta ${state.activeFinancialAccountName}, ${clientNameToUse}. 🧐 Tente o nome exato ou o código!`;
                                 break;
                             }
-                            const stockBalance = await stockService.getProductStockBalance(productId); // Assumindo que este retorna { name, quantity, unit, minimumStock }
-                            currentActionFormatted = `📦 Estoque de *${stockBalance.name}* (${state.activeFinancialAccountName}):\n` +
+                            const stockBalance = await stockService.getProductStockBalance(productId); 
+                            currentActionFormatted = `📦 Estoque de *${stockBalance.name}* (${state.activeFinancialAccountName}), ${clientNameToUse}:\n\n` +
                                                   `Disponível: ${stockBalance.quantity} ${stockBalance.unit || 'UN'}\n` +
-                                                  (stockBalance.minimumStock ? `Mínimo: ${stockBalance.minimumStock} ${stockBalance.unit || 'UN'}` : '');
+                                                  (stockBalance.minimumStock && stockBalance.minimumStock > 0 ? `🔔 Mínimo configurado: ${stockBalance.minimumStock} ${stockBalance.unit || 'UN'}` : '🔔 Mínimo não configurado.') +
+                                                  `\n\n${stockBalance.quantity > (stockBalance.minimumStock || 0) ? 'Tudo em ordem por aqui! ✅' : (stockBalance.quantity > 0 ? 'Atenção ao estoque baixo! ⚠️' : 'Estoque zerado! Hora de repor! 🅾️')}`;
                             break;
                         }
                         case 'RECORD_STOCK_MOVEMENT': {
                             if (!['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
-                                currentActionFormatted = `Sinto muito, ${clientNameToUse}, movimentação de estoque é para contas PJ ou MEI.`;
+                                currentActionFormatted = `Sinto muito, ${clientNameToUse}, movimentação de estoque é para contas PJ ou MEI. Sua conta "${state.activeFinancialAccountName}" é ${state.activeFinancialAccountType}.`;
                                 break;
                             }
                             const productIdStock = await findProductIdByNameOrCode(params.productNameOrCode, state.activeFinancialAccountId);
                              if(!productIdStock) {
-                                currentActionFormatted = `Não encontrei o produto "${params.productNameOrCode}" para movimentar o estoque, ${clientNameToUse}. 😬`;
+                                currentActionFormatted = `Não encontrei o produto "${params.productNameOrCode}" para movimentar o estoque, ${clientNameToUse}. 😬 Verifique o nome ou código.`;
                                 break;
                             }
                             const movementData = {
-                                type: params.movementType, // "Entrada", "Saída", "Ajuste"
-                                quantity: parseInt(params.quantity), // Para ajuste, IA pode enviar negativo. O service trata.
+                                type: params.movementType, 
+                                quantity: parseInt(params.quantity), 
                                 reason: params.reason
                             };
                             const movement = await stockService.recordStockMovement(productIdStock, movementData);
                             const updatedProduct = await productService.getProductById(state.activeFinancialAccountId, productIdStock);
-                            currentActionFormatted = `📝 Movimentação de estoque para *${updatedProduct.name}* registrada!\n`+
-                                                   `Tipo: ${movement.type}, Quantidade: ${movement.quantity}\n`+
-                                                   `Novo Saldo: ${updatedProduct.quantity} ${updatedProduct.unit || 'UN'}`;
+                            currentActionFormatted = formatStockMovementSummary(movement, updatedProduct.name, updatedProduct.quantity, updatedProduct.unit, clientNameToUse);
                             break;
                         }
                         case 'CREATE_CREDIT_CARD': {
@@ -1026,7 +1020,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 isDefault: params.isDefault === undefined ? false : params.isDefault
                             };
                             const newCard = await creditCardService.createCreditCard(state.activeFinancialAccountId, cardData);
-                            currentActionFormatted = formatCreditCardSummary(newCard, aiResponse.detected_actions.length > 1);
+                            currentActionFormatted = formatCreditCardSummary(newCard, clientNameToUse, aiResponse.detected_actions.length > 1);
                             break;
                         }
                         case 'LIST_APPOINTMENTS': {
@@ -1054,16 +1048,22 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             }
                             const { appointments, totalItems: totalApps } = await appointmentService.getAllAppointments(state.activeFinancialAccountId, filterAppList);
                             if (totalApps === 0) {
-                                currentActionFormatted = `Você não tem compromissos agendados para os filtros informados, ${clientNameToUse}. Que tal agendar algo? 😉`;
+                                currentActionFormatted = `Você não tem compromissos agendados para os filtros informados na conta "${state.activeFinancialAccountName}", ${clientNameToUse}. Que tal agendar algo novo? 😉 Ou relaxar, se a agenda estiver livre! 🧘`;
                             } else {
-                                let appListText = `🗓️ Você tem ${totalApps} compromissos. Os próximos são:\n`;
+                                let appListText = `🗓️ ${clientNameToUse}, você tem ${totalApps} compromissos em "${state.activeFinancialAccountName}". Os próximos são:\n`;
                                 for (const app of appointments) {
                                     const eventDT = new Date(app.eventDateTime);
                                     const dateStr = eventDT.toLocaleDateString('pt-BR', {timeZone: process.env.TZ || 'America/Sao_Paulo'});
                                     const timeStr = eventDT.toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit', timeZone: process.env.TZ || 'America/Sao_Paulo'});
-                                    appListText += `\n- ${app.title} em ${dateStr} às ${timeStr} (ID: ${app.id})`;
+                                    let appEmoji = '▫️';
+                                    if (app.status === 'Completed') appEmoji = '✅';
+                                    else if (app.status === 'Cancelled') appEmoji = '❌';
+                                    else if (new Date(app.eventDateTime) < new Date()) appEmoji = '⏰'; // Atrasado
+
+                                    appListText += `\n${appEmoji} ${app.title} em ${dateStr} às ${timeStr} (ID: ${app.id})`;
                                 }
-                                if (totalApps > appointments.length) appListText += `\n\nE mais ${totalApps - appointments.length}. Peça para ver mais ou filtre!`;
+                                if (totalApps > appointments.length) appListText += `\n\nE mais ${totalApps - appointments.length}. Peça para ver mais ou filtre para encontrar algo específico!`;
+                                else appListText += `\n\nAgenda cheia ou nem tanto? O importante é se organizar! 😄`;
                                 currentActionFormatted = appListText;
                             }
                             break;
@@ -1071,12 +1071,13 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         case 'LIST_CREDIT_CARDS': {
                             const cards = await creditCardService.getAllCreditCards(state.activeFinancialAccountId, { isActive: true });
                             if(cards.length === 0) {
-                                currentActionFormatted = `Você ainda não cadastrou nenhum cartão de crédito na conta "${state.activeFinancialAccountName}", ${clientNameToUse}. 💳`;
+                                currentActionFormatted = `Você ainda não cadastrou nenhum cartão de crédito na conta "${state.activeFinancialAccountName}", ${clientNameToUse}. 💳 Que tal adicionar um para facilitar seus registros? Diga "criar cartão"!`;
                             } else {
-                                let cardListText = `Estes são seus cartões de crédito ativos para "${state.activeFinancialAccountName}":\n`;
+                                let cardListText = `Estes são seus cartões de crédito ativos para "${state.activeFinancialAccountName}", ${clientNameToUse}:\n`;
                                 cards.forEach(c => {
-                                    cardListText += `\n- *${c.name}* (Limite: R$ ${parseFloat(c.limit).toFixed(2)})${c.isDefault ? ' ⭐Padrão' : ''}`;
+                                    cardListText += `\n- *${c.name}* (Limite: R$ ${parseFloat(c.limit).toFixed(2)})${c.isDefault ? ' ⭐Padrão' : ''}${c.lastFourDigits ? ' Final ' + c.lastFourDigits : ''}`;
                                 });
+                                cardListText += "\n\nQual deles você quer usar ou saber mais? 😊"
                                 currentActionFormatted = cardListText;
                             }
                             break;
@@ -1084,13 +1085,15 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         case 'LIST_RECURRING_RULES': {
                             const rules = await recurringTransactionService.getAllRecurringRules(state.activeFinancialAccountId, { isActive: true });
                             if(rules.length === 0) {
-                                currentActionFormatted = `Nenhuma regra de recorrência ativa encontrada para "${state.activeFinancialAccountName}", ${clientNameToUse}. 🔄`;
+                                currentActionFormatted = `Nenhuma regra de recorrência ativa encontrada para "${state.activeFinancialAccountName}", ${clientNameToUse}. 🔄 Quer criar uma para automatizar seus lançamentos? É só pedir!`;
                             } else {
-                                let ruleListText = `Suas regras de recorrência ativas para "${state.activeFinancialAccountName}":\n`;
+                                let ruleListText = `Suas regras de recorrência ativas para "${state.activeFinancialAccountName}", ${clientNameToUse}:\n`;
                                 rules.forEach(r => {
-                                    const nextDue = new Date(r.nextDueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'});
-                                    ruleListText += `\n- ${r.description} (R$ ${parseFloat(r.value).toFixed(2)} ${r.type}, Próx: ${nextDue})`;
+                                    const nextDue = r.nextDueDate ? new Date(r.nextDueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'}) : 'Finalizada';
+                                    const emoji = r.type === 'Entrada' ? '🟢' : '🔴';
+                                    ruleListText += `\n${emoji} ${r.description} (R$ ${parseFloat(r.value).toFixed(2)} ${r.type === 'Entrada' ? 'a receber' : 'a pagar'}, Próx: ${nextDue})`;
                                 });
+                                ruleListText += "\n\nLembre-se que posso listar mais detalhes ou ajudar a criar novas! 😉"
                                 currentActionFormatted = ruleListText;
                             }
                             break;
@@ -1100,13 +1103,16 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const allClientAccounts = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
                             if (!targetAccountName) {
                                 if (allClientAccounts.length <= 1 && state.activeFinancialAccountId) {
-                                    currentActionFormatted = `Você só tem a conta "${state.activeFinancialAccountName}" configurada por enquanto, ${clientNameToUse}. Se quiser criar outra, me diga! 😉`;
-                                } else {
+                                    currentActionFormatted = `Você só tem a conta "${state.activeFinancialAccountName}" configurada por enquanto, ${clientNameToUse}. Se quiser criar outra, é só dizer "criar conta"! 😉`;
+                                } else if (allClientAccounts.length === 0) {
+                                    currentActionFormatted = `Puxa, ${clientNameToUse}, parece que você ainda não tem nenhuma conta financeira configurada. Que tal criarmos uma agora? Diga "criar conta PF", "criar conta PJ" ou "criar conta MEI"! 🚀`;
+                                }
+                                 else {
                                     let accList = `Você tem estas contas, ${clientNameToUse}:\n`;
                                     allClientAccounts.forEach(acc => { accList += `\n- *${acc.accountName}* (${acc.accountType}) ${acc.id === state.activeFinancialAccountId ? ' (Selecionada ✨)' : ''}`; });
-                                    accList += "\n\nPara qual delas você gostaria de mudar? Só me dizer o nome.";
+                                    accList += "\n\nPara qual delas você gostaria de mudar? Só me dizer o nome ou o tipo. Qual vai ser? 🤔";
                                     currentActionFormatted = accList;
-                                    state.currentAction = 'selecting_initial_financial_account';
+                                    state.currentAction = 'selecting_initial_financial_account'; // Reutiliza o estado
                                     state.data.accountsToList = allClientAccounts.map(a => ({id: a.id, name: a.accountName, type: a.accountType}));
                                 }
                             } else {
@@ -1115,12 +1121,12 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     state.activeFinancialAccountId = foundAcc.id;
                                     state.activeFinancialAccountName = foundAcc.accountName;
                                     state.activeFinancialAccountType = foundAcc.accountType;
-                                    currentActionFormatted = `Prontinho, ${clientNameToUse}! Mudei para sua conta "${state.activeFinancialAccountName}". O que faremos agora? 😊`;
-                                    state.currentAction = null; // Limpa ação de seleção
+                                    currentActionFormatted = `Prontinho, ${clientNameToUse}! Mudei para sua conta "${state.activeFinancialAccountName}". O que faremos agora por aqui? 😊`;
+                                    state.currentAction = null; 
                                 } else if (foundAcc && foundAcc.id === state.activeFinancialAccountId) {
-                                    currentActionFormatted = `Você já está usando a conta "${state.activeFinancialAccountName}", ${clientNameToUse}! 😉`;
+                                    currentActionFormatted = `Você já está usando a conta "${state.activeFinancialAccountName}", ${clientNameToUse}! 😉 Tudo certo por aqui!`;
                                 } else {
-                                    currentActionFormatted = `Não encontrei uma conta chamada ou do tipo "${targetAccountName}", ${clientNameToUse}. 😕 Tente de novo com o nome exato ou o tipo (PF, PJ, MEI).`;
+                                    currentActionFormatted = `Não encontrei uma conta chamada ou do tipo "${targetAccountName}", ${clientNameToUse}. 😕 Tente de novo com o nome exato ou o tipo (PF, PJ, MEI). Suas contas são: ${allClientAccounts.map(a => a.accountName).join(', ')}.`;
                                 }
                             }
                             break;
@@ -1129,68 +1135,64 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const typeToCreate = params.accountTypeToCreate;
                             const newAccName = params.newAccountName;
                             if (!typeToCreate) {
-                                currentActionFormatted = `Para criar uma nova conta financeira, preciso saber o tipo: Pessoal (PF), Empresa (PJ) ou MEI?`;
-                                state.currentAction = 'creating_first_account_type'; // Estado para aguardar tipo
+                                currentActionFormatted = `Para criar uma nova conta financeira, preciso saber o tipo: Pessoal (PF), Empresa (PJ) ou MEI? Qual você prefere, ${clientNameToUse}? 🤓`;
+                                state.currentAction = 'awaiting_create_account_type'; // Novo estado
                             } else if (!newAccName) {
-                                currentActionFormatted = `Entendi que você quer criar uma conta do tipo ${typeToCreate}. Qual nome você gostaria de dar para ela?`;
-                                state.currentAction = 'awaiting_first_account_name'; // Estado para aguardar nome
-                                state.data.accountTypeToCreate = typeToCreate; // Guarda o tipo
+                                currentActionFormatted = `Entendi que você quer criar uma conta do tipo ${typeToCreate}, ${clientNameToUse}. Que nome massa vamos dar para ela? 🤩 (Ex: "Minha Empresa Show", "Finanças Pessoais Power")`;
+                                state.currentAction = 'awaiting_create_account_name'; 
+                                state.data.accountTypeToCreate = typeToCreate;
                             } else {
                                 try {
                                     const newFA = await clientService.createFinancialAccount(client.id, { accountName: newAccName, accountType: typeToCreate });
-                                    currentActionFormatted = `Conta "${newFA.accountName}" (${newFA.accountType}) criada com sucesso, ${clientNameToUse}! 🎉 Ela já está selecionada. O que vamos fazer?`;
+                                    currentActionFormatted = `Conta "${newFA.accountName}" (${newFA.accountType}) criada com sucesso, ${clientNameToUse}! 🎉 Ela já está selecionada e pronta para brilhar! O que vamos fazer primeiro nela?`;
                                     state.activeFinancialAccountId = newFA.id;
                                     state.activeFinancialAccountName = newFA.accountName;
                                     state.activeFinancialAccountType = newFA.accountType;
-                                    state.currentAction = null; state.data = {}; // Limpa estados de criação
+                                    state.currentAction = null; state.data = {}; 
                                 } catch(e) {
-                                    currentActionFormatted = `Ops, não consegui criar a conta "${newAccName}" (${typeToCreate}). ${e.message.substring(0,70)}. Tente um nome diferente.`;
-                                    state.currentAction = 'awaiting_first_account_name'; // Mantém para tentar nome de novo
+                                    currentActionFormatted = `Ops, não consegui criar a conta "${newAccName}" (${typeToCreate}), ${clientNameToUse}. ${e.message.substring(0,70)}. Será que já existe uma com esse nome/documento ou o nome é muito diferentão? Tente outro nome! 🤔`;
+                                    state.currentAction = 'awaiting_create_account_name'; 
                                     state.data.accountTypeToCreate = typeToCreate;
                                 }
                             }
                             break;
                         }
-                        // --- NOVAS AÇÕES DE CARTÃO ---
                         case 'GET_CREDIT_CARD_INVOICE': {
                             const cardIdForInvoice = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
                             if (!cardIdForInvoice) {
-                                currentActionFormatted = `Hum, não consegui identificar o cartão "${params.creditCardName}". Pode tentar de novo ou verificar se ele está cadastrado? 🤔`;
+                                currentActionFormatted = `Hum, não consegui identificar o cartão "${params.creditCardName}" na conta "${state.activeFinancialAccountName}", ${clientNameToUse}. Pode tentar de novo ou verificar se ele está cadastrado? 🤔`;
                                 break;
                             }
                             const periodOpts = {
-                                type: params.invoicePeriodType || 'aberta', // 'aberta', 'ultima_fechada', 'especifico'
-                                month: params.invoiceMonth, // 1-12
+                                type: params.invoicePeriodType || 'aberta', 
+                                month: params.invoiceMonth, 
                                 year: params.invoiceYear
                             };
                             const invoiceDetails = await creditCardService.getCreditCardInvoiceDetails(state.activeFinancialAccountId, cardIdForInvoice, periodOpts);
-                            currentActionFormatted = formatCreditCardInvoiceSummary(invoiceDetails, params.listTransactions !== false);
+                            currentActionFormatted = formatCreditCardInvoiceSummary(invoiceDetails, clientNameToUse, params.listTransactions !== false);
                             break;
                         }
                         case 'GET_CREDIT_CARD_AVAILABLE_LIMIT': {
                             const cardIdForLimit = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
                             if (!cardIdForLimit) {
-                                currentActionFormatted = `Não encontrei o cartão "${params.creditCardName}" para verificar o limite, ${clientNameToUse}.`;
+                                currentActionFormatted = `Não encontrei o cartão "${params.creditCardName}" na conta "${state.activeFinancialAccountName}" para verificar o limite, ${clientNameToUse}. 🧐`;
                                 break;
                             }
                             const limitInfo = await creditCardService.getAvailableCreditLimit(state.activeFinancialAccountId, cardIdForLimit);
-                            currentActionFormatted = formatAvailableLimitSummary(limitInfo);
+                            currentActionFormatted = formatAvailableLimitSummary(limitInfo, clientNameToUse);
                             break;
                         }
                         case 'PAY_CREDIT_CARD_INVOICE': {
                             const cardIdForPayment = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
                             if (!cardIdForPayment) {
-                                currentActionFormatted = `Não identifiquei o cartão "${params.creditCardName}" para registrar o pagamento da fatura.`;
+                                currentActionFormatted = `Não identifiquei o cartão "${params.creditCardName}" para registrar o pagamento da fatura, ${clientNameToUse}. Verifique o nome, por favor. 🙏`;
                                 break;
                             }
                             const paymentAmount = parseFloat(params.paymentAmount);
                             const paymentDate = params.paymentDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0];
 
-                            // TODO: Lógica para identificar conta de origem se `params.originatingAccountDescription` for fornecido.
-                            // Por agora, assume que sai da `state.activeFinancialAccountId` (que não deve ser o próprio cartão).
-
                             const paymentDescription = `Pagamento Fatura ${params.creditCardName} - R$ ${paymentAmount.toFixed(2)}`;
-                            const categoryName = params.financialCategoryName || "Pagamento de Fatura"; // Categoria padrão
+                            const categoryName = params.financialCategoryName || "Pagamento de Fatura"; 
                             const paymentCategoryId = await findFinancialCategoryIdByName(categoryName, state.activeFinancialAccountId, 'Saída');
 
                             try {
@@ -1200,13 +1202,13 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     value: paymentAmount,
                                     transactionDate: paymentDate,
                                     financialCategoryId: paymentCategoryId,
-                                    isPayableOrReceivable: false,
-                                    isPaidOrReceived: true
+                                    isPayableOrReceivable: false, // Pagamento de fatura é uma quitação, não uma "conta a pagar" futura
+                                    isPaidOrReceived: true // Já foi pago
                                 });
-                                currentActionFormatted = `Pagamento da fatura do cartão ${params.creditCardName} no valor de R$ ${paymentAmount.toFixed(2)} registrado com sucesso na sua conta ${state.activeFinancialAccountName}! 🎉`;
+                                currentActionFormatted = `Pagamento da fatura do cartão ${params.creditCardName} no valor de R$ ${paymentAmount.toFixed(2)} registrado com sucesso na sua conta ${state.activeFinancialAccountName}! 🎉 Isso aí, ${clientNameToUse}, fatura paga é sinônimo de tranquilidade! 😌`;
                             } catch (e) {
                                 logger.error(`Erro ao registrar pagamento de fatura para cartão ${params.creditCardName} na conta ${state.activeFinancialAccountName}: ${e.message}`);
-                                currentActionFormatted = `Ops! Tive um problema ao tentar registrar o pagamento da fatura do ${params.creditCardName}. (${e.message.substring(0,60)})`;
+                                currentActionFormatted = `Ops! Tive um problema ao tentar registrar o pagamento da fatura do ${params.creditCardName}, ${clientNameToUse}. (${e.message.substring(0,60)}). Vamos tentar de novo?`;
                             }
                             break;
                         }
@@ -1214,47 +1216,48 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         case 'GENERAL_QUESTION_OR_HELP':
                         case 'ACTION_CONFIRMATION_YES':
                         case 'ACTION_CONFIRMATION_NO':
-                            // Tratamento especial para perguntas sobre funcionalidades não implementadas
-                            if(messageText.toLowerCase().includes("pagar fatura de um item") || messageText.toLowerCase().includes("antecipar fatura")){
-                                currentActionFormatted = `Entendo que você quer fazer um pagamento específico ou antecipar algo da fatura, ${clientNameToUse}. Essa é uma função mais avançada que ainda estou aprendendo a fazer direitinho! 😅 Por enquanto, posso te mostrar a fatura total, o limite, ou registrar o pagamento total da fatura. O que prefere?`;
+                            if(messageText.toLowerCase().includes("pagar fatura de um item") || messageText.toLowerCase().includes("antecipar fatura") || messageText.toLowerCase().includes("pagar parcialmente a fatura")){
+                                currentActionFormatted = `Entendi que você quer fazer um pagamento específico ou antecipar algo da fatura, ${clientNameToUse}. Essa é uma função mais avançada que ainda estou aprendendo a fazer direitinho! 😅 Por enquanto, posso te mostrar a fatura total, o limite disponível, ou registrar o pagamento total da fatura (se você já o fez). O que prefere? 🤔`;
+                            } else if (aiResponse.reply_to_user_suggestion && aiResponse.reply_to_user_suggestion.length > 5) { // Evitar sugestões muito curtas como "Ok"
+                                currentActionFormatted = aiResponse.reply_to_user_suggestion;
                             } else {
-                                currentActionFormatted = aiResponse.reply_to_user_suggestion || `Entendido, ${clientNameToUse}! 😊`;
+                                currentActionFormatted = `Entendido, ${clientNameToUse}! 😊 Como posso te ajudar agora?`;
                             }
 
                             if (detectedAction.action === 'ACTION_CONFIRMATION_YES' || detectedAction.action === 'ACTION_CONFIRMATION_NO') {
                                 state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                             }
-                            // Se a IA deu uma sugestão de resposta direta e não é uma das frases acima, usa ela como única resposta.
-                            if (aiResponse.reply_to_user_suggestion && !messageText.toLowerCase().includes("pagar fatura de um item") && !messageText.toLowerCase().includes("antecipar fatura")) {
-                                finalReplyParts = [aiResponse.reply_to_user_suggestion]; // Sobrescreve qualquer overall_summary
+                            // Se a IA deu uma sugestão de resposta direta, usa ela como única resposta.
+                            if (aiResponse.reply_to_user_suggestion && !aiResponse.overall_summary_suggestion && aiResponse.detected_actions.length === 1) {
+                                finalReplyParts = [aiResponse.reply_to_user_suggestion];
                                 multipleActionFormattedResults = []; // Limpa outras ações se houver
                             }
                             break;
                         default:
                             if (aiResponse.detected_actions.length === 1 && aiResponse.reply_to_user_suggestion && !aiResponse.overall_summary_suggestion) {
-                                currentActionFormatted = aiResponse.reply_to_user_suggestion;
+                                currentActionFormatted = aiResponse.reply_to_user_suggestion; // Se a IA já deu uma resposta final
                             } else {
-                                currentActionFormatted = `Ação "${detectedAction.action}" ${params.description ? `para "${params.description}"` : ''} foi entendida, ${clientNameToUse}, mas ainda não sei como processá-la completamente. 😅`;
+                                currentActionFormatted = `Ação "${detectedAction.action}" ${params.description ? `para "${params.description}"` : ''} foi entendida, ${clientNameToUse}, mas ainda não sei como processá-la completamente. 😅 Minha equipe está trabalhando para me deixar mais esperto! Enquanto isso, posso te ajudar com outra coisa?`;
                                 logger.warn(`[WHATSAPP SERVICE] Ação da IA não implementada no switch: ${detectedAction.action}`);
                             }
                             break;
                     } // Fim do Switch
 
-                    if (actionBlockedNoAccessLoop) continue; // Pula para a próxima ação detectada se houver
+                    if (actionBlockedNoAccessLoop) continue;
 
                     if (currentActionFormatted) {
                         if (aiResponse.detected_actions.length === 1 && !isEditActionCurrentLoop) {
                             singleActionFormattedResult = currentActionFormatted;
-                        } else if (!isEditActionCurrentLoop) { // Múltiplas ações, não edição
+                        } else if (!isEditActionCurrentLoop) {
                             multipleActionFormattedResults.push(currentActionFormatted);
-                        } else { // Ação de edição única
-                            singleActionFormattedResult = currentActionFormatted; // Edições são tratadas como ação única
+                        } else {
+                            singleActionFormattedResult = currentActionFormatted;
                         }
                     }
 
                 } catch (e) {
                     logger.error(`[WHATSAPP HANDLER] Erro executando "${detectedAction.action}" para ${senderPhone}: ${e.message}`, { stack: e.stack?.substring(0,300), params: params });
-                    const errorMsgPart = `Ops! 😬 Tive um problema ao tentar processar "${params.description || detectedAction.action.toLowerCase().replace(/_/g," ")}". (${e.message.length < 80 ? e.message : 'Erro interno, desculpe!'}). Pode tentar de novo ou com outros termos?`;
+                    const errorMsgPart = `Ops! 😬 Tive um problema ao tentar processar "${params.description || detectedAction.action.toLowerCase().replace(/_/g," ")}". (${e.message.length < 80 ? e.message : 'Erro interno, desculpe!'}). Pode tentar de novo ou com outros termos? Se persistir, chame o suporte! 🙏`;
                     if (aiResponse.detected_actions.length === 1) singleActionFormattedResult = errorMsgPart;
                     else multipleActionFormattedResults.push(errorMsgPart);
                 }
@@ -1264,66 +1267,68 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
         // Lógica para construir a resposta final
         if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
-            // Se precisa de esclarecimentos, essa é a resposta principal
-            finalReplyParts = [aiResponse.reply_to_user_suggestion || `Opa, ${clientNameToUse}! Para continuarmos, preciso de um detalhe: ${aiResponse.clarifications_needed[0].clarification_question}`];
-            state.currentAction = 'awaiting_clarification_response'; // Define estado para aguardar esclarecimento
-            state.data.clarificationContext = { // Guarda o contexto do que estava sendo feito
+            // Se precisa de esclarecimentos, essa é a resposta principal, já formatada pela IA
+            finalReplyParts = [aiResponse.reply_to_user_suggestion]; // reply_to_user_suggestion DEVE ser a clarification_question
+            state.currentAction = 'awaiting_clarification_response';
+            state.data.clarificationContext = {
                 action: aiResponse.clarifications_needed[0].original_intent_action_suggestion,
                 original_message: messageText,
-                parameters_so_far: aiResponse.clarifications_needed[0].parameters_so_far || {} // Parâmetros já coletados
+                parameters_so_far: aiResponse.clarifications_needed[0].parameters_so_far || {}
             };
-            singleActionFormattedResult = null; // Limpa resultados de ações se precisar de esclarecimento
+            singleActionFormattedResult = null;
             multipleActionFormattedResults = [];
-        } else if (singleActionFormattedResult) { // Se houve uma única ação processada
-            // Se já havia um overall_summary e não é parte da ação, e não é edição, concatena.
-            if (finalReplyParts.length > 0 && !actionWasAnEdit && !finalReplyParts.join(" ").toLowerCase().includes(singleActionFormattedResult.substring(0,20).toLowerCase())) {
-                // Adiciona a sugestão de resposta da IA se não for redundante com o overall_summary ou o resultado da ação
-                if(aiResponse.reply_to_user_suggestion &&
-                   (!aiResponse.overall_summary_suggestion || !aiResponse.reply_to_user_suggestion.toLowerCase().includes(aiResponse.overall_summary_suggestion.substring(0,20).toLowerCase())) &&
-                   !singleActionFormattedResult.toLowerCase().includes(aiResponse.reply_to_user_suggestion.substring(0,20).toLowerCase())) {
-                    finalReplyParts.push(aiResponse.reply_to_user_suggestion);
-                }
+        } else if (singleActionFormattedResult) {
+            // Se já havia um overall_summary (saudação) e não é uma edição, concatena.
+            if (finalReplyParts.length > 0 && !actionWasAnEdit) {
                 finalReplyParts.push(singleActionFormattedResult);
             } else { // Se não tinha overall_summary ou era edição, a ação é a resposta principal.
                 finalReplyParts = [singleActionFormattedResult];
             }
-        } else if (multipleActionFormattedResults.length > 0) { // Se múltiplas ações foram processadas
-            if (finalReplyParts.length === 0) { // Se não houve overall_summary
-                finalReplyParts.push(`${clientNameToUse}, aqui está o que eu fiz pra você! 😉`);
-            } else if (aiResponse.reply_to_user_suggestion && !finalReplyParts.join(" ").toLowerCase().includes(aiResponse.reply_to_user_suggestion.substring(0,20).toLowerCase())) {
-                 finalReplyParts.push(aiResponse.reply_to_user_suggestion); // Adiciona a sugestão geral se houver e não for redundante
+             // Adiciona reply_to_user_suggestion se for diferente do overall_summary e da ação, e não for para edição
+            if (aiResponse.reply_to_user_suggestion && !actionWasAnEdit &&
+                (!aiResponse.overall_summary_suggestion || !aiResponse.reply_to_user_suggestion.includes(aiResponse.overall_summary_suggestion.substring(0,15))) &&
+                !singleActionFormattedResult.includes(aiResponse.reply_to_user_suggestion.substring(0,15))) {
+                finalReplyParts.push(aiResponse.reply_to_user_suggestion);
             }
-            finalReplyParts.push(multipleActionFormattedResults.join("\n\n---\n\n")); // Adiciona os resultados das múltiplas ações
+
+        } else if (multipleActionFormattedResults.length > 0) {
+            // Se já tinha overall_summary (saudação), concatena.
+            if (finalReplyParts.length > 0) {
+                 // Adiciona reply_to_user_suggestion se for diferente do overall_summary
+                if(aiResponse.reply_to_user_suggestion && (!aiResponse.overall_summary_suggestion || !aiResponse.reply_to_user_suggestion.includes(aiResponse.overall_summary_suggestion.substring(0,15)))){
+                     finalReplyParts.push(aiResponse.reply_to_user_suggestion);
+                }
+                finalReplyParts.push(multipleActionFormattedResults.join("\n\n---\n\n"));
+            } else { // Se não tinha overall_summary, a primeira ação pode ter a saudação implícita.
+                finalReplyParts = [multipleActionFormattedResults.join("\n\n---\n\n")];
+            }
         } else if (aiResponse.reply_to_user_suggestion) { // Se não houve ação concreta, mas há uma sugestão de resposta da IA
-            // Se a lista de resposta está vazia ou só tem o overall_summary, usa a sugestão.
-            if (finalReplyParts.length === 0 || (finalReplyParts.length === 1 && finalReplyParts[0] === aiResponse.overall_summary_suggestion)) {
+             if (finalReplyParts.length === 0 || (finalReplyParts.length === 1 && finalReplyParts[0] === aiResponse.overall_summary_suggestion)) {
                 finalReplyParts = [aiResponse.reply_to_user_suggestion];
             } else if (!finalReplyParts.join(" ").toLowerCase().includes(aiResponse.reply_to_user_suggestion.substring(0,30).toLowerCase())) {
-                 // Adiciona se não for redundante com o que já tem
                  finalReplyParts.push(aiResponse.reply_to_user_suggestion);
             }
-        } else { // Fallback se nenhuma resposta foi construída
-            finalReplyParts.push(`Entendido, ${clientNameToUse}! Se precisar de mais alguma coisa, é só chamar. 😊 Estou por aqui!`);
+        } else if (finalReplyParts.length === 0) { // Fallback final se nada foi construído
+            finalReplyParts.push(`Entendido, ${clientNameToUse}! Se precisar de mais alguma coisa, é só dar um grito. Estou por aqui! 😊`);
         }
 
-        // Adiciona mensagem sobre a plataforma se uma ação concreta foi realizada e o cliente tem acesso
+        // Adiciona mensagem sobre a plataforma
         const performedConcreteAction = (singleActionFormattedResult || multipleActionFormattedResults.length > 0) &&
-                                       !(aiResponse.detected_actions?.some(a => a.action.startsWith("GENERAL_"))) && // Ignora saudações
-                                       (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0); // Não se precisar de esclarecimento
+                                       !(aiResponse.detected_actions?.some(a => a.action.startsWith("GENERAL_") || a.action.startsWith("ACTION_CONFIRMATION_"))) &&
+                                       (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0);
 
         if (performedConcreteAction && state.hasPaidAccess) {
-            const platformUrl = process.env.PLATFORM_URL || 'app.meuassessor.com'; // Configure isso no .env
-            const dashboardMessage = `\n📊 Para visualizar mais detalhes e relatórios, acesse a plataforma em https://${platformUrl}`;
-            if (!finalReplyParts.join(" ").includes(platformUrl)) { // Evita duplicar
+            const platformUrl = process.env.PLATFORM_URL || 'app.mapnocontrole.com.br'; // Atualize para seu domínio
+            const dashboardMessage = `\n📊 Para visualizar mais detalhes e relatórios, acesse a plataforma em https://${platformUrl}. Se precisar de algo a mais é só me chamar! 😃📈`;
+            if (!finalReplyParts.join(" ").includes(platformUrl)) {
                 finalReplyParts.push(dashboardMessage);
             }
         }
 
 
         const completeFinalReply = finalReplyParts.join("\n\n").trim();
-        state.messageHistory.push({ role: 'assistant', content: completeFinalReply }); // Adiciona resposta final ao histórico
+        state.messageHistory.push({ role: 'assistant', content: completeFinalReply });
 
-        // Limpa contextos de edição ou esclarecimento se foram resolvidos
         if (actionWasAnEdit || (state.editingResource && aiResponse.detected_actions?.every(a => !a.action.startsWith("UPDATE_")))) {
             state.editingResource = null;
         }
@@ -1331,12 +1336,11 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             delete state.data.clarificationContext;
         }
 
-        conversationState.set(senderPhone, state); // Salva o estado atualizado
+        conversationState.set(senderPhone, state);
 
-        // Envia a resposta para o usuário
+        // Envia a resposta
         if (completeFinalReply) {
             if (resourceForButtonsContext && aiResponse.detected_actions?.length === 1 && !actionWasAnEdit && (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0)) {
-                // Lógica para adicionar botões de Editar/Excluir
                 let buttons = [];
                 let buttonItemDesc = "item";
                 if (resourceForButtonsContext.description && typeof resourceForButtonsContext.description === 'string') {
@@ -1355,35 +1359,31 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         { id: `delete_appointment_${resourceForButtonsContext.id}`, label: "Excluir Compromisso 🗑️" },
                     ];
                 }
-                // Adicionar outros tipos de botões aqui se necessário (ex: para cartão de crédito)
-
                 if (buttons.length > 0) {
                     await sendButtonListMessage(senderPhone, completeFinalReply, buttons, buttonTitle);
                 } else {
                     await sendWhatsappMessage(senderPhone, completeFinalReply);
                 }
-                state.editingResource = resourceForButtonsContext; // Mantém para o caso de um clique no botão logo após
+                state.editingResource = resourceForButtonsContext;
 
-            } else { // Sem botões contextuais
+            } else {
                 await sendWhatsappMessage(senderPhone, completeFinalReply);
-                // Limpa o recurso de edição se não foram enviados botões para ele
                 if(state.editingResource && !resourceForButtonsContext) state.editingResource = null;
             }
         }
-
 
     } catch (error) {
         logger.error(`[WHATSAPP HANDLER] Erro CRÍTICO processando msg de ${senderPhone}: ${error.message}`, { stack: error.stack?.substring(0,1000), messageText, rawPayload });
         const clientNameToUseInError = state ? state.clientName : (pushName || "você");
         try {
-            await sendWhatsappMessage(senderPhone, `Puxa vida, ${clientNameToUseInError}! 😬 Parece que tive um curto-circuito aqui e não consegui processar sua mensagem. Minha equipe de engenheiros já está de olho nisso! 👩‍💻👨‍💻 Por favor, tente de novo em um momentinho. Desculpe o transtorno!`);
+            await sendWhatsappMessage(senderPhone, `Puxa vida, ${clientNameToUseInError}! 😬 Meu sistema deu um tilt aqui (${error.message.substring(0,50)}). Parece que precisei de um cafézinho extra! ☕ Minha equipe já está verificando o que houve. Tente novamente em instantes, por favor! 🙏`);
         } catch (sendError) {
             logger.error(`[WHATSAPP HANDLER] Falha ao enviar msg de erro crítico para ${senderPhone}: ${sendError.message}`);
         }
     } finally {
         const endTime = Date.now();
         logger.info(`[WHATSAPP HANDLER] Processamento para ${senderPhone} finalizado em ${endTime - startTime}ms.`);
-        if (state) conversationState.set(senderPhone, state); // Garante que o estado final seja salvo
+        if (state) conversationState.set(senderPhone, state);
     }
 }
 
