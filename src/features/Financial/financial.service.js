@@ -3,7 +3,7 @@ const {
   FinancialTransaction,
   FinancialCategory,
   FinancialAccount,
-  CreditCard, // Já importado
+  CreditCard, 
   RecurringTransactionRule,
   Client,
   sequelize
@@ -11,16 +11,9 @@ const {
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 const { calculateNextDueDate } = require('../../utils/dateUtils');
-const creditCardService = require('../CreditCardManagement/creditCard.service'); // <<< IMPORTAR
+const creditCardService = require('../CreditCardManagement/creditCard.service'); 
 
-// --- Funções Auxiliares ---
-/**
-* Valida se a FinancialAccount existe e está ativa.
-* @param {number} financialAccountId
-* @param {object} transaction - Transação Sequelize opcional.
-* @param {Array<string|object>} include - Opções de include para FinancialAccount.
-* @returns {Promise<object>} A FinancialAccount validada.
-*/
+// ... (validateAndGetFinancialAccount permanece a mesma) ...
 async function validateAndGetFinancialAccount(financialAccountId, transaction = null, include = []) {
 const account = await FinancialAccount.findByPk(financialAccountId, { transaction, include });
 if (!account) {
@@ -35,15 +28,6 @@ return account;
 }
 
 
-// === Gerenciamento de Transações Financeiras (FinancialTransaction) ===
-
-/**
-* Registra uma nova transação financeira para uma FinancialAccount.
-* @param {number} financialAccountId - ID da conta financeira.
-* @param {object} transactionData - Dados da transação.
-* @param {object} options - Opções adicionais, como { transaction: sequelizeTransaction }
-* @returns {Promise<object>} A transação criada.
-*/
 async function createTransaction(financialAccountId, transactionData, options = {}) {
 const t = options.transaction || await sequelize.transaction();
 try {
@@ -62,7 +46,6 @@ try {
     error.statusCode = 404; error.status = 'fail'; throw error;
   }
 
-  // >>> INÍCIO VALIDAÇÃO DE LIMITE DO CARTÃO
   if (transactionData.creditCardId && transactionData.type === 'Saída') {
       const card = await CreditCard.findOne({ where: { id: transactionData.creditCardId, financialAccountId }, transaction: t });
       if (!card) {
@@ -74,14 +57,13 @@ try {
           error.statusCode = 400; error.status = 'fail'; throw error;
       }
 
-      const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, transactionData.creditCardId); // Não precisa de transação aqui, é uma consulta.
+      const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, transactionData.creditCardId); 
       if (parseFloat(transactionData.value) > limitInfo.availableLimit) {
           const error = new Error(`Limite insuficiente no cartão "${card.name}". Disponível: R$ ${limitInfo.availableLimit.toFixed(2)}, Tentativa: R$ ${parseFloat(transactionData.value).toFixed(2)}.`);
-          error.statusCode = 409; // Conflict or 400 Bad Request
+          error.statusCode = 409; 
           error.status = 'fail'; throw error;
       }
   }
-  // <<< FIM VALIDAÇÃO DE LIMITE DO CARTÃO
 
   if (transactionData.isPayableOrReceivable && !transactionData.dueDate) {
     logger.warn(`Registrando conta a pagar/receber para financialAccountId ${financialAccountId} sem data de vencimento.`);
@@ -92,23 +74,17 @@ try {
     { transaction: t }
   );
 
-  if (!options.transaction) await t.commit(); // Só faz commit se a transação foi criada aqui
+  if (!options.transaction) await t.commit(); 
   logger.info(`Transação ID ${newTransaction.id} ("${newTransaction.description}") criada para FinancialAccount ID ${financialAccountId}.`);
   return newTransaction.toJSON();
 } catch (error) {
-  if (!options.transaction) await t.rollback(); // Só faz rollback se a transação foi criada aqui
+  if (!options.transaction) await t.rollback(); 
   logger.error(`Erro ao criar transação para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error, transactionData });
   if (!error.statusCode) error.statusCode = 500;
   throw error;
 }
 }
 
-/**
-* Registra uma conta parcelada para uma FinancialAccount.
-* @param {number} financialAccountId - ID da conta financeira.
-* @param {object} accountData - { description, type, totalValue, initialDueDate, numberOfParcels, ...commonData }
-* @returns {Promise<object>} Objeto com as parcelas criadas.
-*/
 async function createParcelledAccount(financialAccountId, accountData) {
 const { description, type, totalValue, initialDueDate, numberOfParcels = 1, ...commonData } = accountData;
 
@@ -126,7 +102,6 @@ try {
       error.statusCode = 404; error.status = 'fail'; throw error;
   }
 
-  // >>> INÍCIO VALIDAÇÃO DE LIMITE DO CARTÃO PARA PARCELAMENTO
   if (commonData.creditCardId && type === 'Saída') {
       const card = await CreditCard.findOne({ where: { id: commonData.creditCardId, financialAccountId }, transaction: t });
       if (!card) {
@@ -137,27 +112,25 @@ try {
           const error = new Error(`Cartão de Crédito ID ${commonData.creditCardId} ("${card.name}") está inativo.`);
           error.statusCode = 400; error.status = 'fail'; throw error;
       }
-      // Para parcelamento, o valor TOTAL da compra compromete o limite
-      const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, commonData.creditCardId); // Não precisa de transação aqui
+      const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, commonData.creditCardId); 
       if (parseFloat(totalValue) > limitInfo.availableLimit) {
           const error = new Error(`Limite insuficiente no cartão "${card.name}" para a compra parcelada. Disponível: R$ ${limitInfo.availableLimit.toFixed(2)}, Valor total da compra: R$ ${parseFloat(totalValue).toFixed(2)}.`);
           error.statusCode = 409;
           error.status = 'fail'; throw error;
       }
   }
-  // <<< FIM VALIDAÇÃO DE LIMITE DO CARTÃO PARA PARCELAMENTO
 
 
   const parcelValue = parseFloat((totalValue / numberOfParcels).toFixed(2));
   let accumulatedValue = 0;
-  const createdParcelsModels = []; // Para armazenar os modelos Sequelize criados
+  const createdParcelsModels = []; 
   let firstParcelId = null;
 
   for (let i = 1; i <= numberOfParcels; i++) {
     const currentParcelValue = (i === numberOfParcels) ? parseFloat((totalValue - accumulatedValue).toFixed(2)) : parcelValue;
     accumulatedValue += currentParcelValue;
 
-    const dueDateObj = new Date(new Date(initialDueDate).toISOString().slice(0,10) + 'T12:00:00Z'); // Normalize to UTC noon
+    const dueDateObj = new Date(new Date(initialDueDate).toISOString().slice(0,10) + 'T12:00:00Z'); 
     dueDateObj.setUTCMonth(dueDateObj.getUTCMonth() + (i - 1));
     const dueDateString = `${dueDateObj.getUTCFullYear()}-${String(dueDateObj.getUTCMonth() + 1).padStart(2, '0')}-${String(dueDateObj.getUTCDate()).padStart(2, '0')}`;
 
@@ -169,13 +142,14 @@ try {
       type,
       value: currentParcelValue,
       transactionDate: commonData.transactionDate || new Date().toISOString().split('T')[0],
-      isPayableOrReceivable: commonData.isPayableOrReceivable !== undefined ? commonData.isPayableOrReceivable : (commonData.creditCardId ? false : true), // Gasto no cartão é efetivado, não "a pagar" ao lojista
-      isPaidOrReceived: commonData.isPaidOrReceived !== undefined ? commonData.isPaidOrReceived : (commonData.creditCardId ? true : false), // Mesma lógica acima
-      dueDate: commonData.creditCardId ? null : dueDateString, // Se for cartão, a "dívida" é com o cartão, não tem dueDate aqui.
+      isPayableOrReceivable: commonData.isPayableOrReceivable !== undefined ? commonData.isPayableOrReceivable : (commonData.creditCardId ? false : true), 
+      isPaidOrReceived: commonData.isPaidOrReceived !== undefined ? commonData.isPaidOrReceived : (commonData.creditCardId ? true : false), 
+      dueDate: commonData.creditCardId ? null : dueDateString, 
       isParcel: numberOfParcels > 1,
       parcelNumber: numberOfParcels > 1 ? i : null,
       totalParcels: numberOfParcels > 1 ? numberOfParcels : null,
-      originalAccountId: null, // Será definido abaixo se for uma parcela
+      originalAccountId: null, 
+      originalPurchaseTotalValue: numberOfParcels > 1 ? parseFloat(totalValue) : null, // <<< ADICIONADO AQUI
     };
 
     const createdParcel = await FinancialTransaction.create(parcelData, { transaction: t });
@@ -186,18 +160,15 @@ try {
     }
   }
 
-  // Agora, atualiza originalAccountId para todas as parcelas se houver mais de uma
   if (numberOfParcels > 1 && firstParcelId) {
-      for (let i = 0; i < createdParcelsModels.length; i++) {
-          // A primeira parcela também pode ter o originalAccountId apontando para si mesma
-          await createdParcelsModels[i].update({ originalAccountId: firstParcelId }, { transaction: t });
+      for (let k = 0; k < createdParcelsModels.length; k++) { // <<< CORRIGIDO ÍNDICE DO LOOP AQUI de i para k
+          await createdParcelsModels[k].update({ originalAccountId: firstParcelId }, { transaction: t });
       }
   }
 
   await t.commit();
   logger.info(`Conta parcelada "${description}" criada com ${numberOfParcels} parcelas para FinancialAccount ID ${financialAccountId}.`);
 
-  // Recarregar para obter os dados atualizados, especialmente originalAccountId
   const finalParcels = [];
   for(const pModel of createdParcelsModels){
       finalParcels.push(await pModel.reload({transaction: null, include: [{model: FinancialTransaction, as: 'originalAccount'}]}).then(p => p.toJSON()));
@@ -265,7 +236,11 @@ try {
     include: [
       { model: FinancialCategory, as: 'category', attributes: ['id', 'name'] },
       { model: CreditCard, as: 'creditCard', attributes: ['id', 'name', 'lastFourDigits'] },
-      { model: FinancialTransaction, as: 'originalAccount', attributes: ['id', 'description'] }
+      { 
+        model: FinancialTransaction, 
+        as: 'originalAccount', 
+        attributes: ['id', 'description', 'originalPurchaseTotalValue'] // Incluir valor total da compra original
+      }
     ],
     limit: parseInt(limit, 10),
     offset: offset,
@@ -297,10 +272,19 @@ try {
       { model: CreditCard, as: 'creditCard' },
       {
         model: FinancialTransaction,
-        as: 'parcels', // Se esta for uma conta original (primeira parcela), lista suas "filhas"
-        include: [{model: FinancialCategory, as: 'category'}, {model: CreditCard, as: 'creditCard'}] // Detalhes das parcelas
+        as: 'parcels', 
+        include: [
+            {model: FinancialCategory, as: 'category'}, 
+            {model: CreditCard, as: 'creditCard'},
+            // Para evitar loop infinito, não incluir 'originalAccount' dentro de 'parcels' recursivamente aqui
+            // Se precisar do originalAccount das parcelas, buscar separadamente ou ajustar a query com cuidado.
+        ] 
       },
-      { model: FinancialTransaction, as: 'originalAccount' } // Se esta for uma parcela, mostra a conta original
+      { 
+        model: FinancialTransaction, 
+        as: 'originalAccount',
+        attributes: ['id', 'description', 'value', 'originalPurchaseTotalValue'] // Incluir o valor da transação original e o total da compra
+      } 
     ]
   });
 
@@ -334,8 +318,6 @@ try {
       const e = new Error('Categoria não encontrada.'); e.statusCode = 404; e.status = 'fail'; throw e;
   }
 
-  // >>> INÍCIO VALIDAÇÃO DE LIMITE DO CARTÃO AO ATUALIZAR
-  // Se o cartão ou o valor estão mudando
   const changingCardOrValue = (updateData.creditCardId && updateData.creditCardId !== transaction.creditCardId) ||
                             (updateData.value && parseFloat(updateData.value) !== parseFloat(transaction.value));
   const targetCreditCardId = updateData.hasOwnProperty('creditCardId') ? updateData.creditCardId : transaction.creditCardId;
@@ -355,12 +337,9 @@ try {
           error.statusCode = 400; error.status = 'fail'; throw error;
       }
 
-      // Recalcular o limite disponível como se esta transação não existisse (ou com o valor antigo)
-      // E então verificar se o *novo* valor (ou a transação no *novo* cartão) passaria.
-      // Esta lógica pode ser complexa. Uma simplificação é verificar o limite atual e o *delta* da mudança.
       const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, targetCreditCardId);
       let availableAfterOldTx = limitInfo.availableLimit;
-      if (transaction.creditCardId === targetCreditCardId) { // Se o cartão é o mesmo, adiciona o valor antigo de volta
+      if (transaction.creditCardId === targetCreditCardId) { 
           availableAfterOldTx += parseFloat(transaction.value);
       }
 
@@ -370,9 +349,13 @@ try {
           error.statusCode = 409; error.status = 'fail'; throw error;
       }
   }
-  // <<< FIM VALIDAÇÃO DE LIMITE DO CARTÃO AO ATUALIZAR
+  
+  delete updateData.financialAccountId; 
 
-  delete updateData.financialAccountId; // Não permitir mover entre contas aqui
+  // Se a transação é uma parcela e o valor está sendo atualizado,
+  // idealmente, outras parcelas do mesmo grupo e o originalPurchaseTotalValue deveriam ser ajustados.
+  // Isso adiciona complexidade e pode ser um "TODO" para uma lógica mais avançada de edição de parcelamentos.
+  // Por ora, a atualização de valor em uma parcela só afeta ELA MESMA.
 
   await transaction.update(updateData, { transaction: t });
   const updatedTransaction = await transaction.reload({
@@ -434,10 +417,6 @@ try {
       const e = new Error('Transação não encontrada.'); e.statusCode = 404; e.status = 'fail'; throw e;
   }
 
-  // Se esta transação for a "originalAccount" de outras parcelas, o que fazer?
-  // A FK nas outras parcelas (originalAccountId) tem onDelete: 'SET NULL' ou 'CASCADE'.
-  // Se SET NULL, as parcelas perdem a referência. Se CASCADE, são deletadas.
-  // Se esta for a PRIMEIRA parcela de um conjunto (originalAccountId === id), e outras a referenciam:
   if (transaction.isParcel && transaction.originalAccountId === transaction.id) {
       const childParcelsCount = await FinancialTransaction.count({
           where: { originalAccountId: transaction.id, id: { [Op.ne]: transaction.id } },
@@ -476,39 +455,35 @@ try {
   if (dateEnd) whereTransactionDate[Op.lte] = dateEnd;
   if(Object.keys(whereTransactionDate).length > 0) whereBase.transactionDate = whereTransactionDate;
 
-  // Transações que efetivamente movimentaram caixa no período
   const whereEffective = {
       ...whereBase,
       [Op.or]: [
-          { isPayableOrReceivable: false }, // Transações à vista
-          { isPaidOrReceived: true }        // Contas que foram pagas/recebidas
+          { isPayableOrReceivable: false }, 
+          { isPaidOrReceived: true }        
       ],
-      creditCardId: null // Exclui gastos de cartão de crédito, pois eles não saem do caixa da conta principal
+      creditCardId: null 
   };
-  // Transações pagas/recebidas de cartão no período (pagamento de fatura)
   const whereCardPayments = {
       ...whereBase,
-      isPayableOrReceivable: false, // Pagamento de fatura é uma transação à vista
-      description: { [Op.iLike]: '%Pagamento de Fatura%' } // Assumindo uma descrição padrão
+      isPayableOrReceivable: false, 
+      description: { [Op.iLike]: '%Pagamento de Fatura%' } 
   };
 
 
   const totalEntradasCaixa = await FinancialTransaction.sum('value', { where: { ...whereEffective, type: 'Entrada' } }) || 0;
   let totalSaidasCaixa = await FinancialTransaction.sum('value', { where: { ...whereEffective, type: 'Saída' } }) || 0;
   const totalPagamentoFaturas = await FinancialTransaction.sum('value', { where: { ...whereCardPayments, type: 'Saída' }}) || 0;
-  totalSaidasCaixa += totalPagamentoFaturas; // Adiciona pagamento de faturas às saídas de caixa
+  totalSaidasCaixa += totalPagamentoFaturas; 
 
 
   const saldoEfetivado = parseFloat((totalEntradasCaixa - totalSaidasCaixa).toFixed(2));
 
-  // Contas a Receber Pendentes (com vencimento no período ou antes, se não especificado 'dateStart' para dueDate)
   const whereReceivables = { financialAccountId, type: 'Entrada', isPayableOrReceivable: true, isPaidOrReceived: false };
-  if (dateEnd) whereReceivables.dueDate = { [Op.lte]: dateEnd }; // Vencendo até o final do período
+  if (dateEnd) whereReceivables.dueDate = { [Op.lte]: dateEnd }; 
   const totalAReceberPendente = await FinancialTransaction.sum('value', { where: whereReceivables }) || 0;
 
-  // Contas a Pagar Pendentes
   const wherePayables = { financialAccountId, type: 'Saída', isPayableOrReceivable: true, isPaidOrReceived: false };
-  if (dateEnd) wherePayables.dueDate = { [Op.lte]: dateEnd }; // Vencendo até o final do período
+  if (dateEnd) wherePayables.dueDate = { [Op.lte]: dateEnd }; 
   const totalAPagarPendente = await FinancialTransaction.sum('value', { where: wherePayables }) || 0;
 
   const summary = {

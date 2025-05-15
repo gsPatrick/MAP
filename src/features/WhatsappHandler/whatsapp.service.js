@@ -238,7 +238,13 @@ function formatCreditCardInvoiceSummary(invoiceDetails, clientName = "você", li
         const maxTxToList = 7; 
         invoiceDetails.transactions.slice(0, maxTxToList).forEach(tx => {
             const txDate = new Date(tx.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
-            summary += `\n- ${txDate}: ${tx.description} (R$ ${parseFloat(tx.value).toFixed(2)})`;
+            // Ajuste para exibir parcelas de forma mais clara
+            if (tx.isParcel && tx.originalPurchaseTotalValue && tx.originalAccountId) {
+                const originalDesc = tx.originalAccount ? tx.originalAccount.description.replace(/ - Parcela \d+\/\d+/, '') : tx.description.replace(/ - Parcela \d+\/\d+/, '');
+                summary += `\n- ${txDate}: ${originalDesc} (Total: R$ ${parseFloat(tx.originalPurchaseTotalValue).toFixed(2)}) - Parcela ${tx.parcelNumber}/${tx.totalParcels} (R$ ${parseFloat(tx.value).toFixed(2)})`;
+            } else {
+                summary += `\n- ${txDate}: ${tx.description} (R$ ${parseFloat(tx.value).toFixed(2)})`;
+            }
             if (tx.category) summary += ` [${tx.category.name}]`;
         });
         if (invoiceDetails.transactions.length > maxTxToList) {
@@ -717,7 +723,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         let finalReplyParts = [];
         let actionErrorOccurred = false;
         let actionErrorMessageForUser = "";
-        let messageForInvoiceSelection = ""; 
+        let messageForInvoiceSelectionDisplay = ""; // <<< Renomeada para evitar conflito de escopo
 
         if (aiResponse.overall_summary_suggestion && (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0)) {
             finalReplyParts.push(aiResponse.overall_summary_suggestion);
@@ -1202,7 +1208,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const cardDetails = await creditCardService.getCreditCardById(state.activeFinancialAccountId, cardIdToUse); 
                             const actualCardName = cardDetails ? cardDetails.name : cardNameToUseForLog;
                             
-                            // Padrão: Mostrar fatura aberta diretamente
                             let periodOpts = { type: 'aberta' }; 
 
                             if (params.invoicePeriodType === 'especifico' && params.invoiceMonth && params.invoiceYear) {
@@ -1212,7 +1217,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             } else if (params.invoicePeriodType === 'ultima_fechada') {
                                 periodOpts.type = 'ultima_fechada';
                             }
-                            // Se invoicePeriodType for 'aberta' ou não fornecido, periodOpts.type já é 'aberta'.
+                            // Se a IA não passou um período específico, o padrão 'aberta' é usado.
+                            // A lógica de listar meses com botões foi removida para simplificar e mostrar a fatura padrão (aberta) diretamente.
 
                             const invoiceDetails = await creditCardService.getCreditCardInvoiceDetails(state.activeFinancialAccountId, cardIdToUse, periodOpts);
                             currentActionFormattedForLoop = formatCreditCardInvoiceSummary(invoiceDetails, clientNameToUse, params.listTransactions !== false);
@@ -1293,6 +1299,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     if (actionBlockedNoAccessLoop) continue;
 
                     if (currentActionFormattedForLoop) {
+                        // A lógica de atribuir a singleActionFormattedResult ou multipleActionFormattedResults
+                        // permanece, mas a messageForInvoiceSelection não é mais usada aqui.
                         if (state.currentAction !== 'awaiting_invoice_period_selection') { 
                             if (aiResponse.detected_actions.length === 1 && !isEditActionCurrentLoop) {
                                 singleActionFormattedResult = currentActionFormattedForLoop;
@@ -1302,7 +1310,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 singleActionFormattedResult = currentActionFormattedForLoop;
                             }
                         } else {
-                            messageForInvoiceSelection = currentActionFormattedForLoop;
+                            // Se estamos aguardando seleção, currentActionFormattedForLoop é a mensagem com opções
+                            // Ela será usada em messageForInvoiceSelectionDisplay
+                            messageForInvoiceSelectionDisplay = currentActionFormattedForLoop;
                         }
                     }
 
@@ -1338,16 +1348,13 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             multipleActionFormattedResults = [];
         } 
         else if (state.currentAction === 'awaiting_invoice_period_selection' && state.data.invoicePeriodsToList) {
-            // Se a lógica de listar botões foi acionada, messageForInvoiceSelection conterá a mensagem
-            // e state.data.invoicePeriodsToList conterá os botões.
-            // finalReplyParts aqui deve ser apenas a mensagem que introduz os botões.
-            if (finalReplyParts.length > 0 && messageForInvoiceSelection && !finalReplyParts[0].includes(messageForInvoiceSelection.substring(0,20))) {
-                 finalReplyParts.push(messageForInvoiceSelection); 
-            } else if (messageForInvoiceSelection) { 
-                finalReplyParts = [messageForInvoiceSelection]; 
-            } else { // Fallback
+            if (finalReplyParts.length > 0 && messageForInvoiceSelectionDisplay && !finalReplyParts[0].includes(messageForInvoiceSelectionDisplay.substring(0,20))) {
+                 finalReplyParts.push(messageForInvoiceSelectionDisplay); 
+            } else if (messageForInvoiceSelectionDisplay) { 
+                finalReplyParts = [messageForInvoiceSelectionDisplay]; 
+            } else {
                 finalReplyParts.push(`Por favor, escolha um período para a fatura do cartão ${state.data.cardNameForInvoice || 'selecionado'}, ${clientNameToUse}.`);
-                 logger.warn("Estado 'awaiting_invoice_period_selection' mas messageForInvoiceSelection não foi definida como esperado dentro do loop.");
+                 logger.warn("Estado 'awaiting_invoice_period_selection' mas messageForInvoiceSelectionDisplay não foi definida como esperado.");
             }
         }
         else if (singleActionFormattedResult) {

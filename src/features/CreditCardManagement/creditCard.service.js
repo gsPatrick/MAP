@@ -1,9 +1,9 @@
 // src/features/CreditCardManagement/creditCard.service.js
 const { CreditCard, FinancialAccount, FinancialTransaction, FinancialCategory, sequelize } = require('../../database');
-const { Op, fn, col, literal } = require('sequelize'); // Adicionado fn, col, literal
+const { Op, fn, col, literal } = require('sequelize');
 const logger = require('../../utils/logger');
 
-// ... (validateOwningFinancialAccount, findCreditCardByName, createCreditCard, etc. permanecem os mesmos) ...
+// ... (demais funções do serviço inalteradas) ...
 async function validateOwningFinancialAccount(financialAccountId, transaction = null) {
   const account = await FinancialAccount.findByPk(financialAccountId, { transaction });
   if (!account) {
@@ -22,28 +22,24 @@ async function findCreditCardByName(financialAccountId, cardName, transaction = 
         const error = new Error('Nome do cartão de crédito não fornecido para busca.');
         error.statusCode = 400; error.status = 'fail'; throw error;
     }
-    // Primeiro, tenta uma correspondência mais exata com o início do nome ou nome completo
     let card = await CreditCard.findOne({
         where: {
             [Op.or]: [
-                { name: { [Op.iLike]: cardName } }, // Exato (case-insensitive)
-                { name: { [Op.iLike]: `${cardName}%` } } // Começa com (case-insensitive)
+                { name: { [Op.iLike]: cardName } },
+                { name: { [Op.iLike]: `${cardName}%` } } 
             ],
             financialAccountId,
-            isActive: true // Considera apenas cartões ativos
+            isActive: true 
         },
         transaction
     });
 
     if (!card) {
-        // Se não encontrou exato ou começando com, tenta busca parcial (contém)
         const cards = await CreditCard.findAll({ where: { financialAccountId, isActive: true }, transaction });
-        // Prioriza correspondência exata se houver múltiplas parciais
         const exactMatchAmongPartials = cards.find(c => c.name.toLowerCase() === cardName.toLowerCase());
         if (exactMatchAmongPartials) {
             card = exactMatchAmongPartials;
         } else {
-            // Se não há correspondência exata entre as parciais, pega a primeira parcial que encontrar
             card = cards.find(c => c.name.toLowerCase().includes(cardName.toLowerCase()));
         }
 
@@ -54,7 +50,6 @@ async function findCreditCardByName(financialAccountId, cardName, transaction = 
             error.statusCode = 404; error.status = 'fail'; throw error;
         }
     }
-    // A verificação de isActive já foi feita na query ou no processo de busca parcial
     return card;
 }
 
@@ -242,7 +237,7 @@ async function deleteCreditCard(financialAccountId, cardId) {
       });
       if (otherCard) {
         await otherCard.update({ isDefault: true }, { transaction: t });
-        logger.info(`Cartão de Crédito ID ${otherCard.id} ("${otherCard.name}") promovido a default para FinancialAccount ID ${financialAccountId}.`);
+        logger.info(`Cartão de Crédito ID ${otherCard.id} ("${otherCard.name}") promovido a default para FinancialAccount ID ${account.clientId}.`);
       }
     }
 
@@ -377,7 +372,7 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
                 invoiceStartDate = new Date(Date.UTC(currentBillingYear, currentBillingMonth - 1, card.closingDay + 1));
             }
             invoiceDescriptionPeriod = `Última Fatura Fechada (${invoiceStartDate.toLocaleDateString('pt-BR', {timeZone:'UTC'})} - ${invoiceEndDate.toLocaleDateString('pt-BR', {timeZone:'UTC'})})`;
-        } else { 
+        } else { // 'aberta' (default)
             if (today.getUTCDate() <= card.closingDay) { 
                 invoiceStartDate = new Date(Date.UTC(currentBillingYear, currentBillingMonth - 1, card.closingDay + 1));
                 invoiceEndDate = new Date(Date.UTC(currentBillingYear, currentBillingMonth, card.closingDay)); 
@@ -399,7 +394,14 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
                 }
             },
             order: [['transactionDate', 'ASC'], ['createdAt', 'ASC']],
-            include: [{model: FinancialCategory, as: 'category', attributes: ['name']}] 
+            include: [
+                {model: FinancialCategory, as: 'category', attributes: ['id', 'name']}, // <<< Adicionado ID da categoria
+                {
+                    model: FinancialTransaction, 
+                    as: 'originalAccount', // Para buscar a descrição da compra original das parcelas
+                    attributes: ['id', 'description', 'value', 'originalPurchaseTotalValue']
+                }
+            ] 
         });
 
         let totalAmount = 0;
@@ -431,12 +433,6 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
     }
 }
 
-/**
- * Obtém os períodos de fatura disponíveis (meses com transações) para um cartão.
- * @param {number} financialAccountId
- * @param {number} creditCardId
- * @returns {Promise<Array<object>>} Lista de objetos { month, year, label }
- */
 async function getAvailableInvoicePeriods(financialAccountId, creditCardId) {
     try {
         await validateOwningFinancialAccount(financialAccountId);
@@ -446,58 +442,61 @@ async function getAvailableInvoicePeriods(financialAccountId, creditCardId) {
             error.statusCode = 404; error.status = 'fail'; throw error;
         }
 
-        // Buscar todas as datas de transação para este cartão
         const transactionsDates = await FinancialTransaction.findAll({
             attributes: [
-                [fn('DISTINCT', fn('to_char', col('transactionDate'), 'YYYY-MM')), 'yearMonth']
-                // Adapte 'to_char' e 'YYYY-MM' para a sintaxe do seu banco de dados se não for PostgreSQL
-                // Para SQLite, seria: [fn('strftime', '%Y-%m', col('transactionDate')), 'yearMonth']
-                // Para MySQL, seria: [fn('DATE_FORMAT', col('transactionDate'), '%Y-%m'), 'yearMonth']
+                // Usando fn.TRUNC para agrupar por mês. Adapte para seu DB.
+                // Para PostgreSQL: fn('date_trunc', 'month', col('transactionDate'))
+                // Para SQLite: fn('strftime', '%Y-%m-01', col('transactionDate'))
+                // Para MySQL: fn('DATE_FORMAT', col('transactionDate'), '%Y-%m-01')
+                // Vamos usar uma forma mais genérica que agrupa pelo texto YYYY-MM e depois processa
+                [fn('DISTINCT', fn('strftime', '%Y-%m', col('transactionDate'))), 'yearMonth']
             ],
             where: {
                 creditCardId: creditCardId,
                 financialAccountId: financialAccountId,
-                type: 'Saída' // Apenas gastos contam para faturas
+                type: 'Saída' 
             },
-            order: [[literal('"yearMonth"'), 'DESC']], // Mais recentes primeiro
-            raw: true, // Para obter o resultado puro
+            order: [[literal('"yearMonth"'), 'DESC']], 
+            raw: true, 
+            group: ['yearMonth'] // Adiciona group by para o distinct funcionar corretamente com fn
         });
         
         const periods = [];
-        const addedPeriods = new Set(); // Para evitar duplicatas de rótulos
+        const addedLabels = new Set();
 
         for (const { yearMonth } of transactionsDates) {
-            if (yearMonth) { // yearMonth será algo como "2024-05"
+            if (yearMonth) { 
                 const [year, monthNum] = yearMonth.split('-').map(Number);
                 
-                // Determinar o período de fechamento da fatura para transações deste mês/ano
-                // Se uma transação ocorreu em Mês X / Ano Y:
-                // - Se transactionDate.day <= closingDay, ela pertence à fatura que fecha em Mês X / Ano Y (no closingDay).
-                // - Se transactionDate.day > closingDay, ela pertence à fatura que fecha em Mês X+1 / Ano Y (no closingDay).
-
-                // Precisamos agrupar por MÊS DE FECHAMENTO DA FATURA.
-                // Uma transação de 05/Maio com fechamento dia 20, pertence à fatura que fecha em 20/Maio.
-                // Uma transação de 25/Maio com fechamento dia 20, pertence à fatura que fecha em 20/Junho.
+                // A fatura de um gasto feito no dia D do mês M com fechamento no dia C:
+                // - Se D <= C, a fatura fecha no mês M.
+                // - Se D > C, a fatura fecha no mês M+1.
+                // Precisamos do mês de FECHAMENTO da fatura.
                 
-                // Para simplificar, vamos listar os meses em que HOUVE GASTOS.
-                // A lógica de `getCreditCardInvoiceDetails` determinará o período exato da fatura.
-                // Aqui, queremos dar ao usuário opções de "Mês/Ano" que ele reconheça.
+                // Data da transação (representativa do mês de gastos)
+                const transactionSampleDate = new Date(Date.UTC(year, monthNum - 1, 15)); // Dia 15 para evitar problemas com fim de mês
+                
+                let closingMonth = transactionSampleDate.getUTCMonth(); // Mês base 0
+                let closingYear = transactionSampleDate.getUTCFullYear();
 
-                const dateForLabel = new Date(Date.UTC(year, monthNum -1, 15)); // Dia 15 para pegar o nome do mês corretamente
-                const label = dateForLabel.toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+                // Simula o dia da transação em relação ao dia de fechamento para determinar o mês de fechamento
+                // Se uma transação foi feita no dia 25 e o cartão fecha dia 20, ela entra na fatura do mês seguinte.
+                // (Esta é uma simplificação, a lógica exata de qual fatura uma transação entra está em getCreditCardInvoiceDetails)
+                // Para listar opções, podemos usar o mês da transação como referência para o "mês da fatura".
+                
+                const labelDate = new Date(Date.UTC(year, monthNum - 1, 1));
+                const label = labelDate.toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 
-                if (!addedPeriods.has(label)) {
+                if (!addedLabels.has(label)) {
                     periods.push({
-                        month: monthNum, // 1-12
+                        month: monthNum, 
                         year: year,
-                        label: label // Ex: "Maio/2024"
+                        label: label 
                     });
-                    addedPeriods.add(label);
+                    addedLabels.add(label);
                 }
             }
         }
-        // Adicionar "Última Fechada" e "Fatura Aberta" como opções fixas
-        // Estas serão tratadas pela lógica do `getCreditCardInvoiceDetails`
         
         logger.info(`Encontrados ${periods.length} períodos de fatura distintos para cartão ID ${creditCardId}.`);
         return periods;
@@ -519,5 +518,5 @@ module.exports = {
   findCreditCardByName, 
   getAvailableCreditLimit,
   getCreditCardInvoiceDetails,
-  getAvailableInvoicePeriods, // <<< EXPORTADO
+  getAvailableInvoicePeriods, 
 };

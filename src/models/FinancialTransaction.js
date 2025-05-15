@@ -8,15 +8,15 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
     autoIncrement: true,
     primaryKey: true,
   },
-  financialAccountId: { // Chave estrangeira para FinancialAccount
+  financialAccountId: { 
     type: DataTypes.INTEGER,
     allowNull: false,
     references: {
-      model: 'financial_accounts', // Nome da tabela 'financial_accounts'
+      model: 'financial_accounts', 
       key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'CASCADE', // Se a FinancialAccount for deletada, suas transações também são
+    onDelete: 'CASCADE', 
   },
   description: {
     type: DataTypes.STRING,
@@ -42,7 +42,7 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
       key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'SET NULL', // Se categoria for deletada, transação fica sem categoria
+    onDelete: 'SET NULL', 
   },
   transactionDate: {
     type: DataTypes.DATEONLY,
@@ -82,7 +82,7 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
     allowNull: true,
     validate: { min: 1 },
   },
-  originalAccountId: { // ID da transação "mãe" desta parcela (auto-referência)
+  originalAccountId: { 
     type: DataTypes.INTEGER,
     allowNull: true,
     references: {
@@ -90,7 +90,13 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
       key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'SET NULL', // Se a transação original for deletada, as parcelas perdem a referência (ou CASCADE)
+    onDelete: 'SET NULL', 
+  },
+  // NOVO CAMPO PARA ARMAZENAR O VALOR TOTAL DA COMPRA PARCELADA
+  originalPurchaseTotalValue: {
+    type: DataTypes.DECIMAL(12, 2),
+    allowNull: true,
+    comment: 'Valor total da compra original, se esta transação for uma parcela.',
   },
   paymentMethod: {
     type: DataTypes.STRING,
@@ -104,22 +110,21 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
       key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'SET NULL', // Se o cartão for deletado, a transação fica sem cartão associado
+    onDelete: 'SET NULL', 
   },
   notes: {
     type: DataTypes.TEXT,
     allowNull: true,
   },
-  // NOVO CAMPO
   recurringTransactionRuleId: {
     type: DataTypes.INTEGER,
     allowNull: true,
     references: {
-        model: 'recurring_transaction_rules', // Nome da tabela 'recurring_transaction_rules'
+        model: 'recurring_transaction_rules', 
         key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'SET NULL', // Se a regra for deletada, as transações geradas por ela perdem a referência, mas não são deletadas
+    onDelete: 'SET NULL', 
     comment: 'ID da regra de recorrência que originou esta transação (se aplicável)',
   }
 }, {
@@ -133,7 +138,7 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
     { fields: ['financialCategoryId'] },
     { fields: ['creditCardId'] },
     { fields: ['originalAccountId'] },
-    { fields: ['recurringTransactionRuleId'] }, // <<< NOVO ÍNDICE
+    { fields: ['recurringTransactionRuleId'] }, 
   ],
   hooks: {
     beforeUpdate: (transaction, options) => {
@@ -145,7 +150,6 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
         transaction.paymentDate = null;
       }
     },
-    // Manter o beforeValidate se necessário para lógica de parcelas e contas a pagar/receber
   }
 });
 
@@ -155,19 +159,20 @@ FinancialTransaction.associate = (models) => {
   FinancialTransaction.belongsTo(models.CreditCard, { foreignKey: 'creditCardId', as: 'creditCard' });
   
   FinancialTransaction.hasMany(models.FinancialTransaction, {
-    as: 'parcels',
+    as: 'parcels', // Uma transação original (isParcel=true, parcelNumber=1, originalAccountId=id) pode ter várias parcelas
     foreignKey: 'originalAccountId',
-    useJunctionTable: false
+    useJunctionTable: false,
+    // constraints: false // Pode ser necessário se houver problemas com a auto-referência circular
   });
   FinancialTransaction.belongsTo(models.FinancialTransaction, {
-    as: 'originalAccount',
-    foreignKey: 'originalAccountId'
+    as: 'originalAccount', // Uma parcela (parcelNumber > 1 OU parcelNumber=1 com originalAccountId != id) pertence a uma transação original
+    foreignKey: 'originalAccountId',
+    targetKey: 'id'
   });
 
-  // NOVA ASSOCIAÇÃO
   FinancialTransaction.belongsTo(models.RecurringTransactionRule, {
     foreignKey: 'recurringTransactionRuleId',
-    as: 'recurringRuleOrigin', // Nome do alias para a associação
+    as: 'recurringRuleOrigin', 
   });
 };
 
