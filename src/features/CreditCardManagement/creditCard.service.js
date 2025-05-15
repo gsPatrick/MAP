@@ -1,13 +1,9 @@
 // src/features/CreditCardManagement/creditCard.service.js
-const { CreditCard, FinancialAccount, FinancialTransaction, FinancialCategory, sequelize } = require('../../database'); // <<< FinancialCategory ADICIONADO
-const { Op } = require('sequelize');
+const { CreditCard, FinancialAccount, FinancialTransaction, FinancialCategory, sequelize } = require('../../database');
+const { Op, fn, col, literal } = require('sequelize'); // Adicionado fn, col, literal
 const logger = require('../../utils/logger');
 
-/**
- * Valida se a FinancialAccount existe e está ativa.
- * @param {number} financialAccountId
- * @param {object} transaction - Transação Sequelize opcional.
- */
+// ... (validateOwningFinancialAccount, findCreditCardByName, createCreditCard, etc. permanecem os mesmos) ...
 async function validateOwningFinancialAccount(financialAccountId, transaction = null) {
   const account = await FinancialAccount.findByPk(financialAccountId, { transaction });
   if (!account) {
@@ -26,56 +22,43 @@ async function findCreditCardByName(financialAccountId, cardName, transaction = 
         const error = new Error('Nome do cartão de crédito não fornecido para busca.');
         error.statusCode = 400; error.status = 'fail'; throw error;
     }
-    const card = await CreditCard.findOne({
+    // Primeiro, tenta uma correspondência mais exata com o início do nome ou nome completo
+    let card = await CreditCard.findOne({
         where: {
-            // Busca por nome exato ou que contenha o termo, case-insensitive
             [Op.or]: [
-                { name: { [Op.iLike]: cardName } },
-                { name: { [Op.iLike]: `%${cardName}%` } } 
+                { name: { [Op.iLike]: cardName } }, // Exato (case-insensitive)
+                { name: { [Op.iLike]: `${cardName}%` } } // Começa com (case-insensitive)
             ],
-            financialAccountId
+            financialAccountId,
+            isActive: true // Considera apenas cartões ativos
         },
         transaction
     });
 
-    // Se encontrou múltiplos, tenta pegar o mais exato.
-    // Esta lógica pode ser aprimorada se necessário para desambiguação mais complexa.
     if (!card) {
-        const cards = await CreditCard.findAll({ where: { financialAccountId }, transaction });
-        const exactMatch = cards.find(c => c.name.toLowerCase() === cardName.toLowerCase());
-        if (exactMatch) {
-            if (!exactMatch.isActive) {
-                const error = new Error(`O cartão de crédito "${exactMatch.name}" está inativo.`);
-                error.statusCode = 400; error.status = 'fail'; throw error;
-            }
-            return exactMatch;
+        // Se não encontrou exato ou começando com, tenta busca parcial (contém)
+        const cards = await CreditCard.findAll({ where: { financialAccountId, isActive: true }, transaction });
+        // Prioriza correspondência exata se houver múltiplas parciais
+        const exactMatchAmongPartials = cards.find(c => c.name.toLowerCase() === cardName.toLowerCase());
+        if (exactMatchAmongPartials) {
+            card = exactMatchAmongPartials;
+        } else {
+            // Se não há correspondência exata entre as parciais, pega a primeira parcial que encontrar
+            card = cards.find(c => c.name.toLowerCase().includes(cardName.toLowerCase()));
         }
-        const partialMatch = cards.find(c => c.name.toLowerCase().includes(cardName.toLowerCase()) && c.isActive);
-        if (partialMatch) {
-            logger.info(`Cartão "${cardName}" não encontrado exatamente, usando correspondência parcial ATIVA "${partialMatch.name}" (ID: ${partialMatch.id})`);
-             if (!partialMatch.isActive) { // Dupla checagem, mas importante
-                const error = new Error(`O cartão de crédito correspondente "${partialMatch.name}" está inativo.`);
-                error.statusCode = 400; error.status = 'fail'; throw error;
-            }
-            return partialMatch;
+
+        if (card) {
+            logger.info(`Cartão "${cardName}" não encontrado por correspondência inicial, usando correspondência parcial/exata encontrada: "${card.name}" (ID: ${card.id})`);
+        } else {
+            const error = new Error(`Cartão de crédito ativo com nome parecido com "${cardName}" não encontrado nesta conta financeira.`);
+            error.statusCode = 404; error.status = 'fail'; throw error;
         }
-        const error = new Error(`Cartão de crédito com nome parecido com "${cardName}" não encontrado ou está inativo nesta conta financeira.`);
-        error.statusCode = 404; error.status = 'fail'; throw error;
     }
-    if (!card.isActive) {
-        const error = new Error(`O cartão de crédito "${card.name}" está inativo.`);
-        error.statusCode = 400; error.status = 'fail'; throw error;
-    }
+    // A verificação de isActive já foi feita na query ou no processo de busca parcial
     return card;
 }
 
 
-/**
- * Cria um novo cartão de crédito para uma FinancialAccount.
- * @param {number} financialAccountId - ID da conta financeira.
- * @param {object} cardData - Dados do cartão (name, limit, closingDay, paymentDay, lastFourDigits, flag, isDefault, isActive).
- * @returns {Promise<object>} O cartão criado.
- */
 async function createCreditCard(financialAccountId, cardData) {
   const t = await sequelize.transaction();
   try {
@@ -128,12 +111,6 @@ async function createCreditCard(financialAccountId, cardData) {
   }
 }
 
-/**
- * Lista todos os cartões de crédito de uma FinancialAccount.
- * @param {number} financialAccountId - ID da conta financeira.
- * @param {object} queryParams - { isActive }
- * @returns {Promise<Array<object>>}
- */
 async function getAllCreditCards(financialAccountId, queryParams = {}) {
   try {
     await validateOwningFinancialAccount(financialAccountId);
@@ -162,12 +139,6 @@ async function getAllCreditCards(financialAccountId, queryParams = {}) {
   }
 }
 
-/**
- * Busca um cartão de crédito pelo ID, verificando se pertence à FinancialAccount.
- * @param {number} financialAccountId
- * @param {number} cardId
- * @returns {Promise<object|null>}
- */
 async function getCreditCardById(financialAccountId, cardId) {
   try {
     await validateOwningFinancialAccount(financialAccountId);
@@ -187,13 +158,6 @@ async function getCreditCardById(financialAccountId, cardId) {
   }
 }
 
-/**
- * Atualiza um cartão de crédito.
- * @param {number} financialAccountId
- * @param {number} cardId
- * @param {object} updateData
- * @returns {Promise<object|null>}
- */
 async function updateCreditCard(financialAccountId, cardId, updateData) {
   const t = await sequelize.transaction();
   try {
@@ -248,12 +212,6 @@ async function updateCreditCard(financialAccountId, cardId, updateData) {
   }
 }
 
-/**
- * Exclui um cartão de crédito.
- * @param {number} financialAccountId
- * @param {number} cardId
- * @returns {Promise<boolean>}
- */
 async function deleteCreditCard(financialAccountId, cardId) {
   const t = await sequelize.transaction();
   try {
@@ -299,9 +257,6 @@ async function deleteCreditCard(financialAccountId, cardId) {
     throw error;
   }
 }
-
-
-// --- NOVAS FUNÇÕES PARA FATURA E LIMITE ---
 
 async function getAvailableCreditLimit(financialAccountId, creditCardId) {
     try {
@@ -444,7 +399,7 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
                 }
             },
             order: [['transactionDate', 'ASC'], ['createdAt', 'ASC']],
-            include: [{model: FinancialCategory, as: 'category', attributes: ['name']}] // FinancialCategory foi importado
+            include: [{model: FinancialCategory, as: 'category', attributes: ['name']}] 
         });
 
         let totalAmount = 0;
@@ -476,6 +431,84 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
     }
 }
 
+/**
+ * Obtém os períodos de fatura disponíveis (meses com transações) para um cartão.
+ * @param {number} financialAccountId
+ * @param {number} creditCardId
+ * @returns {Promise<Array<object>>} Lista de objetos { month, year, label }
+ */
+async function getAvailableInvoicePeriods(financialAccountId, creditCardId) {
+    try {
+        await validateOwningFinancialAccount(financialAccountId);
+        const card = await CreditCard.findByPk(creditCardId);
+        if (!card || card.financialAccountId !== financialAccountId || !card.isActive) {
+            const error = new Error(`Cartão de crédito ID ${creditCardId} inválido, inativo ou não pertence à conta.`);
+            error.statusCode = 404; error.status = 'fail'; throw error;
+        }
+
+        // Buscar todas as datas de transação para este cartão
+        const transactionsDates = await FinancialTransaction.findAll({
+            attributes: [
+                [fn('DISTINCT', fn('to_char', col('transactionDate'), 'YYYY-MM')), 'yearMonth']
+                // Adapte 'to_char' e 'YYYY-MM' para a sintaxe do seu banco de dados se não for PostgreSQL
+                // Para SQLite, seria: [fn('strftime', '%Y-%m', col('transactionDate')), 'yearMonth']
+                // Para MySQL, seria: [fn('DATE_FORMAT', col('transactionDate'), '%Y-%m'), 'yearMonth']
+            ],
+            where: {
+                creditCardId: creditCardId,
+                financialAccountId: financialAccountId,
+                type: 'Saída' // Apenas gastos contam para faturas
+            },
+            order: [[literal('"yearMonth"'), 'DESC']], // Mais recentes primeiro
+            raw: true, // Para obter o resultado puro
+        });
+        
+        const periods = [];
+        const addedPeriods = new Set(); // Para evitar duplicatas de rótulos
+
+        for (const { yearMonth } of transactionsDates) {
+            if (yearMonth) { // yearMonth será algo como "2024-05"
+                const [year, monthNum] = yearMonth.split('-').map(Number);
+                
+                // Determinar o período de fechamento da fatura para transações deste mês/ano
+                // Se uma transação ocorreu em Mês X / Ano Y:
+                // - Se transactionDate.day <= closingDay, ela pertence à fatura que fecha em Mês X / Ano Y (no closingDay).
+                // - Se transactionDate.day > closingDay, ela pertence à fatura que fecha em Mês X+1 / Ano Y (no closingDay).
+
+                // Precisamos agrupar por MÊS DE FECHAMENTO DA FATURA.
+                // Uma transação de 05/Maio com fechamento dia 20, pertence à fatura que fecha em 20/Maio.
+                // Uma transação de 25/Maio com fechamento dia 20, pertence à fatura que fecha em 20/Junho.
+                
+                // Para simplificar, vamos listar os meses em que HOUVE GASTOS.
+                // A lógica de `getCreditCardInvoiceDetails` determinará o período exato da fatura.
+                // Aqui, queremos dar ao usuário opções de "Mês/Ano" que ele reconheça.
+
+                const dateForLabel = new Date(Date.UTC(year, monthNum -1, 15)); // Dia 15 para pegar o nome do mês corretamente
+                const label = dateForLabel.toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+
+                if (!addedPeriods.has(label)) {
+                    periods.push({
+                        month: monthNum, // 1-12
+                        year: year,
+                        label: label // Ex: "Maio/2024"
+                    });
+                    addedPeriods.add(label);
+                }
+            }
+        }
+        // Adicionar "Última Fechada" e "Fatura Aberta" como opções fixas
+        // Estas serão tratadas pela lógica do `getCreditCardInvoiceDetails`
+        
+        logger.info(`Encontrados ${periods.length} períodos de fatura distintos para cartão ID ${creditCardId}.`);
+        return periods;
+
+    } catch (error) {
+        logger.error(`Erro ao obter períodos de fatura para cartão ID ${creditCardId}: ${error.message}`, { error });
+        if (!error.statusCode) error.statusCode = 500;
+        throw error;
+    }
+}
+
 
 module.exports = {
   createCreditCard,
@@ -486,4 +519,5 @@ module.exports = {
   findCreditCardByName, 
   getAvailableCreditLimit,
   getCreditCardInvoiceDetails,
+  getAvailableInvoicePeriods, // <<< EXPORTADO
 };
