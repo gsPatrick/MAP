@@ -16,7 +16,7 @@ async function initializeDatabaseAndJobs() {
     console.log('Conexão com o banco de dados estabelecida com sucesso.');
 
     if (process.env.NODE_ENV === 'production' && process.env.DB_SYNC === 'true') {
-      await sequelize.sync({ force: false }); // Use com cautela!
+      await sequelize.sync({ force: true }); // Use com cautela!
       console.log('Modelos sincronizados com o banco de dados (alter:true). Use migrations em produção!');
     } else if (process.env.NODE_ENV !== 'deveplopment') {
       console.log('DB_SYNC não está habilitado ou NODE_ENV não é development. Migrations são preferidas.');
