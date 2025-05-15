@@ -67,12 +67,13 @@ async function processRecurringTransactions() {
             type: currentRule.type,
             value: currentRule.value,
             financialCategoryId: currentRule.financialCategoryId,
-            transactionDate: currentRule.nextDueDate,
+            transactionDate: currentRule.nextDueDate, // A data da transação é a data de vencimento da recorrência
             isPayableOrReceivable: currentRule.isPayableOrReceivable,
             dueDate: currentRule.nextDueDate,
-            isPaidOrReceived: false,
+            isPaidOrReceived: false, // Sempre criada como pendente
             paymentMethod: currentRule.paymentMethod,
             notes: `Gerado automaticamente: ${currentRule.notes || ''} (Regra ID ${currentRule.id})`,
+            recurringTransactionRuleId: currentRule.id, // <<< ADICIONADO AQUI
           }, { transaction: ruleProcessingTransaction });
 
           logger.info(`[JOB RECORRÊNCIA] Transação criada para regra ID ${currentRule.id} ("${currentRule.description}") na FinancialAccount "${financialAccount.accountName}" em ${currentRule.nextDueDate}.`);
@@ -97,7 +98,7 @@ async function processRecurringTransactions() {
           currentRule.interval,
           currentRule.dayOfMonth,
           currentRule.dayOfWeek,
-          oldNextDueDate
+          oldNextDueDate // A próxima é calculada a partir da última data de vencimento processada
         );
 
         if (newNextDueDate && (!currentRule.endDate || new Date(newNextDueDate) <= new Date(currentRule.endDate))) {
@@ -107,6 +108,7 @@ async function processRecurringTransactions() {
           }, { transaction: ruleProcessingTransaction });
           logger.info(`[JOB RECORRÊNCIA] Regra ID ${currentRule.id} atualizada. Próximo vencimento: ${newNextDueDate}.`);
         } else {
+          // Se não há próxima data ou ultrapassou a data final, desativa a regra
           await currentRule.update({ isActive: false, lastGeneratedDate: oldNextDueDate, nextDueDate: null }, { transaction: ruleProcessingTransaction });
           logger.info(`[JOB RECORRÊNCIA] Regra ID ${currentRule.id} ("${currentRule.description}") finalizada/expirada. Regra desativada.`);
         }

@@ -109,6 +109,18 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
   notes: {
     type: DataTypes.TEXT,
     allowNull: true,
+  },
+  // NOVO CAMPO
+  recurringTransactionRuleId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: {
+        model: 'recurring_transaction_rules', // Nome da tabela 'recurring_transaction_rules'
+        key: 'id',
+    },
+    onUpdate: 'CASCADE',
+    onDelete: 'SET NULL', // Se a regra for deletada, as transações geradas por ela perdem a referência, mas não são deletadas
+    comment: 'ID da regra de recorrência que originou esta transação (se aplicável)',
   }
 }, {
   tableName: 'financial_transactions',
@@ -121,6 +133,7 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
     { fields: ['financialCategoryId'] },
     { fields: ['creditCardId'] },
     { fields: ['originalAccountId'] },
+    { fields: ['recurringTransactionRuleId'] }, // <<< NOVO ÍNDICE
   ],
   hooks: {
     beforeUpdate: (transaction, options) => {
@@ -149,6 +162,12 @@ FinancialTransaction.associate = (models) => {
   FinancialTransaction.belongsTo(models.FinancialTransaction, {
     as: 'originalAccount',
     foreignKey: 'originalAccountId'
+  });
+
+  // NOVA ASSOCIAÇÃO
+  FinancialTransaction.belongsTo(models.RecurringTransactionRule, {
+    foreignKey: 'recurringTransactionRuleId',
+    as: 'recurringRuleOrigin', // Nome do alias para a associação
   });
 };
 

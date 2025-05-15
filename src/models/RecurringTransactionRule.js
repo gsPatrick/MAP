@@ -109,6 +109,12 @@ const RecurringTransactionRule = sequelize.define('RecurringTransactionRule', {
 RecurringTransactionRule.associate = (models) => {
   RecurringTransactionRule.belongsTo(models.FinancialAccount, { foreignKey: 'financialAccountId', as: 'financialAccount' });
   RecurringTransactionRule.belongsTo(models.FinancialCategory, { foreignKey: 'financialCategoryId', as: 'category' });
+
+  // NOVA ASSOCIAÇÃO (INVERSA)
+  RecurringTransactionRule.hasMany(models.FinancialTransaction, {
+    foreignKey: 'recurringTransactionRuleId',
+    as: 'generatedTransactions', // Nome do alias para acessar as transações geradas
+  });
 };
 
 module.exports = RecurringTransactionRule;

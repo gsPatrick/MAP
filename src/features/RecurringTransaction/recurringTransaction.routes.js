@@ -14,4 +14,8 @@ router.get('/:ruleId', recurringTransactionController.getRecurringRuleById);
 router.put('/:ruleId', recurringTransactionController.updateRecurringRule);
 router.delete('/:ruleId', recurringTransactionController.deleteRecurringRule);
 
+// NOVA ROTA
+router.get('/:ruleId/history', recurringTransactionController.getRecurringRuleHistory);
+
+
 module.exports = router;

@@ -40,7 +40,10 @@ async function getRecurringRuleById(req, res, next) {
         const error = new Error('ID da Regra de Recorrência inválido.');
         error.statusCode = 400; error.status = 'fail'; return next(error);
     }
-    const rule = await recurringTransactionService.getRecurringRuleById(financialAccountId, ruleId);
+    // Novo parâmetro para o service
+    const includeHistory = req.query.includeHistory === 'true';
+    const rule = await recurringTransactionService.getRecurringRuleById(financialAccountId, ruleId, includeHistory);
+
     if (!rule) {
       const error = new Error('Regra de recorrência não encontrada.');
       error.statusCode = 404; error.status = 'fail'; return next(error);
@@ -86,10 +89,27 @@ async function deleteRecurringRule(req, res, next) {
   }
 }
 
+// NOVO CONTROLLER
+async function getRecurringRuleHistory(req, res, next) {
+  try {
+    const financialAccountId = getFinancialAccountIdFromRequest(req);
+    const ruleId = parseInt(req.params.ruleId, 10);
+    if (isNaN(ruleId)) {
+        const error = new Error('ID da Regra de Recorrência inválido.');
+        error.statusCode = 400; error.status = 'fail'; return next(error);
+    }
+    const result = await recurringTransactionService.getRecurringRuleHistory(financialAccountId, ruleId, req.query);
+    res.status(200).json({ status: 'success', ...result });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createRecurringRule,
   getAllRecurringRules,
   getRecurringRuleById,
   updateRecurringRule,
   deleteRecurringRule,
+  getRecurringRuleHistory, // <<< EXPORTADO
 };

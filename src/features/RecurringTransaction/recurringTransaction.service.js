@@ -1,5 +1,5 @@
 // src/features/RecurringTransaction/recurringTransaction.service.js
-const { RecurringTransactionRule, FinancialAccount, FinancialCategory, sequelize } = require('../../database');
+const { RecurringTransactionRule, FinancialAccount, FinancialCategory, FinancialTransaction, sequelize } = require('../../database'); // Adicionado FinancialTransaction
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 const { calculateNextDueDate } = require('../../utils/dateUtils'); // Utilitário a ser criado
@@ -124,17 +124,32 @@ async function getAllRecurringRules(financialAccountId, queryParams = {}) {
  * Busca uma regra de recorrência pelo ID, verificando se pertence à FinancialAccount.
  * @param {number} financialAccountId
  * @param {number} ruleId
+ * @param {boolean} includeGeneratedTransactions - Se true, inclui as transações geradas.
  * @returns {Promise<object|null>}
  */
-async function getRecurringRuleById(financialAccountId, ruleId) {
+async function getRecurringRuleById(financialAccountId, ruleId, includeGeneratedTransactions = false) { // Adicionado includeGeneratedTransactions
   try {
     await validateOwningFinancialAccount(financialAccountId);
-    const rule = await RecurringTransactionRule.findOne({
-      where: { id: ruleId, financialAccountId },
-      include: [
+    
+    const includeOptions = [
         { model: FinancialCategory, as: 'category' },
         { model: FinancialAccount, as: 'financialAccount', attributes: ['id', 'accountName']}
-      ]
+    ];
+
+    if (includeGeneratedTransactions) {
+        includeOptions.push({
+            model: FinancialTransaction,
+            as: 'generatedTransactions',
+            attributes: ['id', 'description', 'value', 'type', 'transactionDate', 'dueDate', 'isPaidOrReceived', 'paymentDate'], // Campos relevantes
+            order: [['dueDate', 'DESC']], // Mais recentes primeiro
+            limit: 50, // Limitar para não sobrecarregar, se necessário
+            separate: true // Opcional: para queries mais eficientes com hasMany e limit
+        });
+    }
+    
+    const rule = await RecurringTransactionRule.findOne({
+      where: { id: ruleId, financialAccountId },
+      include: includeOptions
     });
 
     if (!rule) {
@@ -259,6 +274,10 @@ async function deleteRecurringRule(financialAccountId, ruleId) {
       logger.warn(`Regra de recorrência ID ${ruleId} não encontrada para exclusão na FinancialAccount ID ${financialAccountId}.`);
       return false;
     }
+    // IMPORTANTE: Decidir o que fazer com as FinancialTransactions geradas por esta regra.
+    // A FK em FinancialTransaction tem onDelete: 'SET NULL'.
+    // Se quisesse deletar as transações junto, teria que ser 'CASCADE' ou deletá-las manualmente aqui.
+    // Por ora, elas apenas perderão a referência à regra.
 
     await rule.destroy({ transaction: t });
     await t.commit();
@@ -272,10 +291,68 @@ async function deleteRecurringRule(financialAccountId, ruleId) {
   }
 }
 
+
+/**
+ * Busca o histórico de transações geradas por uma regra de recorrência.
+ * @param {number} financialAccountId
+ * @param {number} ruleId
+ * @param {object} queryParams - { page, limit, sortBy, sortOrder }
+ * @returns {Promise<object>} Objeto com lista de transações e paginação.
+ */
+async function getRecurringRuleHistory(financialAccountId, ruleId, queryParams = {}) {
+  try {
+    await validateOwningFinancialAccount(financialAccountId);
+    const rule = await RecurringTransactionRule.findOne({ where: { id: ruleId, financialAccountId } });
+    if (!rule) {
+        const error = new Error('Regra de recorrência não encontrada ou não pertence à conta financeira.');
+        error.statusCode = 404; error.status = 'fail'; throw error;
+    }
+
+    const { page = 1, limit = 10, sortBy = 'dueDate', sortOrder = 'DESC' } = queryParams;
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+
+    const whereConditions = {
+        financialAccountId,
+        recurringTransactionRuleId: ruleId
+    };
+    
+    const validSortOrders = ['ASC', 'DESC'];
+    const order = [[sortBy, validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC']];
+
+    const { count, rows } = await FinancialTransaction.findAndCountAll({
+        where: whereConditions,
+        include: [
+            { model: FinancialCategory, as: 'category', attributes: ['id', 'name'] },
+            // Não precisa incluir a regra de novo, pois já temos o ruleId
+        ],
+        limit: parseInt(limit, 10),
+        offset: offset,
+        order: order,
+        distinct: true,
+    });
+
+    logger.info(`Listado histórico de ${rows.length} transações para Regra de Recorrência ID ${ruleId} (Total: ${count}).`);
+    return {
+        ruleDescription: rule.description, // Adiciona a descrição da regra para contexto
+        totalItems: count,
+        totalPages: Math.ceil(count / parseInt(limit, 10)),
+        currentPage: parseInt(page, 10),
+        transactions: rows.map(t => t.toJSON()),
+    };
+
+  } catch (error) {
+    logger.error(`Erro ao buscar histórico da regra de recorrência ID ${ruleId}: ${error.message}`, { error });
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
+}
+
+
 module.exports = {
   createRecurringRule,
   getAllRecurringRules,
   getRecurringRuleById,
   updateRecurringRule,
   deleteRecurringRule,
+  getRecurringRuleHistory, // <<< EXPORTADO
 };
