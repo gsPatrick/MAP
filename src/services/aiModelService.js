@@ -228,14 +228,14 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 22. GENERAL_QUESTION_OR_HELP: (Sem parâmetros)
 
 23. GET_CREDIT_CARD_INVOICE: (Ex: "fatura nubank", "qual a fatura do meu cartão inter?", "fatura aberta do nubank", "fatura desse mês do cartão visa", "fatura de janeiro do nubank", "proxima fatura nubank")
-    - creditCardName: string (OBRIGATÓRIO. Extraia de frases como "cartão XPTO", "do Inter", "nubank". Tente extrair mesmo que não seja a primeira palavra. Se o nome exato do cartão não for fornecido ou não for claramente identificável na mensagem do usuário, use \`clarifications_needed\` para pedir o nome do cartão.)
-    - invoicePeriodType: "aberta", "ultima_fechada", "especifico" (opcional, default: "aberta". Se usuário falar "desse mês", "mês atual", "fatura de [nome do mês]", ou "próxima fatura", defina como "especifico" e calcule month/year apropriados. "Próxima fatura" geralmente se refere à fatura que está em curso ou a que acabou de fechar.)
-    - invoiceMonth: integer (opcional, 1-12. Se \`invoicePeriodType\`="especifico" E (\`invoiceMonth\` não foi extraído OU é inválido), use \`clarifications_needed\`. Se usuário falou "desse mês", calcule e preencha com ${currentMonth}. Se "próxima fatura", calcule o mês da próxima fatura a fechar. Se nome do mês, use o número do mês.)
-    - invoiceYear: integer (opcional. Se \`invoicePeriodType\`="especifico" E (\`invoiceYear\` não foi extraído OU é inválido), use \`clarifications_needed\`. Se usuário falou "deste mês", calcule e preencha com ${currentYear}. Se "próxima fatura" ou nome de mês, calcule o ano correspondente (pode ser o próximo ano se o mês já passou no ano atual).)
+    - creditCardName: string (OBRIGATÓRIO. TENTE EXTRAIR o nome do cartão de frases como "cartão XPTO", "do Inter", "nubank", "cartão chamado Nubank". Se o nome do cartão estiver presente na mensagem do usuário, EXTRAIA-O. Se, e SOMENTE SE, nenhum nome de cartão puder ser razoavelmente identificado na mensagem do usuário, use \`clarifications_needed\` para pedir o nome do cartão.)
+    - invoicePeriodType: "aberta", "ultima_fechada", "especifico" (opcional, default: "aberta". Se usuário falar "desse mês", "mês atual", "fatura de [nome do mês]", ou "próxima fatura", defina como "especifico" e calcule month/year apropriados. "Próxima fatura" geralmente se refere à fatura que está em curso para fechar ou a que acabou de fechar.)
+    - invoiceMonth: integer (opcional, 1-12. Se \`invoicePeriodType\`="especifico" E (\`invoiceMonth\` não foi extraído OU é inválido), use \`clarifications_needed\`. Se usuário falou "desse mês", preencha com ${currentMonth}. Se "próxima fatura", calcule o mês da próxima fatura a fechar. Se nome do mês, use o número do mês.)
+    - invoiceYear: integer (opcional. Se \`invoicePeriodType\`="especifico" E (\`invoiceYear\` não foi extraído OU é inválido), use \`clarifications_needed\`. Se usuário falou "deste mês", preencha com ${currentYear}. Se "próxima fatura" ou nome de mês, calcule o ano correspondente (pode ser o próximo ano se o mês já passou no ano atual).)
     - listTransactions: boolean (opcional, default: true)
 
 24. GET_CREDIT_CARD_AVAILABLE_LIMIT: (Ex: "limite disponivel nubank", "qual o limite do inter?")
-    - creditCardName: string (OBRIGATÓRIO. Extraia de forma similar ao GET_CREDIT_CARD_INVOICE. Se faltar, \`clarifications_needed\`)
+    - creditCardName: string (OBRIGATÓRIO. TENTE EXTRAIR de forma similar ao GET_CREDIT_CARD_INVOICE. Se faltar, \`clarifications_needed\`)
 
 25. PAY_CREDIT_CARD_INVOICE:
     - creditCardName: string (OBRIGATÓRIO. Se faltar, \`clarifications_needed\`)
@@ -249,8 +249,8 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 2.  A mensagem é uma descrição de edição? Detecte UPDATE_*.
 3.  A mensagem é uma confirmação (Sim/Não)? Detecte ACTION_CONFIRMATION_*.
 4.  A mensagem é uma saudação simples ou pergunta genérica? Detecte GENERAL_*.
-5.  Caso contrário, tente uma das outras ações.
-6.  Se dados OBRIGATÓRIOS para uma ação faltarem (ex: NOME DO CARTÃO para GET_CREDIT_CARD_INVOICE; VALOR para SCHEDULE_APPOINTMENT financeiro; NOME, LIMITE, CLOSINGDAY ou PAYMENTDAY para CREATE_CREDIT_CARD), NÃO detecte a ação. Use \`clarifications_needed\` COM EXEMPLO DE FRASE CORRIGIDA.
+5.  Caso contrário, tente uma das outras ações. TENTE SEMPRE EXTRAIR todos os parâmetros possíveis da mensagem do usuário antes de recorrer a \`clarifications_needed\`.
+6.  Se dados OBRIGATÓRIOS para uma ação faltarem E NÃO PUDEREM SER INFERIDOS da mensagem do usuário (ex: NOME DO CARTÃO para GET_CREDIT_CARD_INVOICE; VALOR para SCHEDULE_APPOINTMENT financeiro; NOME, LIMITE, CLOSINGDAY ou PAYMENTDAY para CREATE_CREDIT_CARD), NÃO detecte a ação. Use \`clarifications_needed\` COM EXEMPLO DE FRASE CORRIGIDA.
 7.  Se confiante e com todos os dados, detecte a ação para execução direta.
 
 Contexto da Conta Ativa: ${accountCtx}
