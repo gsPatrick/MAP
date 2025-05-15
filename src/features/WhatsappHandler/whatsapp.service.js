@@ -586,7 +586,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             } else if (buttonId.startsWith('delete_appointment_')) {
                 const appointmentId = buttonId.replace('delete_appointment_', '');
                 try {
-                    const success = await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, appointmentId, true); // true para deletar
+                    const success = await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, appointmentId, true); 
                     replyForButtonClick = success ? `Compromisso removido da sua agenda, ${clientNameToUse}! ✅ Fico à disposição se precisar de algo mais.` : "Não foi possível excluir o compromisso.";
                 } catch (e) {
                      logger.error(`[WHATSAPP SERVICE] Erro ao excluir compromisso ${appointmentId} por botão: ${e.message}`);
@@ -664,10 +664,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         }
 
         let finalReplyParts = [];
-        // INÍCIO AJUSTE PARA TRATAMENTO DE ERRO DENTRO DO LOOP DE AÇÕES
         let actionErrorOccurred = false;
         let actionErrorMessageForUser = "";
-        // FIM AJUSTE
 
         if (aiResponse.overall_summary_suggestion && (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0)) {
             finalReplyParts.push(aiResponse.overall_summary_suggestion);
@@ -681,7 +679,16 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
         if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
             for (const detectedAction of aiResponse.detected_actions) {
-                if (actionErrorOccurred) break; // Se um erro já ocorreu, não processa mais ações
+                if (actionErrorOccurred) break; 
+
+                if (!detectedAction || !detectedAction.action) { // <<< VERIFICAÇÃO DEFENSIVA ADICIONADA
+                    logger.warn('[WHATSAPP SERVICE] Ação detectada pela IA está malformada ou sem o campo "action". Pulando esta ação.', { detectedAction });
+                    if (aiResponse.detected_actions.length === 1) { // Se for a única ação "detectada"
+                        actionErrorMessageForUser = `Hum, ${clientNameToUse}, entendi sua intenção, mas tive um pequeno problema ao processá-la internamente. 🛠️ Poderia tentar de novo ou reformular?`;
+                        actionErrorOccurred = true;
+                    }
+                    continue; 
+                }
 
                 const params = detectedAction.parameters || {};
                 let currentActionFormatted = "";
@@ -692,7 +699,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 if (!state.hasPaidAccess && !publicActions.includes(detectedAction.action)) {
                     actionErrorMessageForUser = `Sinto muito, ${clientNameToUse}, mas para realizar a ação de "${detectedAction.action.toLowerCase().replace(/_/g, " ")}", você precisa de um acesso 'mensal' ou 'anual'. Para obter, acesse nosso site: ${process.env.PLAN_SITE_URL || "https://mapnocontrole.com.br/planos"} e depois me chame aqui! 😉`;
                     state.currentAction = 'awaiting_plan_interest';
-                    actionErrorOccurred = true; // Trata como erro para fluxo de resposta
+                    actionErrorOccurred = true; 
                     actionBlockedNoAccessLoop = true;
                 }
                 const accountRequiredActions = [
@@ -712,14 +719,12 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 }
 
                 if (actionBlockedNoAccessLoop) {
-                    // Se overall_summary_suggestion existir e for relevante (não uma saudação genérica), mantém.
-                    // Senão, a actionErrorMessageForUser será a principal.
-                    if (finalReplyParts.length > 0 && finalReplyParts[0] === aiResponse.overall_summary_suggestion && aiResponse.overall_summary_suggestion.length > 30) { // Heurística para relevante
+                    if (finalReplyParts.length > 0 && finalReplyParts[0] === aiResponse.overall_summary_suggestion && aiResponse.overall_summary_suggestion.length > 30) { 
                         finalReplyParts = [aiResponse.overall_summary_suggestion, actionErrorMessageForUser];
                     } else {
                         finalReplyParts = [actionErrorMessageForUser];
                     }
-                    continue; // Pula para o próximo detected_action, embora já esteja marcado para sair do loop
+                    continue; 
                 }
 
                 try {
@@ -1087,7 +1092,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 }
                                  else {
                                     let accList = `Você tem estas contas, ${clientNameToUse}:\n`;
-                                    allClientAccounts.forEach(acc => { accList += `\n- *${acc.accountName}* (${acc.accountType}) ${acc.id === state.activeFinancialAccountId ? ' (Selecionada ✨)' : ''}`; });
+                                    allClientAccounts.forEach(acc => { accList += `\n- *${acc.name}* (${acc.accountType}) ${acc.id === state.activeFinancialAccountId ? ' (Selecionada ✨)' : ''}`; });
                                     accList += "\n\nPara qual delas você gostaria de mudar? Só me dizer o nome ou o tipo. Qual vai ser? 🤔";
                                     currentActionFormatted = accList;
                                     state.currentAction = 'selecting_initial_financial_account'; 
@@ -1174,7 +1179,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const paymentCategoryId = await findFinancialCategoryIdByName(categoryName, state.activeFinancialAccountId, 'Saída');
 
                             try {
-                                const paymentTx = await financialService.createTransaction(state.activeFinancialAccountId, {
+                                await financialService.createTransaction(state.activeFinancialAccountId, { // Removido 'const paymentTx =' pois não é usado
                                     description: paymentDescription,
                                     type: 'Saída',
                                     value: paymentAmount,
@@ -1234,10 +1239,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
                 } catch (e) {
                     logger.error(`[WHATSAPP HANDLER] Erro executando "${detectedAction.action}" para ${senderPhone}: ${e.message}`, { stack: e.stack?.substring(0,300), params: params });
-                    // ATUALIZAÇÃO: Constrói a mensagem de erro para o usuário aqui
                     actionErrorMessageForUser = `Ops, ${clientNameToUse}! 😬 Tive um probleminha ao tentar ${detectedAction.action.toLowerCase().replace(/_/g," ")} "${params.description || 'isso que você pediu'}".\n\nMotivo: ${e.message.length < 100 ? e.message : 'Erro interno, desculpe!'}\n\nPode tentar de novo ou com outros termos? Se o erro persistir, me avise para eu chamar os universitários! 🛠️`;
                     actionErrorOccurred = true;
-                    // Limpa overall_summary se o erro for na única ação, para focar na mensagem de erro
                     if (aiResponse.detected_actions.length === 1 && finalReplyParts[0] === aiResponse.overall_summary_suggestion) {
                         finalReplyParts = [];
                     }
@@ -1245,16 +1248,13 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             } 
         } 
 
-        // Construção da Resposta Final
         if (actionErrorOccurred) {
-            // Se um erro ocorreu em uma ação, a actionErrorMessageForUser será a parte principal da resposta.
-            // Se já havia uma saudação em finalReplyParts, mantém.
             if (finalReplyParts.length > 0 && finalReplyParts[0] === aiResponse.overall_summary_suggestion && !finalReplyParts[0].toLowerCase().includes("erro") && !finalReplyParts[0].toLowerCase().includes("ops")) {
                 finalReplyParts.push(actionErrorMessageForUser);
             } else {
                 finalReplyParts = [actionErrorMessageForUser];
             }
-            singleActionFormattedResult = null; // Limpa resultados de sucesso
+            singleActionFormattedResult = null; 
             multipleActionFormattedResults = [];
         } else if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
             finalReplyParts = [aiResponse.reply_to_user_suggestion];
@@ -1297,10 +1297,11 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             finalReplyParts.push(`Entendido, ${clientNameToUse}! Se precisar de mais alguma coisa, é só dar um grito. Estou por aqui! 😊`);
         }
 
-        // Adiciona mensagem sobre a plataforma, apenas se não houve erro e uma ação concreta foi feita
         const performedConcreteAction = (!actionErrorOccurred && (singleActionFormattedResult || multipleActionFormattedResults.length > 0)) &&
-                                       !(aiResponse.detected_actions?.some(a => a.action.startsWith("GENERAL_") || a.action.startsWith("ACTION_CONFIRMATION_"))) &&
+                                       !(aiResponse.detected_actions?.some(da => da.action && da.action.startsWith("GENERAL_"))) && // Verificação de da.action adicionada
+                                       !(aiResponse.detected_actions?.some(da => da.action && da.action.startsWith("ACTION_CONFIRMATION_"))) && // Verificação de da.action adicionada
                                        (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0);
+
 
         if (performedConcreteAction && state.hasPaidAccess) {
             const platformUrl = process.env.PLATFORM_URL || 'app.mapnocontrole.com.br';
@@ -1360,7 +1361,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         logger.error(`[WHATSAPP HANDLER] Erro CRÍTICO processando msg de ${senderPhone}: ${error.message}`, { stack: error.stack?.substring(0,1000), messageText, rawPayload });
         const clientNameToUseInError = state ? state.clientName : (pushName || "você");
         try {
-            await sendWhatsappMessage(senderPhone, `Puxa vida, ${clientNameToUseInError}! 😬 Meu sistema deu um tilt aqui (${error.message.substring(0,50)}). Parece que precisei de um cafézinho extra! ☕ Minha equipe já está verificando o que houve. Tente novamente em instantes, por favor! 🙏`);
+            // Ajuste na mensagem de erro crítico para ser mais genérica e menos técnica.
+            await sendWhatsappMessage(senderPhone, `Puxa vida, ${clientNameToUseInError}! 😬 Parece que algo inesperado aconteceu por aqui e não consegui processar sua última mensagem. Minha equipe já foi notificada para dar uma olhadinha! 🛠️ Tente novamente em alguns instantes, por favor. Desculpe o transtorno! 🙏`);
         } catch (sendError) {
             logger.error(`[WHATSAPP HANDLER] Falha ao enviar msg de erro crítico para ${senderPhone}: ${sendError.message}`);
         }
