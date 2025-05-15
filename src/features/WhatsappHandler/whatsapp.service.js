@@ -6,7 +6,7 @@ const stockService = require('../Stock/stock.service');
 const appointmentService = require('../Appointment/appointment.service');
 const recurringTransactionService = require('../RecurringTransaction/recurringTransaction.service');
 const creditCardService = require('../CreditCardManagement/creditCard.service');
-const systemService = require('../System/system.service'); // Para categorias
+const systemService = require('../System/system.service'); 
 
 const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
 const aiModelService = require('../../services/aiModelService');
@@ -36,11 +36,9 @@ async function findFinancialCategoryIdByName(name, financialAccountId, transacti
 async function findCreditCardIdByName(name, financialAccountId) {
     if (!name || typeof name !== 'string' || name.trim() === '') return null;
     try {
-        // A função findCreditCardByName já foi ajustada para ser mais flexível
         const card = await creditCardService.findCreditCardByName(financialAccountId, name);
         return card.id;
     } catch (e) {
-        // Log já acontece em findCreditCardByName se não encontrar
         logger.warn(`[WHATSAPP SERVICE] Tentativa de encontrar cartão "${name}" na conta ${financialAccountId} falhou: ${e.message}`);
         return null;
     }
@@ -338,6 +336,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
     const senderPhone = senderPhoneNormalized;
     const startTime = Date.now();
     let state;
+    let actionFromButtonClick = null; // <<< DECLARADA EM ESCOPO MAIS ALTO
 
     try {
         let client = await clientService.findOrCreateClientByPhone(senderPhone, { name: pushName });
@@ -558,13 +557,12 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             return;
         }
 
-        // Tratamento de Cliques em Botões
         if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
             const buttonId = rawPayload.selectedButtonId;
             logger.info(`[WHATSAPP SERVICE] Botão clicado por ${senderPhone} (${clientNameToUse}): ID '${buttonId}', Texto do Botão: '${messageText}'`);
             let buttonClickHandledByServiceLogic = true;
             let replyForButtonClick = "";
-            let actionFromButtonClick = null; // Para armazenar a ação a ser executada após o clique
+            // actionFromButtonClick já está declarado no escopo da função processIncomingMessage
 
             if (buttonId.startsWith('edit_transaction_')) {
                 const transactionId = buttonId.replace('edit_transaction_', '');
@@ -597,83 +595,72 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 }
                 state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
             } 
-            // --- NOVO TRATAMENTO PARA BOTÕES DE FATURA ---
             else if (buttonId.startsWith('select_invoice_period_')) {
-                const parts = buttonId.replace('select_invoice_period_', '').split('_'); // Ex: open_CARDID, closed_CARDID, MM-YYYY_CARDID
+                const parts = buttonId.replace('select_invoice_period_', '').split('_'); 
                 const periodTypeOrDate = parts[0];
-                const cardId = parseInt(parts[1], 10); // Assume que o cardId está no final do ID do botão
+                const cardId = parseInt(parts[parts.length -1], 10); // O ID do cartão é o último elemento
+                const cardNameFromState = state.data.cardNameForInvoice || "o cartão selecionado"; // Fallback
 
                 if (state.data.cardIdForInvoice && state.data.cardIdForInvoice !== cardId) {
-                     logger.warn(`[WHATSAPP SERVICE] ID do cartão no botão (${cardId}) diferente do armazenado no estado (${state.data.cardIdForInvoice}). Usando o do botão.`);
+                     logger.warn(`[WHATSAPP SERVICE] ID do cartão no botão (${cardId}) diferente do armazenado no estado (${state.data.cardIdForInvoice}). Usando o do botão se for válido ou o do estado.`);
                 }
+                const finalCardId = (state.data.cardIdForInvoice === cardId || !state.data.cardIdForInvoice) ? cardId : state.data.cardIdForInvoice;
 
-                state.currentAction = null; // Limpa ação de seleção de período
-                let periodOptions = { type: 'aberta' }; // Default
+
+                state.currentAction = null; 
+                let periodOptions = { type: 'aberta' }; 
 
                 if (periodTypeOrDate === 'open') {
                     periodOptions.type = 'aberta';
                 } else if (periodTypeOrDate === 'closed') {
                     periodOptions.type = 'ultima_fechada';
-                } else if (periodTypeOrDate.includes('-')) { // Formato MM-YYYY
+                } else if (periodTypeOrDate.includes('-')) { 
                     const [month, year] = periodTypeOrDate.split('-').map(Number);
                     periodOptions.type = 'especifico';
                     periodOptions.month = month;
                     periodOptions.year = year;
                 }
                 
-                // Simula uma ação da IA para reusar a lógica do switch
                 actionFromButtonClick = {
                     action: 'GET_CREDIT_CARD_INVOICE',
                     parameters: { 
-                        creditCardName: state.data.cardNameForInvoice, // Pega o nome do cartão que estava no estado
+                        creditCardName: cardNameFromState, 
                         invoicePeriodType: periodOptions.type,
                         invoiceMonth: periodOptions.month,
                         invoiceYear: periodOptions.year,
                         listTransactions: true 
                     },
-                    confidence: 1.0 // Alta confiança pois foi clique de botão
+                    confidence: 1.0 
                 };
-                // Limpa os dados de seleção de fatura do estado
+                // Define o cardId para ser usado pela ação, caso a IA não o tenha pego
+                actionFromButtonClick.parameters.creditCardIdContext = finalCardId; 
+
                 delete state.data.cardIdForInvoice;
                 delete state.data.cardNameForInvoice;
                 delete state.data.invoicePeriodsToList;
+                // A replyForButtonClick será construída pelo processamento da actionFromButtonClick
             }
-            // --- FIM NOVO TRATAMENTO ---
             else {
                 buttonClickHandledByServiceLogic = false; 
             }
 
-            if (buttonClickHandledByServiceLogic && !actionFromButtonClick) { // Se o botão foi tratado e NÃO gerou uma nova ação para a IA
+            if (buttonClickHandledByServiceLogic && !actionFromButtonClick) { 
                 state.messageHistory.push({ role: 'assistant', content: replyForButtonClick }); 
                 conversationState.set(senderPhone, state);
                 await sendWhatsappMessage(senderPhone, replyForButtonClick);
                 return; 
             } else if (actionFromButtonClick) {
-                // Se o clique do botão gerou uma nova ação, força o processamento dela
-                // como se fosse uma ação detectada pela IA.
-                // Limpa o overall_summary_suggestion para não ter saudações redundantes.
                 state.lastAiResponse = {
                     detected_actions: [actionFromButtonClick],
-                    overall_summary_suggestion: null,
-                    reply_to_user_suggestion: `Ok, ${clientNameToUse}! Buscando a fatura de ${messageText} para o cartão ${actionFromButtonClick.parameters.creditCardName}... ⏳`
+                    overall_summary_suggestion: null, 
+                    // Saudação temática será feita pela ação principal
+                    reply_to_user_suggestion: `Entendido, ${clientNameToUse}! Buscando a fatura de "${messageText}" para o cartão ${actionFromButtonClick.parameters.creditCardName || cardNameFromState}... ⏳`
                 };
-                // A mensagem do botão (`messageText`) é o label, pode ser útil para o `overall_summary_suggestion`
-                // que será construído abaixo se a ação for bem sucedida.
-                // Removemos a mensagem do usuário original do histórico para não confundir a IA na próxima rodada
-                // se esta ação do botão for a única coisa a ser processada agora.
-                 const lastUserMsgIndex = state.messageHistory.map(m => m.role).lastIndexOf('user');
-                 if (lastUserMsgIndex > -1 && state.messageHistory[lastUserMsgIndex].content === messageText && rawPayload.selectedButtonId) {
-                    // Não remove, pois messageText é o label do botão e pode ser útil.
-                    // A IA será chamada novamente apenas se esta "ação de botão" precisar de mais passos (o que não é o caso aqui).
-                 }
-
             }
         }
 
 
-        // Tratamento de Ações Pendentes (confirmação, edição, etc.)
-        // ... (lógica de currentAction já existente, pode ser mantida e adaptada se necessário) ...
-        if (!actionFromButtonClick && state.currentAction) { // Só entra aqui se não for uma ação gerada por botão
+        if (!actionFromButtonClick && state.currentAction) { 
             let stateHandledInPreProcessing = false;
             let replyForPreProcessing = "";
 
@@ -705,11 +692,20 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
         }
 
-        // Se uma ação foi gerada por um clique de botão, usa a resposta da IA simulada.
-        // Senão, chama a IA.
+        const aiContext = { // Definindo aiContext aqui para ser usado se actionFromButtonClick for nulo
+            currentFinancialAccountId: state.activeFinancialAccountId,
+            currentFinancialAccountType: state.activeFinancialAccountType,
+            currentFinancialAccountName: state.activeFinancialAccountName,
+            clientName: clientNameToUse,
+            conversationHistory: state.messageHistory.slice(-MAX_HISTORY_FOR_AI * 2),
+            editingResource: state.editingResource,
+            currentAccessLevel: state.currentAccessLevel,
+            hasPaidAccess: state.hasPaidAccess,
+        };
+        
         const aiResponse = actionFromButtonClick ? state.lastAiResponse : await aiModelService.interpretUserMessage(messageText, aiContext);
         
-        if(!actionFromButtonClick) { // Só atualiza o lastAiResponse e logs se não for ação de botão
+        if(!actionFromButtonClick) { 
             logger.info(`[WHATSAPP HANDLER] AI Response for ${senderPhone}:`, {aiResponsePreview: JSON.stringify(aiResponse).substring(0,500) + "..."});
             state.lastAiResponse = aiResponse;
         }
@@ -1199,42 +1195,51 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             break;
                         }
                         case 'GET_CREDIT_CARD_INVOICE': {
-                            const cardIdForInvoice = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
-                            if (!cardIdForInvoice) {
-                                // Este erro será tratado pelo catch abaixo e a mensagem de erro será actionErrorMessageForUser
-                                throw new Error(`Hum, não consegui identificar o cartão "${params.creditCardName}" na conta "${state.activeFinancialAccountName}", ${clientNameToUse}. Pode tentar de novo ou verificar se ele está cadastrado? 🤔`);
-                            }
+                            // Usa o cardId que pode ter sido passado pela ação de botão
+                            const cardIdToUse = params.creditCardIdContext || await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
+                            const cardNameToUse = params.creditCardName || state.data.cardNameForInvoice; // Pega o nome que a IA extraiu ou do estado
 
-                            // Se a IA não especificou um período, iniciamos o fluxo de seleção de período
-                            if (!params.invoicePeriodType && !params.invoiceMonth && !params.invoiceYear) {
-                                const availablePeriods = await creditCardService.getAvailableInvoicePeriods(state.activeFinancialAccountId, cardIdForInvoice);
+                            if (!cardIdToUse) {
+                                throw new Error(`Hum, não consegui identificar o cartão "${cardNameToUse}" na conta "${state.activeFinancialAccountName}", ${clientNameToUse}. Pode tentar de novo ou verificar se ele está cadastrado? 🤔`);
+                            }
+                            const cardDetails = await creditCardService.getCreditCardById(state.activeFinancialAccountId, cardIdToUse); // Pega o nome real do cartão
+                            const actualCardName = cardDetails ? cardDetails.name : cardNameToUse;
+
+
+                            // Se a IA não especificou um período, ou se estamos explicitamente aguardando a seleção
+                            if (state.currentAction === 'awaiting_invoice_period_selection' || (!params.invoicePeriodType && !params.invoiceMonth && !params.invoiceYear)) {
+                                const availablePeriods = await creditCardService.getAvailableInvoicePeriods(state.activeFinancialAccountId, cardIdToUse);
                                 let buttons = [
-                                    { id: `select_invoice_period_open_${cardIdForInvoice}`, label: "Fatura Aberta 💳" },
-                                    { id: `select_invoice_period_closed_${cardIdForInvoice}`, label: "Última Fatura Fechada 📜" }
+                                    { id: `select_invoice_period_open_${cardIdToUse}`, label: "Fatura Aberta 💳" },
+                                    { id: `select_invoice_period_closed_${cardIdToUse}`, label: "Última Fatura Fechada 📜" }
                                 ];
-                                // Adiciona os últimos X meses disponíveis, mais recentes primeiro
-                                availablePeriods.slice(0, 5).forEach(p => {
-                                    buttons.push({ id: `select_invoice_period_${String(p.month).padStart(2,'0')}-${p.year}_${cardIdForInvoice}`, label: p.label });
+                                availablePeriods.slice(0, 5).forEach(p => { // Limita a 5 meses + 2 opções fixas = 7 botões
+                                    buttons.push({ id: `select_invoice_period_${String(p.month).padStart(2,'0')}-${p.year}_${cardIdToUse}`, label: p.label });
                                 });
 
-                                if (buttons.length > 0) {
-                                    currentActionFormatted = `Qual período da fatura do cartão *${params.creditCardName}* você gostaria de ver, ${clientNameToUse}?`;
+                                if (buttons.length > 2 || (buttons.length > 0 && availablePeriods.length > 0)) { // Se houver períodos além dos fixos
+                                    currentActionFormatted = `Qual período da fatura do cartão *${actualCardName}* você gostaria de ver, ${clientNameToUse}?`;
                                     state.currentAction = 'awaiting_invoice_period_selection';
-                                    state.data.cardIdForInvoice = cardIdForInvoice; // Guarda para o próximo passo
-                                    state.data.cardNameForInvoice = params.creditCardName;
-                                    state.data.invoicePeriodsToList = buttons; // Para usar com sendButtonListMessage
-                                    // Não define singleActionFormattedResult aqui, a resposta será a lista de botões
-                                } else {
-                                    currentActionFormatted = `Não encontrei períodos de fatura disponíveis para o cartão "${params.creditCardName}", ${clientNameToUse}. 🧐`;
+                                    state.data.cardIdForInvoice = cardIdToUse; 
+                                    state.data.cardNameForInvoice = actualCardName;
+                                    state.data.invoicePeriodsToList = buttons; 
+                                } else { // Só tem fatura aberta e/ou fechada, ou nenhuma
+                                    currentActionFormatted = `Não encontrei muitos históricos de fatura para o cartão "${actualCardName}", ${clientNameToUse}. 🧐 Por padrão, vou te mostrar a fatura aberta. Se quiser a última fechada, é só pedir!`;
+                                    // Força a busca da fatura aberta se não houver outras opções
+                                    const periodOptsDefault = { type: 'aberta' };
+                                    const invoiceDetails = await creditCardService.getCreditCardInvoiceDetails(state.activeFinancialAccountId, cardIdToUse, periodOptsDefault);
+                                    currentActionFormatted += "\n\n" + formatCreditCardInvoiceSummary(invoiceDetails, clientNameToUse, params.listTransactions !== false);
+                                    state.currentAction = null; // Limpa a ação, pois já resolveu
                                 }
-                            } else { // Período foi especificado pela IA
+                            } else { 
                                 const periodOpts = {
                                     type: params.invoicePeriodType || 'aberta', 
                                     month: params.invoiceMonth, 
                                     year: params.invoiceYear
                                 };
-                                const invoiceDetails = await creditCardService.getCreditCardInvoiceDetails(state.activeFinancialAccountId, cardIdForInvoice, periodOpts);
+                                const invoiceDetails = await creditCardService.getCreditCardInvoiceDetails(state.activeFinancialAccountId, cardIdToUse, periodOpts);
                                 currentActionFormatted = formatCreditCardInvoiceSummary(invoiceDetails, clientNameToUse, params.listTransactions !== false);
+                                state.currentAction = null; // Limpa se a fatura foi mostrada
                             }
                             break;
                         }
@@ -1271,8 +1276,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 });
                                 currentActionFormatted = `Pagamento da fatura do cartão ${params.creditCardName} no valor de R$ ${paymentAmount.toFixed(2)} registrado com sucesso na sua conta ${state.activeFinancialAccountName}! 🎉 Isso aí, ${clientNameToUse}, fatura paga é sinônimo de tranquilidade! 😌`;
                             } catch (e) {
-                                // Este catch é para erros específicos do createTransaction, como falha de DB.
-                                // O erro de limite de cartão já é tratado dentro de createTransaction e relançado.
                                 throw new Error(`Ops! Tive um problema ao tentar registrar o pagamento da fatura do ${params.creditCardName}, ${clientNameToUse}. (${e.message.substring(0,60)}). Vamos tentar de novo?`);
                             }
                             break;
@@ -1310,20 +1313,26 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     if (actionBlockedNoAccessLoop) continue;
 
                     if (currentActionFormatted) {
-                        if (aiResponse.detected_actions.length === 1 && !isEditActionCurrentLoop && state.currentAction !== 'awaiting_invoice_period_selection') { // Não definir se estamos aguardando seleção de período
-                            singleActionFormattedResult = currentActionFormatted;
-                        } else if (!isEditActionCurrentLoop) {
-                            multipleActionFormattedResults.push(currentActionFormatted);
-                        } else {
-                            singleActionFormattedResult = currentActionFormatted;
+                        // Apenas adiciona ao resultado se não estivermos aguardando uma seleção de período de fatura
+                        if (state.currentAction !== 'awaiting_invoice_period_selection') {
+                            if (aiResponse.detected_actions.length === 1 && !isEditActionCurrentLoop) {
+                                singleActionFormattedResult = currentActionFormatted;
+                            } else if (!isEditActionCurrentLoop) {
+                                multipleActionFormattedResults.push(currentActionFormatted);
+                            } else {
+                                singleActionFormattedResult = currentActionFormatted;
+                            }
                         }
+                        // Se estamos aguardando seleção de período, currentActionFormatted é a mensagem com as opções.
+                        // Ela será usada diretamente para construir a finalReplyParts depois.
                     }
+
 
                 } catch (e) {
                     logger.error(`[WHATSAPP HANDLER] Erro executando "${detectedAction.action}" para ${senderPhone}: ${e.message}`, { stack: e.stack?.substring(0,300), params: params });
                     actionErrorMessageForUser = `Ops, ${clientNameToUse}! 😬 Tive um probleminha ao tentar ${detectedAction.action.toLowerCase().replace(/_/g," ")} ${params.description ? `"${params.description}"` : 'isso que você pediu'}.\n\nMotivo: ${e.message.length < 100 ? e.message : 'Erro interno, desculpe!'}\n\nPode tentar de novo ou com outros termos? Se o erro persistir, me avise para eu chamar os universitários! 🛠️`;
                     actionErrorOccurred = true;
-                    if (aiResponse.detected_actions.length === 1 && finalReplyParts[0] === aiResponse.overall_summary_suggestion) {
+                    if (aiResponse.detected_actions.length === 1 && finalReplyParts.length > 0 && finalReplyParts[0] === aiResponse.overall_summary_suggestion) {
                         finalReplyParts = [];
                     }
                 }
@@ -1349,11 +1358,18 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             singleActionFormattedResult = null;
             multipleActionFormattedResults = [];
         } 
-        // NOVO: Se estiver aguardando seleção de período da fatura
         else if (state.currentAction === 'awaiting_invoice_period_selection' && state.data.invoicePeriodsToList) {
-            // A mensagem já foi construída e está em `currentActionFormatted` dentro do `case GET_CREDIT_CARD_INVOICE`
-            // E será enviada com botões. `singleActionFormattedResult` não será usado aqui.
-            finalReplyParts = [singleActionFormattedResult || currentActionFormatted]; // `currentActionFormatted` aqui é a pergunta com as opções
+             // Se a ação foi 'GET_CREDIT_CARD_INVOICE' e resultou em 'awaiting_invoice_period_selection',
+            // currentActionFormatted já contém a pergunta com as opções.
+            // O overall_summary_suggestion da IA (se houver e for relevante) pode preceder isso.
+            if (finalReplyParts.length > 0 && currentActionFormatted && !finalReplyParts[0].includes(currentActionFormatted.substring(0,20))) {
+                 finalReplyParts.push(currentActionFormatted); // Adiciona a pergunta se não for redundante com a saudação
+            } else if (currentActionFormatted) {
+                finalReplyParts = [currentActionFormatted]; // A pergunta é a mensagem principal
+            } else {
+                // Fallback se algo deu errado na construção da lista de botões
+                finalReplyParts.push(`Algo estranho aconteceu ao tentar listar os períodos da fatura, ${clientNameToUse}. Pode tentar novamente?`);
+            }
         }
         else if (singleActionFormattedResult) {
             if (finalReplyParts.length > 0 && !actionWasAnEdit) {
@@ -1393,7 +1409,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                        !(aiResponse.detected_actions?.some(da => da.action && da.action.startsWith("GENERAL_"))) &&
                                        !(aiResponse.detected_actions?.some(da => da.action && da.action.startsWith("ACTION_CONFIRMATION_"))) && 
                                        (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0) &&
-                                       state.currentAction !== 'awaiting_invoice_period_selection'; // Não adicionar se está aguardando
+                                       state.currentAction !== 'awaiting_invoice_period_selection'; 
 
 
         if (performedConcreteAction && state.hasPaidAccess) {
@@ -1408,17 +1424,19 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         const completeFinalReply = finalReplyParts.join("\n\n").trim();
         state.messageHistory.push({ role: 'assistant', content: completeFinalReply });
 
-        if (actionWasAnEdit || (state.editingResource && aiResponse.detected_actions?.every(a => !a.action.startsWith("UPDATE_")))) {
+        if (actionWasAnEdit || (state.editingResource && aiResponse.detected_actions?.every(a => !a.action || !a.action.startsWith("UPDATE_")))) { // Adicionado !a.action para segurança
             state.editingResource = null;
         }
         if (state.data.clarificationContext && (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0)) {
             delete state.data.clarificationContext;
         }
+        // Não limpar o estado de seleção de fatura aqui, pois o usuário ainda precisa clicar no botão.
+        // Ele será limpo após o clique no botão ser processado.
 
         conversationState.set(senderPhone, state);
 
         if (completeFinalReply) {
-            if (state.currentAction === 'awaiting_invoice_period_selection' && state.data.invoicePeriodsToList) {
+            if (state.currentAction === 'awaiting_invoice_period_selection' && state.data.invoicePeriodsToList && !actionErrorOccurred) {
                 await sendButtonListMessage(senderPhone, completeFinalReply, state.data.invoicePeriodsToList, `Faturas do Cartão ${state.data.cardNameForInvoice}`);
             }
             else if (resourceForButtonsContext && !actionErrorOccurred && aiResponse.detected_actions?.length === 1 && !actionWasAnEdit && (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0)) {
