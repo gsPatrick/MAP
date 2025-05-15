@@ -11,11 +11,11 @@ const systemService = require('../System/system.service'); // Para categorias
 const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
 const aiModelService = require('../../services/aiModelService');
 const logger = require('../../utils/logger');
-const { ASSISTANT_NAME } = require('../../services/aiModelService'); // Para usar o nome do assistente consistentemente
+const { ASSISTANT_NAME } = require('../../services/aiModelService'); 
 
 const conversationState = new Map();
-const MAX_HISTORY_FOR_AI = 8; // Pares de mensagens (usuário/assistente)
-const MAX_STATE_HISTORY = 20; // Total de mensagens no estado
+const MAX_HISTORY_FOR_AI = 8; 
+const MAX_STATE_HISTORY = 20; 
 
 // --- Helper Functions ---
 async function findFinancialCategoryIdByName(name, financialAccountId, transactionType = null) {
@@ -57,8 +57,7 @@ async function findProductIdByNameOrCode(nameOrCode, financialAccountId) {
     return null;
 }
 
-// --- Funções de Formatação de Resumo (Caprichadas e seguindo os padrões) ---
-
+// --- Funções de Formatação de Resumo ---
 function formatFinancialTransactionSummary(transaction, clientName = "você", forMulti = false, forEdit = false) {
     const dateFormatted = transaction.transactionDate
         ? new Date(transaction.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' })
@@ -681,9 +680,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             for (const detectedAction of aiResponse.detected_actions) {
                 if (actionErrorOccurred) break; 
 
-                if (!detectedAction || !detectedAction.action) { // <<< VERIFICAÇÃO DEFENSIVA ADICIONADA
+                if (!detectedAction || !detectedAction.action) { 
                     logger.warn('[WHATSAPP SERVICE] Ação detectada pela IA está malformada ou sem o campo "action". Pulando esta ação.', { detectedAction });
-                    if (aiResponse.detected_actions.length === 1) { // Se for a única ação "detectada"
+                    if (aiResponse.detected_actions.length === 1) { 
                         actionErrorMessageForUser = `Hum, ${clientNameToUse}, entendi sua intenção, mas tive um pequeno problema ao processá-la internamente. 🛠️ Poderia tentar de novo ou reformular?`;
                         actionErrorOccurred = true;
                     }
@@ -1179,7 +1178,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const paymentCategoryId = await findFinancialCategoryIdByName(categoryName, state.activeFinancialAccountId, 'Saída');
 
                             try {
-                                await financialService.createTransaction(state.activeFinancialAccountId, { // Removido 'const paymentTx =' pois não é usado
+                                await financialService.createTransaction(state.activeFinancialAccountId, { 
                                     description: paymentDescription,
                                     type: 'Saída',
                                     value: paymentAmount,
@@ -1268,18 +1267,24 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             multipleActionFormattedResults = [];
         } else if (singleActionFormattedResult) {
             if (finalReplyParts.length > 0 && !actionWasAnEdit) {
-                finalReplyParts.push(singleActionFormattedResult);
+                // Se overall_summary_suggestion já existe e não é o mesmo que a ação, adiciona
+                if (finalReplyParts[0] !== singleActionFormattedResult) {
+                     finalReplyParts.push(singleActionFormattedResult);
+                } else {
+                    // Se for igual, já está lá, não precisa adicionar de novo, evita duplicidade se a IA já incluiu no overall
+                }
             } else { 
                 finalReplyParts = [singleActionFormattedResult];
             }
             if (aiResponse.reply_to_user_suggestion && !actionWasAnEdit &&
                 (!aiResponse.overall_summary_suggestion || !aiResponse.reply_to_user_suggestion.includes(aiResponse.overall_summary_suggestion.substring(0,15))) &&
-                !singleActionFormattedResult.includes(aiResponse.reply_to_user_suggestion.substring(0,15))) {
+                !singleActionFormattedResult.includes(aiResponse.reply_to_user_suggestion.substring(0,15)) &&
+                finalReplyParts[finalReplyParts.length-1] !== aiResponse.reply_to_user_suggestion ) { // Evitar adicionar se já é a última parte
                 finalReplyParts.push(aiResponse.reply_to_user_suggestion);
             }
 
         } else if (multipleActionFormattedResults.length > 0) {
-            if (finalReplyParts.length > 0) {
+            if (finalReplyParts.length > 0) { // Se já tem overall_summary_suggestion
                 if(aiResponse.reply_to_user_suggestion && (!aiResponse.overall_summary_suggestion || !aiResponse.reply_to_user_suggestion.includes(aiResponse.overall_summary_suggestion.substring(0,15)))){
                      finalReplyParts.push(aiResponse.reply_to_user_suggestion);
                 }
@@ -1296,10 +1301,10 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         } else if (finalReplyParts.length === 0) { 
             finalReplyParts.push(`Entendido, ${clientNameToUse}! Se precisar de mais alguma coisa, é só dar um grito. Estou por aqui! 😊`);
         }
-
+        
         const performedConcreteAction = (!actionErrorOccurred && (singleActionFormattedResult || multipleActionFormattedResults.length > 0)) &&
-                                       !(aiResponse.detected_actions?.some(da => da.action && da.action.startsWith("GENERAL_"))) && // Verificação de da.action adicionada
-                                       !(aiResponse.detected_actions?.some(da => da.action && da.action.startsWith("ACTION_CONFIRMATION_"))) && // Verificação de da.action adicionada
+                                       !(aiResponse.detected_actions?.some(da => da.action && da.action.startsWith("GENERAL_"))) &&
+                                       !(aiResponse.detected_actions?.some(da => da.action && da.action.startsWith("ACTION_CONFIRMATION_"))) && 
                                        (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0);
 
 
@@ -1361,7 +1366,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         logger.error(`[WHATSAPP HANDLER] Erro CRÍTICO processando msg de ${senderPhone}: ${error.message}`, { stack: error.stack?.substring(0,1000), messageText, rawPayload });
         const clientNameToUseInError = state ? state.clientName : (pushName || "você");
         try {
-            // Ajuste na mensagem de erro crítico para ser mais genérica e menos técnica.
             await sendWhatsappMessage(senderPhone, `Puxa vida, ${clientNameToUseInError}! 😬 Parece que algo inesperado aconteceu por aqui e não consegui processar sua última mensagem. Minha equipe já foi notificada para dar uma olhadinha! 🛠️ Tente novamente em alguns instantes, por favor. Desculpe o transtorno! 🙏`);
         } catch (sendError) {
             logger.error(`[WHATSAPP HANDLER] Falha ao enviar msg de erro crítico para ${senderPhone}: ${sendError.message}`);
