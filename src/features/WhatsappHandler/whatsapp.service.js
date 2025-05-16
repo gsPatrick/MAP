@@ -36,7 +36,7 @@ async function findFinancialCategoryIdByName(name, financialAccountId, transacti
 async function findCreditCardIdByName(name, financialAccountId) {
     if (!name || typeof name !== 'string' || name.trim() === '') return null;
     try {
-        const card = await creditCardService.findCreditCardByName(financialAccountId, name);
+        const card = await creditCardService.findCreditCardByName(financialAccountId, name); // Assumindo que findCreditCardByName existe e busca pelo nome
         return card.id;
     } catch (e) {
         logger.warn(`[WHATSAPP SERVICE] Tentativa de encontrar cartão "${name}" na conta ${financialAccountId} falhou: ${e.message}`);
@@ -75,7 +75,7 @@ function formatFinancialTransactionSummary(transaction, clientName = "você", fo
             statusEmoji = "🗓️";
         }
     } else {
-        statusText = transaction.type === 'Entrada' ? "Recebido!" : "Pago!";
+        statusText = transaction.type === 'Entrada' ? "Recebido!" : "Pago!"; // Para gastos no cartão, já são "pagos" na fatura
         statusEmoji = "✅";
     }
 
@@ -238,7 +238,6 @@ function formatCreditCardInvoiceSummary(invoiceDetails, clientName = "você", li
         const maxTxToList = 7; 
         invoiceDetails.transactions.slice(0, maxTxToList).forEach(tx => {
             const txDate = new Date(tx.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
-            // Ajuste para exibir parcelas de forma mais clara
             if (tx.isParcel && tx.originalPurchaseTotalValue && tx.originalAccountId) {
                 const originalDesc = tx.originalAccount ? tx.originalAccount.description.replace(/ - Parcela \d+\/\d+/, '') : tx.description.replace(/ - Parcela \d+\/\d+/, '');
                 summary += `\n- ${txDate}: ${originalDesc} (Total: R$ ${parseFloat(tx.originalPurchaseTotalValue).toFixed(2)}) - Parcela ${tx.parcelNumber}/${tx.totalParcels} (R$ ${parseFloat(tx.value).toFixed(2)})`;
@@ -723,7 +722,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         let finalReplyParts = [];
         let actionErrorOccurred = false;
         let actionErrorMessageForUser = "";
-        let messageForInvoiceSelectionDisplay = ""; // <<< Renomeada para evitar conflito de escopo
+        let messageForInvoiceSelectionDisplay = ""; 
 
         if (aiResponse.overall_summary_suggestion && (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0)) {
             finalReplyParts.push(aiResponse.overall_summary_suggestion);
@@ -789,17 +788,29 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     switch (detectedAction.action) {
                         case 'CREATE_FINANCIAL_TRANSACTION': {
                             const categoryId = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type);
-                            const cardId = params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null;
                             const txData = {
                                 description: params.description, type: params.type, value: parseFloat(params.value),
                                 transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0],
-                                financialCategoryId: categoryId, creditCardId: cardId, notes: params.notes,
-                                isPayableOrReceivable: params.isPayableOrReceivable !== undefined ? params.isPayableOrReceivable : (params.dueDate ? true : (cardId ? false : false)),
-                                dueDate: cardId ? null : params.dueDate,
-                                isPaidOrReceived: params.isPaidOrReceived !== undefined ? params.isPaidOrReceived : (cardId ? true : (!params.dueDate))
+                                financialCategoryId: categoryId, notes: params.notes,
+                                isPayableOrReceivable: params.isPayableOrReceivable !== undefined ? params.isPayableOrReceivable : (params.creditCardName ? false : (params.dueDate ? true : false)),
+                                dueDate: params.creditCardName ? null : params.dueDate, // Se for cartão, não tem dueDate para a transação em si
+                                isPaidOrReceived: params.isPaidOrReceived !== undefined ? params.isPaidOrReceived : (params.creditCardName ? true : (!params.dueDate)), // Gasto no cartão é "pago" na fatura
                             };
+                        
+                            if (params.creditCardName) {
+                                const cardId = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
+                                if (!cardId) {
+                                    throw new Error(`Cartão de crédito "${params.creditCardName}" não encontrado para registrar o gasto.`);
+                                }
+                                txData.creditCardId = cardId;
+                                // Sobrescreve/Garante os defaults para gasto no cartão, conforme instruído à IA
+                                txData.isPayableOrReceivable = false;
+                                txData.isPaidOrReceived = true;
+                                txData.dueDate = null;
+                            }
+                        
                             const newTx = await financialService.createTransaction(state.activeFinancialAccountId, txData);
-                            const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, newTx.id);
+                            const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, newTx.id); // Recarrega para ter includes
                             currentActionFormattedForLoop = formatFinancialTransactionSummary(reloadedTx, clientNameToUse, aiResponse.detected_actions.length > 1);
                             if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'transaction', id: newTx.id, description: newTx.description };
                             break;
@@ -812,6 +823,13 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const updateTxData = { ...params };
                             if (params.financialCategoryName) updateTxData.financialCategoryId = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type || null);
                             if (params.creditCardName) updateTxData.creditCardId = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
+                            // Se creditCardName for fornecido e convertido para creditCardId, ajustar isPayableOrReceivable, isPaidOrReceived, dueDate
+                            if (updateTxData.creditCardId) {
+                                updateTxData.isPayableOrReceivable = false;
+                                updateTxData.isPaidOrReceived = true;
+                                updateTxData.dueDate = null;
+                            }
+                            
                             delete updateTxData.transactionIdToUpdate; delete updateTxData.financialCategoryName; delete updateTxData.creditCardName;
 
                             const updatedTx = await financialService.updateTransaction(state.activeFinancialAccountId, transactionIdToUpdate, updateTxData);
@@ -1203,12 +1221,13 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const cardNameToUseForLog = params.creditCardName || state.data.cardNameForInvoice; 
 
                             if (!cardIdToUse) {
+                                // A IA já deve pedir o nome do cartão se não identificar, mas como fallback:
                                 throw new Error(`Hum, não consegui identificar o cartão "${cardNameToUseForLog || 'mencionado'}" na conta "${state.activeFinancialAccountName}", ${clientNameToUse}. Pode tentar de novo ou verificar se ele está cadastrado? 🤔`);
                             }
                             const cardDetails = await creditCardService.getCreditCardById(state.activeFinancialAccountId, cardIdToUse); 
                             const actualCardName = cardDetails ? cardDetails.name : cardNameToUseForLog;
                             
-                            let periodOpts = { type: 'aberta' }; 
+                            let periodOpts = { type: 'aberta' }; // Default to 'aberta' as per AI prompt instructions
 
                             if (params.invoicePeriodType === 'especifico' && params.invoiceMonth && params.invoiceYear) {
                                 periodOpts.type = 'especifico';
@@ -1217,9 +1236,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             } else if (params.invoicePeriodType === 'ultima_fechada') {
                                 periodOpts.type = 'ultima_fechada';
                             }
-                            // Se a IA não passou um período específico, o padrão 'aberta' é usado.
-                            // A lógica de listar meses com botões foi removida para simplificar e mostrar a fatura padrão (aberta) diretamente.
-
+                            
                             const invoiceDetails = await creditCardService.getCreditCardInvoiceDetails(state.activeFinancialAccountId, cardIdToUse, periodOpts);
                             currentActionFormattedForLoop = formatCreditCardInvoiceSummary(invoiceDetails, clientNameToUse, params.listTransactions !== false);
                             state.currentAction = null; 
@@ -1299,8 +1316,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     if (actionBlockedNoAccessLoop) continue;
 
                     if (currentActionFormattedForLoop) {
-                        // A lógica de atribuir a singleActionFormattedResult ou multipleActionFormattedResults
-                        // permanece, mas a messageForInvoiceSelection não é mais usada aqui.
                         if (state.currentAction !== 'awaiting_invoice_period_selection') { 
                             if (aiResponse.detected_actions.length === 1 && !isEditActionCurrentLoop) {
                                 singleActionFormattedResult = currentActionFormattedForLoop;
@@ -1310,8 +1325,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 singleActionFormattedResult = currentActionFormattedForLoop;
                             }
                         } else {
-                            // Se estamos aguardando seleção, currentActionFormattedForLoop é a mensagem com opções
-                            // Ela será usada em messageForInvoiceSelectionDisplay
                             messageForInvoiceSelectionDisplay = currentActionFormattedForLoop;
                         }
                     }
