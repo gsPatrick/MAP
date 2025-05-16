@@ -97,8 +97,10 @@ function formatFinancialTransactionSummary(transaction, clientName, forMulti = f
 
 
     let summary = "";
-    if (!forMulti && !forEdit) summary += "📋 Resumo da Transação:\n\n"; // Este título pode ser omitido se a IA já deu um bom `overall_summary_suggestion`
-    else if (forEdit) summary += "✅ Transação Editada:\n\n";
+    // O título "Resumo da Transação" será adicionado pelo overall_summary_suggestion da IA, se ela achar pertinente.
+    // Caso contrário, o template abaixo já é auto-explicativo.
+    // if (!forMulti && !forEdit) summary += "📋 Resumo da Transação:\n\n";
+    if (forEdit) summary += "✅ Transação Editada:\n\n";
 
 
     summary += `${categoryEmoji} Descrição: ${transaction.description}\n`;
@@ -127,13 +129,13 @@ function formatAppointmentSummary(appointment, clientName, forMulti = false, for
     });
 
     let summary = "";
-    if (!forMulti && !forEdit) summary += "📅 Resumo do Compromisso:\n\n";
-    else if (forEdit) summary += "✅ Compromisso Atualizado:\n\n";
+    // if (!forMulti && !forEdit) summary += "📅 Resumo do Compromisso:\n\n"; // IA deve dar o tom
+    if (forEdit) summary += "✅ Compromisso Atualizado:\n\n";
 
     let titleEmoji = "📝";
     const titleLower = appointment.title?.toLowerCase() || "";
-    if(titleLower.includes("pagar") || titleLower.includes("dívida") || titleLower.includes("divida") || appointment.associatedValue && appointment.associatedTransactionType === 'Saída') titleEmoji = "💸";
-    else if(titleLower.includes("receber") || appointment.associatedValue && appointment.associatedTransactionType === 'Entrada') titleEmoji = "💰";
+    if(titleLower.includes("pagar") || titleLower.includes("dívida") || titleLower.includes("divida") || (appointment.associatedValue && appointment.associatedTransactionType === 'Saída')) titleEmoji = "💸";
+    else if(titleLower.includes("receber") || (appointment.associatedValue && appointment.associatedTransactionType === 'Entrada')) titleEmoji = "💰";
     else if(titleLower.includes("reunião") || titleLower.includes("reuniao")) titleEmoji = "🤝";
     else if(titleLower.includes("médico") || titleLower.includes("dentista") || titleLower.includes("medico")) titleEmoji = "🩺";
     else if(titleLower.includes("aniversário") || titleLower.includes("aniversario") || titleLower.includes("festa")) titleEmoji = "🎉";
@@ -181,8 +183,8 @@ function formatRecurringRuleSummary(rule, clientName, forMulti = false, forEdit 
     }
 
     let summary = "";
-    if(!forMulti && !forEdit) summary += "🔄 Resumo da Recorrência:\n\n";
-    else if (forEdit) summary += "✅ Recorrência Atualizada:\n\n";
+    // if(!forMulti && !forEdit) summary += "🔄 Resumo da Recorrência:\n\n"; // IA deve dar o tom
+    if (forEdit) summary += "✅ Recorrência Atualizada:\n\n";
 
 
     summary += `${categoryEmoji} Descrição: ${rule.description}\n`;
@@ -204,8 +206,8 @@ function formatRecurringRuleSummary(rule, clientName, forMulti = false, forEdit 
 
 function formatProductSummary(product, clientName, forMulti = false, forEdit = false) {
     let summary = "";
-    if(!forMulti && !forEdit) summary += "📦 Resumo do Produto:\n\n";
-    else if (forEdit) summary += "✅ Produto Atualizado:\n\n";
+    // if(!forMulti && !forEdit) summary += "📦 Resumo do Produto:\n\n"; // IA deve dar o tom
+    if (forEdit) summary += "✅ Produto Atualizado:\n\n";
 
     summary += `🏷️ Nome: ${product.name}\n`;
     if (product.code) summary += `🔢 Código: ${product.code}\n`;
@@ -224,8 +226,8 @@ function formatProductSummary(product, clientName, forMulti = false, forEdit = f
 
 function formatCreditCardSummary(card, clientName, forMulti = false, forEdit = false) {
     let summary = "";
-    if(!forMulti && !forEdit) summary += "💳 Resumo do Cartão de Crédito:\n\n";
-    else if (forEdit) summary += "✅ Cartão Atualizado:\n\n";
+    // if(!forMulti && !forEdit) summary += "💳 Resumo do Cartão de Crédito:\n\n"; // IA deve dar o tom
+    if (forEdit) summary += "✅ Cartão Atualizado:\n\n";
 
     summary += `✨ Nome: ${card.name}\n`;
     if(card.lastFourDigits) summary += `🔢 Final: **** ${card.lastFourDigits}\n`;
@@ -239,15 +241,7 @@ function formatCreditCardSummary(card, clientName, forMulti = false, forEdit = f
 }
 
 function formatCreditCardInvoiceSummary(invoiceDetails, clientName, listTransactions = true) {
-    // Saudação temática (a IA pode fornecer isso em overall_summary_suggestion, ou podemos ter um fallback)
-    let summary = ""; // O overall_summary_suggestion da IA virá primeiro
-    // Se a IA não der um overall_summary, podemos adicionar um aqui:
-    // if(!aiResponse.overall_summary_suggestion) {
-    //     summary += `E aí, ${clientName}! 🥳 Hora de dar uma espiada na fatura do seu cartão *${invoiceDetails.cardName}*:\n\n`;
-    // } else {
-    //     summary += "\n\n"; // Espaço após o overall_summary_suggestion da IA
-    // }
-
+    let summary = "";
     const invoiceMonthYear = new Date(invoiceDetails.invoiceEndDate + 'T00:00:00Z').toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 
     summary += `🧾 Fatura referente a: *${invoiceMonthYear}*\n`;
@@ -257,7 +251,7 @@ function formatCreditCardInvoiceSummary(invoiceDetails, clientName, listTransact
 
     if (listTransactions && invoiceDetails.transactions && invoiceDetails.transactions.length > 0) {
         summary += "\n--- Lançamentos Detalhados 🛒 ---\n";
-        const maxTxToList = 10; // Aumentado o limite
+        const maxTxToList = 10;
         invoiceDetails.transactions.slice(0, maxTxToList).forEach(tx => {
             const txDate = new Date(tx.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
             let txDescription = tx.description;
@@ -277,20 +271,12 @@ function formatCreditCardInvoiceSummary(invoiceDetails, clientName, listTransact
     } else if (listTransactions && (!invoiceDetails.transactions || invoiceDetails.transactions.length === 0)) {
         summary += "\n🎉 Uhuul! Nenhum lançamento nesta fatura até o momento. Que tranquilidade!";
     }
-    // A mensagem de "Se tiver alguma dúvida..." será adicionada ao final pelo `finalReplyParts.push`
     return summary;
 }
 
 
-function formatAvailableLimitSummary(limitInfo, clientName) { // Adicionado clientName
-    // A IA já deve ter dado um `overall_summary_suggestion`
+function formatAvailableLimitSummary(limitInfo, clientName) {
     let summary = "";
-    // if(!aiResponse.overall_summary_suggestion) {
-    //     summary = `Aqui está o panorama do seu limite no cartão *${limitInfo.cardName}*, ${clientName}:\n\n`;
-    // } else {
-    //    summary = "\n\n";
-    // }
-
     summary += `💳 Cartão: *${limitInfo.cardName}*\n`;
     summary += `💰 Limite Total: R$ ${limitInfo.totalLimit.toFixed(2)}\n`;
     summary += `📈 Usado na Fatura Aberta: R$ ${limitInfo.usedAmount.toFixed(2)}\n`;
@@ -411,7 +397,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         conversationState.set(senderPhone, state);
 
         if (!state.hasPaidAccess) {
-            // ... (lógica de acesso pago permanece a mesma)
             if (state.currentAction === 'awaiting_plan_interest' || !state.currentAction) {
                 const lowerMsg = messageText.toLowerCase().trim();
                 if (state.currentAction === 'awaiting_plan_interest' && (lowerMsg === 'sim' || lowerMsg === 's' || lowerMsg.includes('quero') || lowerMsg.includes('planos') || lowerMsg.includes('obter'))) {
@@ -453,7 +438,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         }
 
         if (state.isFirstInteractionWithAccounts && state.currentAction !== 'awaiting_financial_account_selection') {
-             // ... (lógica de setup guiado de contas permanece a mesma)
             let replyMsgGuiada = "";
             let nextStepActionGuiada = state.currentAction;
 
@@ -535,7 +519,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         }
 
         if (!state.activeFinancialAccountId && clientFinancialAccounts.length > 0) {
-            // ... (lógica de seleção de conta permanece a mesma)
             if (clientFinancialAccounts.length === 1) {
                 const acc = clientFinancialAccounts[0];
                 state.activeFinancialAccountId = acc.id;
@@ -596,7 +579,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         }
 
         if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
-            // ... (lógica de clique em botão permanece a mesma)
             const buttonId = rawPayload.selectedButtonId;
             logger.info(`[WHATSAPP SERVICE] Botão clicado por ${senderPhone} (${clientNameToUse}): ID '${buttonId}', Texto: '${messageText}'`);
             let buttonClickHandledByServiceLogic = true;
@@ -646,7 +628,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         }
 
         if (state.currentAction) {
-            // ... (lógica de currentAction permanece a mesma)
              let stateHandledInPreProcessing = false;
             let replyForPreProcessing = "";
 
@@ -706,7 +687,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         }
 
         let finalReplyParts = [];
-        if (aiResponse.overall_summary_suggestion) { // Esta é a saudação temática da IA
+        if (aiResponse.overall_summary_suggestion) {
             finalReplyParts.push(aiResponse.overall_summary_suggestion);
         }
 
@@ -852,13 +833,18 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0],
                             };
                             const parcelResult = await financialService.createParcelledAccount(state.activeFinancialAccountId, parcelData);
-                            // O `overall_summary_suggestion` da IA deve ser usado como introdução
-                            currentActionFormatted = `Conta parcelada "${params.description}" (${parcelResult.parcels.length}x) registrada com sucesso! 🥳\n`;
-                            if (parcelResult.parcels.length > 0 && parcelResult.parcels[0].dueDate && !cardIdParcel) { // Mostra dueDate se não for cartão
-                                currentActionFormatted += ` A primeira parcela vence em ${new Date(parcelResult.parcels[0].dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'})}.`;
-                            } else if (cardIdParcel) {
-                                currentActionFormatted += `As parcelas serão lançadas automaticamente na fatura do seu cartão ${params.creditCardName}.`;
+                            // O `overall_summary_suggestion` da IA deve ser usado como introdução.
+                            // Se a IA der um `action_specific_reply_suggestion`, ele será usado.
+                            // Senão, este será o corpo principal da mensagem da ação.
+                            if (!detectedAction.action_specific_reply_suggestion) {
+                                currentActionFormatted = `Conta parcelada "${params.description}" (${parcelResult.parcels.length}x) registrada com sucesso! 🥳\n`;
+                                if (parcelResult.parcels.length > 0 && parcelResult.parcels[0].dueDate && !cardIdParcel) {
+                                    currentActionFormatted += ` A primeira parcela vence em ${new Date(parcelResult.parcels[0].dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'})}.`;
+                                } else if (cardIdParcel) {
+                                    currentActionFormatted += `As parcelas serão lançadas automaticamente na fatura do seu cartão ${params.creditCardName}.`;
+                                }
                             }
+                            // Não precisa de resourceForButtonsContext para parcelamento, pois são várias transações.
                             break;
                         }
                         case 'GET_FINANCIAL_SUMMARY': {
@@ -910,7 +896,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 isPayableOrReceivable: params.isPayableOrReceivable,
                                 isPaidOrReceived: params.isPaidOrReceived,
                                 search: params.searchTerm || params.description,
-                                limit: params.limit || 7, page: params.page || 1, // Aumentei o limite padrão
+                                limit: params.limit || 7, page: params.page || 1,
                                 sortBy: params.sortBy || 'transactionDate', sortOrder: params.sortOrder || 'DESC'
                             };
                             const { transactions, totalItems } = await financialService.getAllTransactions(state.activeFinancialAccountId, filterParamsList);
@@ -933,7 +919,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     }
 
                                     listText += `\n${emoji} ${descriptionText} - R$ ${parseFloat(t.value).toFixed(2)}\n    (Cat: ${catName}, Data: ${date}, ID: ${t.id})`;
-                                    if (t.isPayableOrReceivable && !t.creditCardId) { // Não mostrar status de pago/pendente para item de cartão, pois já está "pago" ao lojista
+                                    if (t.isPayableOrReceivable && !t.creditCardId) {
                                         listText += t.isPaidOrReceived ? " (Liquidada ✅)" : ` (Vence ${new Date(t.dueDate+'T00:00:00Z').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',timeZone:'UTC'})} 🗓️)`;
                                     }
                                 }
@@ -968,8 +954,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 currentActionFormatted = `Não encontrei uma transação pendente clara para "${params.transactionDescription || 'a transação mencionada'}" para marcar como paga/recebida, ${clientNameToUse}. 😕 (ID Pesquisado: ${params.transactionIdToUpdate || 'N/A'})`;
                             } else {
                                 const updatedTx = await financialService.markAsPaidOrReceived(state.activeFinancialAccountId, transactionToMark.id, params.paymentDate);
-                                // A saudação temática virá da IA em `overall_summary_suggestion`.
-                                // O `action_specific_reply_suggestion` da IA pode complementar ou ser usado aqui.
                                 currentActionFormatted = detectedAction.action_specific_reply_suggestion || `✨ Resumo do registro:\n\n🔄 Atualizamos o status da transação "${updatedTx.description}" e agora ela está como ${updatedTx.type === 'Entrada' ? '"recebida"' : '"paga"'}. A data marcada foi ${new Date(updatedTx.paymentDate+'T00:00:00Z').toLocaleDateString('pt-BR',{timeZone:'UTC'})}. 🎉`;
                                 state.editingResource = null;
                             }
@@ -1258,8 +1242,14 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             }
                             // Se a IA deu uma sugestão de resposta direta e não é uma das frases acima, usa ela como única resposta.
                             if (aiResponse.reply_to_user_suggestion && !(messageText.toLowerCase().includes("pagar fatura de um item") || messageText.toLowerCase().includes("antecipar fatura"))) {
-                                finalReplyParts = [aiResponse.reply_to_user_suggestion];
-                                multipleActionFormattedResults = [];
+                                // Se a resposta da IA para uma saudação já é o overall_summary_suggestion, não precisamos duplicar.
+                                if(finalReplyParts.length > 0 && finalReplyParts[0] === aiResponse.reply_to_user_suggestion) {
+                                     multipleActionFormattedResults = []; // Limpa outras possíveis ações
+                                     singleActionFormattedResult = null; // Garante que esta seja a única resposta
+                                } else {
+                                    finalReplyParts = [aiResponse.reply_to_user_suggestion];
+                                    multipleActionFormattedResults = [];
+                                }
                             }
                             break;
                         default:
@@ -1274,7 +1264,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
                     if (actionBlockedNoAccessLoop) continue;
 
-                    // Se a IA deu uma sugestão de fala específica para ESTA ação, prioriza ela.
                     if (detectedAction.action_specific_reply_suggestion) {
                         currentActionFormatted = detectedAction.action_specific_reply_suggestion;
                     }
@@ -1285,7 +1274,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             singleActionFormattedResult = currentActionFormatted;
                         } else if (!isEditActionCurrentLoop) {
                             multipleActionFormattedResults.push(currentActionFormatted);
-                        } else {
+                        } else { // Ação de edição única
                             singleActionFormattedResult = currentActionFormatted;
                         }
                     }
@@ -1300,6 +1289,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         }
 
 
+        // Lógica para construir a resposta final (CORRIGIDA)
         if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
             finalReplyParts = [aiResponse.reply_to_user_suggestion || `Opa, ${clientNameToUse}! Para continuarmos, preciso de um detalhe: ${aiResponse.clarifications_needed[0].clarification_question}`];
             state.currentAction = 'awaiting_clarification_response';
@@ -1311,64 +1301,69 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             singleActionFormattedResult = null;
             multipleActionFormattedResults = [];
         } else if (singleActionFormattedResult) {
-            if (finalReplyParts.length > 0 && !actionWasAnEdit && !finalReplyParts.join(" ").toLowerCase().includes(singleActionFormattedResult.substring(0,20).toLowerCase())) {
-                if(aiResponse.reply_to_user_suggestion &&
-                   (!aiResponse.overall_summary_suggestion || !aiResponse.reply_to_user_suggestion.toLowerCase().includes(aiResponse.overall_summary_suggestion.substring(0,20).toLowerCase())) &&
-                   !singleActionFormattedResult.toLowerCase().includes(aiResponse.reply_to_user_suggestion.substring(0,20).toLowerCase())) {
-                    finalReplyParts.push(aiResponse.reply_to_user_suggestion); // Adiciona fala geral da IA se houver e não for redundante
+            if (finalReplyParts.length > 0 && !actionWasAnEdit) {
+                if (aiResponse.reply_to_user_suggestion &&
+                    aiResponse.reply_to_user_suggestion !== aiResponse.overall_summary_suggestion &&
+                    !singleActionFormattedResult.toLowerCase().includes(aiResponse.reply_to_user_suggestion.substring(0, 20).toLowerCase()) &&
+                    aiResponse.reply_to_user_suggestion !== singleActionFormattedResult &&
+                    finalReplyParts.indexOf(aiResponse.reply_to_user_suggestion) === -1 ) {
+                    finalReplyParts.push(aiResponse.reply_to_user_suggestion);
                 }
-                finalReplyParts.push(singleActionFormattedResult); // Adiciona o resultado formatado da ação
-            } else {
-                // Se overall_summary_suggestion era o único item em finalReplyParts (ou estava vazio)
-                // E a ação NÃO é uma saudação (onde o overall_summary pode ser a única resposta)
-                if(finalReplyParts.length > 0 && aiResponse.detected_actions[0]?.action.startsWith("GENERAL_")){
-                    // Para saudações, se já tem overall_summary, não precisa do singleActionFormattedResult se ele for genérico
-                    if(aiResponse.reply_to_user_suggestion !== singleActionFormattedResult){
+                 if (finalReplyParts.indexOf(singleActionFormattedResult) === -1) { // Evita duplicar o resultado da ação
+                    finalReplyParts.push(singleActionFormattedResult);
+                 }
+
+            } else { // Se não tinha overall_summary ou era edição, a ação é a resposta principal.
+                 if(finalReplyParts.length > 0 && aiResponse.detected_actions[0]?.action.startsWith("GENERAL_")){
+                    if(aiResponse.reply_to_user_suggestion !== singleActionFormattedResult && finalReplyParts.indexOf(singleActionFormattedResult) === -1){
                          finalReplyParts.push(singleActionFormattedResult);
                     }
-                } else {
-                     finalReplyParts = [finalReplyParts.join(" "), singleActionFormattedResult].filter(Boolean).join("\n\n"); // Concatena overall com resultado da ação
+                } else if (finalReplyParts.indexOf(singleActionFormattedResult) === -1) {
+                    finalReplyParts.push(singleActionFormattedResult);
                 }
             }
         } else if (multipleActionFormattedResults.length > 0) {
             if (finalReplyParts.length === 0) {
                 finalReplyParts.push(`${clientNameToUse}, aqui está o que eu fiz pra você! 😉`);
-            } else if (aiResponse.reply_to_user_suggestion && !finalReplyParts.join(" ").toLowerCase().includes(aiResponse.reply_to_user_suggestion.substring(0,20).toLowerCase())) {
+            } else if (aiResponse.reply_to_user_suggestion && finalReplyParts.indexOf(aiResponse.reply_to_user_suggestion) === -1) {
                  finalReplyParts.push(aiResponse.reply_to_user_suggestion);
             }
             finalReplyParts.push(multipleActionFormattedResults.join("\n\n---\n\n"));
         } else if (aiResponse.reply_to_user_suggestion) {
             if (finalReplyParts.length === 0 || (finalReplyParts.length === 1 && finalReplyParts[0] === aiResponse.overall_summary_suggestion)) {
                 finalReplyParts = [aiResponse.reply_to_user_suggestion];
-            } else if (!finalReplyParts.join(" ").toLowerCase().includes(aiResponse.reply_to_user_suggestion.substring(0,30).toLowerCase())) {
+            } else if (finalReplyParts.indexOf(aiResponse.reply_to_user_suggestion) === -1) {
                  finalReplyParts.push(aiResponse.reply_to_user_suggestion);
             }
-        } else if (finalReplyParts.length === 0) { // Fallback se NADA foi construído
+        } else if (finalReplyParts.length === 0) {
             finalReplyParts.push(`Entendido, ${clientNameToUse}! Se precisar de mais alguma coisa, é só chamar. 😊 Estou por aqui!`);
         }
+
+        // Limpa partes duplicadas (uma checagem simples, pode ser aprimorada)
+        finalReplyParts = finalReplyParts.filter((item, index, self) =>
+            item && self.findIndex(t => t && item && t.trim() === item.trim()) === index
+        );
+
 
         const performedConcreteAction = (aiResponse.detected_actions && aiResponse.detected_actions.length > 0 &&
                                        aiResponse.detected_actions.some(a => !a.action.startsWith("GENERAL_") && !a.action.startsWith("LIST_") && !a.action.startsWith("GET_") && !a.action.startsWith("SWITCH_") )
                                       ) &&
                                        (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0);
 
+        let completeFinalReply = finalReplyParts.filter(part => typeof part === 'string' && part.trim() !== "").join("\n\n").trim();
+
         if (performedConcreteAction && state.hasPaidAccess) {
             const platformUrl = process.env.PLATFORM_URL || 'app.mapnocontrole.com.br';
-            const dashboardMessage = `\n📊 Para visualizar mais detalhes e relatórios, acesse a plataforma em https://${platformUrl}`;
-            if (!finalReplyParts.join(" ").includes(platformUrl)) {
-                finalReplyParts.push(dashboardMessage);
+            const dashboardMessage = `📊 Para visualizar mais detalhes e relatórios, acesse a plataforma em https://${platformUrl}`;
+            if (!completeFinalReply.includes(platformUrl)) {
+                completeFinalReply += `\n\n${dashboardMessage}`;
             }
-             // Adiciona a chamada para mais ajuda
             const helpMessage = "Se precisar de algo a mais é só me chamar! 😃📈";
-            if(!finalReplyParts.join(" ").includes(helpMessage.substring(0,20))){
-                finalReplyParts.push(helpMessage);
+            if(!completeFinalReply.includes(helpMessage.substring(0,20))){
+                 completeFinalReply += `\n\n${helpMessage}`;
             }
         }
 
-
-        let completeFinalReply = finalReplyParts.filter(Boolean).join("\n\n").trim(); // Remove partes vazias antes de juntar
-
-        // Garante que não haja mais de 2 quebras de linha seguidas
         completeFinalReply = completeFinalReply.replace(/\n{3,}/g, '\n\n');
 
 
