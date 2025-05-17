@@ -74,7 +74,7 @@ function formatFinancialTransactionSummary(transaction, clientName, forMulti = f
             statusEmoji = "🗓️";
         }
     } else { // Transações não "PayableOrReceivable" são consideradas efetivadas
-        statusText = transaction.type === 'Entrada' ? "Recebido!" : "Pago!"; // Ou "Registrada!" para clareza
+        statusText = transaction.type === 'Entrada' ? "Recebido!" : "Pago!";
         statusEmoji = "✅";
     }
 
@@ -97,11 +97,8 @@ function formatFinancialTransactionSummary(transaction, clientName, forMulti = f
 
 
     let summary = "";
-    // O título "Resumo da Transação" será adicionado pelo overall_summary_suggestion da IA, se ela achar pertinente.
-    // Caso contrário, o template abaixo já é auto-explicativo.
-    // if (!forMulti && !forEdit) summary += "📋 Resumo da Transação:\n\n";
     if (forEdit) summary += "✅ Transação Editada:\n\n";
-
+    // Não adicionar título "Resumo da Transação" aqui, pois o overall_summary_suggestion da IA já deve cobrir a introdução.
 
     summary += `${categoryEmoji} Descrição: ${transaction.description}\n`;
     summary += `💰 Valor: R$ ${parseFloat(transaction.value).toFixed(2)}\n`;
@@ -129,7 +126,6 @@ function formatAppointmentSummary(appointment, clientName, forMulti = false, for
     });
 
     let summary = "";
-    // if (!forMulti && !forEdit) summary += "📅 Resumo do Compromisso:\n\n"; // IA deve dar o tom
     if (forEdit) summary += "✅ Compromisso Atualizado:\n\n";
 
     let titleEmoji = "📝";
@@ -183,9 +179,7 @@ function formatRecurringRuleSummary(rule, clientName, forMulti = false, forEdit 
     }
 
     let summary = "";
-    // if(!forMulti && !forEdit) summary += "🔄 Resumo da Recorrência:\n\n"; // IA deve dar o tom
     if (forEdit) summary += "✅ Recorrência Atualizada:\n\n";
-
 
     summary += `${categoryEmoji} Descrição: ${rule.description}\n`;
     summary += `💰 Valor: R$ ${parseFloat(rule.value).toFixed(2)} (${rule.type})\n`;
@@ -206,7 +200,6 @@ function formatRecurringRuleSummary(rule, clientName, forMulti = false, forEdit 
 
 function formatProductSummary(product, clientName, forMulti = false, forEdit = false) {
     let summary = "";
-    // if(!forMulti && !forEdit) summary += "📦 Resumo do Produto:\n\n"; // IA deve dar o tom
     if (forEdit) summary += "✅ Produto Atualizado:\n\n";
 
     summary += `🏷️ Nome: ${product.name}\n`;
@@ -223,59 +216,37 @@ function formatProductSummary(product, clientName, forMulti = false, forEdit = f
     if (product.description) summary += `\n📜 Descrição: ${product.description}`;
     return summary;
 }
-function formatCreditCardInvoiceSummary(invoiceDetails, clientName, listTransactions = true) {
-    let summary = ""; // O overall_summary_suggestion da IA virá primeiro
 
-    // Define o nome do perfil baseado no accountType
-    let profileName = "Pessoal"; // Default
-    if (invoiceDetails.financialAccountType === 'PJ') {
-        profileName = "Empresarial (PJ)";
-    } else if (invoiceDetails.financialAccountType === 'MEI') {
-        profileName = "MEI";
-    }
+function formatCreditCardSummary(card, clientName, forMulti = false, forEdit = false) {
+    let summary = "";
+    if (forEdit) summary += "✅ Cartão Atualizado:\n\n";
 
-    summary += `🧾 Fatura do Cartão ${invoiceDetails.cardName} – ${invoiceDetails.invoiceReferenceMonthYear}\n`;
-    summary += `👤 Perfil: ${invoiceDetails.financialAccountName} [${profileName}]\n`; // Nome da conta e tipo
-    summary += `📆 Período da fatura: ${new Date(invoiceDetails.invoiceCycleStartDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {day: '2-digit', month:'2-digit', timeZone:'UTC'})} a ${new Date(invoiceDetails.invoiceCycleEndDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {day: '2-digit', month:'2-digit', timeZone:'UTC'})}\n`;
-    summary += `💳 Vencimento: ${new Date(invoiceDetails.paymentDueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' })}\n`;
-    summary += `💰 Valor Total: R$ ${invoiceDetails.totalAmount.toFixed(2)}\n`;
-
-    if (listTransactions && invoiceDetails.transactions && invoiceDetails.transactions.length > 0) {
-        summary += "\n📋 Lançamentos Detalhados:\n"; // Emoji alterado
-        const maxTxToList = 10;
-        invoiceDetails.transactions.slice(0, maxTxToList).forEach(tx => {
-            const txDate = new Date(tx.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
-            let txDescription = tx.description;
-
-            if (tx.isParcel && tx.parcelNumber && tx.totalParcels && tx.originalAccount) {
-                const originalDesc = tx.originalAccount.description.replace(/ - Parcela \d+\/\d+$/, '').trim();
-                if (!txDescription.toLowerCase().includes(`parcela ${tx.parcelNumber}/${tx.totalParcels}`)) {
-                     txDescription = `${originalDesc} – Parcela ${tx.parcelNumber}/${tx.totalParcels}`; // Usando hífen maior
-                }
-            }
-            summary += `\n🗓️ ${txDate} – ${txDescription} – R$ ${parseFloat(tx.value).toFixed(2)}`; // Emoji e formato alterados
-            if (tx.category && tx.category.name) summary += ` [${tx.category.name}]`;
-        });
-        if (invoiceDetails.transactions.length > maxTxToList) {
-            summary += `\n\n... e mais ${invoiceDetails.transactions.length - maxTxToList} lançamentos. Peça para ver todos se quiser! 😉`;
-        }
-    } else if (listTransactions && (!invoiceDetails.transactions || invoiceDetails.transactions.length === 0)) {
-        summary += "\n🎉 Uhuul! Nenhum lançamento nesta fatura até o momento. Que tranquilidade!";
-    }
+    summary += `✨ Nome: ${card.name}\n`;
+    if(card.lastFourDigits) summary += `🔢 Final: **** ${card.lastFourDigits}\n`;
+    if(card.flag) summary += `🚩 Bandeira: ${card.flag}\n`;
+    summary += `💰 Limite: R$ ${parseFloat(card.limit).toFixed(2)}\n`;
+    summary += `🗓️ Dia Fechamento: ${card.closingDay}\n`;
+    summary += `💸 Dia Pagamento: ${card.paymentDay}\n`;
+    summary += `⭐ Padrão: ${card.isDefault ? 'Sim ✔️' : 'Não ❌'}\n`;
+    summary += `🚦 Status: ${card.isActive ? 'Ativo ✔️' : 'Inativo ❌'}`;
     return summary;
 }
 
 function formatCreditCardInvoiceSummary(invoiceDetails, clientName, listTransactions = true) {
     let summary = "";
     const invoiceMonthYear = new Date(invoiceDetails.invoiceEndDate + 'T00:00:00Z').toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    let profileName = "Pessoal";
+    if (invoiceDetails.financialAccountType === 'PJ') profileName = "Empresarial (PJ)";
+    else if (invoiceDetails.financialAccountType === 'MEI') profileName = "MEI";
 
-    summary += `🧾 Fatura referente a: *${invoiceMonthYear}*\n`;
-    summary += `(Gastos de ${new Date(invoiceDetails.invoiceStartDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {day: '2-digit', month:'short', timeZone:'UTC'})} a ${new Date(invoiceDetails.invoiceEndDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {day: '2-digit', month:'short', timeZone:'UTC'})})\n`;
-    summary += `💸 Vencimento: ${new Date(invoiceDetails.paymentDueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' })}\n`;
-    summary += `💰 *Valor Total da Fatura: R$ ${invoiceDetails.totalAmount.toFixed(2)}*\n`;
+    summary += `🧾 Fatura do Cartão ${invoiceDetails.cardName} – ${invoiceMonthYear}\n`;
+    summary += `👤 Perfil: ${invoiceDetails.financialAccountName} [${profileName}]\n`;
+    summary += `📆 Período da fatura: ${new Date(invoiceDetails.invoiceCycleStartDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {day: '2-digit', month:'2-digit', timeZone:'UTC'})} a ${new Date(invoiceDetails.invoiceCycleEndDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {day: '2-digit', month:'2-digit', timeZone:'UTC'})}\n`;
+    summary += `💳 Vencimento: ${new Date(invoiceDetails.paymentDueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' })}\n`;
+    summary += `💰 Valor Total: R$ ${invoiceDetails.totalAmount.toFixed(2)}\n`;
 
     if (listTransactions && invoiceDetails.transactions && invoiceDetails.transactions.length > 0) {
-        summary += "\n--- Lançamentos Detalhados 🛒 ---\n";
+        summary += "\n📋 Lançamentos Detalhados:\n";
         const maxTxToList = 10;
         invoiceDetails.transactions.slice(0, maxTxToList).forEach(tx => {
             const txDate = new Date(tx.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
@@ -284,10 +255,10 @@ function formatCreditCardInvoiceSummary(invoiceDetails, clientName, listTransact
             if (tx.isParcel && tx.parcelNumber && tx.totalParcels && tx.originalAccount) {
                 const originalDesc = tx.originalAccount.description.replace(/ - Parcela \d+\/\d+$/, '').trim();
                 if (!txDescription.toLowerCase().includes(`parcela ${tx.parcelNumber}/${tx.totalParcels}`)) {
-                     txDescription = `${originalDesc} - Parcela ${tx.parcelNumber}/${tx.totalParcels}`;
+                     txDescription = `${originalDesc} – Parcela ${tx.parcelNumber}/${tx.totalParcels}`;
                 }
             }
-            summary += `\n- ${txDate}: ${txDescription} (R$ ${parseFloat(tx.value).toFixed(2)})`;
+            summary += `\n🗓️ ${txDate} – ${txDescription} – R$ ${parseFloat(tx.value).toFixed(2)}`;
             if (tx.category && tx.category.name) summary += ` [${tx.category.name}]`;
         });
         if (invoiceDetails.transactions.length > maxTxToList) {
@@ -314,7 +285,6 @@ function formatAvailableLimitSummary(limitInfo, clientName) {
     return summary;
 }
 
-// Inicialização do estado (sem alterações significativas aqui, mas o `clientName` é usado)
 function initializeState(client, defaultAccount = null) {
     const clientName = client ? (client.name || "pessoa incrível") : "pessoa incrível";
 
@@ -364,15 +334,14 @@ function initializeState(client, defaultAccount = null) {
         newState.currentAction = 'awaiting_plan_interest';
     } else if (defaultAccount && client && newState.hasPaidAccess) {
         newState.messageHistory.push({ role: 'assistant', content: `Olá ${clientName}! 😊 Bem-vindo(a) de volta à sua conta "${newState.activeFinancialAccountName}" (Acesso: ${accessLevelText}). Como posso te ajudar hoje? Estou pronto para anotar tudo! 📝` });
-    } else if (client && newState.hasPaidAccess) { // Se não tem conta default mas tem acesso
+    } else if (client && newState.hasPaidAccess) {
         newState.messageHistory.push({ role: 'assistant', content: `Olá ${clientName}! 😊 (Acesso: ${accessLevelText}). Como posso te ajudar hoje? Estou aqui para o que precisar! ✨` });
-    } else if (!client) { // Se o client for nulo por algum motivo (não deveria acontecer após findOrCreate)
+    } else if (!client) {
         newState.messageHistory.push({ role: 'assistant', content: `Olá! Como posso te ajudar hoje?` });
     }
     return newState;
 }
 
-// --- Função Principal de Processamento ---
 async function processIncomingMessage(senderPhoneNormalized, messageText, pushName, rawPayload) {
     const senderPhone = senderPhoneNormalized;
     const startTime = Date.now();
@@ -767,8 +736,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0],
                                 financialCategoryId: categoryId, creditCardId: cardId, notes: params.notes,
                                 isPayableOrReceivable: params.isPayableOrReceivable !== undefined ? params.isPayableOrReceivable : (params.dueDate ? true : (cardId ? false : false)),
-                                dueDate: cardId ? null : params.dueDate, // Se for no cartão à vista, não tem dueDate para o lojista
-                                isPaidOrReceived: params.isPaidOrReceived !== undefined ? params.isPaidOrReceived : (cardId ? true : (!params.dueDate)) // Cartão à vista é pago ao lojista
+                                dueDate: cardId ? null : params.dueDate, 
+                                isPaidOrReceived: params.isPaidOrReceived !== undefined ? params.isPaidOrReceived : (cardId ? true : (!params.dueDate))
                             };
                             const newTx = await financialService.createTransaction(state.activeFinancialAccountId, txData);
                             const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, newTx.id);
@@ -789,7 +758,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
                             const updatedTx = await financialService.updateTransaction(state.activeFinancialAccountId, transactionIdToUpdate, updateTxData);
                             const reloadedUpdatedTx = await financialService.getTransactionById(state.activeFinancialAccountId, updatedTx.id);
-                            // Se a IA deu uma sugestão de fala para a edição, usa ela, senão o formato padrão.
                             currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatFinancialTransactionSummary(reloadedUpdatedTx, clientNameToUse, false, true);
                             state.editingResource = null;
                             break;
@@ -846,7 +814,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const catIdParcel = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type);
                             const cardIdParcel = params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null;
 
-                            if (params.creditCardName && !cardIdParcel) { // Validação se o cartão mencionado existe
+                            if (params.creditCardName && !cardIdParcel) {
                                 currentActionFormatted = `Hum, ${clientNameToUse}, não encontrei um cartão chamado "${params.creditCardName}" para registrar essa compra parcelada. 😕 Você pode cadastrar o cartão primeiro ou tentar com outro nome.`;
                                 break;
                             }
@@ -858,18 +826,19 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0],
                             };
                             const parcelResult = await financialService.createParcelledAccount(state.activeFinancialAccountId, parcelData);
-                            // O `overall_summary_suggestion` da IA deve ser usado como introdução.
-                            // Se a IA der um `action_specific_reply_suggestion`, ele será usado.
-                            // Senão, este será o corpo principal da mensagem da ação.
                             if (!detectedAction.action_specific_reply_suggestion) {
-                                currentActionFormatted = `Conta parcelada "${params.description}" (${parcelResult.parcels.length}x) registrada com sucesso! 🥳\n`;
+                                currentActionFormatted = `Sua compra de ${params.description} no valor de R$ ${parseFloat(params.totalValue).toFixed(2)} em ${params.numberOfParcels}x `;
+                                if (cardIdParcel) {
+                                    currentActionFormatted += `no cartão ${params.creditCardName} `;
+                                }
+                                currentActionFormatted += `foi registrada com sucesso! 🥳`;
                                 if (parcelResult.parcels.length > 0 && parcelResult.parcels[0].dueDate && !cardIdParcel) {
-                                    currentActionFormatted += ` A primeira parcela vence em ${new Date(parcelResult.parcels[0].dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'})}.`;
+                                    currentActionFormatted += `\nA primeira parcela vence em ${new Date(parcelResult.parcels[0].dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'})}.`;
                                 } else if (cardIdParcel) {
-                                    currentActionFormatted += `As parcelas serão lançadas automaticamente na fatura do seu cartão ${params.creditCardName}.`;
+                                     const firstParcelDate = new Date(parcelResult.parcels[0].transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'});
+                                    currentActionFormatted += `\nA primeira parcela (R$ ${parseFloat(parcelResult.parcels[0].value).toFixed(2)}) deve aparecer na fatura do seu cartão ${params.creditCardName} por volta de ${firstParcelDate}.`;
                                 }
                             }
-                            // Não precisa de resourceForButtonsContext para parcelamento, pois são várias transações.
                             break;
                         }
                         case 'GET_FINANCIAL_SUMMARY': {
@@ -1116,7 +1085,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             } else {
                                 let cardListText = `Estes são seus cartões de crédito ativos para "${state.activeFinancialAccountName}", ${clientNameToUse}:\n`;
                                 cards.forEach(c => {
-                                    cardListText += `\n- *${c.name}* (Limite: R$ ${parseFloat(c.limit).toFixed(2)})${c.isDefault ? ' ⭐Padrão' : ''}`;
+                                    cardListText += `\n- *${c.name}* (Limite: R$ ${parseFloat(c.limit).toFixed(2)})${c.isDefault ? ' ⭐Padrão' : ''}${c.lastFourDigits ? ` Final ${c.lastFourDigits}` : ''}`;
                                 });
                                 currentActionFormatted = cardListText;
                             }
@@ -1231,17 +1200,14 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const paymentCategoryId = await findFinancialCategoryIdByName(categoryName, state.activeFinancialAccountId, 'Saída');
 
                             try {
-                                // O pagamento da fatura é uma saída da CONTA FINANCEIRA ATUAL (ex: conta corrente)
-                                // Não do cartão de crédito em si.
                                 const paymentTx = await financialService.createTransaction(state.activeFinancialAccountId, {
                                     description: paymentDescription,
                                     type: 'Saída',
                                     value: paymentAmount,
                                     transactionDate: paymentDate,
                                     financialCategoryId: paymentCategoryId,
-                                    isPayableOrReceivable: false, // Pagamento é uma ação imediata
+                                    isPayableOrReceivable: false,
                                     isPaidOrReceived: true,
-                                    // Não associar creditCardId aqui, pois é a ORIGEM do pagamento, não um GASTO no cartão
                                 });
                                 currentActionFormatted = `Pagamento da fatura do cartão ${params.creditCardName} no valor de R$ ${paymentAmount.toFixed(2)} registrado com sucesso na sua conta ${state.activeFinancialAccountName}! 🎉 Bom demais ter as contas em dia!`;
                             } catch (e) {
@@ -1256,7 +1222,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         case 'ACTION_CONFIRMATION_NO':
                             if(messageText.toLowerCase().includes("pagar fatura de um item") || messageText.toLowerCase().includes("antecipar fatura") || messageText.toLowerCase().includes("pagar antecipado")){
                                 currentActionFormatted = `Entendo que você quer fazer um pagamento específico ou antecipar algo da fatura, ${clientNameToUse}. Essa é uma função mais avançada que ainda estou aprendendo a fazer direitinho! 😅 Por enquanto, posso te mostrar a fatura total, o limite, ou registrar o pagamento total da fatura. O que prefere?`;
-                            } else if (aiResponse.reply_to_user_suggestion) { // Usar a sugestão da IA para estas ações gerais
+                            } else if (aiResponse.reply_to_user_suggestion) {
                                 currentActionFormatted = aiResponse.reply_to_user_suggestion;
                             } else {
                                 currentActionFormatted = `Entendido, ${clientNameToUse}! 😊`;
@@ -1265,12 +1231,10 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             if (detectedAction.action === 'ACTION_CONFIRMATION_YES' || detectedAction.action === 'ACTION_CONFIRMATION_NO') {
                                 state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                             }
-                            // Se a IA deu uma sugestão de resposta direta e não é uma das frases acima, usa ela como única resposta.
                             if (aiResponse.reply_to_user_suggestion && !(messageText.toLowerCase().includes("pagar fatura de um item") || messageText.toLowerCase().includes("antecipar fatura"))) {
-                                // Se a resposta da IA para uma saudação já é o overall_summary_suggestion, não precisamos duplicar.
                                 if(finalReplyParts.length > 0 && finalReplyParts[0] === aiResponse.reply_to_user_suggestion) {
-                                     multipleActionFormattedResults = []; // Limpa outras possíveis ações
-                                     singleActionFormattedResult = null; // Garante que esta seja a única resposta
+                                     multipleActionFormattedResults = [];
+                                     singleActionFormattedResult = null; 
                                 } else {
                                     finalReplyParts = [aiResponse.reply_to_user_suggestion];
                                     multipleActionFormattedResults = [];
@@ -1293,28 +1257,30 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         currentActionFormatted = detectedAction.action_specific_reply_suggestion;
                     }
 
-
                     if (currentActionFormatted) {
                         if (aiResponse.detected_actions.length === 1 && !isEditActionCurrentLoop) {
                             singleActionFormattedResult = currentActionFormatted;
                         } else if (!isEditActionCurrentLoop) {
                             multipleActionFormattedResults.push(currentActionFormatted);
-                        } else { // Ação de edição única
+                        } else {
                             singleActionFormattedResult = currentActionFormatted;
                         }
                     }
 
                 } catch (e) {
                     logger.error(`[WHATSAPP HANDLER] Erro executando "${detectedAction.action}" para ${senderPhone}: ${e.message}`, { stack: e.stack?.substring(0,300), params: params });
-                    const errorMsgPart = `Ops! 😬 Tive um problema ao tentar processar "${params.description || detectedAction.action.toLowerCase().replace(/_/g," ")}". (${e.message.length < 80 ? e.message : 'Erro interno, desculpe!'}). Pode tentar de novo ou com outros termos?`;
-                    if (aiResponse.detected_actions.length === 1) singleActionFormattedResult = errorMsgPart;
-                    else multipleActionFormattedResults.push(errorMsgPart);
+                    if (detectedAction.action === 'CREATE_CREDIT_CARD' && e.statusCode === 409 && e.message.toLowerCase().includes('já existe um cartão com o nome')) {
+                        singleActionFormattedResult = `Opa, ${clientNameToUse}! 😅 Parece que você já tem um cartão chamado "*${params.name}*" cadastrado nessa conta. Que tal dar outro nome ou verificar seus cartões existentes com "listar cartões"?`;
+                        finalReplyParts = []; 
+                    } else {
+                        const errorMsgPart = `Ops! 😬 Tive um problema ao tentar processar "${params.description || detectedAction.action.toLowerCase().replace(/_/g," ")}". (${e.message.length < 80 ? e.message : 'Erro interno, desculpe!'}). Pode tentar de novo ou com outros termos?`;
+                        if (aiResponse.detected_actions.length === 1) singleActionFormattedResult = errorMsgPart;
+                        else multipleActionFormattedResults.push(errorMsgPart);
+                    }
                 }
             }
         }
 
-
-        // Lógica para construir a resposta final (CORRIGIDA)
         if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
             finalReplyParts = [aiResponse.reply_to_user_suggestion || `Opa, ${clientNameToUse}! Para continuarmos, preciso de um detalhe: ${aiResponse.clarifications_needed[0].clarification_question}`];
             state.currentAction = 'awaiting_clarification_response';
@@ -1329,22 +1295,23 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             if (finalReplyParts.length > 0 && !actionWasAnEdit) {
                 if (aiResponse.reply_to_user_suggestion &&
                     aiResponse.reply_to_user_suggestion !== aiResponse.overall_summary_suggestion &&
-                    !singleActionFormattedResult.toLowerCase().includes(aiResponse.reply_to_user_suggestion.substring(0, 20).toLowerCase()) &&
+                    (!singleActionFormattedResult.toLowerCase().includes(aiResponse.reply_to_user_suggestion.substring(0, 20).toLowerCase())) &&
                     aiResponse.reply_to_user_suggestion !== singleActionFormattedResult &&
                     finalReplyParts.indexOf(aiResponse.reply_to_user_suggestion) === -1 ) {
                     finalReplyParts.push(aiResponse.reply_to_user_suggestion);
                 }
-                 if (finalReplyParts.indexOf(singleActionFormattedResult) === -1) { // Evita duplicar o resultado da ação
+                 if (finalReplyParts.indexOf(singleActionFormattedResult) === -1) {
                     finalReplyParts.push(singleActionFormattedResult);
                  }
-
-            } else { // Se não tinha overall_summary ou era edição, a ação é a resposta principal.
+            } else {
                  if(finalReplyParts.length > 0 && aiResponse.detected_actions[0]?.action.startsWith("GENERAL_")){
                     if(aiResponse.reply_to_user_suggestion !== singleActionFormattedResult && finalReplyParts.indexOf(singleActionFormattedResult) === -1){
                          finalReplyParts.push(singleActionFormattedResult);
                     }
                 } else if (finalReplyParts.indexOf(singleActionFormattedResult) === -1) {
                     finalReplyParts.push(singleActionFormattedResult);
+                } else if (finalReplyParts.length === 0) {
+                     finalReplyParts = [singleActionFormattedResult];
                 }
             }
         } else if (multipleActionFormattedResults.length > 0) {
@@ -1364,33 +1331,30 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             finalReplyParts.push(`Entendido, ${clientNameToUse}! Se precisar de mais alguma coisa, é só chamar. 😊 Estou por aqui!`);
         }
 
-        // Limpa partes duplicadas (uma checagem simples, pode ser aprimorada)
         finalReplyParts = finalReplyParts.filter((item, index, self) =>
-            item && self.findIndex(t => t && item && t.trim() === item.trim()) === index
+            item && typeof item === 'string' && item.trim() !== "" && self.findIndex(t => t && typeof t === 'string' && t.trim() === item.trim()) === index
         );
-
 
         const performedConcreteAction = (aiResponse.detected_actions && aiResponse.detected_actions.length > 0 &&
                                        aiResponse.detected_actions.some(a => !a.action.startsWith("GENERAL_") && !a.action.startsWith("LIST_") && !a.action.startsWith("GET_") && !a.action.startsWith("SWITCH_") )
                                       ) &&
                                        (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0);
 
-        let completeFinalReply = finalReplyParts.filter(part => typeof part === 'string' && part.trim() !== "").join("\n\n").trim();
+        let completeFinalReply = finalReplyParts.join("\n\n").trim();
 
         if (performedConcreteAction && state.hasPaidAccess) {
             const platformUrl = process.env.PLATFORM_URL || 'app.mapnocontrole.com.br';
             const dashboardMessage = `📊 Para visualizar mais detalhes e relatórios, acesse a plataforma em https://${platformUrl}`;
-            if (!completeFinalReply.includes(platformUrl)) {
+            if (completeFinalReply && !completeFinalReply.includes(platformUrl)) {
                 completeFinalReply += `\n\n${dashboardMessage}`;
             }
             const helpMessage = "Se precisar de algo a mais é só me chamar! 😃📈";
-            if(!completeFinalReply.includes(helpMessage.substring(0,20))){
+            if(completeFinalReply && !completeFinalReply.includes(helpMessage.substring(0,20))){
                  completeFinalReply += `\n\n${helpMessage}`;
             }
         }
 
         completeFinalReply = completeFinalReply.replace(/\n{3,}/g, '\n\n');
-
 
         state.messageHistory.push({ role: 'assistant', content: completeFinalReply });
 
@@ -1436,7 +1400,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 if(state.editingResource && !resourceForButtonsContext) state.editingResource = null;
             }
         }
-
 
     } catch (error) {
         logger.error(`[WHATSAPP HANDLER] Erro CRÍTICO processando msg de ${senderPhone}: ${error.message}`, { stack: error.stack?.substring(0,1000), messageText, rawPayload });
