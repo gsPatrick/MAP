@@ -223,20 +223,45 @@ function formatProductSummary(product, clientName, forMulti = false, forEdit = f
     if (product.description) summary += `\n📜 Descrição: ${product.description}`;
     return summary;
 }
+function formatCreditCardInvoiceSummary(invoiceDetails, clientName, listTransactions = true) {
+    let summary = ""; // O overall_summary_suggestion da IA virá primeiro
 
-function formatCreditCardSummary(card, clientName, forMulti = false, forEdit = false) {
-    let summary = "";
-    // if(!forMulti && !forEdit) summary += "💳 Resumo do Cartão de Crédito:\n\n"; // IA deve dar o tom
-    if (forEdit) summary += "✅ Cartão Atualizado:\n\n";
+    // Define o nome do perfil baseado no accountType
+    let profileName = "Pessoal"; // Default
+    if (invoiceDetails.financialAccountType === 'PJ') {
+        profileName = "Empresarial (PJ)";
+    } else if (invoiceDetails.financialAccountType === 'MEI') {
+        profileName = "MEI";
+    }
 
-    summary += `✨ Nome: ${card.name}\n`;
-    if(card.lastFourDigits) summary += `🔢 Final: **** ${card.lastFourDigits}\n`;
-    if(card.flag) summary += `🚩 Bandeira: ${card.flag}\n`;
-    summary += `💰 Limite: R$ ${parseFloat(card.limit).toFixed(2)}\n`;
-    summary += `🗓️ Dia Fechamento: ${card.closingDay}\n`;
-    summary += `💸 Dia Pagamento: ${card.paymentDay}\n`;
-    summary += `⭐ Padrão: ${card.isDefault ? 'Sim ✔️' : 'Não ❌'}\n`;
-    summary += `🚦 Status: ${card.isActive ? 'Ativo ✔️' : 'Inativo ❌'}`;
+    summary += `🧾 Fatura do Cartão ${invoiceDetails.cardName} – ${invoiceDetails.invoiceReferenceMonthYear}\n`;
+    summary += `👤 Perfil: ${invoiceDetails.financialAccountName} [${profileName}]\n`; // Nome da conta e tipo
+    summary += `📆 Período da fatura: ${new Date(invoiceDetails.invoiceCycleStartDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {day: '2-digit', month:'2-digit', timeZone:'UTC'})} a ${new Date(invoiceDetails.invoiceCycleEndDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {day: '2-digit', month:'2-digit', timeZone:'UTC'})}\n`;
+    summary += `💳 Vencimento: ${new Date(invoiceDetails.paymentDueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' })}\n`;
+    summary += `💰 Valor Total: R$ ${invoiceDetails.totalAmount.toFixed(2)}\n`;
+
+    if (listTransactions && invoiceDetails.transactions && invoiceDetails.transactions.length > 0) {
+        summary += "\n📋 Lançamentos Detalhados:\n"; // Emoji alterado
+        const maxTxToList = 10;
+        invoiceDetails.transactions.slice(0, maxTxToList).forEach(tx => {
+            const txDate = new Date(tx.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
+            let txDescription = tx.description;
+
+            if (tx.isParcel && tx.parcelNumber && tx.totalParcels && tx.originalAccount) {
+                const originalDesc = tx.originalAccount.description.replace(/ - Parcela \d+\/\d+$/, '').trim();
+                if (!txDescription.toLowerCase().includes(`parcela ${tx.parcelNumber}/${tx.totalParcels}`)) {
+                     txDescription = `${originalDesc} – Parcela ${tx.parcelNumber}/${tx.totalParcels}`; // Usando hífen maior
+                }
+            }
+            summary += `\n🗓️ ${txDate} – ${txDescription} – R$ ${parseFloat(tx.value).toFixed(2)}`; // Emoji e formato alterados
+            if (tx.category && tx.category.name) summary += ` [${tx.category.name}]`;
+        });
+        if (invoiceDetails.transactions.length > maxTxToList) {
+            summary += `\n\n... e mais ${invoiceDetails.transactions.length - maxTxToList} lançamentos. Peça para ver todos se quiser! 😉`;
+        }
+    } else if (listTransactions && (!invoiceDetails.transactions || invoiceDetails.transactions.length === 0)) {
+        summary += "\n🎉 Uhuul! Nenhum lançamento nesta fatura até o momento. Que tranquilidade!";
+    }
     return summary;
 }
 
