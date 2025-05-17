@@ -281,7 +281,6 @@ function formatAvailableLimitSummary(limitInfo, clientName) {
     return summary;
 }
 
-// NOVA FUNÇÃO DE FORMATAÇÃO PARA COMPRA PARCELADA
 function formatParcelledAccountSummary(params, parcelResult, clientName) {
     let summary = `Sua compra de ${params.description} no valor de R$ ${parseFloat(params.totalValue).toFixed(2)} em ${params.numberOfParcels}x `;
     if (params.creditCardName) {
@@ -291,11 +290,11 @@ function formatParcelledAccountSummary(params, parcelResult, clientName) {
 
     if (parcelResult.parcels && parcelResult.parcels.length > 0) {
         const firstParcel = parcelResult.parcels[0];
-        if (params.creditCardName && firstParcel.transactionDate) { // Para cartão, a transactionDate da parcela é quando ela entra na fatura
-            const firstParcelDate = new Date(firstParcel.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', timeZone: 'UTC' });
+        if (params.creditCardName && firstParcel.transactionDate) {
+            const firstParcelDate = new Date(firstParcel.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
             summary += `\nA primeira parcela (R$ ${parseFloat(firstParcel.value).toFixed(2)}) deve aparecer na fatura do seu cartão ${params.creditCardName} por volta de ${firstParcelDate}.`;
-        } else if (!params.creditCardName && firstParcel.dueDate) { // Para contas a pagar/receber parceladas
-            summary += `\nA primeira parcela vence em ${new Date(firstParcel.dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' })}.`;
+        } else if (!params.creditCardName && firstParcel.dueDate) {
+            summary += `\nA primeira parcela vence em ${new Date(firstParcel.dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' })}.`;
         }
     }
     return summary;
@@ -662,9 +661,23 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 }
                 state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
             }
-            // Adicionar aqui para PRODUCT se necessário
-            // else if (buttonId.startsWith('edit_product_')) { ... }
-            // else if (buttonId.startsWith('delete_product_')) { ... }
+            else if (buttonId.startsWith('edit_parcelled_account_')) {
+                const originalAccountId = buttonId.replace('edit_parcelled_account_', '');
+                state.editingResource = { type: 'parcelled_account', id: originalAccountId };
+                resourceTypeForEditMessage = "compra parcelada";
+                replyForButtonClick = `Ok, ${clientNameToUse}! Editar uma compra parcelada pode ser um pouco complexo por aqui. Por enquanto, posso te ajudar a mudar a *descrição geral* dessa compra. Se quiser alterar valores ou número de parcelas, o ideal é excluir e registrar novamente. Quer tentar mudar a descrição? (Responda com a nova descrição ou "cancelar")`;
+                state.currentAction = 'awaiting_parcelled_account_description_edit';
+            } else if (buttonId.startsWith('delete_parcelled_account_')) {
+                const originalAccountId = buttonId.replace('delete_parcelled_account_', '');
+                try {
+                    const success = await financialService.deleteParcelledAccountGroup(state.activeFinancialAccountId, originalAccountId);
+                    replyForButtonClick = success ? `Compra parcelada e todas as suas parcelas foram removidas, ${clientNameToUse}! 👍` : `Não consegui remover essa compra parcelada. Pode ter ocorrido um erro.`;
+                } catch (e) {
+                    logger.error(`[WHATSAPP SERVICE] Erro ao excluir grupo de parcelas ${originalAccountId} por botão: ${e.message}`);
+                    replyForButtonClick = `Ops! Tive um problema ao tentar remover essa compra parcelada. (${e.message.substring(0,70)})`;
+                }
+                state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
+            }
             else {
                 buttonClickHandledByServiceLogic = false;
             }
@@ -695,10 +708,30 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
             else if (state.currentAction === 'awaiting_transaction_edit_details' || 
                      state.currentAction === 'awaiting_appointment_edit_details' ||
-                     state.currentAction === 'awaiting_credit_card_edit_details' ||
+                     state.currentAction === 'awaiting_credit_card_edit_details' || 
                      state.currentAction === 'awaiting_recurring_rule_edit_details'
                     ) {
                 stateHandledInPreProcessing = false;
+            }
+             else if (state.currentAction === 'awaiting_parcelled_account_description_edit' && state.editingResource?.type === 'parcelled_account') {
+                const newDescription = messageText.trim();
+                if (newDescription.toLowerCase() === 'cancelar') {
+                    replyForPreProcessing = `Tudo bem, ${clientNameToUse}! Edição da descrição cancelada. O que mais posso fazer por você? 😊`;
+                    state.currentAction = null; state.editingResource = null; stateHandledInPreProcessing = true;
+                } else if (newDescription.length > 2 && newDescription.length < 200) {
+                    try {
+                        await financialService.updateParcelledAccountDescription(state.activeFinancialAccountId, state.editingResource.id, newDescription);
+                        replyForPreProcessing = `Beleza! A descrição da sua compra parcelada foi atualizada para "${newDescription}" em todas as parcelas. ✨`;
+                        state.currentAction = null; state.editingResource = null; stateHandledInPreProcessing = true;
+                    } catch (e) {
+                        logger.error(`Erro ao atualizar descrição de compra parcelada: ${e.message}`);
+                        replyForPreProcessing = `Xiii, não consegui atualizar a descrição. 😥 Tente novamente ou diga "cancelar".`;
+                        stateHandledInPreProcessing = true; 
+                    }
+                } else {
+                    replyForPreProcessing = `Essa descrição parece um pouco curta ou longa demais. Poderia tentar uma descrição entre 3 e 200 letras, ou dizer "cancelar"?`;
+                    stateHandledInPreProcessing = true; 
+                }
             }
             else if (state.currentAction === 'awaiting_clarification_response'){
                 stateHandledInPreProcessing = false;
@@ -739,7 +772,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
         }
 
-        let finalReplyParts = [];
+        finalReplyParts = []; // Resetar para esta interação
         if (aiResponse.overall_summary_suggestion) {
             finalReplyParts.push(aiResponse.overall_summary_suggestion);
         }
@@ -770,7 +803,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     'LIST_FINANCIAL_TRANSACTIONS', 'MARK_TRANSACTION_AS_PAID_RECEIVED',
                     'CREATE_RECURRING_RULE', 'CREATE_PRODUCT', 'GET_STOCK_INFO',
                     'RECORD_STOCK_MOVEMENT', 'LIST_APPOINTMENTS', 'CREATE_CREDIT_CARD',
-                    'LIST_CREDIT_CARDS', 'LIST_RECURRING_RULES', 'UPDATE_CREDIT_CARD', 'UPDATE_RECURRING_RULE',
+                    'LIST_CREDIT_CARDS', 'LIST_RECURRING_RULES', 'UPDATE_CREDIT_CARD', 'UPDATE_RECURRING_RULE', 'UPDATE_PRODUCT',
+                    'UPDATE_PARCELLED_ACCOUNT_DESCRIPTION', // Ação de edição de descrição de parcela
                     'GET_CREDIT_CARD_INVOICE', 'GET_CREDIT_CARD_AVAILABLE_LIMIT', 'PAY_CREDIT_CARD_INVOICE'
                 ];
                 if (accountRequiredActions.includes(detectedAction.action) && !state.activeFinancialAccountId) {
@@ -800,7 +834,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             };
                             const newTx = await financialService.createTransaction(state.activeFinancialAccountId, txData);
                             const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, newTx.id);
-                            currentActionFormatted = formatFinancialTransactionSummary(reloadedTx, clientNameToUse, aiResponse.detected_actions.length > 1);
+                            currentActionFormatted = formatFinancialTransactionSummary(reloadedTx, clientNameToUse);
                             if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'transaction', id: newTx.id, description: newTx.description };
                             break;
                         }
@@ -841,7 +875,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             };
                             const newApp = await appointmentService.scheduleAppointment(state.activeFinancialAccountId, appData);
                             const reloadedApp = await appointmentService.getAppointmentById(state.activeFinancialAccountId, newApp.id);
-                            currentActionFormatted = formatAppointmentSummary(reloadedApp, clientNameToUse, aiResponse.detected_actions.length > 1);
+                            currentActionFormatted = formatAppointmentSummary(reloadedApp, clientNameToUse);
                             if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'appointment', id: newApp.id, description: newApp.title };
                             break;
                         }
@@ -885,12 +919,43 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0],
                             };
                             const parcelResult = await financialService.createParcelledAccount(state.activeFinancialAccountId, parcelData);
-                            // Usar a nova função de formatação
                             currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatParcelledAccountSummary(params, parcelResult, clientNameToUse);
-                            // Decidir se parcelas devem ter botões. Por ora, não, devido à complexidade de editar/excluir um grupo.
-                            // if (aiResponse.detected_actions.length === 1 && parcelResult.parcels.length > 0) {
-                            //    resourceForButtonsContext = { type: 'parcelled_account', id: parcelResult.parcels[0].originalAccountId || parcelResult.parcels[0].id, description: params.description };
-                            // }
+                            if (aiResponse.detected_actions.length === 1 && parcelResult.parcels && parcelResult.parcels.length > 0) {
+                                const originalTxId = parcelResult.parcels[0].originalAccountId || parcelResult.parcels[0].id;
+                                resourceForButtonsContext = { type: 'parcelled_account', id: originalTxId, description: params.description };
+                            }
+                            break;
+                        }
+                        case 'UPDATE_PARCELLED_ACCOUNT_DESCRIPTION': {
+                            isEditActionCurrentLoop = true;
+                            actionWasAnEdit = true;
+                            const originalAccountIdToUpdate = params.originalAccountIdToUpdate || state.editingResource?.id;
+                            if (!originalAccountIdToUpdate) throw new Error("ID da compra parcelada para atualizar a descrição não foi fornecido.");
+
+                            const newDescription = params.newDescription;
+                            if (!newDescription || newDescription.trim() === '') {
+                                currentActionFormatted = `Por favor, me diga a nova descrição para esta compra parcelada, ${clientNameToUse}. 😊`;
+                                // Manter o estado de edição para a próxima mensagem
+                                state.currentAction = 'awaiting_parcelled_account_description_edit';
+                                break;
+                            }
+                            await financialService.updateParcelledAccountDescription(state.activeFinancialAccountId, originalAccountIdToUpdate, newDescription);
+                            currentActionFormatted = detectedAction.action_specific_reply_suggestion || `A descrição da sua compra parcelada foi atualizada para "${newDescription}" em todas as parcelas! ✨`;
+                            state.editingResource = null;
+                            break;
+                        }
+                        case 'UPDATE_PRODUCT': { 
+                            isEditActionCurrentLoop = true;
+                            actionWasAnEdit = true;
+                            const productIdToUpdate = params.productIdToUpdate || state.editingResource?.id;
+                            if (!productIdToUpdate) throw new Error("ID do produto para atualizar não fornecido pela IA ou não estava no contexto de edição.");
+
+                            const updateProdData = { ...params };
+                            delete updateProdData.productIdToUpdate;
+
+                            const updatedProd = await productService.updateProduct(state.activeFinancialAccountId, productIdToUpdate, updateProdData);
+                            currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatProductSummary(updatedProd, clientNameToUse, false, true);
+                            state.editingResource = null;
                             break;
                         }
                         case 'GET_FINANCIAL_SUMMARY': {
@@ -1119,6 +1184,20 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
                             const updatedRule = await recurringTransactionService.updateRecurringRule(state.activeFinancialAccountId, ruleIdToUpdate, updateRuleData);
                             currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatRecurringRuleSummary(updatedRule, clientNameToUse, false, true);
+                            state.editingResource = null;
+                            break;
+                        }
+                        case 'UPDATE_PRODUCT': {
+                            isEditActionCurrentLoop = true;
+                            actionWasAnEdit = true;
+                            const productIdToUpdate = params.productIdToUpdate || state.editingResource?.id;
+                            if (!productIdToUpdate) throw new Error("ID do produto para atualizar não fornecido pela IA ou não estava no contexto de edição.");
+
+                            const updateProdData = { ...params };
+                            delete updateProdData.productIdToUpdate;
+
+                            const updatedProd = await productService.updateProduct(state.activeFinancialAccountId, productIdToUpdate, updateProdData);
+                            currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatProductSummary(updatedProd, clientNameToUse, false, true);
                             state.editingResource = null;
                             break;
                         }
@@ -1490,7 +1569,12 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             { id: `delete_product_${resourceForButtonsContext.id}`, label: "Excluir Produto 🗑️" },
                         ];
                         break;
-                    // Adicionar 'parcelled_account' aqui se decidir implementar botões para ele
+                    case 'parcelled_account':
+                        buttons = [
+                            { id: `edit_parcelled_account_${resourceForButtonsContext.id}`, label: "Editar Descrição ✍️" },
+                            { id: `delete_parcelled_account_${resourceForButtonsContext.id}`, label: "Excluir Compra Parcelada 🗑️" },
+                        ];
+                        break;
                 }
 
                 if (buttons.length > 0) {

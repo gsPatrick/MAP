@@ -123,7 +123,6 @@ async function createParcelledAccount(financialAccountId, accountData) {
         error.statusCode = 400; error.status = 'fail'; throw error;
     }
 
-
     const t = await sequelize.transaction();
     try {
       await validateAndGetFinancialAccount(financialAccountId, t);
@@ -161,9 +160,8 @@ async function createParcelledAccount(financialAccountId, accountData) {
         const currentParcelValue = (i === parseInt(numberOfParcels, 10)) ? parseFloat((parseFloat(totalValue) - accumulatedValue).toFixed(2)) : parcelValue;
         accumulatedValue += currentParcelValue;
 
-        // Calcula a data em que ESTA parcela específica deve "entrar" na fatura ou vencer
         const parcelEffectiveDateObj = new Date(new Date(initialDueDate).toISOString().slice(0,10) + 'T12:00:00Z');
-        parcelEffectiveDateObj.setUTCMonth(parcelEffectiveDateObj.getUTCMonth() + (i - 1)); // Avança mês a mês para cada parcela
+        parcelEffectiveDateObj.setUTCMonth(parcelEffectiveDateObj.getUTCMonth() + (i - 1));
         const parcelEffectiveDateString = `${parcelEffectiveDateObj.getUTCFullYear()}-${String(parcelEffectiveDateObj.getUTCMonth() + 1).padStart(2, '0')}-${String(parcelEffectiveDateObj.getUTCDate()).padStart(2, '0')}`;
 
         const parcelData = {
@@ -172,16 +170,14 @@ async function createParcelledAccount(financialAccountId, accountData) {
           description: parseInt(numberOfParcels, 10) > 1 ? `${description} - Parcela ${i}/${numberOfParcels}` : description,
           type,
           value: currentParcelValue,
-          // Para compras no cartão, a 'transactionDate' DEVE ser a data em que a parcela entra na fatura.
-          // Para contas a pagar/receber parceladas (sem cartão), 'transactionDate' pode ser a data da "compra" original.
           transactionDate: commonData.creditCardId ? parcelEffectiveDateString : originalPurchaseDate,
-          isPayableOrReceivable: commonData.creditCardId ? false : true, // Gasto no cartão é efetivado para o lojista
-          isPaidOrReceived: commonData.creditCardId ? true : false, // Mesma lógica acima
-          dueDate: commonData.creditCardId ? null : parcelEffectiveDateString, // Se for cartão, a dívida é com o cartão, não tem dueDate para o lojista.
+          isPayableOrReceivable: commonData.creditCardId ? false : true,
+          isPaidOrReceived: commonData.creditCardId ? true : false,
+          dueDate: commonData.creditCardId ? null : parcelEffectiveDateString,
           isParcel: parseInt(numberOfParcels, 10) > 1,
           parcelNumber: parseInt(numberOfParcels, 10) > 1 ? i : null,
           totalParcels: parseInt(numberOfParcels, 10) > 1 ? parseInt(numberOfParcels, 10) : null,
-          originalAccountId: null, // Será definido abaixo
+          originalAccountId: null,
         };
 
         const createdParcel = await FinancialTransaction.create(parcelData, { transaction: t });
@@ -194,13 +190,12 @@ async function createParcelledAccount(financialAccountId, accountData) {
 
       if (parseInt(numberOfParcels, 10) > 1 && firstParcelId) {
           for (let parcelModel of createdParcelsModels) {
-              // A primeira parcela também aponta para si mesma como original para agrupar
               await parcelModel.update({ originalAccountId: firstParcelId }, { transaction: t });
           }
       } else if (parseInt(numberOfParcels, 10) === 1 && createdParcelsModels.length === 1) {
-          // Se for "parcelado em 1x", não tem originalAccountId
+          // Para uma "parcela única", ela também pode ser sua própria originalAccount para facilitar agrupamento se necessário.
+          await createdParcelsModels[0].update({ originalAccountId: createdParcelsModels[0].id }, { transaction: t });
       }
-
 
       await t.commit();
       logger.info(`Conta parcelada "${description}" criada com ${numberOfParcels} parcelas para FinancialAccount ID ${financialAccountId}.`);
@@ -272,7 +267,7 @@ try {
     include: [
       { model: FinancialCategory, as: 'category', attributes: ['id', 'name'] },
       { model: CreditCard, as: 'creditCard', attributes: ['id', 'name', 'lastFourDigits'] },
-      { model: FinancialTransaction, as: 'originalAccount', attributes: ['id', 'description'] } // Para ver a descrição da compra original da parcela
+      { model: FinancialTransaction, as: 'originalAccount', attributes: ['id', 'description'] }
     ],
     limit: parseInt(limit, 10),
     offset: offset,
@@ -304,10 +299,10 @@ try {
       { model: CreditCard, as: 'creditCard' },
       {
         model: FinancialTransaction,
-        as: 'parcels', // Se esta for uma conta original (primeira parcela), lista suas "filhas"
+        as: 'parcels',
         include: [{model: FinancialCategory, as: 'category'}, {model: CreditCard, as: 'creditCard'}]
       },
-      { model: FinancialTransaction, as: 'originalAccount' } // Se esta for uma parcela, mostra a conta original
+      { model: FinancialTransaction, as: 'originalAccount' }
     ]
   });
 
@@ -335,6 +330,18 @@ try {
       await t.rollback();
       const e = new Error('Transação não encontrada.'); e.statusCode = 404; e.status = 'fail'; throw e;
   }
+
+  // Não permitir alterar dados de parcelamento diretamente aqui, exceto descrição.
+  // Valor, número de parcelas, etc. de uma compra parcelada exigiriam uma lógica mais complexa (excluir e recriar).
+  if (transaction.isParcel && transaction.originalAccountId) {
+      if(updateData.hasOwnProperty('value') && parseFloat(updateData.value) !== parseFloat(transaction.value)) {
+          await t.rollback();
+          const e = new Error('Não é possível alterar o valor de uma parcela individual. Edite a compra parcelada original ou exclua e crie novamente.');
+          e.statusCode = 400; e.status = 'fail'; throw e;
+      }
+      // Outras restrições para edição de parcelas...
+  }
+
 
   if (updateData.financialCategoryId && updateData.financialCategoryId !== transaction.financialCategoryId && !(await FinancialCategory.findByPk(updateData.financialCategoryId, { transaction: t }))) {
       await t.rollback();
@@ -435,22 +442,17 @@ try {
       const e = new Error('Transação não encontrada.'); e.statusCode = 404; e.status = 'fail'; throw e;
   }
 
-  // Se esta transação for a "originalAccount" de outras parcelas, e o usuário está tentando deletar
-  // apenas UMA parcela (que não seja a original) ou a transação única.
-  // Se for a transação original (primeira parcela de um grupo), e tem outras parcelas referenciando-a:
   if (transaction.isParcel && transaction.originalAccountId === transaction.id) {
       const childParcelsCount = await FinancialTransaction.count({
-          where: { originalAccountId: transaction.id, id: { [Op.ne]: transaction.id } }, // Exclui a própria transação original da contagem
+          where: { originalAccountId: transaction.id, id: { [Op.ne]: transaction.id } },
           transaction: t
       });
       if (childParcelsCount > 0) {
           await t.rollback();
-          const error = new Error(`Esta é a transação principal de um parcelamento com ${childParcelsCount} outras parcelas. Para excluí-la, primeiro exclua ou desvincule as parcelas dependentes, ou exclua todas as parcelas do grupo. A exclusão individual de parcelas dependentes é permitida.`);
+          const error = new Error(`Esta é a transação principal de um parcelamento com ${childParcelsCount} outras parcelas. Para excluí-la, primeiro exclua ou desvincule as parcelas dependentes, ou use a opção de excluir o grupo de parcelas.`);
           error.statusCode = 409; error.status = 'fail'; throw error;
       }
   }
-  // Se for uma parcela dependente (originalAccountId !== id), ela pode ser deletada individualmente.
-  // O onDelete: 'SET NULL' na FK originalAccountId fará com que as outras parcelas percam a referência se a original for deletada.
 
   await transaction.destroy({ transaction: t });
   await t.commit();
@@ -530,6 +532,105 @@ try {
   }
 }
 
+/**
+ * Exclui todas as transações de um grupo de parcelamento.
+ * @param {number} financialAccountId - ID da conta financeira.
+ * @param {number} originalAccountId - ID da transação original que agrupa as parcelas.
+ * @returns {Promise<boolean>} True se o grupo foi excluído.
+ */
+async function deleteParcelledAccountGroup(financialAccountId, originalAccountId) {
+    const t = await sequelize.transaction();
+    try {
+        await validateAndGetFinancialAccount(financialAccountId, t);
+
+        // Verifica se a transação original existe e pertence à conta
+        const originalTx = await FinancialTransaction.findOne({
+            where: { id: originalAccountId, financialAccountId },
+            transaction: t
+        });
+
+        if (!originalTx) {
+            await t.rollback();
+            logger.warn(`Grupo de parcelamento com ID original ${originalAccountId} não encontrado para FinancialAccount ID ${financialAccountId}.`);
+            const e = new Error('Grupo de parcelamento não encontrado.'); e.statusCode = 404; e.status = 'fail'; throw e;
+        }
+
+        // Deleta todas as transações que têm este originalAccountId (incluindo a própria original)
+        const numDeleted = await FinancialTransaction.destroy({
+            where: {
+                originalAccountId: originalAccountId,
+                financialAccountId: financialAccountId
+            },
+            transaction: t
+        });
+
+        // Se a transação original não se auto-referenciava (caso de 1 parcela que virou "original")
+        // e ainda não foi deletada pelo where acima, deleta-a.
+        // Isso garante que mesmo uma "compra parcelada em 1x" seja removida.
+        if (originalTx.originalAccountId !== originalTx.id) {
+             const stillExists = await FinancialTransaction.findByPk(originalAccountId, {transaction: t, attributes: ['id']});
+             if(stillExists) {
+                await stillExists.destroy({transaction: t});
+                logger.info(`Transação única (marcada como original) ID ${originalAccountId} também foi removida.`);
+             }
+        }
+
+
+        await t.commit();
+        logger.info(`${numDeleted} parcelas do grupo original ID ${originalAccountId} foram excluídas da FinancialAccount ID ${financialAccountId}.`);
+        return true;
+    } catch (error) {
+        await t.rollback();
+        logger.error(`Erro ao excluir grupo de parcelas ID ${originalAccountId}: ${error.message}`, { error });
+        if (!error.statusCode) error.statusCode = 500;
+        throw error;
+    }
+}
+
+/**
+ * Atualiza a descrição de todas as transações de um grupo de parcelamento.
+ * @param {number} financialAccountId - ID da conta financeira.
+ * @param {number} originalAccountId - ID da transação original que agrupa as parcelas.
+ * @param {string} newDescription - Nova descrição base para as parcelas.
+ * @returns {Promise<number>} Número de parcelas atualizadas.
+ */
+async function updateParcelledAccountDescription(financialAccountId, originalAccountId, newDescription) {
+    const t = await sequelize.transaction();
+    try {
+        await validateAndGetFinancialAccount(financialAccountId, t);
+
+        const parcelsToUpdate = await FinancialTransaction.findAll({
+            where: { originalAccountId, financialAccountId },
+            transaction: t
+        });
+
+        if (!parcelsToUpdate || parcelsToUpdate.length === 0) {
+            await t.rollback();
+            const e = new Error('Nenhuma parcela encontrada para este grupo para atualizar a descrição.');
+            e.statusCode = 404; e.status = 'fail'; throw e;
+        }
+
+        let updatedCount = 0;
+        for (const parcel of parcelsToUpdate) {
+            let updatedParcelDescription = newDescription;
+            if (parcel.isParcel && parcel.parcelNumber && parcel.totalParcels) {
+                updatedParcelDescription = `${newDescription} - Parcela ${parcel.parcelNumber}/${parcel.totalParcels}`;
+            }
+            await parcel.update({ description: updatedParcelDescription }, { transaction: t });
+            updatedCount++;
+        }
+
+        await t.commit();
+        logger.info(`${updatedCount} parcelas do grupo ID ${originalAccountId} tiveram a descrição atualizada para "${newDescription}".`);
+        return updatedCount;
+    } catch (error) {
+        await t.rollback();
+        logger.error(`Erro ao atualizar descrição do grupo de parcelas ID ${originalAccountId}: ${error.message}`, { error });
+        if (!error.statusCode) error.statusCode = 500;
+        throw error;
+    }
+}
+
 
 module.exports = {
 createTransaction,
@@ -540,4 +641,6 @@ updateTransaction,
 markAsPaidOrReceived,
 deleteTransaction,
 getFinancialSummary,
+deleteParcelledAccountGroup,        // <<< EXPORTADO
+updateParcelledAccountDescription,  // <<< EXPORTADO
 };
