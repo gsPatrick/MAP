@@ -30,7 +30,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 
 **DIFERENCIAÇÃO CRUCIAL: TRANSAÇÃO IMEDIATA vs. LEMBRETE/COMPROMISSO FUTURO vs. COMPRA PARCELADA NO CARTÃO:**
 -   Se o usuário descreve uma ação financeira (gasto, ganho, pagamento) que JÁ ACONTECEU ou está acontecendo AGORA (ex: "gastei 50 no uber", "recebi um pix", "paguei a conta de luz") E NÃO É PARCELADA NO CARTÃO, use \`CREATE_FINANCIAL_TRANSACTION\`.
--   Se o usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO (ex: "comprei um celular de 1200 em 10x no Nubank", "parcelei o tênis em 3x no Inter de 300 reais", "Comprei um controle de 200 reais e parcelei de 12x no cartão inter"), use \`CREATE_PARCELLED_ACCOUNT\`. O \`totalValue\` é o valor total da compra, \`numberOfParcels\` é o número de parcelas, e \`creditCardName\` DEVE ser preenchido. A \`initialDueDate\` para compras no cartão é a data da PRIMEIRA parcela que aparecerá na fatura (geralmente a data da compra ou o próximo mês).
+-   Se o usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO (ex: "comprei um celular de 1200 em 10x no Nubank", "parcelei o tênis em 3x no Inter de 300 reais", "Comprei um controle de 200 reais e parcelei de 12x no cartão inter"), use \`CREATE_PARCELLED_ACCOUNT\`. O \`totalValue\` é o valor total da compra, \`numberOfParcels\` é o número de parcelas, e \`creditCardName\` DEVE ser preenchido.
 -   Se o usuário descreve uma ação financeira (pagar, receber, comprar algo) que DEVE ACONTECER NO FUTURO (ex: "tenho que pagar X amanhã", "lembrete para comprar Y semana que vem", "agendar pagamento Z para dia D", "me lembra de pagar o aluguel dia 5") E NÃO É UMA COMPRA PARCELADA NO CARTÃO, use \`SCHEDULE_APPOINTMENT\`. Para estes, o \`title\` do compromisso será a descrição da ação financeira (ex: "Pagar conta de luz", "Comprar presente para Maria"), e os parâmetros \`associatedValue\` e \`associatedTransactionType\` DEVEM ser preenchidos se a informação estiver disponível. Se o valor estiver faltando para um lembrete financeiro, use \`clarifications_needed\` para obter o valor.
 
 **TOM E ESTILO DA CONVERSA (MUITO IMPORTANTE!):**
@@ -114,11 +114,11 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - type: "Saída" (OBRIGATÓRIO para compras no cartão) ou "Entrada"
     - totalValue: float (OBRIGATÓRIO, >0. Valor total da compra/dívida)
     - numberOfParcels: integer (OBRIGATÓRIO, min 2 se for parcelamento real. Se o usuário só disser "parcelei X", assuma 2 parcelas e peça confirmação ou use \`clarifications_needed\` para o número de parcelas se não for óbvio.)
-    - initialDueDate: "YYYY-MM-DD" (OBRIGATÓRIO. Para compras no cartão, esta é a data da PRIMEIRA parcela que aparecerá na fatura. Pode ser a data da compra ou o próximo ciclo de fatura, dependendo de como o usuário informar. Se não informado, pode usar a data da compra e o sistema de backend ajustará para a fatura correta. Entenda "próximo mês", "daqui 30 dias".)
+    - initialDueDate: "YYYY-MM-DD" (OBRIGATÓRIO. **Para compras parceladas no cartão, SEMPRE use a DATA DA COMPRA (parâmetro \`transactionDate\`, que por default é hoje se não especificado) como o valor para \`initialDueDate\`.** Não tente calcular ou adivinhar o próximo ciclo de fatura para a primeira parcela aqui. O sistema de backend cuidará de alocar a parcela para a fatura correta com base nesta data.)
     - financialCategoryName: string (opcional)
     - creditCardName: string (OBRIGATÓRIO se for uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO)
     - notes: string (opcional)
-    - transactionDate: "YYYY-MM-DD" (opcional, default: hoje. Data da compra original, se diferente da primeira parcela).
+    - transactionDate: "YYYY-MM-DD" (opcional, default: hoje. **Esta é a DATA DA COMPRA ORIGINAL.** Se o usuário disser "comprei ontem e parcelei", \`transactionDate\` é "ontem". Se não especificado, use a data atual.)
 
 4.  UPDATE_FINANCIAL_TRANSACTION:
     - transactionIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto \`conversationContext.editingResource.id\`)
@@ -289,7 +289,6 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
   const conversationHistoryForAPI = (conversationContext.conversationHistory || [])
       .map(entry => ({ role: entry.role, content: entry.content }));
 
-  // Prepara o system prompt final, substituindo os placeholders
   let finalSystemPromptContent = systemPromptContent
       .replace("{{CONVERSATION_HISTORY}}", JSON.stringify(conversationHistoryForAPI.slice(-6)));
 
@@ -301,8 +300,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
       {role: "user", content: userMessage}
   ];
 
-  // Determina o modelo a ser usado: Prioriza a variável de ambiente, senão usa gpt-4-turbo-preview
-  const modelToUse = "gpt-4-turbo-preview"; // ALTERADO AQUI
+  const modelToUse = process.env.OPENAI_MODEL || "gpt-4-turbo-preview";
 
   logger.debug('[AI SERVICE] Enviando para OpenAI:', {
       model: modelToUse,
@@ -312,7 +310,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
 
   try {
     const completion = await openai.chat.completions.create({
-      model: modelToUse, // USA O MODELO DEFINIDO
+      model: modelToUse,
       messages: messagesToSendToAPI,
       temperature: 0.05,
       response_format: { type: "json_object" },
@@ -322,13 +320,13 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     if (!aiResultContent) throw new Error("Resposta da IA vazia ou inválida.");
 
     const parsedResult = JSON.parse(aiResultContent);
-    logger.info(`[AI SERVICE] Resultado da IA (${modelToUse}) parseado com sucesso.`); // Loga o modelo usado
+    logger.info(`[AI SERVICE] Resultado da IA (${modelToUse}) parseado com sucesso.`);
     logger.debug('[AI SERVICE] Parsed AI Result:', parsedResult);
     return parsedResult;
 
   } catch (error) {
     const rawResponseForError = error.response?.data || (typeof error.message === 'string' && error.message.includes("{") ? error.message : null) || "Sem resposta bruta disponível";
-    logger.error(`[AI SERVICE] Erro ao chamar ou parsear API da OpenAI (${modelToUse}):`, { // Loga o modelo usado no erro
+    logger.error(`[AI SERVICE] Erro ao chamar ou parsear API da OpenAI (${modelToUse}):`, {
         errorMessage: error.message,
         rawApiResponse: rawResponseForError,
         requestMessageCount: messagesToSendToAPI.length
