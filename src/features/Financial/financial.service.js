@@ -3,7 +3,7 @@ const {
   FinancialTransaction,
   FinancialCategory,
   FinancialAccount,
-  CreditCard, 
+  CreditCard,
   RecurringTransactionRule,
   Client,
   sequelize
@@ -11,9 +11,16 @@ const {
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 const { calculateNextDueDate } = require('../../utils/dateUtils');
-const creditCardService = require('../CreditCardManagement/creditCard.service'); 
+const creditCardService = require('../CreditCardManagement/creditCard.service');
 
-// ... (validateAndGetFinancialAccount permanece a mesma) ...
+// --- Funções Auxiliares ---
+/**
+* Valida se a FinancialAccount existe e está ativa.
+* @param {number} financialAccountId
+* @param {object} transaction - Transação Sequelize opcional.
+* @param {Array<string|object>} include - Opções de include para FinancialAccount.
+* @returns {Promise<object>} A FinancialAccount validada.
+*/
 async function validateAndGetFinancialAccount(financialAccountId, transaction = null, include = []) {
 const account = await FinancialAccount.findByPk(financialAccountId, { transaction, include });
 if (!account) {
@@ -28,6 +35,15 @@ return account;
 }
 
 
+// === Gerenciamento de Transações Financeiras (FinancialTransaction) ===
+
+/**
+* Registra uma nova transação financeira para uma FinancialAccount.
+* @param {number} financialAccountId - ID da conta financeira.
+* @param {object} transactionData - Dados da transação.
+* @param {object} options - Opções adicionais, como { transaction: sequelizeTransaction }
+* @returns {Promise<object>} A transação criada.
+*/
 async function createTransaction(financialAccountId, transactionData, options = {}) {
 const t = options.transaction || await sequelize.transaction();
 try {
@@ -57,10 +73,10 @@ try {
           error.statusCode = 400; error.status = 'fail'; throw error;
       }
 
-      const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, transactionData.creditCardId); 
+      const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, transactionData.creditCardId);
       if (parseFloat(transactionData.value) > limitInfo.availableLimit) {
           const error = new Error(`Limite insuficiente no cartão "${card.name}". Disponível: R$ ${limitInfo.availableLimit.toFixed(2)}, Tentativa: R$ ${parseFloat(transactionData.value).toFixed(2)}.`);
-          error.statusCode = 409; 
+          error.statusCode = 409;
           error.status = 'fail'; throw error;
       }
   }
@@ -74,117 +90,137 @@ try {
     { transaction: t }
   );
 
-  if (!options.transaction) await t.commit(); 
+  if (!options.transaction) await t.commit();
   logger.info(`Transação ID ${newTransaction.id} ("${newTransaction.description}") criada para FinancialAccount ID ${financialAccountId}.`);
   return newTransaction.toJSON();
 } catch (error) {
-  if (!options.transaction) await t.rollback(); 
+  if (!options.transaction) await t.rollback();
   logger.error(`Erro ao criar transação para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error, transactionData });
   if (!error.statusCode) error.statusCode = 500;
   throw error;
 }
 }
 
+/**
+* Registra uma conta parcelada para uma FinancialAccount.
+* @param {number} financialAccountId - ID da conta financeira.
+* @param {object} accountData - { description, type, totalValue, initialDueDate (primeira parcela), numberOfParcels, transactionDate (data da compra original), ...commonData }
+* @returns {Promise<object>} Objeto com as parcelas criadas.
+*/
 async function createParcelledAccount(financialAccountId, accountData) {
-const { description, type, totalValue, initialDueDate, numberOfParcels = 1, ...commonData } = accountData;
+    const { description, type, totalValue, initialDueDate, numberOfParcels = 1, transactionDate, ...commonData } = accountData;
 
-if (!description || !type || totalValue === undefined || !initialDueDate || numberOfParcels < 1) {
-  const error = new Error('Descrição, tipo, valor total, data de vencimento inicial e número de parcelas (mínimo 1) são obrigatórios.');
-  error.statusCode = 400; error.status = 'fail'; throw error;
-}
+    if (!description || !type || totalValue === undefined || !initialDueDate || numberOfParcels < 1) {
+      const error = new Error('Descrição, tipo, valor total, data de vencimento inicial da primeira parcela e número de parcelas (mínimo 1) são obrigatórios.');
+      error.statusCode = 400; error.status = 'fail'; throw error;
+    }
+    if (parseFloat(totalValue) <= 0) {
+        const error = new Error('O valor total da conta parcelada deve ser maior que zero.');
+        error.statusCode = 400; error.status = 'fail'; throw error;
+    }
+    if (parseInt(numberOfParcels, 10) < 1) {
+        const error = new Error('O número de parcelas deve ser pelo menos 1.');
+        error.statusCode = 400; error.status = 'fail'; throw error;
+    }
 
-const t = await sequelize.transaction();
-try {
-  await validateAndGetFinancialAccount(financialAccountId, t);
 
-  if (commonData.financialCategoryId && !(await FinancialCategory.findByPk(commonData.financialCategoryId, { transaction: t }))) {
-      const error = new Error(`Categoria financeira ID ${commonData.financialCategoryId} não encontrada.`);
-      error.statusCode = 404; error.status = 'fail'; throw error;
-  }
+    const t = await sequelize.transaction();
+    try {
+      await validateAndGetFinancialAccount(financialAccountId, t);
 
-  if (commonData.creditCardId && type === 'Saída') {
-      const card = await CreditCard.findOne({ where: { id: commonData.creditCardId, financialAccountId }, transaction: t });
-      if (!card) {
-          const error = new Error(`Cartão de Crédito ID ${commonData.creditCardId} não pertence à conta financeira ${financialAccountId}.`);
+      if (commonData.financialCategoryId && !(await FinancialCategory.findByPk(commonData.financialCategoryId, { transaction: t }))) {
+          const error = new Error(`Categoria financeira ID ${commonData.financialCategoryId} não encontrada.`);
           error.statusCode = 404; error.status = 'fail'; throw error;
       }
-       if(!card.isActive){
-          const error = new Error(`Cartão de Crédito ID ${commonData.creditCardId} ("${card.name}") está inativo.`);
-          error.statusCode = 400; error.status = 'fail'; throw error;
+
+      if (commonData.creditCardId && type === 'Saída') {
+          const card = await CreditCard.findOne({ where: { id: commonData.creditCardId, financialAccountId }, transaction: t });
+          if (!card) {
+              const error = new Error(`Cartão de Crédito ID ${commonData.creditCardId} não pertence à conta financeira ${financialAccountId}.`);
+              error.statusCode = 404; error.status = 'fail'; throw error;
+          }
+           if(!card.isActive){
+              const error = new Error(`Cartão de Crédito ID ${commonData.creditCardId} ("${card.name}") está inativo.`);
+              error.statusCode = 400; error.status = 'fail'; throw error;
+          }
+          const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, commonData.creditCardId);
+          if (parseFloat(totalValue) > limitInfo.availableLimit) {
+              const error = new Error(`Limite insuficiente no cartão "${card.name}" para a compra parcelada. Disponível: R$ ${limitInfo.availableLimit.toFixed(2)}, Valor total da compra: R$ ${parseFloat(totalValue).toFixed(2)}.`);
+              error.statusCode = 409;
+              error.status = 'fail'; throw error;
+          }
       }
-      const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, commonData.creditCardId); 
-      if (parseFloat(totalValue) > limitInfo.availableLimit) {
-          const error = new Error(`Limite insuficiente no cartão "${card.name}" para a compra parcelada. Disponível: R$ ${limitInfo.availableLimit.toFixed(2)}, Valor total da compra: R$ ${parseFloat(totalValue).toFixed(2)}.`);
-          error.statusCode = 409;
-          error.status = 'fail'; throw error;
+
+      const parcelValue = parseFloat((parseFloat(totalValue) / parseInt(numberOfParcels, 10)).toFixed(2));
+      let accumulatedValue = 0;
+      const createdParcelsModels = [];
+      let firstParcelId = null;
+      const originalPurchaseDate = transactionDate || initialDueDate || new Date().toISOString().split('T')[0];
+
+      for (let i = 1; i <= parseInt(numberOfParcels, 10); i++) {
+        const currentParcelValue = (i === parseInt(numberOfParcels, 10)) ? parseFloat((parseFloat(totalValue) - accumulatedValue).toFixed(2)) : parcelValue;
+        accumulatedValue += currentParcelValue;
+
+        // Calcula a data em que ESTA parcela específica deve "entrar" na fatura ou vencer
+        const parcelEffectiveDateObj = new Date(new Date(initialDueDate).toISOString().slice(0,10) + 'T12:00:00Z');
+        parcelEffectiveDateObj.setUTCMonth(parcelEffectiveDateObj.getUTCMonth() + (i - 1)); // Avança mês a mês para cada parcela
+        const parcelEffectiveDateString = `${parcelEffectiveDateObj.getUTCFullYear()}-${String(parcelEffectiveDateObj.getUTCMonth() + 1).padStart(2, '0')}-${String(parcelEffectiveDateObj.getUTCDate()).padStart(2, '0')}`;
+
+        const parcelData = {
+          ...commonData,
+          financialAccountId,
+          description: parseInt(numberOfParcels, 10) > 1 ? `${description} - Parcela ${i}/${numberOfParcels}` : description,
+          type,
+          value: currentParcelValue,
+          // Para compras no cartão, a 'transactionDate' DEVE ser a data em que a parcela entra na fatura.
+          // Para contas a pagar/receber parceladas (sem cartão), 'transactionDate' pode ser a data da "compra" original.
+          transactionDate: commonData.creditCardId ? parcelEffectiveDateString : originalPurchaseDate,
+          isPayableOrReceivable: commonData.creditCardId ? false : true, // Gasto no cartão é efetivado para o lojista
+          isPaidOrReceived: commonData.creditCardId ? true : false, // Mesma lógica acima
+          dueDate: commonData.creditCardId ? null : parcelEffectiveDateString, // Se for cartão, a dívida é com o cartão, não tem dueDate para o lojista.
+          isParcel: parseInt(numberOfParcels, 10) > 1,
+          parcelNumber: parseInt(numberOfParcels, 10) > 1 ? i : null,
+          totalParcels: parseInt(numberOfParcels, 10) > 1 ? parseInt(numberOfParcels, 10) : null,
+          originalAccountId: null, // Será definido abaixo
+        };
+
+        const createdParcel = await FinancialTransaction.create(parcelData, { transaction: t });
+        createdParcelsModels.push(createdParcel);
+
+        if (i === 1 && parseInt(numberOfParcels, 10) > 1) {
+          firstParcelId = createdParcel.id;
+        }
       }
-  }
+
+      if (parseInt(numberOfParcels, 10) > 1 && firstParcelId) {
+          for (let parcelModel of createdParcelsModels) {
+              // A primeira parcela também aponta para si mesma como original para agrupar
+              await parcelModel.update({ originalAccountId: firstParcelId }, { transaction: t });
+          }
+      } else if (parseInt(numberOfParcels, 10) === 1 && createdParcelsModels.length === 1) {
+          // Se for "parcelado em 1x", não tem originalAccountId
+      }
 
 
-  const parcelValue = parseFloat((totalValue / numberOfParcels).toFixed(2));
-  let accumulatedValue = 0;
-  const createdParcelsModels = []; 
-  let firstParcelId = null;
+      await t.commit();
+      logger.info(`Conta parcelada "${description}" criada com ${numberOfParcels} parcelas para FinancialAccount ID ${financialAccountId}.`);
 
-  for (let i = 1; i <= numberOfParcels; i++) {
-    const currentParcelValue = (i === numberOfParcels) ? parseFloat((totalValue - accumulatedValue).toFixed(2)) : parcelValue;
-    accumulatedValue += currentParcelValue;
+      const finalParcels = [];
+      for(const pModel of createdParcelsModels){
+          finalParcels.push(await pModel.reload({transaction: null, include: [{model: FinancialTransaction, as: 'originalAccount'}]}).then(p => p.toJSON()));
+      }
 
-    const dueDateObj = new Date(new Date(initialDueDate).toISOString().slice(0,10) + 'T12:00:00Z'); 
-    dueDateObj.setUTCMonth(dueDateObj.getUTCMonth() + (i - 1));
-    const dueDateString = `${dueDateObj.getUTCFullYear()}-${String(dueDateObj.getUTCMonth() + 1).padStart(2, '0')}-${String(dueDateObj.getUTCDate()).padStart(2, '0')}`;
+      return {
+          message: parseInt(numberOfParcels, 10) > 1 ? `Conta parcelada criada com ${numberOfParcels} parcelas.` : "Transação criada.",
+          parcels: finalParcels
+      };
 
-
-    const parcelData = {
-      ...commonData,
-      financialAccountId,
-      description: numberOfParcels > 1 ? `${description} - Parcela ${i}/${numberOfParcels}` : description,
-      type,
-      value: currentParcelValue,
-      transactionDate: commonData.transactionDate || new Date().toISOString().split('T')[0],
-      isPayableOrReceivable: commonData.isPayableOrReceivable !== undefined ? commonData.isPayableOrReceivable : (commonData.creditCardId ? false : true), 
-      isPaidOrReceived: commonData.isPaidOrReceived !== undefined ? commonData.isPaidOrReceived : (commonData.creditCardId ? true : false), 
-      dueDate: commonData.creditCardId ? null : dueDateString, 
-      isParcel: numberOfParcels > 1,
-      parcelNumber: numberOfParcels > 1 ? i : null,
-      totalParcels: numberOfParcels > 1 ? numberOfParcels : null,
-      originalAccountId: null, 
-      originalPurchaseTotalValue: numberOfParcels > 1 ? parseFloat(totalValue) : null, // <<< ADICIONADO AQUI
-    };
-
-    const createdParcel = await FinancialTransaction.create(parcelData, { transaction: t });
-    createdParcelsModels.push(createdParcel);
-
-    if (i === 1 && numberOfParcels > 1) {
-      firstParcelId = createdParcel.id;
+    } catch (error) {
+      await t.rollback();
+      logger.error(`Erro ao criar conta parcelada para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error, accountData });
+      if (!error.statusCode) error.statusCode = 500;
+      throw error;
     }
-  }
-
-  if (numberOfParcels > 1 && firstParcelId) {
-      for (let k = 0; k < createdParcelsModels.length; k++) { // <<< CORRIGIDO ÍNDICE DO LOOP AQUI de i para k
-          await createdParcelsModels[k].update({ originalAccountId: firstParcelId }, { transaction: t });
-      }
-  }
-
-  await t.commit();
-  logger.info(`Conta parcelada "${description}" criada com ${numberOfParcels} parcelas para FinancialAccount ID ${financialAccountId}.`);
-
-  const finalParcels = [];
-  for(const pModel of createdParcelsModels){
-      finalParcels.push(await pModel.reload({transaction: null, include: [{model: FinancialTransaction, as: 'originalAccount'}]}).then(p => p.toJSON()));
-  }
-
-  return {
-      message: numberOfParcels > 1 ? `Conta parcelada criada com ${numberOfParcels} parcelas.` : "Transação criada.",
-      parcels: finalParcels
-  };
-
-} catch (error) {
-  await t.rollback();
-  logger.error(`Erro ao criar conta parcelada para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error, accountData });
-  if (!error.statusCode) error.statusCode = 500;
-  throw error;
-}
 }
 
 
@@ -236,11 +272,7 @@ try {
     include: [
       { model: FinancialCategory, as: 'category', attributes: ['id', 'name'] },
       { model: CreditCard, as: 'creditCard', attributes: ['id', 'name', 'lastFourDigits'] },
-      { 
-        model: FinancialTransaction, 
-        as: 'originalAccount', 
-        attributes: ['id', 'description', 'originalPurchaseTotalValue'] // Incluir valor total da compra original
-      }
+      { model: FinancialTransaction, as: 'originalAccount', attributes: ['id', 'description'] } // Para ver a descrição da compra original da parcela
     ],
     limit: parseInt(limit, 10),
     offset: offset,
@@ -272,19 +304,10 @@ try {
       { model: CreditCard, as: 'creditCard' },
       {
         model: FinancialTransaction,
-        as: 'parcels', 
-        include: [
-            {model: FinancialCategory, as: 'category'}, 
-            {model: CreditCard, as: 'creditCard'},
-            // Para evitar loop infinito, não incluir 'originalAccount' dentro de 'parcels' recursivamente aqui
-            // Se precisar do originalAccount das parcelas, buscar separadamente ou ajustar a query com cuidado.
-        ] 
+        as: 'parcels', // Se esta for uma conta original (primeira parcela), lista suas "filhas"
+        include: [{model: FinancialCategory, as: 'category'}, {model: CreditCard, as: 'creditCard'}]
       },
-      { 
-        model: FinancialTransaction, 
-        as: 'originalAccount',
-        attributes: ['id', 'description', 'value', 'originalPurchaseTotalValue'] // Incluir o valor da transação original e o total da compra
-      } 
+      { model: FinancialTransaction, as: 'originalAccount' } // Se esta for uma parcela, mostra a conta original
     ]
   });
 
@@ -339,7 +362,7 @@ try {
 
       const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, targetCreditCardId);
       let availableAfterOldTx = limitInfo.availableLimit;
-      if (transaction.creditCardId === targetCreditCardId) { 
+      if (transaction.creditCardId === targetCreditCardId) {
           availableAfterOldTx += parseFloat(transaction.value);
       }
 
@@ -349,13 +372,8 @@ try {
           error.statusCode = 409; error.status = 'fail'; throw error;
       }
   }
-  
-  delete updateData.financialAccountId; 
 
-  // Se a transação é uma parcela e o valor está sendo atualizado,
-  // idealmente, outras parcelas do mesmo grupo e o originalPurchaseTotalValue deveriam ser ajustados.
-  // Isso adiciona complexidade e pode ser um "TODO" para uma lógica mais avançada de edição de parcelamentos.
-  // Por ora, a atualização de valor em uma parcela só afeta ELA MESMA.
+  delete updateData.financialAccountId;
 
   await transaction.update(updateData, { transaction: t });
   const updatedTransaction = await transaction.reload({
@@ -417,17 +435,22 @@ try {
       const e = new Error('Transação não encontrada.'); e.statusCode = 404; e.status = 'fail'; throw e;
   }
 
+  // Se esta transação for a "originalAccount" de outras parcelas, e o usuário está tentando deletar
+  // apenas UMA parcela (que não seja a original) ou a transação única.
+  // Se for a transação original (primeira parcela de um grupo), e tem outras parcelas referenciando-a:
   if (transaction.isParcel && transaction.originalAccountId === transaction.id) {
       const childParcelsCount = await FinancialTransaction.count({
-          where: { originalAccountId: transaction.id, id: { [Op.ne]: transaction.id } },
+          where: { originalAccountId: transaction.id, id: { [Op.ne]: transaction.id } }, // Exclui a própria transação original da contagem
           transaction: t
       });
       if (childParcelsCount > 0) {
           await t.rollback();
-          const error = new Error(`Esta é a transação principal de um parcelamento com ${childParcelsCount} outras parcelas. Para excluí-la, primeiro exclua ou desvincule as parcelas dependentes, ou exclua todas as parcelas do grupo.`);
+          const error = new Error(`Esta é a transação principal de um parcelamento com ${childParcelsCount} outras parcelas. Para excluí-la, primeiro exclua ou desvincule as parcelas dependentes, ou exclua todas as parcelas do grupo. A exclusão individual de parcelas dependentes é permitida.`);
           error.statusCode = 409; error.status = 'fail'; throw error;
       }
   }
+  // Se for uma parcela dependente (originalAccountId !== id), ela pode ser deletada individualmente.
+  // O onDelete: 'SET NULL' na FK originalAccountId fará com que as outras parcelas percam a referência se a original for deletada.
 
   await transaction.destroy({ transaction: t });
   await t.commit();
@@ -458,32 +481,32 @@ try {
   const whereEffective = {
       ...whereBase,
       [Op.or]: [
-          { isPayableOrReceivable: false }, 
-          { isPaidOrReceived: true }        
+          { isPayableOrReceivable: false },
+          { isPaidOrReceived: true }
       ],
-      creditCardId: null 
+      creditCardId: null
   };
   const whereCardPayments = {
       ...whereBase,
-      isPayableOrReceivable: false, 
-      description: { [Op.iLike]: '%Pagamento de Fatura%' } 
+      isPayableOrReceivable: false,
+      description: { [Op.iLike]: '%Pagamento de Fatura%' }
   };
 
 
   const totalEntradasCaixa = await FinancialTransaction.sum('value', { where: { ...whereEffective, type: 'Entrada' } }) || 0;
   let totalSaidasCaixa = await FinancialTransaction.sum('value', { where: { ...whereEffective, type: 'Saída' } }) || 0;
   const totalPagamentoFaturas = await FinancialTransaction.sum('value', { where: { ...whereCardPayments, type: 'Saída' }}) || 0;
-  totalSaidasCaixa += totalPagamentoFaturas; 
+  totalSaidasCaixa += totalPagamentoFaturas;
 
 
   const saldoEfetivado = parseFloat((totalEntradasCaixa - totalSaidasCaixa).toFixed(2));
 
   const whereReceivables = { financialAccountId, type: 'Entrada', isPayableOrReceivable: true, isPaidOrReceived: false };
-  if (dateEnd) whereReceivables.dueDate = { [Op.lte]: dateEnd }; 
+  if (dateEnd) whereReceivables.dueDate = { [Op.lte]: dateEnd };
   const totalAReceberPendente = await FinancialTransaction.sum('value', { where: whereReceivables }) || 0;
 
   const wherePayables = { financialAccountId, type: 'Saída', isPayableOrReceivable: true, isPaidOrReceived: false };
-  if (dateEnd) wherePayables.dueDate = { [Op.lte]: dateEnd }; 
+  if (dateEnd) wherePayables.dueDate = { [Op.lte]: dateEnd };
   const totalAPagarPendente = await FinancialTransaction.sum('value', { where: wherePayables }) || 0;
 
   const summary = {
