@@ -281,6 +281,27 @@ function formatAvailableLimitSummary(limitInfo, clientName) {
     return summary;
 }
 
+// NOVA FUNÇÃO DE FORMATAÇÃO PARA COMPRA PARCELADA
+function formatParcelledAccountSummary(params, parcelResult, clientName) {
+    let summary = `Sua compra de ${params.description} no valor de R$ ${parseFloat(params.totalValue).toFixed(2)} em ${params.numberOfParcels}x `;
+    if (params.creditCardName) {
+        summary += `no cartão ${params.creditCardName} `;
+    }
+    summary += `foi registrada com sucesso! 🥳`;
+
+    if (parcelResult.parcels && parcelResult.parcels.length > 0) {
+        const firstParcel = parcelResult.parcels[0];
+        if (params.creditCardName && firstParcel.transactionDate) { // Para cartão, a transactionDate da parcela é quando ela entra na fatura
+            const firstParcelDate = new Date(firstParcel.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', timeZone: 'UTC' });
+            summary += `\nA primeira parcela (R$ ${parseFloat(firstParcel.value).toFixed(2)}) deve aparecer na fatura do seu cartão ${params.creditCardName} por volta de ${firstParcelDate}.`;
+        } else if (!params.creditCardName && firstParcel.dueDate) { // Para contas a pagar/receber parceladas
+            summary += `\nA primeira parcela vence em ${new Date(firstParcel.dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' })}.`;
+        }
+    }
+    return summary;
+}
+
+
 function initializeState(client, defaultAccount = null) {
     const clientName = client ? (client.name || "pessoa incrível") : "pessoa incrível";
 
@@ -641,6 +662,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 }
                 state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
             }
+            // Adicionar aqui para PRODUCT se necessário
+            // else if (buttonId.startsWith('edit_product_')) { ... }
+            // else if (buttonId.startsWith('delete_product_')) { ... }
             else {
                 buttonClickHandledByServiceLogic = false;
             }
@@ -671,10 +695,10 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
             else if (state.currentAction === 'awaiting_transaction_edit_details' || 
                      state.currentAction === 'awaiting_appointment_edit_details' ||
-                     state.currentAction === 'awaiting_credit_card_edit_details' || // Adicionado
-                     state.currentAction === 'awaiting_recurring_rule_edit_details' // Adicionado
+                     state.currentAction === 'awaiting_credit_card_edit_details' ||
+                     state.currentAction === 'awaiting_recurring_rule_edit_details'
                     ) {
-                stateHandledInPreProcessing = false; // Deixa a IA processar os detalhes da edição
+                stateHandledInPreProcessing = false;
             }
             else if (state.currentAction === 'awaiting_clarification_response'){
                 stateHandledInPreProcessing = false;
@@ -746,7 +770,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     'LIST_FINANCIAL_TRANSACTIONS', 'MARK_TRANSACTION_AS_PAID_RECEIVED',
                     'CREATE_RECURRING_RULE', 'CREATE_PRODUCT', 'GET_STOCK_INFO',
                     'RECORD_STOCK_MOVEMENT', 'LIST_APPOINTMENTS', 'CREATE_CREDIT_CARD',
-                    'LIST_CREDIT_CARDS', 'LIST_RECURRING_RULES', 'UPDATE_CREDIT_CARD', 'UPDATE_RECURRING_RULE', // Adicionado updates
+                    'LIST_CREDIT_CARDS', 'LIST_RECURRING_RULES', 'UPDATE_CREDIT_CARD', 'UPDATE_RECURRING_RULE',
                     'GET_CREDIT_CARD_INVOICE', 'GET_CREDIT_CARD_AVAILABLE_LIMIT', 'PAY_CREDIT_CARD_INVOICE'
                 ];
                 if (accountRequiredActions.includes(detectedAction.action) && !state.activeFinancialAccountId) {
@@ -861,19 +885,12 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0],
                             };
                             const parcelResult = await financialService.createParcelledAccount(state.activeFinancialAccountId, parcelData);
-                            if (!detectedAction.action_specific_reply_suggestion) {
-                                currentActionFormatted = `Sua compra de ${params.description} no valor de R$ ${parseFloat(params.totalValue).toFixed(2)} em ${params.numberOfParcels}x `;
-                                if (cardIdParcel) {
-                                    currentActionFormatted += `no cartão ${params.creditCardName} `;
-                                }
-                                currentActionFormatted += `foi registrada com sucesso! 🥳`;
-                                if (parcelResult.parcels.length > 0 && parcelResult.parcels[0].dueDate && !cardIdParcel) {
-                                    currentActionFormatted += `\nA primeira parcela vence em ${new Date(parcelResult.parcels[0].dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'})}.`;
-                                } else if (cardIdParcel && parcelResult.parcels.length > 0 && parcelResult.parcels[0].transactionDate) {
-                                     const firstParcelDate = new Date(parcelResult.parcels[0].transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {day:'2-digit', month: 'short', timeZone:'UTC'});
-                                    currentActionFormatted += `\nA primeira parcela (R$ ${parseFloat(parcelResult.parcels[0].value).toFixed(2)}) deve aparecer na fatura do seu cartão ${params.creditCardName} por volta de ${firstParcelDate}.`;
-                                }
-                            }
+                            // Usar a nova função de formatação
+                            currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatParcelledAccountSummary(params, parcelResult, clientNameToUse);
+                            // Decidir se parcelas devem ter botões. Por ora, não, devido à complexidade de editar/excluir um grupo.
+                            // if (aiResponse.detected_actions.length === 1 && parcelResult.parcels.length > 0) {
+                            //    resourceForButtonsContext = { type: 'parcelled_account', id: parcelResult.parcels[0].originalAccountId || parcelResult.parcels[0].id, description: params.description };
+                            // }
                             break;
                         }
                         case 'GET_FINANCIAL_SUMMARY': {
@@ -1077,7 +1094,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'credit_card', id: newCard.id, description: newCard.name };
                             break;
                         }
-                        case 'UPDATE_CREDIT_CARD': { // Novo case para update
+                        case 'UPDATE_CREDIT_CARD': {
                             isEditActionCurrentLoop = true;
                             actionWasAnEdit = true;
                             const cardIdToUpdate = params.cardIdToUpdate || state.editingResource?.id;
@@ -1091,7 +1108,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             state.editingResource = null;
                             break;
                         }
-                        case 'UPDATE_RECURRING_RULE': { // Novo case para update
+                        case 'UPDATE_RECURRING_RULE': {
                             isEditActionCurrentLoop = true;
                             actionWasAnEdit = true;
                             const ruleIdToUpdate = params.ruleIdToUpdate || state.editingResource?.id;
@@ -1467,12 +1484,13 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             { id: `delete_recurring_rule_${resourceForButtonsContext.id}`, label: "Excluir Recorrência 🗑️" },
                         ];
                         break;
-                    case 'product': // Adicionando case para produto
+                    case 'product':
                         buttons = [
                             { id: `edit_product_${resourceForButtonsContext.id}`, label: "Editar Produto ✍️" },
                             { id: `delete_product_${resourceForButtonsContext.id}`, label: "Excluir Produto 🗑️" },
                         ];
                         break;
+                    // Adicionar 'parcelled_account' aqui se decidir implementar botões para ele
                 }
 
                 if (buttons.length > 0) {
