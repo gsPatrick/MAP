@@ -231,8 +231,8 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 22. GENERAL_QUESTION_OR_HELP: (Sem parâmetros. Para perguntas genéricas sobre suas capacidades ou pedidos de ajuda não mapeados)
 
 23. GET_CREDIT_CARD_INVOICE: (Para o usuário ver a fatura do cartão)
-    -   **Exemplos de como o usuário pode pedir:** "Qual a fatura do Inter?", "Me mostra a fatura do Nubank", "Fatura do meu cartão XP", "Ver fatura de maio do Inter", "Fatura do mês passado do Bradesco", "Como está a fatura do meu cartão Visa?"
-    -   creditCardName: string (OBRIGATÓRIO. Extraia o nome do cartão da frase do usuário. Se faltar, use \`clarifications_needed\` com o exemplo: "Com certeza, ${clientNameForPrompt}! Para eu te mostrar a fatura, preciso saber de qual cartão você está falando. Por exemplo: 'Qual a fatura do cartão **Nubank**?'")
+    -   **Exemplos de como o usuário pode pedir:** "Qual a fatura do Inter?", "Me mostra a fatura do Nubank", "Fatura do meu cartão XP", "Ver fatura de maio do Inter", "Fatura do mês passado do Bradesco", "Como está a fatura do meu cartão Visa?", "fatura inter", "extrato cartão nubank".
+    -   creditCardName: string (OBRIGATÓRIO. **Você DEVE extrair o nome do cartão da frase do usuário, mesmo que seja um nome curto como 'Inter', 'Nu', 'XP', 'Visa', 'Master'.** Se o usuário mencionar um nome de cartão, use-o. Se, e SOMENTE SE, o nome do cartão estiver CLARAMENTE AUSENTE da mensagem do usuário, use \`clarifications_needed\` com o exemplo: "Com certeza, ${clientNameForPrompt}! Para eu te mostrar a fatura, preciso saber de qual cartão você está falando. Por exemplo: 'Qual a fatura do cartão **Nubank**?'")
     -   invoicePeriodType: "aberta", "ultima_fechada", "especifico" (opcional, default: "aberta". Se "especifico", \`invoiceMonth\` e \`invoiceYear\` são OBRIGATÓRIOS. Se o usuário pedir "fatura de maio", interprete como \`invoicePeriodType: "especifico"\`, \`invoiceMonth: 5\`, \`invoiceYear: ${now.getFullYear()}\`. Se pedir "fatura do mês passado", use "ultima_fechada".)
     -   invoiceMonth: integer (opcional, 1-12. Se \`invoicePeriodType\`="especifico" e faltar, use \`clarifications_needed\`)
     -   invoiceYear: integer (opcional, ex: ${now.getFullYear()}. Se \`invoicePeriodType\`="especifico" e faltar, use \`clarifications_needed\`)
@@ -291,30 +291,28 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
 
   // Prepara o system prompt final, substituindo os placeholders
   let finalSystemPromptContent = systemPromptContent
-      .replace("{{CONVERSATION_HISTORY}}", JSON.stringify(conversationHistoryForAPI.slice(-6))); // Pega as últimas 6 interações (3 pares user/assistant)
+      .replace("{{CONVERSATION_HISTORY}}", JSON.stringify(conversationHistoryForAPI.slice(-6)));
 
-  // Remove o placeholder {{USER_MESSAGE}} do final do prompt, pois a mensagem do usuário será a última mensagem na lista `messagesToSendToAPI`
   finalSystemPromptContent = finalSystemPromptContent.replace("MENSAGEM DO USUÁRIO:\n\"{{USER_MESSAGE}}\"", "").trim();
 
   const messagesToSendToAPI = [
       {role: "system", content: finalSystemPromptContent},
-      // Adiciona algumas das últimas mensagens do histórico para dar contexto à IA
-      ...conversationHistoryForAPI.slice(-4), // Pega as últimas 4 mensagens (2 pares user/assistant)
-      {role: "user", content: userMessage} // A mensagem atual do usuário
+      ...conversationHistoryForAPI.slice(-4),
+      {role: "user", content: userMessage}
   ];
 
+  // Determina o modelo a ser usado: Prioriza a variável de ambiente, senão usa gpt-4-turbo-preview
+  const modelToUse = process.env.OPENAI_MODEL || "gpt-4-turbo-preview"; // ALTERADO AQUI
+
   logger.debug('[AI SERVICE] Enviando para OpenAI:', {
-      model: process.env.OPENAI_MODEL || "gpt-3.5-turbo-1106", // ou "gpt-4-turbo-preview"
+      model: modelToUse,
       messageCount: messagesToSendToAPI.length,
       userMessageLength: userMessage.length,
-      // Descomente para ver o prompt enviado em desenvolvimento (CUIDADO COM O TAMANHO DO LOG)
-      // systemPromptPreview: finalSystemPromptContent.substring(0, 300) + "...",
-      // lastUserMessages: messagesToSendToAPI.filter(m => m.role === 'user').map(m => m.content).slice(-2)
   });
 
   try {
     const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-3.5-turbo-1106",
+      model: modelToUse, // USA O MODELO DEFINIDO
       messages: messagesToSendToAPI,
       temperature: 0.05,
       response_format: { type: "json_object" },
@@ -324,13 +322,13 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     if (!aiResultContent) throw new Error("Resposta da IA vazia ou inválida.");
 
     const parsedResult = JSON.parse(aiResultContent);
-    logger.info('[AI SERVICE] Resultado da IA parseado com sucesso.');
+    logger.info(`[AI SERVICE] Resultado da IA (${modelToUse}) parseado com sucesso.`); // Loga o modelo usado
     logger.debug('[AI SERVICE] Parsed AI Result:', parsedResult);
     return parsedResult;
 
   } catch (error) {
     const rawResponseForError = error.response?.data || (typeof error.message === 'string' && error.message.includes("{") ? error.message : null) || "Sem resposta bruta disponível";
-    logger.error('[AI SERVICE] Erro ao chamar ou parsear API da OpenAI:', {
+    logger.error(`[AI SERVICE] Erro ao chamar ou parsear API da OpenAI (${modelToUse}):`, { // Loga o modelo usado no erro
         errorMessage: error.message,
         rawApiResponse: rawResponseForError,
         requestMessageCount: messagesToSendToAPI.length
