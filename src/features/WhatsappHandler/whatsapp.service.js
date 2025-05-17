@@ -33,9 +33,8 @@ async function findFinancialCategoryIdByName(name, financialAccountId, transacti
 
 async function findCreditCardIdByName(name, financialAccountId) {
     if (!name || typeof name !== 'string' || name.trim() === '') return null;
-    // A função findCreditCardByName do creditCardService já lida com a busca e erros
     try {
-        const card = await creditCardService.findCreditCardByName(financialAccountId, name); // Este método deve existir no creditCardService
+        const card = await creditCardService.findCreditCardByName(financialAccountId, name);
         return card.id;
     } catch (e) {
         logger.warn(`[WHATSAPP SERVICE] Cartão de crédito com nome "${name}" não encontrado para a conta ${financialAccountId} via creditCardService: ${e.message}`);
@@ -73,7 +72,7 @@ function formatFinancialTransactionSummary(transaction, clientName, forMulti = f
             statusText = ` ${transaction.type === 'Entrada' ? 'A receber' : 'A pagar'} em ${dueDateFormatted}`;
             statusEmoji = "🗓️";
         }
-    } else { // Transações não "PayableOrReceivable" são consideradas efetivadas
+    } else {
         statusText = transaction.type === 'Entrada' ? "Recebido!" : "Pago!";
         statusEmoji = "✅";
     }
@@ -95,10 +94,8 @@ function formatFinancialTransactionSummary(transaction, clientName, forMulti = f
     }
     if (transaction.creditCard && transaction.creditCard.name) categoryEmoji = '💳';
 
-
     let summary = "";
     if (forEdit) summary += "✅ Transação Editada:\n\n";
-    // Não adicionar título "Resumo da Transação" aqui, pois o overall_summary_suggestion da IA já deve cobrir a introdução.
 
     summary += `${categoryEmoji} Descrição: ${transaction.description}\n`;
     summary += `💰 Valor: R$ ${parseFloat(transaction.value).toFixed(2)}\n`;
@@ -137,7 +134,6 @@ function formatAppointmentSummary(appointment, clientName, forMulti = false, for
     else if(titleLower.includes("aniversário") || titleLower.includes("aniversario") || titleLower.includes("festa")) titleEmoji = "🎉";
     else if(titleLower.includes("viagem")) titleEmoji = "✈️";
     else if(titleLower.includes("estudar") || titleLower.includes("aula") || titleLower.includes("curso")) titleEmoji = "📚";
-
 
     summary += `${titleEmoji} Descrição: ${appointment.title}\n`;
     summary += `📆 Data: ${eventDateFormatted}\n`;
@@ -577,35 +573,71 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             logger.info(`[WHATSAPP SERVICE] Botão clicado por ${senderPhone} (${clientNameToUse}): ID '${buttonId}', Texto: '${messageText}'`);
             let buttonClickHandledByServiceLogic = true;
             let replyForButtonClick = "";
+            let resourceTypeForEditMessage = "item";
 
             if (buttonId.startsWith('edit_transaction_')) {
                 const transactionId = buttonId.replace('edit_transaction_', '');
                 state.editingResource = { type: 'transaction', id: transactionId };
-                replyForButtonClick = `Claro, ${clientNameToUse}! 😉 Descreva na próxima mensagem o que você precisa que eu altere na transação (ID: ${transactionId}). Por exemplo: "mude a descrição para X e o valor para Y".`;
+                resourceTypeForEditMessage = "transação";
+                replyForButtonClick = `Claro, ${clientNameToUse}! 😉 Descreva na próxima mensagem o que você precisa que eu altere na ${resourceTypeForEditMessage} (ID: ${transactionId}). Por exemplo: "mude a descrição para X e o valor para Y".`;
                 state.currentAction = 'awaiting_transaction_edit_details';
             } else if (buttonId.startsWith('delete_transaction_')) {
                 const transactionId = buttonId.replace('delete_transaction_', '');
                 try {
-                    const success = await financialService.deleteTransaction(state.activeFinancialAccountId, transactionId);
-                    replyForButtonClick = success ? `Transação removida com sucesso, ${clientNameToUse}! 👍 Se precisar de mais alguma coisa, é só chamar.` : "Não consegui excluir a transação. Pode ter sido um erro ou ela já foi removida.";
-                } catch (e) {
+                    await financialService.deleteTransaction(state.activeFinancialAccountId, transactionId);
+                    replyForButtonClick = `Transação removida com sucesso, ${clientNameToUse}! 👍 Se precisar de mais alguma coisa, é só chamar.`;
+                } catch (e) { 
                     logger.error(`[WHATSAPP SERVICE] Erro ao excluir transação ${transactionId} por botão: ${e.message}`);
-                    replyForButtonClick = `Ops! Tive um problema ao tentar excluir a transação. (${e.message.substring(0,50)})`;
+                    replyForButtonClick = `Ops! Tive um problema ao tentar excluir a transação. (${e.message.substring(0,70)})`;
                 }
                 state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
             } else if (buttonId.startsWith('edit_appointment_')) {
                 const appointmentId = buttonId.replace('edit_appointment_', '');
                 state.editingResource = { type: 'appointment', id: appointmentId };
-                replyForButtonClick = `Beleza, ${clientNameToUse}! ✨ Me diga na próxima mensagem o que você quer mudar no compromisso (ID: ${appointmentId}).`;
+                resourceTypeForEditMessage = "compromisso";
+                replyForButtonClick = `Beleza, ${clientNameToUse}! ✨ Me diga na próxima mensagem o que você quer mudar no ${resourceTypeForEditMessage} (ID: ${appointmentId}).`;
                 state.currentAction = 'awaiting_appointment_edit_details';
             } else if (buttonId.startsWith('delete_appointment_')) {
                 const appointmentId = buttonId.replace('delete_appointment_', '');
                 try {
-                    const success = await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, appointmentId, true); // true para deletar
-                    replyForButtonClick = success ? `Compromisso removido da sua agenda, ${clientNameToUse}! ✅ Fico à disposição se precisar de algo mais.` : "Não foi possível excluir o compromisso.";
+                    await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, appointmentId, true);
+                    replyForButtonClick = `Compromisso removido da sua agenda, ${clientNameToUse}! ✅ Fico à disposição se precisar de algo mais.`;
+                } catch (e) { 
+                    logger.error(`[WHATSAPP SERVICE] Erro ao excluir compromisso ${appointmentId} por botão: ${e.message}`);
+                    replyForButtonClick = `Ops! Tive um problema ao tentar excluir o compromisso. (${e.message.substring(0,70)})`;
+                }
+                state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
+            }
+            else if (buttonId.startsWith('edit_credit_card_')) {
+                const cardId = buttonId.replace('edit_credit_card_', '');
+                state.editingResource = { type: 'credit_card', id: cardId };
+                resourceTypeForEditMessage = "cartão de crédito";
+                replyForButtonClick = `Entendido, ${clientNameToUse}! 💳 O que você gostaria de alterar no ${resourceTypeForEditMessage} (ID: ${cardId})? Pode me dizer, por exemplo: "mudar o limite para 3000" ou "atualizar o dia de fechamento para 25".`;
+                state.currentAction = 'awaiting_credit_card_edit_details';
+            } else if (buttonId.startsWith('delete_credit_card_')) {
+                const cardId = buttonId.replace('delete_credit_card_', '');
+                try {
+                    await creditCardService.deleteCreditCard(state.activeFinancialAccountId, cardId);
+                    replyForButtonClick = `Cartão de crédito removido com sucesso, ${clientNameToUse}! 🗑️`;
                 } catch (e) {
-                     logger.error(`[WHATSAPP SERVICE] Erro ao excluir compromisso ${appointmentId} por botão: ${e.message}`);
-                    replyForButtonClick = `Ops! Tive um problema ao tentar excluir o compromisso. (${e.message.substring(0,50)})`;
+                    logger.error(`[WHATSAPP SERVICE] Erro ao excluir cartão ${cardId} por botão: ${e.message}`);
+                    replyForButtonClick = `Ops! Tive um problema ao tentar excluir o cartão. ${e.message.includes("transações") ? "Ele ainda tem transações associadas." : `(${e.message.substring(0,70)})` }`;
+                }
+                state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
+            } else if (buttonId.startsWith('edit_recurring_rule_')) {
+                const ruleId = buttonId.replace('edit_recurring_rule_', '');
+                state.editingResource = { type: 'recurring_rule', id: ruleId };
+                resourceTypeForEditMessage = "regra de recorrência";
+                replyForButtonClick = `Certo, ${clientNameToUse}! 🔄 O que vamos ajustar na ${resourceTypeForEditMessage} (ID: ${ruleId})? Por exemplo: "mudar o valor para 60" ou "alterar a frequência para mensal".`;
+                state.currentAction = 'awaiting_recurring_rule_edit_details';
+            } else if (buttonId.startsWith('delete_recurring_rule_')) {
+                const ruleId = buttonId.replace('delete_recurring_rule_', '');
+                try {
+                    await recurringTransactionService.deleteRecurringRule(state.activeFinancialAccountId, ruleId);
+                    replyForButtonClick = `Regra de recorrência removida, ${clientNameToUse}! 👍`;
+                } catch (e) { 
+                    logger.error(`[WHATSAPP SERVICE] Erro ao excluir regra ${ruleId} por botão: ${e.message}`);
+                    replyForButtonClick = `Ops! Tive um problema ao tentar excluir a regra. (${e.message.substring(0,70)})`;
                 }
                 state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
             }
@@ -637,13 +669,16 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     stateHandledInPreProcessing = true;
                 }
             }
-            else if (state.currentAction === 'awaiting_transaction_edit_details' || state.currentAction === 'awaiting_appointment_edit_details') {
-                stateHandledInPreProcessing = false;
+            else if (state.currentAction === 'awaiting_transaction_edit_details' || 
+                     state.currentAction === 'awaiting_appointment_edit_details' ||
+                     state.currentAction === 'awaiting_credit_card_edit_details' || // Adicionado
+                     state.currentAction === 'awaiting_recurring_rule_edit_details' // Adicionado
+                    ) {
+                stateHandledInPreProcessing = false; // Deixa a IA processar os detalhes da edição
             }
             else if (state.currentAction === 'awaiting_clarification_response'){
                 stateHandledInPreProcessing = false;
             }
-
 
             if (stateHandledInPreProcessing && replyForPreProcessing) {
                 state.messageHistory.push({ role: 'assistant', content: replyForPreProcessing });
@@ -687,10 +722,10 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
         state.pendingConfirmation = null;
 
-        let singleActionFormattedResult = null;
-        let multipleActionFormattedResults = [];
-        let actionWasAnEdit = false;
-        let resourceForButtonsContext = null;
+        singleActionFormattedResult = null;
+        multipleActionFormattedResults = [];
+        actionWasAnEdit = false;
+        resourceForButtonsContext = null;
 
         if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
             for (const detectedAction of aiResponse.detected_actions) {
@@ -711,7 +746,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     'LIST_FINANCIAL_TRANSACTIONS', 'MARK_TRANSACTION_AS_PAID_RECEIVED',
                     'CREATE_RECURRING_RULE', 'CREATE_PRODUCT', 'GET_STOCK_INFO',
                     'RECORD_STOCK_MOVEMENT', 'LIST_APPOINTMENTS', 'CREATE_CREDIT_CARD',
-                    'LIST_CREDIT_CARDS', 'LIST_RECURRING_RULES',
+                    'LIST_CREDIT_CARDS', 'LIST_RECURRING_RULES', 'UPDATE_CREDIT_CARD', 'UPDATE_RECURRING_RULE', // Adicionado updates
                     'GET_CREDIT_CARD_INVOICE', 'GET_CREDIT_CARD_AVAILABLE_LIMIT', 'PAY_CREDIT_CARD_INVOICE'
                 ];
                 if (accountRequiredActions.includes(detectedAction.action) && !state.activeFinancialAccountId) {
@@ -834,8 +869,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 currentActionFormatted += `foi registrada com sucesso! 🥳`;
                                 if (parcelResult.parcels.length > 0 && parcelResult.parcels[0].dueDate && !cardIdParcel) {
                                     currentActionFormatted += `\nA primeira parcela vence em ${new Date(parcelResult.parcels[0].dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'})}.`;
-                                } else if (cardIdParcel) {
-                                     const firstParcelDate = new Date(parcelResult.parcels[0].transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'});
+                                } else if (cardIdParcel && parcelResult.parcels.length > 0 && parcelResult.parcels[0].transactionDate) {
+                                     const firstParcelDate = new Date(parcelResult.parcels[0].transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {day:'2-digit', month: 'short', timeZone:'UTC'});
                                     currentActionFormatted += `\nA primeira parcela (R$ ${parseFloat(parcelResult.parcels[0].value).toFixed(2)}) deve aparecer na fatura do seu cartão ${params.creditCardName} por volta de ${firstParcelDate}.`;
                                 }
                             }
@@ -970,7 +1005,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             };
                             const newRule = await recurringTransactionService.createRecurringRule(state.activeFinancialAccountId, ruleData);
                             const reloadedRule = await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, newRule.id);
-                            currentActionFormatted = formatRecurringRuleSummary(reloadedRule, clientNameToUse, aiResponse.detected_actions.length > 1);
+                            currentActionFormatted = formatRecurringRuleSummary(reloadedRule, clientNameToUse);
+                            if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'recurring_rule', id: newRule.id, description: newRule.description };
                             break;
                         }
                          case 'CREATE_PRODUCT': {
@@ -986,7 +1022,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 unit: params.unit
                             };
                             const newProd = await productService.createProduct(state.activeFinancialAccountId, productData);
-                            currentActionFormatted = formatProductSummary(newProd, clientNameToUse, aiResponse.detected_actions.length > 1);
+                            currentActionFormatted = formatProductSummary(newProd, clientNameToUse);
+                            if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'product', id: newProd.id, description: newProd.name };
                             break;
                         }
                         case 'GET_STOCK_INFO': {
@@ -1036,7 +1073,36 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 isDefault: params.isDefault === undefined ? false : params.isDefault
                             };
                             const newCard = await creditCardService.createCreditCard(state.activeFinancialAccountId, cardData);
-                            currentActionFormatted = formatCreditCardSummary(newCard, clientNameToUse, aiResponse.detected_actions.length > 1);
+                            currentActionFormatted = formatCreditCardSummary(newCard, clientNameToUse);
+                            if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'credit_card', id: newCard.id, description: newCard.name };
+                            break;
+                        }
+                        case 'UPDATE_CREDIT_CARD': { // Novo case para update
+                            isEditActionCurrentLoop = true;
+                            actionWasAnEdit = true;
+                            const cardIdToUpdate = params.cardIdToUpdate || state.editingResource?.id;
+                            if (!cardIdToUpdate) throw new Error("ID do cartão para atualizar não fornecido pela IA ou não estava no contexto de edição.");
+
+                            const updateCardData = { ...params };
+                            delete updateCardData.cardIdToUpdate;
+
+                            const updatedCard = await creditCardService.updateCreditCard(state.activeFinancialAccountId, cardIdToUpdate, updateCardData);
+                            currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatCreditCardSummary(updatedCard, clientNameToUse, false, true);
+                            state.editingResource = null;
+                            break;
+                        }
+                        case 'UPDATE_RECURRING_RULE': { // Novo case para update
+                            isEditActionCurrentLoop = true;
+                            actionWasAnEdit = true;
+                            const ruleIdToUpdate = params.ruleIdToUpdate || state.editingResource?.id;
+                            if (!ruleIdToUpdate) throw new Error("ID da regra de recorrência para atualizar não fornecido pela IA ou não estava no contexto de edição.");
+
+                            const updateRuleData = { ...params };
+                            delete updateRuleData.ruleIdToUpdate;
+
+                            const updatedRule = await recurringTransactionService.updateRecurringRule(state.activeFinancialAccountId, ruleIdToUpdate, updateRuleData);
+                            currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatRecurringRuleSummary(updatedRule, clientNameToUse, false, true);
+                            state.editingResource = null;
                             break;
                         }
                         case 'LIST_APPOINTMENTS': {
@@ -1304,7 +1370,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     finalReplyParts.push(singleActionFormattedResult);
                  }
             } else {
-                 if(finalReplyParts.length > 0 && aiResponse.detected_actions[0]?.action.startsWith("GENERAL_")){
+                 if(finalReplyParts.length > 0 && aiResponse.detected_actions && aiResponse.detected_actions.length > 0 && aiResponse.detected_actions[0]?.action.startsWith("GENERAL_")){
                     if(aiResponse.reply_to_user_suggestion !== singleActionFormattedResult && finalReplyParts.indexOf(singleActionFormattedResult) === -1){
                          finalReplyParts.push(singleActionFormattedResult);
                     }
@@ -1358,7 +1424,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
         state.messageHistory.push({ role: 'assistant', content: completeFinalReply });
 
-        if (actionWasAnEdit || (state.editingResource && aiResponse.detected_actions?.every(a => !a.action.startsWith("UPDATE_")))) {
+        if (actionWasAnEdit || (state.editingResource && (!aiResponse.detected_actions || aiResponse.detected_actions.every(a => !a.action.startsWith("UPDATE_"))))) {
             state.editingResource = null;
         }
         if (state.data.clarificationContext && (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0)) {
@@ -1372,20 +1438,41 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 let buttons = [];
                 let buttonItemDesc = "item";
                 if (resourceForButtonsContext.description && typeof resourceForButtonsContext.description === 'string') {
-                    buttonItemDesc = resourceForButtonsContext.description.length > 20 ? resourceForButtonsContext.description.substring(0, 17) + "..." : resourceForButtonsContext.description;
+                    buttonItemDesc = resourceForButtonsContext.description.length > 24 ? resourceForButtonsContext.description.substring(0, 21) + "..." : resourceForButtonsContext.description;
                 }
                 const buttonTitle = `Opções para "${buttonItemDesc}":`;
 
-                if (resourceForButtonsContext.type === 'transaction') {
-                    buttons = [
-                        { id: `edit_transaction_${resourceForButtonsContext.id}`, label: "Editar Transação ✍️" },
-                        { id: `delete_transaction_${resourceForButtonsContext.id}`, label: "Excluir Transação 🗑️" },
-                    ];
-                } else if (resourceForButtonsContext.type === 'appointment') {
-                    buttons = [
-                        { id: `edit_appointment_${resourceForButtonsContext.id}`, label: "Editar Compromisso ✍️" },
-                        { id: `delete_appointment_${resourceForButtonsContext.id}`, label: "Excluir Compromisso 🗑️" },
-                    ];
+                switch(resourceForButtonsContext.type) {
+                    case 'transaction':
+                        buttons = [
+                            { id: `edit_transaction_${resourceForButtonsContext.id}`, label: "Editar Transação ✍️" },
+                            { id: `delete_transaction_${resourceForButtonsContext.id}`, label: "Excluir Transação 🗑️" },
+                        ];
+                        break;
+                    case 'appointment':
+                        buttons = [
+                            { id: `edit_appointment_${resourceForButtonsContext.id}`, label: "Editar Compromisso ✍️" },
+                            { id: `delete_appointment_${resourceForButtonsContext.id}`, label: "Excluir Compromisso 🗑️" },
+                        ];
+                        break;
+                    case 'credit_card':
+                        buttons = [
+                            { id: `edit_credit_card_${resourceForButtonsContext.id}`, label: "Editar Cartão ✍️" },
+                            { id: `delete_credit_card_${resourceForButtonsContext.id}`, label: "Excluir Cartão 🗑️" },
+                        ];
+                        break;
+                    case 'recurring_rule':
+                        buttons = [
+                            { id: `edit_recurring_rule_${resourceForButtonsContext.id}`, label: "Editar Recorrência ✍️" },
+                            { id: `delete_recurring_rule_${resourceForButtonsContext.id}`, label: "Excluir Recorrência 🗑️" },
+                        ];
+                        break;
+                    case 'product': // Adicionando case para produto
+                        buttons = [
+                            { id: `edit_product_${resourceForButtonsContext.id}`, label: "Editar Produto ✍️" },
+                            { id: `delete_product_${resourceForButtonsContext.id}`, label: "Excluir Produto 🗑️" },
+                        ];
+                        break;
                 }
 
                 if (buttons.length > 0) {
@@ -1393,8 +1480,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 } else {
                     await sendWhatsappMessage(senderPhone, completeFinalReply);
                 }
-                state.editingResource = resourceForButtonsContext;
-
             } else {
                 await sendWhatsappMessage(senderPhone, completeFinalReply);
                 if(state.editingResource && !resourceForButtonsContext) state.editingResource = null;
