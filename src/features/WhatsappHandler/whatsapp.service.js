@@ -282,6 +282,8 @@ function formatAvailableLimitSummary(limitInfo, clientName) {
 }
 
 function formatParcelledAccountSummary(params, parcelResult, clientName) {
+    // params: { description, totalValue, numberOfParcels, creditCardName }
+    // parcelResult: { parcels: [{ value, transactionDate (para cartão) ou dueDate (para outros) }] }
     let summary = `Sua compra de ${params.description} no valor de R$ ${parseFloat(params.totalValue).toFixed(2)} em ${params.numberOfParcels}x `;
     if (params.creditCardName) {
         summary += `no cartão ${params.creditCardName} `;
@@ -290,10 +292,10 @@ function formatParcelledAccountSummary(params, parcelResult, clientName) {
 
     if (parcelResult.parcels && parcelResult.parcels.length > 0) {
         const firstParcel = parcelResult.parcels[0];
-        if (params.creditCardName && firstParcel.transactionDate) {
+        if (params.creditCardName && firstParcel.transactionDate) { // Para cartão, a transactionDate da parcela é quando ela entra na fatura
             const firstParcelDate = new Date(firstParcel.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
             summary += `\nA primeira parcela (R$ ${parseFloat(firstParcel.value).toFixed(2)}) deve aparecer na fatura do seu cartão ${params.creditCardName} por volta de ${firstParcelDate}.`;
-        } else if (!params.creditCardName && firstParcel.dueDate) {
+        } else if (!params.creditCardName && firstParcel.dueDate) { // Para contas a pagar/receber parceladas
             summary += `\nA primeira parcela vence em ${new Date(firstParcel.dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' })}.`;
         }
     }
@@ -772,7 +774,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
         }
 
-        finalReplyParts = []; // Resetar para esta interação
+        finalReplyParts = [];
         if (aiResponse.overall_summary_suggestion) {
             finalReplyParts.push(aiResponse.overall_summary_suggestion);
         }
@@ -804,7 +806,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     'CREATE_RECURRING_RULE', 'CREATE_PRODUCT', 'GET_STOCK_INFO',
                     'RECORD_STOCK_MOVEMENT', 'LIST_APPOINTMENTS', 'CREATE_CREDIT_CARD',
                     'LIST_CREDIT_CARDS', 'LIST_RECURRING_RULES', 'UPDATE_CREDIT_CARD', 'UPDATE_RECURRING_RULE', 'UPDATE_PRODUCT',
-                    'UPDATE_PARCELLED_ACCOUNT_DESCRIPTION', // Ação de edição de descrição de parcela
+                    'UPDATE_PARCELLED_ACCOUNT_DESCRIPTION',
                     'GET_CREDIT_CARD_INVOICE', 'GET_CREDIT_CARD_AVAILABLE_LIMIT', 'PAY_CREDIT_CARD_INVOICE'
                 ];
                 if (accountRequiredActions.includes(detectedAction.action) && !state.activeFinancialAccountId) {
@@ -931,13 +933,14 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             actionWasAnEdit = true;
                             const originalAccountIdToUpdate = params.originalAccountIdToUpdate || state.editingResource?.id;
                             if (!originalAccountIdToUpdate) throw new Error("ID da compra parcelada para atualizar a descrição não foi fornecido.");
-
+                        
                             const newDescription = params.newDescription;
                             if (!newDescription || newDescription.trim() === '') {
-                                currentActionFormatted = `Por favor, me diga a nova descrição para esta compra parcelada, ${clientNameToUse}. 😊`;
-                                // Manter o estado de edição para a próxima mensagem
-                                state.currentAction = 'awaiting_parcelled_account_description_edit';
-                                break;
+                                // Se a IA não conseguiu extrair a newDescription, pedimos novamente.
+                                currentActionFormatted = `Qual seria a nova descrição para esta compra parcelada, ${clientNameToUse}? 😊`;
+                                state.currentAction = 'awaiting_parcelled_account_description_edit'; // Mantém o estado para próxima mensagem
+                                state.editingResource = { type: 'parcelled_account', id: originalAccountIdToUpdate }; // Mantém o contexto de edição
+                                break; // Interrompe o processamento desta ação, aguardando nova descrição
                             }
                             await financialService.updateParcelledAccountDescription(state.activeFinancialAccountId, originalAccountIdToUpdate, newDescription);
                             currentActionFormatted = detectedAction.action_specific_reply_suggestion || `A descrição da sua compra parcelada foi atualizada para "${newDescription}" em todas as parcelas! ✨`;
