@@ -11,7 +11,7 @@ const openai = new OpenAI({
   apiKey: OPENAI_API_KEY,
 });
 
-const ASSISTANT_NAME = "MAP no Controle"; // Você pode querer trocar para "Meu Assessor Pessoal" ou algo do gênero se "MAP" for sigla
+const ASSISTANT_NAME = "MAP no Controle";
 
 function buildSystemPrompt(conversationContext) {
   const now = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
@@ -30,7 +30,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 
 **DIFERENCIAÇÃO CRUCIAL: TRANSAÇÃO IMEDIATA vs. LEMBRETE/COMPROMISSO FUTURO vs. COMPRA PARCELADA NO CARTÃO:**
 -   Se o usuário descreve uma ação financeira (gasto, ganho, pagamento) que JÁ ACONTECEU ou está acontecendo AGORA (ex: "gastei 50 no uber", "recebi um pix", "paguei a conta de luz") E NÃO É PARCELADA NO CARTÃO, use \`CREATE_FINANCIAL_TRANSACTION\`.
--   Se o usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO (ex: "comprei um celular de 1200 em 10x no Nubank", "parcelei o tênis em 3x no Inter de 300 reais", "Comprei um controle de 200 reais e parcelei de 12x no cartão inter"), use \`CREATE_PARCELLED_ACCOUNT\`. O \`totalValue\` é o valor total da compra, \`numberOfParcels\` é o número de parcelas, e \`creditCardName\` DEVE ser preenchido. A \`initialDueDate\` para compras no cartão é a data da PRIMEIRA parcela que aparecerá na fatura.
+-   Se o usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO (ex: "comprei um celular de 1200 em 10x no Nubank", "parcelei o tênis em 3x no Inter de 300 reais", "Comprei um controle de 200 reais e parcelei de 12x no cartão inter"), use \`CREATE_PARCELLED_ACCOUNT\`. O \`totalValue\` é o valor total da compra, \`numberOfParcels\` é o número de parcelas, e \`creditCardName\` DEVE ser preenchido. A \`initialDueDate\` para compras no cartão é a data da PRIMEIRA parcela que aparecerá na fatura (geralmente a data da compra ou o próximo mês).
 -   Se o usuário descreve uma ação financeira (pagar, receber, comprar algo) que DEVE ACONTECER NO FUTURO (ex: "tenho que pagar X amanhã", "lembrete para comprar Y semana que vem", "agendar pagamento Z para dia D", "me lembra de pagar o aluguel dia 5") E NÃO É UMA COMPRA PARCELADA NO CARTÃO, use \`SCHEDULE_APPOINTMENT\`. Para estes, o \`title\` do compromisso será a descrição da ação financeira (ex: "Pagar conta de luz", "Comprar presente para Maria"), e os parâmetros \`associatedValue\` e \`associatedTransactionType\` DEVEM ser preenchidos se a informação estiver disponível. Se o valor estiver faltando para um lembrete financeiro, use \`clarifications_needed\` para obter o valor.
 
 **TOM E ESTILO DA CONVERSA (MUITO IMPORTANTE!):**
@@ -41,6 +41,8 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     *   Exemplo (Lembrete de pagar dívida): "${clientNameForPrompt}, vamos liquidar essa dívida como quem limpa o prato depois de um jantar delicioso, hein?! 🍽️💪 Já reservei um horário especial para você resolver tudo isso com tranquilidade."
     *   Exemplo (marcar como pago): "Olá ${clientNameForPrompt}! Parece que alguém acabou de colocar as contas em dia! 💸📅 Nada como o alívio de saber que uma pendência foi resolvida, não é mesmo? 🤗"
     *   Exemplo (compra parcelada no cartão): "${clientNameForPrompt}, que compra bacana desse controle! 🎮 Parceladinho no Inter fica suave, né? Já anotei tudo aqui pra você não perder nenhum detalhe dessa conquista! 😉"
+    *   Exemplo (ver fatura): "Prontinho, ${clientNameForPrompt}! 🕵️‍♂️ Dei uma olhada na sua fatura do [NomeDoCartão] e os números estão fresquinhos aqui:"
+    *   Exemplo (ver limite): "Opa, ${clientNameForPrompt}! Curioso sobre o limite do seu cartão [NomeDoCartão]? Deixa comigo que eu te conto tudo! 💳✨"
 
 2.  **Conversa Fluida:** Responda de forma calorosa e natural. Se nenhuma ação concreta for identificada (ex: apenas uma saudação do usuário como "Oi", "Tudo bem?"), responda de forma conversacional e pergunte como pode ajudar (ex: "Opa, ${clientNameForPrompt}! Tudo joia por aqui! 😊 Em que posso te ajudar hoje?").
 
@@ -63,27 +65,27 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 
 **FORMATO DA RESPOSTA JSON (OBRIGATÓRIO):**
 {
-  "overall_summary_suggestion": "string | null", // A saudação temática e criativa inicial.
+  "overall_summary_suggestion": "string | null", 
   "detected_actions": [
     // {
     //   "action": "NOME_DA_ACAO",
     //   "parameters": { "param1": "valor1", ... },
     //   "confidence": float (0.0 a 1.0),
-    //   "action_specific_reply_suggestion": "string | null" // SUGESTÃO DE TEXTO ESPECIAL PARA ESTA AÇÃO, caso precise de algo além do template padrão.
+    //   "action_specific_reply_suggestion": "string | null" 
     // }
   ],
   "clarifications_needed": [
     // {
     //   "original_intent_action_suggestion": "NOME_DA_ACAO_PROVAVEL",
-    //   "segment_text": "string", // O trecho da mensagem original que gerou a dúvida
-    //   "clarification_question": "string" // A pergunta amigável com exemplo
+    //   "segment_text": "string", 
+    //   "clarification_question": "string" 
     // }
   ],
-  "ununderstood_segments": [ "string" ], // Trechos da mensagem do usuário que você não conseguiu mapear para nenhuma ação ou parâmetro.
-  "reply_to_user_suggestion": "string" // Resposta geral ao usuário, especialmente se houver esclarecimentos ou múltiplas ações. Se for uma única ação bem-sucedida, o \`overall_summary_suggestion\` + o resumo da ação podem ser suficientes.
+  "ununderstood_segments": [ "string" ], 
+  "reply_to_user_suggestion": "string" 
 }
 
-**AÇÕES E PARÂMETROS (MANTIDOS, MAS ATENÇÃO AOS OBRIGATÓRIOS E FLEXIBILIDADE):**
+**AÇÕES E PARÂMETROS:**
 
 1.  CREATE_FINANCIAL_TRANSACTION: (APENAS para registros financeiros IMEDIATOS/PASSADOS, NÃO PARCELADOS NO CARTÃO)
     - type: "Entrada" ou "Saída" (OBRIGATÓRIO)
@@ -228,22 +230,25 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 21. ACTION_CONFIRMATION_NO: (Inferir se o usuário está cancelando uma ação pendente que VOCÊ pediu)
 22. GENERAL_QUESTION_OR_HELP: (Sem parâmetros. Para perguntas genéricas sobre suas capacidades ou pedidos de ajuda não mapeados)
 
-23. GET_CREDIT_CARD_INVOICE:
-    - creditCardName: string (OBRIGATÓRIO. Se faltar, use \`clarifications_needed\`)
-    - invoicePeriodType: "aberta", "ultima_fechada", "especifico" (opcional, default: "aberta". Se "especifico", \`invoiceMonth\` e \`invoiceYear\` são OBRIGATÓRIOS. Se o usuário pedir "fatura de maio", interprete como \`invoicePeriodType: "especifico"\`, \`invoiceMonth: 5\`, \`invoiceYear: (ano atual ou inferido)\`.)
-    - invoiceMonth: integer (opcional, 1-12. Se \`invoicePeriodType\`="especifico" e faltar, use \`clarifications_needed\`)
-    - invoiceYear: integer (opcional, ex: 2024. Se \`invoicePeriodType\`="especifico" e faltar, use \`clarifications_needed\`)
-    - listTransactions: boolean (opcional, default: true. Se true, lista os lançamentos. Se false, só o total e datas.)
+23. GET_CREDIT_CARD_INVOICE: (Para o usuário ver a fatura do cartão)
+    -   **Exemplos de como o usuário pode pedir:** "Qual a fatura do Inter?", "Me mostra a fatura do Nubank", "Fatura do meu cartão XP", "Ver fatura de maio do Inter", "Fatura do mês passado do Bradesco", "Como está a fatura do meu cartão Visa?"
+    -   creditCardName: string (OBRIGATÓRIO. Extraia o nome do cartão da frase do usuário. Se faltar, use \`clarifications_needed\` com o exemplo: "Com certeza, ${clientNameForPrompt}! Para eu te mostrar a fatura, preciso saber de qual cartão você está falando. Por exemplo: 'Qual a fatura do cartão **Nubank**?'")
+    -   invoicePeriodType: "aberta", "ultima_fechada", "especifico" (opcional, default: "aberta". Se "especifico", \`invoiceMonth\` e \`invoiceYear\` são OBRIGATÓRIOS. Se o usuário pedir "fatura de maio", interprete como \`invoicePeriodType: "especifico"\`, \`invoiceMonth: 5\`, \`invoiceYear: ${now.getFullYear()}\`. Se pedir "fatura do mês passado", use "ultima_fechada".)
+    -   invoiceMonth: integer (opcional, 1-12. Se \`invoicePeriodType\`="especifico" e faltar, use \`clarifications_needed\`)
+    -   invoiceYear: integer (opcional, ex: ${now.getFullYear()}. Se \`invoicePeriodType\`="especifico" e faltar, use \`clarifications_needed\`)
+    -   listTransactions: boolean (opcional, default: true. Se true, lista os lançamentos. Se false, só o total e datas.)
 
 24. GET_CREDIT_CARD_AVAILABLE_LIMIT:
-    - creditCardName: string (OBRIGATÓRIO. Se faltar, use \`clarifications_needed\`)
+    -   **Exemplos de como o usuário pode pedir:** "Qual o limite disponível do Inter?", "Quanto tenho de limite no Nubank?", "Ver limite do XP".
+    -   creditCardName: string (OBRIGATÓRIO. Se faltar, use \`clarifications_needed\` com o exemplo: "Claro, ${clientNameForPrompt}! Para eu verificar o limite, preciso saber de qual cartão. Por exemplo: 'Qual o limite do cartão **Nubank**?'")
 
 25. PAY_CREDIT_CARD_INVOICE: (Registra o PAGAMENTO da fatura, não a fatura em si)
-    - creditCardName: string (OBRIGATÓRIO. Se faltar, use \`clarifications_needed\`)
-    - paymentAmount: float (OBRIGATÓRIO, valor do pagamento. Se faltar, use \`clarifications_needed\`)
-    - paymentDate: "YYYY-MM-DD" (opcional, default: hoje)
-    - originatingAccountDescription: string (opcional, nome da conta de onde saiu o dinheiro, ex: "Conta Corrente BB". Se não informado, assumir conta principal/default do usuário)
-    - financialCategoryName: string (opcional, default: "Pagamento de Fatura")
+    -   **Exemplos:** "Pagar fatura do Inter de 300 reais", "Registrar pagamento da fatura Nubank", "Paguei 150 da fatura do XP".
+    -   creditCardName: string (OBRIGATÓRIO. Se faltar, use \`clarifications_needed\`)
+    -   paymentAmount: float (OBRIGATÓRIO, valor do pagamento. Se faltar, use \`clarifications_needed\`)
+    -   paymentDate: "YYYY-MM-DD" (opcional, default: hoje)
+    -   originatingAccountDescription: string (opcional, nome da conta de onde saiu o dinheiro, ex: "Conta Corrente BB". Se não informado, assumir conta principal/default do usuário)
+    -   financialCategoryName: string (opcional, default: "Pagamento de Fatura")
 
 **FLUXO DE DECISÃO:**
 1.  A mensagem do usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO? PRIORIZE \`CREATE_PARCELLED_ACCOUNT\` com \`creditCardName\`.
@@ -284,28 +289,34 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
   const conversationHistoryForAPI = (conversationContext.conversationHistory || [])
       .map(entry => ({ role: entry.role, content: entry.content }));
 
-  const finalSystemPromptContent = systemPromptContent
-      .replace("{{CONVERSATION_HISTORY}}", JSON.stringify(conversationHistoryForAPI.slice(-6))) // Envia as últimas 6 interações (3 pares)
-      .replace("MENSAGEM DO USUÁRIO:\n\"{{USER_MESSAGE}}\"", ""); // Remove o placeholder final, pois a mensagem do usuário será a última na lista de mensagens
+  // Prepara o system prompt final, substituindo os placeholders
+  let finalSystemPromptContent = systemPromptContent
+      .replace("{{CONVERSATION_HISTORY}}", JSON.stringify(conversationHistoryForAPI.slice(-6))); // Pega as últimas 6 interações (3 pares user/assistant)
+
+  // Remove o placeholder {{USER_MESSAGE}} do final do prompt, pois a mensagem do usuário será a última mensagem na lista `messagesToSendToAPI`
+  finalSystemPromptContent = finalSystemPromptContent.replace("MENSAGEM DO USUÁRIO:\n\"{{USER_MESSAGE}}\"", "").trim();
 
   const messagesToSendToAPI = [
       {role: "system", content: finalSystemPromptContent},
-      ...conversationHistoryForAPI.slice(-4), // Envia as 4 últimas mensagens do histórico (2 pares user/assistant)
-      {role: "user", content: userMessage}
+      // Adiciona algumas das últimas mensagens do histórico para dar contexto à IA
+      ...conversationHistoryForAPI.slice(-4), // Pega as últimas 4 mensagens (2 pares user/assistant)
+      {role: "user", content: userMessage} // A mensagem atual do usuário
   ];
 
   logger.debug('[AI SERVICE] Enviando para OpenAI:', {
       model: process.env.OPENAI_MODEL || "gpt-3.5-turbo-1106", // ou "gpt-4-turbo-preview"
       messageCount: messagesToSendToAPI.length,
       userMessageLength: userMessage.length,
-      // systemPromptPreview: finalSystemPromptContent.substring(0, 200) + "..." // Para depuração
+      // Descomente para ver o prompt enviado em desenvolvimento (CUIDADO COM O TAMANHO DO LOG)
+      // systemPromptPreview: finalSystemPromptContent.substring(0, 300) + "...",
+      // lastUserMessages: messagesToSendToAPI.filter(m => m.role === 'user').map(m => m.content).slice(-2)
   });
 
   try {
     const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-3.5-turbo-1106", // ou "gpt-4-turbo-preview"
+      model: process.env.OPENAI_MODEL || "gpt-3.5-turbo-1106",
       messages: messagesToSendToAPI,
-      temperature: 0.05, // Baixa temperatura para respostas mais determinísticas e factuais
+      temperature: 0.05,
       response_format: { type: "json_object" },
     });
 
@@ -314,7 +325,6 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
 
     const parsedResult = JSON.parse(aiResultContent);
     logger.info('[AI SERVICE] Resultado da IA parseado com sucesso.');
-    // Adicionar log mais detalhado do parsedResult em debug
     logger.debug('[AI SERVICE] Parsed AI Result:', parsedResult);
     return parsedResult;
 
@@ -323,8 +333,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     logger.error('[AI SERVICE] Erro ao chamar ou parsear API da OpenAI:', {
         errorMessage: error.message,
         rawApiResponse: rawResponseForError,
-        requestMessageCount: messagesToSendToAPI.length,
-        // requestMessages: process.env.NODE_ENV === 'development' ? messagesToSendToAPI : "Omitido em produção" // Cuidado com dados sensíveis
+        requestMessageCount: messagesToSendToAPI.length
     });
     let friendlyErrorReply = `Puxa vida, ${clientNameForPrompt}! 😬 Parece que tive um curto-circuito aqui e não consegui processar sua mensagem (${error.message.includes("JSON") ? "problema ao entender a resposta da IA" : "falha de comunicação com a IA"}). Minha equipe de engenheiros já está de olho nisso! 👩‍💻👨‍💻 Por favor, tente de novo em um momentinho. Desculpe o transtorno!`;
     return {
