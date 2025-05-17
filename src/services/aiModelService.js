@@ -302,7 +302,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
   ];
 
   // Determina o modelo a ser usado: Prioriza a variável de ambiente, senão usa gpt-4-turbo-preview
-  const modelToUse = process.env.OPENAI_MODEL || "gpt-4-turbo-preview"; // ALTERADO AQUI
+  const modelToUse = "gpt-4-turbo-preview"; // ALTERADO AQUI
 
   logger.debug('[AI SERVICE] Enviando para OpenAI:', {
       model: modelToUse,
