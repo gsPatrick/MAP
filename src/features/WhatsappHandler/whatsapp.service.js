@@ -230,7 +230,7 @@ function formatCreditCardSummary(card, clientName, forMulti = false, forEdit = f
 
 function formatCreditCardInvoiceSummary(invoiceDetails, clientName, listTransactions = true) {
     let summary = "";
-    const invoiceMonthYear = new Date(invoiceDetails.invoiceEndDate + 'T00:00:00Z').toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    const invoiceMonthYear = invoiceDetails.invoiceReferenceMonthYear;
     let profileName = "Pessoal";
     if (invoiceDetails.financialAccountType === 'PJ') profileName = "Empresarial (PJ)";
     else if (invoiceDetails.financialAccountType === 'MEI') profileName = "MEI";
@@ -283,15 +283,19 @@ function formatAvailableLimitSummary(limitInfo, clientName) {
 
 function formatParcelledAccountSummary(params, parcelResult, clientName, forEdit = false) {
     let summary = "";
+    let actionText = "registrada";
     if (forEdit) { // Se for para uma edição bem sucedida
-        summary += `✅ Compra Parcelada Atualizada:\n\n`; // Ou uma mensagem temática da IA
+        actionText = "atualizada";
+        // A IA deve fornecer o overall_summary_suggestion para edições.
+        // Se não, podemos adicionar um título genérico aqui.
+        // summary += `✅ Compra Parcelada Atualizada:\n\n`;
     }
     
     summary += `Sua compra de ${params.newDescription || params.description} no valor de R$ ${parseFloat(params.newTotalValue || params.totalValue).toFixed(2)} em ${params.newNumberOfParcels || params.numberOfParcels}x `;
     if (params.newCreditCardName || params.creditCardName) {
         summary += `no cartão ${params.newCreditCardName || params.creditCardName} `;
     }
-    summary += `foi registrada/atualizada com sucesso! 🥳`;
+    summary += `foi ${actionText} com sucesso! 🥳`;
 
     if (parcelResult.parcels && parcelResult.parcels.length > 0) {
         const firstParcel = parcelResult.parcels[0];
@@ -333,14 +337,14 @@ function initializeState(client, defaultAccount = null) {
 
     const newState = {
         currentAction: null,
-        data: {}, // Para coletar dados em múltiplos passos (ex: edição completa de compra parcelada)
+        data: {},
         activeFinancialAccountId: defaultAccount ? defaultAccount.id : null,
         activeFinancialAccountName: defaultAccount ? defaultAccount.accountName : null,
         activeFinancialAccountType: defaultAccount ? defaultAccount.accountType : null,
         clientName: clientName,
         messageHistory: [],
-        pendingConfirmation: null, // { action, parameters, messageToConfirm }
-        editingResource: null, // { type, id, originalData (opcional para edição complexa) }
+        pendingConfirmation: null,
+        editingResource: null,
         lastAiResponse: null,
         currentAccessLevel: client ? client.accessLevel : 'gratuito',
         accessExpiresAt: client ? client.accessExpiresAt : null,
@@ -668,29 +672,21 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
             else if (buttonId.startsWith('edit_parcelled_account_')) {
                 const originalAccountId = buttonId.replace('edit_parcelled_account_', '');
-                // Buscamos a compra original para ter os dados atuais
-                const originalPurchase = await financialService.getTransactionById(state.activeFinancialAccountId, originalAccountId); // Supondo que getTransactionById pode buscar o "pai"
-                
-                if (originalPurchase && originalPurchase.isParcel && originalPurchase.originalAccountId === originalPurchase.id) {
-                    state.editingResource = { 
-                        type: 'parcelled_account', 
-                        id: originalAccountId,
-                        originalData: { // Guardar dados originais para a IA ter contexto
-                            description: originalPurchase.description.replace(/ - Parcela \d+\/\d+$/, '').trim(),
-                            totalValue: originalPurchase.parcels.reduce((sum, p) => sum + parseFloat(p.value), 0), // Recalcular totalValue real
-                            numberOfParcels: originalPurchase.totalParcels,
-                            creditCardName: originalPurchase.creditCard?.name || null,
-                            initialDueDate: originalPurchase.parcels[0]?.transactionDate || originalPurchase.transactionDate, // Data da primeira parcela
-                            financialCategoryName: originalPurchase.category?.name || null,
-                            transactionDate: originalPurchase.transactionDate // Data da compra
-                        }
-                    };
-                    replyForButtonClick = `Ok, ${clientNameToUse}! Vamos editar sua compra parcelada de "${state.editingResource.originalData.description}". Me diga o que você quer mudar (ex: "descrição para X, valor para Y, 10 parcelas no cartão Z"). Lembre-se que alterar valor, parcelas ou cartão irá recriar a compra.`;
-                    state.currentAction = 'awaiting_parcelled_account_full_edit_details';
-                } else {
-                    replyForButtonClick = `Ops, ${clientNameToUse}, não encontrei os detalhes dessa compra parcelada para editar. 😕`;
-                    buttonClickHandledByServiceLogic = true; // Trata como erro, não deixa a IA processar
+                const parcelGroupInfo = await financialService.getTransactionById(state.activeFinancialAccountId, originalAccountId);
+                let originalDescriptionForEdit = "sua compra parcelada";
+                if (parcelGroupInfo && parcelGroupInfo.isParcel && parcelGroupInfo.originalAccountId === parcelGroupInfo.id) {
+                    originalDescriptionForEdit = parcelGroupInfo.description.replace(/ - Parcela \d+\/\d+$/, '').trim();
+                } else if (parcelGroupInfo) {
+                    originalDescriptionForEdit = parcelGroupInfo.description;
                 }
+
+                state.editingResource = { 
+                    type: 'parcelled_account', 
+                    id: originalAccountId,
+                    originalDescription: originalDescriptionForEdit // Guardar a descrição original para a mensagem
+                };
+                replyForButtonClick = `Ok, ${clientNameToUse}! Você quer editar a compra parcelada de "${originalDescriptionForEdit}".\n\nO que gostaria de alterar? Você pode me dizer os novos detalhes, como por exemplo: "mudar para R$250 em 5x no cartão XP com nova descrição 'Presente Dia das Mães'".\n\nLembre-se que alterar valor, número de parcelas ou o cartão irá refazer essa compra com os novos dados. Se quiser mudar apenas a descrição, diga "mudar descrição para [nova descrição]".`;
+                state.currentAction = 'awaiting_parcelled_account_full_edit_details';
             } else if (buttonId.startsWith('delete_parcelled_account_')) {
                 const originalAccountId = buttonId.replace('delete_parcelled_account_', '');
                 try {
@@ -721,20 +717,27 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             if (state.currentAction === 'awaiting_confirmation' && state.pendingConfirmation) {
                  const lowerMsg = messageText.toLowerCase().trim();
                  if (lowerMsg === 'sim' || lowerMsg === 's' || lowerMsg.includes('correto') || lowerMsg.includes('ok') || lowerMsg.includes('pode')) {
-                    // A ação de confirmação agora será delegada para a IA ou tratada no loop de ações
-                    // se a IA detectar ACTION_CONFIRMATION_YES e tiver os dados pendentes
-                    if (state.pendingConfirmation.action === 'RECREATE_PARCELLED_ACCOUNT') {
+                    if (state.pendingConfirmation.action === 'RECREATE_PARCELLED_ACCOUNT' && state.pendingConfirmation.parameters) {
                         try {
                             const { financialAccountId, originalAccountIdToDelete, newParcelData } = state.pendingConfirmation.parameters;
+                            // Antes de recriar, buscar a descrição da compra original para a mensagem de sucesso
+                            const oldParcelInfo = await financialService.getTransactionById(financialAccountId, originalAccountIdToDelete);
+                            const oldDescription = oldParcelInfo ? oldParcelInfo.description.replace(/ - Parcela \d+\/\d+$/, '').trim() : "compra anterior";
+
                             const recreatedResult = await financialService.recreateParcelledAccount(financialAccountId, originalAccountIdToDelete, newParcelData);
-                            replyForPreProcessing = `Show! 🎉 Sua compra parcelada de "${newParcelData.description}" foi atualizada com sucesso!\n${formatParcelledAccountSummary(newParcelData, recreatedResult, clientNameToUse, true)}`;
+                            
+                            let successMsg = aiResponse?.lastAiResponse?.detected_actions?.find(a => a.action === 'RECREATE_PARCELLED_ACCOUNT')?.action_specific_reply_suggestion;
+                            if (!successMsg) {
+                                // Usar newParcelData que contém os dados que a IA extraiu para a recriação
+                                successMsg = `🎉 Sensacional, ${clientNameToUse}! Sua compra parcelada de "${oldDescription}" foi atualizada para os novos detalhes:\n\n${formatParcelledAccountSummary(newParcelData, recreatedResult, clientNameToUse, true)}`;
+                            }
+                            replyForPreProcessing = successMsg;
                             state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                             stateHandledInPreProcessing = true;
                         } catch(e) {
                             logger.error(`[WHATSAPP SERVICE] Erro ao recriar compra parcelada após confirmação: ${e.message}`);
                             replyForPreProcessing = `Puxa, ${clientNameToUse}, algo deu errado ao tentar atualizar sua compra parcelada. 😥 (${e.message.substring(0,70)}). A compra original não foi alterada. Quer tentar de novo os detalhes ou cancelar?`;
-                            // Mantém o pendingConfirmation para que o usuário possa tentar novamente ou cancelar a edição
-                            state.currentAction = 'awaiting_confirmation'; // volta para aguardar sim/nao
+                            state.currentAction = 'awaiting_confirmation'; 
                             stateHandledInPreProcessing = true;
                         }
                     } else {
@@ -748,40 +751,25 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     stateHandledInPreProcessing = true;
                 }
             }
+            // O estado 'awaiting_parcelled_account_description_edit' agora é melhor tratado pela IA com a ação UPDATE_PARCELLED_ACCOUNT_DESCRIPTION
+            // Se a IA não detectar, a lógica de fallback abaixo (se descomentada e ajustada) poderia ser usada,
+            // mas o ideal é a IA ser a principal tomadora de decisão aqui.
+            // else if (state.currentAction === 'awaiting_parcelled_account_description_edit' && state.editingResource?.type === 'parcelled_account') {
+            //     // ... (lógica de fallback)
+            // }
             else if (state.currentAction === 'awaiting_transaction_edit_details' || 
                      state.currentAction === 'awaiting_appointment_edit_details' ||
                      state.currentAction === 'awaiting_credit_card_edit_details' || 
                      state.currentAction === 'awaiting_recurring_rule_edit_details' ||
-                     state.currentAction === 'awaiting_parcelled_account_full_edit_details' 
+                     state.currentAction === 'awaiting_parcelled_account_full_edit_details' || // IA deve detectar RECREATE_PARCELLED_ACCOUNT
+                     state.currentAction === 'awaiting_parcelled_account_description_edit' // IA deve detectar UPDATE_PARCELLED_ACCOUNT_DESCRIPTION
                     ) {
-                stateHandledInPreProcessing = false;
-            }
-             else if (state.currentAction === 'awaiting_parcelled_account_description_edit' && state.editingResource?.type === 'parcelled_account') {
-                // Este estado agora é menos provável de ser atingido diretamente se a IA for para UPDATE_PARCELLED_ACCOUNT_DESCRIPTION
-                // Mas mantemos como fallback.
-                const newDescription = messageText.trim();
-                if (newDescription.toLowerCase() === 'cancelar') {
-                    replyForPreProcessing = `Tudo bem, ${clientNameToUse}! Edição da descrição cancelada. O que mais posso fazer por você? 😊`;
-                    state.currentAction = null; state.editingResource = null; stateHandledInPreProcessing = true;
-                } else if (newDescription.length > 2 && newDescription.length < 200) {
-                    try {
-                        // Se a IA não pegar UPDATE_PARCELLED_ACCOUNT_DESCRIPTION, tratamos aqui.
-                        await financialService.updateParcelledAccountDescription(state.activeFinancialAccountId, state.editingResource.id, newDescription);
-                        replyForPreProcessing = `Beleza! A descrição da sua compra parcelada foi atualizada para "${newDescription}" em todas as parcelas. ✨`;
-                        state.currentAction = null; state.editingResource = null; stateHandledInPreProcessing = true;
-                    } catch (e) {
-                        logger.error(`Erro ao atualizar descrição de compra parcelada (fallback): ${e.message}`);
-                        replyForPreProcessing = `Xiii, não consegui atualizar a descrição. 😥 Tente novamente ou diga "cancelar".`;
-                        stateHandledInPreProcessing = true; 
-                    }
-                } else {
-                    replyForPreProcessing = `Essa descrição parece um pouco curta ou longa demais. Poderia tentar uma descrição entre 3 e 200 letras, ou dizer "cancelar"?`;
-                    stateHandledInPreProcessing = true; 
-                }
+                stateHandledInPreProcessing = false; // Deixa a IA processar os detalhes da edição
             }
             else if (state.currentAction === 'awaiting_clarification_response'){
                 stateHandledInPreProcessing = false;
             }
+
 
             if (stateHandledInPreProcessing && replyForPreProcessing) {
                 state.messageHistory.push({ role: 'assistant', content: replyForPreProcessing });
@@ -814,15 +802,12 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         if(state.currentAction && typeof state.currentAction === 'string' &&
            (state.currentAction.startsWith('awaiting_') || state.currentAction.startsWith('creating_guided_account_') || state.currentAction === 'selecting_initial_financial_account') ) {
             if (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0) {
-                 state.currentAction = null; // Limpa se a IA não pedir mais esclarecimentos
+                 if (!state.currentAction.includes('_edit_') && !state.currentAction.includes('_choice')) { // Não limpar se estiver em fluxo de edição
+                    state.currentAction = null;
+                 }
             }
         }
-        // Se estávamos editando e a IA não detectou uma ação UPDATE, limpamos o contexto de edição.
-        if (state.editingResource && (!aiResponse.detected_actions || !aiResponse.detected_actions.some(act => act.action.startsWith("UPDATE_")))) {
-            // state.editingResource = null; // Movido para o final do loop de ações
-        }
-
-
+        
         finalReplyParts = [];
         if (aiResponse.overall_summary_suggestion) {
             finalReplyParts.push(aiResponse.overall_summary_suggestion);
@@ -855,7 +840,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     'CREATE_RECURRING_RULE', 'CREATE_PRODUCT', 'GET_STOCK_INFO',
                     'RECORD_STOCK_MOVEMENT', 'LIST_APPOINTMENTS', 'CREATE_CREDIT_CARD',
                     'LIST_CREDIT_CARDS', 'LIST_RECURRING_RULES', 'UPDATE_CREDIT_CARD', 'UPDATE_RECURRING_RULE', 'UPDATE_PRODUCT',
-                    'UPDATE_PARCELLED_ACCOUNT_DESCRIPTION', // Ação de edição de descrição de parcela
+                    'UPDATE_PARCELLED_ACCOUNT_DESCRIPTION', 'RECREATE_PARCELLED_ACCOUNT',
                     'GET_CREDIT_CARD_INVOICE', 'GET_CREDIT_CARD_AVAILABLE_LIMIT', 'PAY_CREDIT_CARD_INVOICE'
                 ];
                 if (accountRequiredActions.includes(detectedAction.action) && !state.activeFinancialAccountId) {
@@ -903,7 +888,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const updatedTx = await financialService.updateTransaction(state.activeFinancialAccountId, transactionIdToUpdate, updateTxData);
                             const reloadedUpdatedTx = await financialService.getTransactionById(state.activeFinancialAccountId, updatedTx.id);
                             currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatFinancialTransactionSummary(reloadedUpdatedTx, clientNameToUse, false, true);
-                            state.editingResource = null;
+                            state.editingResource = null; // Limpa após a edição bem-sucedida
+                            state.currentAction = null;   // Limpa a ação de edição
                             break;
                         }
                         case 'SCHEDULE_APPOINTMENT': {
@@ -952,6 +938,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const reloadedUpdatedApp = await appointmentService.getAppointmentById(state.activeFinancialAccountId, updatedApp.id);
                             currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatAppointmentSummary(reloadedUpdatedApp, clientNameToUse, false, true);
                             state.editingResource = null;
+                            state.currentAction = null;
                             break;
                         }
                         case 'CREATE_PARCELLED_ACCOUNT': {
@@ -993,6 +980,58 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             await financialService.updateParcelledAccountDescription(state.activeFinancialAccountId, originalAccountIdToUpdate, newDescription);
                             currentActionFormatted = detectedAction.action_specific_reply_suggestion || `A descrição da sua compra parcelada foi atualizada para "${newDescription}" em todas as parcelas! ✨`;
                             state.editingResource = null;
+                            state.currentAction = null;
+                            break;
+                        }
+                        case 'RECREATE_PARCELLED_ACCOUNT': {
+                            isEditActionCurrentLoop = true;
+                            actionWasAnEdit = true;
+                            const originalAccountIdToRecreate = params.originalAccountIdToUpdate || state.editingResource?.id;
+                            if (!originalAccountIdToRecreate) throw new Error("ID da compra parcelada original não fornecido para recriação.");
+                        
+                            const newParcelData = {
+                                description: params.newDescription,
+                                type: params.newType || 'Saída',
+                                totalValue: parseFloat(params.newTotalValue),
+                                numberOfParcels: parseInt(params.newNumberOfParcels),
+                                initialDueDate: params.newInitialDueDate,
+                                transactionDate: params.newTransactionDate || params.newInitialDueDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0],
+                                financialCategoryId: params.newFinancialCategoryName ? await findFinancialCategoryIdByName(params.newFinancialCategoryName, state.activeFinancialAccountId, params.newType || 'Saída') : null,
+                                creditCardId: params.newCreditCardName ? await findCreditCardIdByName(params.newCreditCardName, state.activeFinancialAccountId) : null,
+                                notes: params.newNotes,
+                            };
+                        
+                            if (!newParcelData.description || !newParcelData.totalValue || !newParcelData.numberOfParcels || !newParcelData.initialDueDate || ( (params.newCreditCardName) && !newParcelData.creditCardId) ) {
+                                currentActionFormatted = `Para refazer essa compra parcelada, preciso de todos os detalhes: nova descrição, valor total, número de parcelas, data da primeira parcela e o cartão (se houver). Parece que algo ficou faltando. Vamos tentar de novo?`;
+                                state.currentAction = 'awaiting_parcelled_account_full_edit_details';
+                                state.editingResource = { type: 'parcelled_account', id: originalAccountIdToRecreate, originalData: state.editingResource?.originalData };
+                                break;
+                            }
+                            if (params.newCreditCardName && !newParcelData.creditCardId){
+                                currentActionFormatted = `Hum, não encontrei um cartão chamado "${params.newCreditCardName}" para esta nova compra parcelada. 😕 Pode verificar o nome ou cadastrar o cartão?`;
+                                state.currentAction = 'awaiting_parcelled_account_full_edit_details';
+                                state.editingResource = { type: 'parcelled_account', id: originalAccountIdToRecreate, originalData: state.editingResource?.originalData };
+                                break;
+                            }
+                        
+                            const confirmationMessage = `Ok, ${clientNameToUse}! Você quer alterar a compra para:\n` +
+                                                        `Descrição: ${newParcelData.description}\n` +
+                                                        `Valor Total: R$ ${newParcelData.totalValue.toFixed(2)} em ${newParcelData.numberOfParcels}x\n` +
+                                                        `Primeira Parcela: ${new Date(newParcelData.initialDueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'})}\n` +
+                                                        (newParcelData.creditCardId ? `Cartão: ${params.newCreditCardName}\n` : '') +
+                                                        `Isso substituirá a compra original. Confirmar? (Sim/Não)`;
+                            
+                            state.pendingConfirmation = {
+                                action: 'RECREATE_PARCELLED_ACCOUNT',
+                                parameters: { 
+                                    financialAccountId: state.activeFinancialAccountId,
+                                    originalAccountIdToDelete: originalAccountIdToRecreate,
+                                    newParcelData: newParcelData
+                                },
+                                messageToConfirm: confirmationMessage
+                            };
+                            currentActionFormatted = confirmationMessage;
+                            state.currentAction = 'awaiting_confirmation';
                             break;
                         }
                         case 'UPDATE_PRODUCT': { 
@@ -1007,6 +1046,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const updatedProd = await productService.updateProduct(state.activeFinancialAccountId, productIdToUpdate, updateProdData);
                             currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatProductSummary(updatedProd, clientNameToUse, false, true);
                             state.editingResource = null;
+                            state.currentAction = null;
                             break;
                         }
                         case 'GET_FINANCIAL_SUMMARY': {
@@ -1222,6 +1262,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const updatedCard = await creditCardService.updateCreditCard(state.activeFinancialAccountId, cardIdToUpdate, updateCardData);
                             currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatCreditCardSummary(updatedCard, clientNameToUse, false, true);
                             state.editingResource = null;
+                            state.currentAction = null;
                             break;
                         }
                         case 'UPDATE_RECURRING_RULE': {
@@ -1236,6 +1277,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const updatedRule = await recurringTransactionService.updateRecurringRule(state.activeFinancialAccountId, ruleIdToUpdate, updateRuleData);
                             currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatRecurringRuleSummary(updatedRule, clientNameToUse, false, true);
                             state.editingResource = null;
+                            state.currentAction = null;
                             break;
                         }
                         case 'UPDATE_PRODUCT': {
@@ -1250,6 +1292,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const updatedProd = await productService.updateProduct(state.activeFinancialAccountId, productIdToUpdate, updateProdData);
                             currentActionFormatted = detectedAction.action_specific_reply_suggestion || formatProductSummary(updatedProd, clientNameToUse, false, true);
                             state.editingResource = null;
+                            state.currentAction = null;
                             break;
                         }
                         case 'LIST_APPOINTMENTS': {
@@ -1571,7 +1614,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
         state.messageHistory.push({ role: 'assistant', content: completeFinalReply });
 
-        if (actionWasAnEdit || (state.editingResource && (!aiResponse.detected_actions || aiResponse.detected_actions.every(a => !a.action.startsWith("UPDATE_"))))) {
+        if (actionWasAnEdit || (state.editingResource && (!aiResponse.detected_actions || aiResponse.detected_actions.every(a => !a.action.startsWith("UPDATE_") && a.action !== 'RECREATE_PARCELLED_ACCOUNT')))) {
+            // Limpa o recurso de edição se uma edição foi feita ou se a IA não detectou uma ação de update/recreate para o recurso em edição.
             state.editingResource = null;
         }
         if (state.data.clarificationContext && (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0)) {
@@ -1622,7 +1666,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         break;
                     case 'parcelled_account':
                         buttons = [
-                            { id: `edit_parcelled_account_${resourceForButtonsContext.id}`, label: "Alterar Compra Parcelada ✍️" }, // Rótulo mais genérico
+                            { id: `edit_parcelled_account_${resourceForButtonsContext.id}`, label: "Alterar Compra Parcelada ✍️" },
                             { id: `delete_parcelled_account_${resourceForButtonsContext.id}`, label: "Excluir Compra Parcelada 🗑️" },
                         ];
                         break;

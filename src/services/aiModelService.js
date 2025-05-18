@@ -58,7 +58,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
         f. Exemplo para "cadastrar despesa" (faltando descrição, valor, tipo): "Para registrar uma despesa, preciso de alguns detalhes, ${clientNameForPrompt}! ✨ Por exemplo, você poderia dizer: 'Gastei **R$ 50** com **almoço** hoje'?"
     *   A \`reply_to_user_suggestion\` DEVE ser exatamente igual à \`clarification_question\`.
 
-4.  **Edição após Clique em Botão 'Editar':** Se o histórico da conversa indicar que o usuário acabou de clicar em um botão 'EDITAR [ITEM] [ID]' (ou enviou uma mensagem com esse texto) e recebeu uma mensagem como "Claro! Descreva na próxima mensagem o que você precisa que eu altere...", a mensagem ATUAL do usuário DEVE ser interpretada como a descrição dessas alterações. Identifique a ação de EDIÇÃO apropriada (ex: UPDATE_FINANCIAL_TRANSACTION, UPDATE_APPOINTMENT, UPDATE_PARCELLED_ACCOUNT_DESCRIPTION) e extraia os campos e novos valores.
+4.  **Edição após Clique em Botão 'Editar':** Se o histórico da conversa indicar que o usuário acabou de clicar em um botão 'EDITAR [ITEM] [ID]' (ou enviou uma mensagem com esse texto) e recebeu uma mensagem como "Claro! Descreva na próxima mensagem o que você precisa que eu altere...", a mensagem ATUAL do usuário DEVE ser interpretada como a descrição dessas alterações. Identifique a ação de EDIÇÃO apropriada (ex: UPDATE_FINANCIAL_TRANSACTION, UPDATE_APPOINTMENT, UPDATE_PARCELLED_ACCOUNT_DESCRIPTION, RECREATE_PARCELLED_ACCOUNT) e extraia os campos e novos valores.
     *   Se a ação de edição for bem-sucedida, a \`reply_to_user_suggestion\` DEVE ser uma mensagem de confirmação caprichada e detalhada, seguindo o novo tom (ex: "Show de bola, ${clientNameForPrompt}! ✨ A transação foi atualizada com sucesso! Agora os detalhes são...").
 
 5.  **Flexibilidade na Extração de Valor:** Para transações financeiras ou valores associados a compromissos, seja flexível. Se o usuário disser "gastei 50 no uber" ou "lembrete de pagar 200", interprete "50" como 50.00 e "200" como 200.00. A menção explícita de "reais" ou "R$" é opcional se o contexto indicar uma transação monetária. Não espere por centavos se não forem mencionados.
@@ -251,7 +251,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     -   financialCategoryName: string (opcional, default: "Pagamento de Fatura")
 
 26. UPDATE_CREDIT_CARD:
-    - cardIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto \`conversationContext.editingResource.id\`)
+    - cardIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto \`conversationContext.editingResource.id\` se \`conversationContext.editingResource.type\` for 'credit_card')
     - name: string (opcional)
     - limit: float (opcional, >0)
     - closingDay: integer (opcional, 1-28)
@@ -262,7 +262,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - isActive: boolean (opcional)
 
 27. UPDATE_RECURRING_RULE:
-    - ruleIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto \`conversationContext.editingResource.id\`)
+    - ruleIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto \`conversationContext.editingResource.id\` se \`conversationContext.editingResource.type\` for 'recurring_rule')
     - description: string (opcional)
     - type: "Saída" ou "Entrada" (opcional)
     - value: float (opcional, >0)
@@ -278,25 +278,40 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - isActive: boolean (opcional)
 
 28. UPDATE_PRODUCT (SÓ PARA CONTAS PJ/MEI):
-    - productIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto \`conversationContext.editingResource.id\`)
+    - productIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto \`conversationContext.editingResource.id\` se \`conversationContext.editingResource.type\` for 'product')
     - name: string (opcional)
     - salePrice: float (opcional, >0)
     - code: string (opcional)
     - costPrice: float (opcional)
-    // - quantity: integer (opcional, A QUANTIDADE DEVE SER ATUALIZADA VIA RECORD_STOCK_MOVEMENT)
     - minimumStock: integer (opcional, default: 0)
     - unit: string (opcional)
     - description: string (opcional)
     - isActive: boolean (opcional)
 
-29. UPDATE_PARCELLED_ACCOUNT_DESCRIPTION: (Apenas para mudar a descrição geral de uma compra parcelada)
-    - originalAccountIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto \`conversationContext.editingResource.id\`, refere-se ao ID da primeira parcela do grupo)
+29. UPDATE_PARCELLED_ACCOUNT_DESCRIPTION: (Apenas para mudar a descrição geral de uma compra parcelada, se o usuário confirmar que quer mudar SÓ a descrição)
+    - originalAccountIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto \`conversationContext.editingResource.id\` se \`conversationContext.editingResource.type\` for 'parcelled_account')
     - newDescription: string (OBRIGATÓRIO)
+
+30. RECREATE_PARCELLED_ACCOUNT: (Para editar VALOR, NÚMERO DE PARCELAS, CARTÃO, etc. de uma compra parcelada. Isso envolve DELETAR o antigo e CRIAR um novo.)
+    - originalAccountIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto \`conversationContext.editingResource.id\` se \`conversationContext.editingResource.type\` for 'parcelled_account'. Este é o ID do grupo de parcelas a ser substituído.)
+    - newDescription: string (OBRIGATÓRIO)
+    - newType: "Saída" (OBRIGATÓRIO para compras no cartão) ou "Entrada" (opcional, default: "Saída" se houver cartão)
+    - newTotalValue: float (OBRIGATÓRIO, >0)
+    - newNumberOfParcels: integer (OBRIGATÓRIO, min 1)
+    - newInitialDueDate: "YYYY-MM-DD" (OBRIGATÓRIO. DATA DA PRIMEIRA PARCELA NA FATURA. Usar data da compra se não especificado outro.)
+    - newFinancialCategoryName: string (opcional)
+    - newCreditCardName: string (OBRIGATÓRIO se for uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO)
+    - newNotes: string (opcional)
+    - newTransactionDate: "YYYY-MM-DD" (opcional, default: hoje. DATA DA COMPRA ORIGINAL.)
+
 
 **FLUXO DE DECISÃO:**
 1.  A mensagem do usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO? PRIORIZE \`CREATE_PARCELLED_ACCOUNT\` com \`creditCardName\`.
 2.  A mensagem do usuário indica claramente uma ação financeira FUTURA (pagar amanhã, lembrar de receber, agendar compra, etc.) e NÃO é uma compra parcelada no cartão? PRIORIZE \`SCHEDULE_APPOINTMENT\` com \`associatedValue\` e \`associatedTransactionType\`.
-3.  A mensagem é uma descrição de edição (após o bot ter pedido)? Detecte a ação UPDATE_* apropriada (ex: UPDATE_FINANCIAL_TRANSACTION, UPDATE_APPOINTMENT, UPDATE_CREDIT_CARD, UPDATE_RECURRING_RULE, UPDATE_PRODUCT, UPDATE_PARCELLED_ACCOUNT_DESCRIPTION).
+3.  A mensagem é uma descrição de edição (após o bot ter pedido, e \`conversationContext.editingResource.id\` está presente)?
+    *   Se \`conversationContext.editingResource.type\` for 'parcelled_account' e o usuário quer mudar SÓ a descrição, use \`UPDATE_PARCELLED_ACCOUNT_DESCRIPTION\`.
+    *   Se \`conversationContext.editingResource.type\` for 'parcelled_account' e o usuário quer mudar valor, parcelas, cartão, etc., tente \`RECREATE_PARCELLED_ACCOUNT\`. Colete todos os novos parâmetros (\`newDescription\`, \`newTotalValue\`, \`newNumberOfParcels\`, \`newCreditCardName\`, \`newInitialDueDate\`, \`newTransactionDate\`). Se algum faltar para recriar, use \`clarifications_needed\` para obtê-los.
+    *   Para outros tipos, detecte a ação UPDATE_* apropriada (ex: UPDATE_FINANCIAL_TRANSACTION, UPDATE_APPOINTMENT, UPDATE_CREDIT_CARD, UPDATE_RECURRING_RULE, UPDATE_PRODUCT).
 4.  A mensagem é uma confirmação (Sim/Não) para uma ação pendente que VOCÊ pediu? Detecte ACTION_CONFIRMATION_*.
 5.  A mensagem é uma saudação simples, agradecimento ou pergunta genérica sobre suas capacidades? Detecte GENERAL_GREETING_OR_SMALLTALK ou GENERAL_QUESTION_OR_HELP.
 6.  Caso contrário, tente detectar uma das outras ações de CRUD ou LIST, incluindo as ações de cartão.
@@ -304,7 +319,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 8.  Se confiante e com todos os dados, detecte a ação para execução direta. Evite pedir confirmações desnecessárias. Para ações bem-sucedidas, use a saudação criativa e temática no \`overall_summary_suggestion\`.
 
 Contexto da Conta Ativa: ${accountCtx}
-Contexto de Edição (se houver): ID do recurso sendo editado: ${conversationContext.editingResource?.id || 'Nenhum'}, Tipo: ${conversationContext.editingResource?.type || 'Nenhum'}.
+Contexto de Edição (se houver): ID do recurso sendo editado: ${conversationContext.editingResource?.id || 'Nenhum'}, Tipo: ${conversationContext.editingResource?.type || 'Nenhum'}. Dados originais para edição de parcelamento (se houver): ${JSON.stringify(conversationContext.editingResource?.originalData) || 'Nenhum'}.
 Histórico da Conversa (últimas interações, a mais recente primeiro):
 {{CONVERSATION_HISTORY}}
 
@@ -349,7 +364,6 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
       model: modelToUse,
       messageCount: messagesToSendToAPI.length,
       userMessageLength: userMessage.length,
-      // systemPromptPreview: process.env.NODE_ENV === 'development' ? finalSystemPromptContent : 'Omitido em produção', // Para depuração
   });
 
   try {
