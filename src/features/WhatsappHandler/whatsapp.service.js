@@ -54,8 +54,10 @@ async function findProductIdByNameOrCode(nameOrCode, financialAccountId) {
 // --- Funções de Formatação Auxiliares ---
 function formatDate(dateString) {
     if (!dateString) return 'N/A';
+    // Garante que a string de data seja interpretada corretamente como UTC se for apenas YYYY-MM-DD
     const safeDateString = dateString.length === 10 ? `${dateString}T00:00:00Z` : dateString;
     try {
+        // Formata para pt-BR, mas considera a data como UTC para evitar problemas de fuso ao formatar apenas a data.
         return new Date(safeDateString).toLocaleDateString('pt-BR', { timeZone: 'UTC' });
     } catch (e) {
         logger.warn(`[FORMAT DATE] Data inválida recebida: ${dateString}`);
@@ -65,6 +67,8 @@ function formatDate(dateString) {
 
 function formatTime(dateTimeString, includeSeconds = true) {
     if (!dateTimeString) return 'N/A';
+    // Assume que dateTimeString é um timestamp ISO ou algo que o construtor Date entenda.
+    // O timezone para formatação será o do ambiente ou São Paulo.
     const options = { hour: '2-digit', minute: '2-digit', timeZone: process.env.TZ || 'America/Sao_Paulo' };
     if (includeSeconds) options.second = '2-digit';
     try {
@@ -87,6 +91,8 @@ function formatPlatformLink(customText = "") {
 }
 
 // --- Funções de Formatação ANTIGAS (Completas, para referência e correção de chamadas) ---
+// Estas funções são mantidas para referência caso sejam chamadas por código não mostrado,
+// mas as novas "format...DataStructure" são preferidas para as mensagens ao usuário.
 function formatOldFinancialTransactionSummary(transaction, clientName, forMulti = false, forEdit = false) {
     if (!transaction) return "Dados da transação não disponíveis.";
     const date = formatDate(transaction.transactionDate);
@@ -101,19 +107,20 @@ function formatOldFinancialTransactionSummary(transaction, clientName, forMulti 
         summary += `Vencimento: ${formatDate(transaction.dueDate)}\n`;
         summary += `Status: ${transaction.isPaidOrReceived ? (transaction.type === 'Entrada' ? 'Recebida ✅' : 'Paga ✅') : 'Pendente ⏳'}\n`;
         if(transaction.isPaidOrReceived && transaction.paymentDate) summary += `Data Pgto/Rec: ${formatDate(transaction.paymentDate)}\n`;
-    } else if (!transaction.isPayableOrReceivable && !transaction.creditCardId) {
+    } else if (!transaction.isPayableOrReceivable && !transaction.creditCardId) { // Transação à vista (não cartão)
          summary += `Status: ${transaction.isPaidOrReceived ? (transaction.type === 'Entrada' ? 'Recebida ✅' : 'Paga ✅') : 'Pendente ⏳'}\n`;
-    } else if (transaction.creditCardId) {
+    } else if (transaction.creditCardId) { // Transação no cartão (sempre "paga" na origem, lançada na fatura)
          summary += `Status: Lançada no cartão ✅\n`;
     }
     if(transaction.isParcel && transaction.parcelNumber && transaction.totalParcels){
         summary += `Parcela: ${transaction.parcelNumber}/${transaction.totalParcels}\n`;
         if(transaction.originalAccount && transaction.originalAccount.description){
+            // Remove o sufixo " - Parcela X/Y" da descrição original para mostrar o nome da compra
             summary += `Compra Original: ${transaction.originalAccount.description.replace(/ - Parcela \d+\/\d+$/, '').trim()}\n`;
         }
     }
     if(transaction.notes && transaction.notes.trim() !== "") summary += `Notas: ${transaction.notes}\n`;
-    if(!forMulti && !forEdit) summary += `\nID: ${transaction.id}`;
+    if(!forMulti && !forEdit) summary += `\nID: ${transaction.id}`; // ID apenas para resumo individual não-edição
     return summary.trim();
 }
 
@@ -127,7 +134,7 @@ function formatOldAppointmentSummary(appointment, clientName, forMulti = false, 
     summary += `Data: ${dateStr} às ${timeStr}\n`;
     if (appointment.durationMinutes) summary += `Duração: ${appointment.durationMinutes} min\n`;
     if (appointment.location) summary += `Local: ${appointment.location}\n`;
-    if (appointment.status) summary += `Status: ${appointment.status}\n`;
+    if (appointment.status) summary += `Status: ${appointment.status}\n`; // Ex: Scheduled, Confirmed, Cancelled
     if (appointment.associatedValue && appointment.associatedTransactionType) {
         summary += `Valor Associado: ${formatCurrency(appointment.associatedValue)} (${appointment.associatedTransactionType})\n`;
     }
@@ -144,16 +151,18 @@ function formatOldRecurringRuleSummary(rule, clientName, forMulti = false, forEd
     if(rule.category) summary += `Categoria: ${rule.category.name}\n`;
     let frequencyDisplay = rule.frequency ? (rule.frequency.charAt(0).toUpperCase() + rule.frequency.slice(1)) : 'N/A';
     if (rule.interval && rule.interval > 1) {
+        // Mapeia para plural
         const pluralMap = { daily: 'dias', weekly: 'semanas', monthly: 'meses', annually: 'anos', 'bi-weekly': 'quinzenas', quarterly: 'trimestres', 'semi-annually': 'semestres' };
         frequencyDisplay = `A cada ${rule.interval} ${pluralMap[rule.frequency] || (rule.frequency ? rule.frequency.replace('ly', 's') : 'períodos')}`;
     } else if (rule.frequency) {
+         // Mapeia para forma singular mais amigável
          const singleMap = { daily: 'Diária', weekly: 'Semanal', monthly: 'Mensal', annually: 'Anual', 'bi-weekly': 'Quinzenal', quarterly: 'Trimestral', 'semi-annually': 'Semestral' };
          frequencyDisplay = singleMap[rule.frequency] || frequencyDisplay;
     }
     summary += `Frequência: ${frequencyDisplay}\n`;
     summary += `Início: ${formatDate(rule.startDate)}\n`;
     if(rule.endDate) summary += `Fim: ${formatDate(rule.endDate)}\n`;
-    if(rule.dayOfWeek !== null && rule.dayOfWeek !== undefined) {
+    if(rule.dayOfWeek !== null && rule.dayOfWeek !== undefined) { // Dia da semana (0=Domingo, 6=Sábado)
         const days = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
         summary += `Dia da Semana: ${days[rule.dayOfWeek]}\n`;
     }
@@ -201,10 +210,12 @@ function formatOldParcelledAccountSummary(params, parcelResult, clientName, forE
     summary += `Descrição: ${params.description || firstParcel.description.replace(/ - Parcela \d+\/\d+$/, '')}\n`;
     summary += `Valor Total: R$ ${parseFloat(params.totalValue).toFixed(2)}\n`;
     summary += `Parcelas: ${params.numberOfParcels}x de R$ ${parseFloat(firstParcel.value).toFixed(2)} (aprox.)\n`;
-    if(params.creditCardName) summary += `Cartão: ${params.creditCardName}\n`;
-    if(params.financialCategoryName) summary += `Categoria: ${params.financialCategoryName}\n`;
+    if(params.creditCardName) summary += `Cartão: ${params.creditCardName}\n`; // Usa o nome do cartão dos parâmetros se disponível
+    else if(firstParcel.creditCard) summary += `Cartão: ${firstParcel.creditCard.name}\n`;
+    if(params.financialCategoryName) summary += `Categoria: ${params.financialCategoryName}\n`; // Usa o nome da categoria dos parâmetros se disponível
+    else if(firstParcel.category) summary += `Categoria: ${firstParcel.category.name}\n`;
     summary += `Data da Compra: ${formatDate(params.transactionDate || firstParcel.transactionDate)}\n`;
-    summary += `Venc. 1ª Parcela: ${formatDate(params.initialDueDate || firstParcel.dueDate || firstParcel.transactionDate)}\n`;
+    summary += `Venc. 1ª Parcela: ${formatDate(params.initialDueDate || firstParcel.dueDate || firstParcel.transactionDate)}\n`; // Usa initialDueDate dos params se disponível
     return summary.trim();
 }
 
@@ -226,15 +237,23 @@ function formatFinancialTransactionDataStructure(transaction) {
         data += `💳 Cartão: ${transaction.creditCard.name}\n`;
     }
 
-    if (transaction.isPayableOrReceivable && !transaction.creditCardId) {
+    if (transaction.isPayableOrReceivable && !transaction.creditCardId) { // Contas a pagar/receber (não cartão)
         data += `🗓️ Vencimento: ${formatDate(transaction.dueDate)}\n`;
         data += `✅ Status: ${transaction.isPaidOrReceived ? (transaction.type === 'Entrada' ? 'Recebido' : 'Pago') : 'Pendente'}\n`;
         if (transaction.isPaidOrReceived && transaction.paymentDate) {
             data += `🧾 Data Pgto/Rec: ${formatDate(transaction.paymentDate)}\n`;
         }
-    } else {
+    } else if (!transaction.creditCardId) { // Transações à vista (não cartão)
         data += `✅ Status: ${transaction.type === 'Entrada' ? 'Recebido' : 'Pago'}\n`;
+    } else { // Transações no cartão (sempre "paga" na origem, lançada na fatura)
+         data += `✅ Status: Lançada no cartão\n`;
     }
+
+    if (transaction.isParcel && transaction.parcelNumber && transaction.totalParcels && transaction.originalAccount) {
+        data += `📦 Parcela: ${transaction.parcelNumber} de ${transaction.totalParcels}\n`;
+        data += `🛒 Compra Original: ${transaction.originalAccount.description.replace(/ - Parcela \d+\/\d+$/, '').trim()}\n`;
+    }
+
     if (transaction.notes) {
         data += `🗒️ Observações: ${transaction.notes}\n`;
     }
@@ -312,9 +331,9 @@ function formatCreditCardListDataStructure(cards) {
         data += `\n${index + 1}️⃣ Cartão: ${card.name || 'N/A'}\n`;
         if (card.flag) data += `🏷️ Bandeira: ${card.flag}\n`;
         if (card.lastFourDigits) data += `💳 Número: **** **** **** ${card.lastFourDigits}\n`;
-        if (card.availableLimit !== undefined) {
+        if (card.availableLimit !== undefined) { // Se o service calculou o limite disponível
             data += `💰 Limite disponível: ${formatCurrency(card.availableLimit)}\n`;
-        } else {
+        } else { // Senão, mostra o limite total
             data += `💰 Limite Total: ${formatCurrency(card.limit)}\n`;
         }
         if (card.isDefault) data += `⭐ Cartão Padrão\n`;
@@ -325,17 +344,18 @@ function formatCreditCardListDataStructure(cards) {
 function formatCreditCardInvoiceDataStructure(invoiceDetails, listTransactions = true) {
     if (!invoiceDetails) return "🎯 Resumo da Fatura:\n\nDados da fatura não disponíveis.";
     let data = `🎯 Resumo da Fatura - Cartão ${invoiceDetails.cardName || 'N/A'}\n\n`;
-    data += `📅 Mês de Referência: ${invoiceDetails.invoiceReferenceMonthYear || 'N/A'}\n`;
+    data += `📅 Mês de Referência: ${invoiceDetails.invoiceReferenceMonthYear || 'N/A'}\n`; // Ex: "Maio/2024"
     data += `💰 Total da fatura: ${formatCurrency(invoiceDetails.totalAmount)}\n`;
+    // Mostra limite disponível APÓS essa fatura se calculado, senão, mostra total do cartão e saldo estimado.
     if(invoiceDetails.availableLimitAfterInvoice !== undefined) {
         data += `💳 Limite disponível (após esta fatura): ${formatCurrency(invoiceDetails.availableLimitAfterInvoice)}\n`;
-    } else if (invoiceDetails.cardTotalLimit !== undefined) {
+    } else if (invoiceDetails.cardTotalLimit !== undefined) { // Se temos o limite total do cartão
         const available = parseFloat(invoiceDetails.cardTotalLimit) - parseFloat(invoiceDetails.totalAmount);
         data += `💳 Limite Total do Cartão: ${formatCurrency(invoiceDetails.cardTotalLimit)}\n`;
         data += `💳 Saldo Estimado Pós-Fatura: ${formatCurrency(available)}\n`;
     }
-    data += `🗓️ Fechamento: ${formatDate(invoiceDetails.invoiceCycleEndDate)}\n`;
-    data += `🗓️ Vencimento: ${formatDate(invoiceDetails.paymentDueDate)}\n`;
+    data += `🗓️ Fechamento: ${formatDate(invoiceDetails.invoiceCycleEndDate)}\n`; // invoiceCycleEndDate é a data de fechamento
+    data += `🗓️ Vencimento: ${formatDate(invoiceDetails.paymentDueDate)}\n`; // paymentDueDate é a data de vencimento
 
 
     if (listTransactions && invoiceDetails.transactions && invoiceDetails.transactions.length > 0) {
@@ -343,9 +363,9 @@ function formatCreditCardInvoiceDataStructure(invoiceDetails, listTransactions =
         invoiceDetails.transactions.forEach((tx, index) => {
             let parcelInfo = "";
             if (tx.isParcel && tx.parcelNumber && tx.totalParcels) {
-                parcelInfo = ` (${tx.parcelNumber}/${tx.totalParcels})`;
+                parcelInfo = ` (${tx.parcelNumber}/${tx.totalParcels})`; // Ex: (1/12)
             } else {
-                parcelInfo = ` — à vista`;
+                parcelInfo = ` — à vista`; // Indica que é à vista
             }
             data += `\n${index + 1}️⃣ ${tx.description} — ${formatCurrency(tx.value)}${parcelInfo}`;
         });
@@ -359,7 +379,7 @@ function formatAvailableLimitDataStructure(limitInfo) {
     if (!limitInfo) return "💳 Limite Disponível:\n\nDados de limite não disponíveis.";
     let data = `💳 Limite Disponível - Cartão ${limitInfo.cardName || 'N/A'}:\n\n`;
     data += `💰 Limite Total: ${formatCurrency(limitInfo.totalLimit)}\n`;
-    data += `💸 Valor Utilizado (Fatura Aberta): ${formatCurrency(limitInfo.netUsedAmount)}\n`;
+    data += `💸 Valor Utilizado (Fatura Aberta): ${formatCurrency(limitInfo.netUsedAmount)}\n`; // Usado na fatura atual
     data += `✅ Limite Disponível Agora: ${formatCurrency(limitInfo.availableLimit)}\n`;
     data += `🗓️ Próximo Fechamento: Dia ${limitInfo.closingDay}\n`;
     data += `🗓️ Dia de Pagamento: Dia ${limitInfo.paymentDay}\n`;
@@ -367,9 +387,11 @@ function formatAvailableLimitDataStructure(limitInfo) {
 }
 
 function formatParcelledAccountDataStructure(parcelParams, parcelResult) {
+    // parcelParams: o que a IA enviou (com nomes de cartão/categoria)
+    // parcelResult: o que o BD retornou (com IDs e valores calculados)
     if (!parcelResult || !parcelResult.parcels || parcelResult.parcels.length === 0) return "🎯 Resumo da Compra Parcelada:\n\nDados não disponíveis.";
 
-    const firstParcel = parcelResult.parcels[0];
+    const firstParcel = parcelResult.parcels[0]; // Pega a primeira parcela para o valor individual
     let data = `🎯 Resumo da Compra Parcelada:\n\n`;
     data += `📝 Descrição: ${parcelParams.description || firstParcel.description.replace(/ - Parcela \d+\/\d+$/, '')}\n`;
     data += `💰 Valor Total: ${formatCurrency(parcelParams.totalValue)}\n`;
@@ -415,7 +437,7 @@ function formatMotivationalMessagePreferenceDataStructure(prefs) {
     let data = `💬 Preferências de Mensagem Motivacional:\n\n`;
     data += `🚦 Status: ${prefs.enableMotivationMessage ? 'Ativada ✅' : 'Desativada ❌'}\n`;
     if (prefs.enableMotivationMessage && prefs.motivationMessageTime) {
-        data += `🕒 Horário Programado: ${prefs.motivationMessageTime.substring(0,5)}\n`;
+        data += `🕒 Horário Programado: ${prefs.motivationMessageTime.substring(0,5)}\n`; // HH:MM
     }
     return data.trim();
 }
@@ -431,8 +453,8 @@ function formatWaterReminderPreferenceDataStructure(prefs) {
             freqText = `Personalizado: a cada ${prefs.waterReminderCustomIntervalMinutes} minutos`;
         }
         data += `🔄 Frequência: ${freqText}\n`;
-        data += `🌅 Início: ${prefs.waterReminderStartTime ? prefs.waterReminderStartTime.substring(0,5) : 'N/A'}\n`;
-        data += `🌃 Fim: ${prefs.waterReminderEndTime ? prefs.waterReminderEndTime.substring(0,5) : 'N/A'}\n`;
+        data += `🌅 Início: ${prefs.waterReminderStartTime ? prefs.waterReminderStartTime.substring(0,5) : 'N/A'}\n`; // HH:MM
+        data += `🌃 Fim: ${prefs.waterReminderEndTime ? prefs.waterReminderEndTime.substring(0,5) : 'N/A'}\n`;     // HH:MM
         if (prefs.dailyGoalMl) {
             data += `🎯 Meta Diária: ${prefs.dailyGoalMl}ml\n`;
         }
@@ -457,7 +479,7 @@ function getOnboardingAskForEmailMessage(clientName, planDetailsText) {
     const aiIntro = `🎉 E aí, ${clientName}! Seja muito bem-vindo ao seu ${planDetailsText}! 🚀`;
     const dataStructure = `📋 Detalhes do Plano:\n\n` +
                           `🗓️ Validade: ${planDetailsText.includes('válido até') ? planDetailsText.split('válido até ')[1].replace(')!','').trim() : (planDetailsText.toLowerCase().includes('vitalício') ? 'Vitalício' : 'N/A')}\n`+
-                          `💼 Tipo: ${planDetailsText.split(' (')[0].trim()}\n` +
+                          `💼 Tipo: ${planDetailsText.split(' (')[0].trim()}\n` + // Pega o nome do plano antes do "(válido até..."
                           `🌐 Acesso: Configuração do login para o app web`;
     const linkText = `📧 Para finalizar seu cadastro, me diga qual é o melhor e-mail para usarmos no acesso. Assim você poderá conferir tudo detalhado quando quiser!`;
     return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
@@ -489,7 +511,7 @@ function getOnboardingAskForPFAccountNameMessage(clientName) {
 function getOnboardingConfirmPJAccountSetupMessage(clientName, pfAccountName, planDetailsText) {
     const aiIntro = `🏦 Conta Pessoal "${pfAccountName}" criada com sucesso, ${clientName}! 🎉 Ela já está selecionada para você começar a usar.`;
     const dataStructure = `🚀 Próximo passo:\n\n` +
-                          `📈 Como você tem o ${planDetailsText.split(' (')[0].trim()}, que tal configurarmos também uma conta para sua empresa (PJ) ou MEI?`;
+                          `📈 Como você tem o ${planDetailsText.split(' (')[0].trim()}, que tal configurarmos também uma conta para sua empresa (PJ) ou MEI?`; // Pega nome do plano
     const linkText = `✨ Responda "sim" para configurar ou "não" para pular essa etapa.`;
     return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
 }
@@ -530,13 +552,13 @@ function formatAccountSelectionMessage(clientName, planDetailsText, accounts) {
 // --- Initialize or Update State ---
 async function initializeOrUpdateState(client, existingState = null, clientAccountsFromDb = []) {
     const clientName = client.name && client.name.trim() !== "" && client.name.trim().toLowerCase() !== "unknown" && client.name.trim().toLowerCase() !== "null"
-        ? client.name.split(" ")[0]
-        : (pushNameFromPayload || "pessoa incrível");
+        ? client.name.split(" ")[0] // Pega o primeiro nome
+        : (pushNameFromPayload || "pessoa incrível"); // Fallback
 
     let hasPaidAccess = false;
-    let clientAccessLevel = client.accessLevel || 'gratuito';
+    let clientAccessLevel = client.accessLevel || 'gratuito'; // Nível de acesso base do cliente
     let clientAccessExpiresAt = client.accessExpiresAt;
-    let accessLevelTextForUser = "Nenhum plano ativo";
+    let accessLevelTextForUser = "Nenhum plano ativo"; // Texto que o usuário verá
     let onboardingStage = existingState?.data?.onboardingStage || 'awaiting_plan_confirmation';
 
     if (client.accessLevel && client.accessLevel !== 'gratuito') {
@@ -546,19 +568,21 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
             accessLevelTextForUser = accessLevelTextForUser.charAt(0).toUpperCase() + accessLevelTextForUser.slice(1);
         } else if (client.accessExpiresAt) {
             const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z'); // Garante UTC
-            const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+            const today = new Date(); today.setUTCHours(0, 0, 0, 0); // Data de hoje em UTC
             if (expiryDate >= today) {
                 hasPaidAccess = true;
                 let planNamePart = client.accessLevel.replace(/_/g, ' ');
                 planNamePart = planNamePart.charAt(0).toUpperCase() + planNamePart.slice(1);
                 accessLevelTextForUser = `${planNamePart} (válido até ${expiryDate.toLocaleDateString('pt-BR', { timeZone: 'UTC' })})`;
             } else {
+                // Plano expirou
                 let planNamePart = client.accessLevel.replace(/_/g, ' ');
                 planNamePart = planNamePart.charAt(0).toUpperCase() + planNamePart.slice(1);
                 accessLevelTextForUser = `Plano ${planNamePart} expirado`;
                 clientAccessLevel = 'gratuito'; // Downgrade no nível de acesso localmente para a sessão
             }
         } else {
+            // Tem accessLevel mas não tem data de expiração (e não é vitalício) - considera como gratuito para segurança
             logger.warn(`[WHATSAPP SERVICE - Initialize/UpdateState] Cliente ${client.id} com accessLevel ${client.accessLevel} mas sem accessExpiresAt. Considerando como sem plano pago.`);
             clientAccessLevel = 'gratuito';
         }
@@ -566,6 +590,7 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
          accessLevelTextForUser = "Nenhum plano ativo";
     }
    
+    // Lógica de transição de estágio de onboarding baseada no status de acesso PAGO
     if (hasPaidAccess) {
         // Se tinha acesso pago e o estágio de onboarding não reflete isso OU se o estágio anterior foi com 'sem acesso pago'
         if (onboardingStage === 'awaiting_plan_confirmation' || (existingState && !existingState.hasPaidAccess_whenStageLastSet) ) {
@@ -589,6 +614,7 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
                      } else if (existingState?.data?.onboardingStage !== 'onboarding_complete') { // Se já passou por tudo, marca como completo
                         onboardingStage = 'onboarding_complete';
                      }
+                     // Se já está 'onboarding_complete', mantém.
                 }
             }
         }
@@ -596,11 +622,13 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
         onboardingStage = 'awaiting_plan_confirmation';
     }
 
+    // Define conta default SE onboarding completo e tem acesso pago
     const defaultAccount = (onboardingStage === 'onboarding_complete' && hasPaidAccess && clientAccountsFromDb.length > 0)
         ? (clientAccountsFromDb.find(a=>a.isDefault) || clientAccountsFromDb[0]) // Pega default ou a primeira
         : null;
 
     if (existingState) {
+        // Atualiza dados do cliente no estado existente
         existingState.clientName = clientName;
         existingState.currentAccessLevel = clientAccessLevel; // Nível de acesso atual (pode ter sido 'gratuito' se expirou)
         existingState.accessExpiresAt = clientAccessExpiresAt;
@@ -615,12 +643,15 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
         existingState.data.onboardingStage = onboardingStage;
         existingState.hasPaidAccess_whenStageLastSet = hasPaidAccess; // Guarda o status de acesso pago no momento que o estágio foi setado
 
+        // Lógica para definir conta ativa no estado
         if (onboardingStage === 'onboarding_complete' && hasPaidAccess) {
             if (!existingState.activeFinancialAccountId && defaultAccount) { // Se não tem conta ativa e existe uma default
                 existingState.activeFinancialAccountId = defaultAccount.id;
                 existingState.activeFinancialAccountName = defaultAccount.accountName;
                 existingState.activeFinancialAccountType = defaultAccount.accountType;
             }
+            // Se já tem uma conta ativa e ela ainda existe em clientAccountsFromDb, mantém.
+            // (A menos que o usuário peça para trocar, o que é tratado em outro lugar)
         } else { // Se não completou onboarding ou não tem acesso pago, não define conta ativa
             existingState.activeFinancialAccountId = null;
             existingState.activeFinancialAccountName = null;
@@ -640,15 +671,15 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
     // Novo estado
     const newState = {
         currentAction: null, // Ação atual do usuário (ex: 'awaiting_input_email')
-        data: { onboardingStage }, // Dados temporários para o fluxo atual
+        data: { onboardingStage }, // Dados temporários para o fluxo atual (ex: email, senha temporários)
         activeFinancialAccountId: defaultAccount ? defaultAccount.id : null,
         activeFinancialAccountName: defaultAccount ? defaultAccount.accountName : null,
         activeFinancialAccountType: defaultAccount ? defaultAccount.accountType : null,
         clientName: clientName,
         messageHistory: [],
-        pendingConfirmation: null,
-        editingResource: null,
-        lastAiResponse: null,
+        pendingConfirmation: null, // Para guardar dados de uma ação que precisa de "sim/não" do usuário
+        editingResource: null, // Para guardar {type: 'transaction', id: 123} quando o usuário pede para editar algo
+        lastAiResponse: null, // Guarda a última resposta completa da IA
         currentAccessLevel: clientAccessLevel, // Nível de acesso original do cliente ou 'gratuito'
         accessExpiresAt: clientAccessExpiresAt, // Data de expiração
         hasPaidAccess: hasPaidAccess,           // Se tem acesso pago e válido
@@ -666,19 +697,20 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
 
 
 async function processIncomingMessage(senderPhoneNormalized, messageText, pushName, rawPayload) {
-    pushNameFromPayload = pushName;
+    pushNameFromPayload = pushName; // Guarda o nome do remetente do payload (pode ser null)
     const senderPhone = senderPhoneNormalized;
     const startTime = Date.now();
-    let state;
+    let state; // Estado da conversa para este usuário
 
     try {
+        // 1. Obter ou criar cliente e estado da conversa
         let client = await clientService.findClientByPhone(senderPhone);
         let isNewUserForSessionLogic = !conversationState.has(senderPhone); // Se não tem estado na memória
         let clientFinancialAccountsForOnboarding = [];
 
         if (!client) {
             logger.info(`[WHATSAPP SERVICE] Cliente com telefone ${senderPhone} não encontrado no banco. Criando novo...`);
-            client = await clientService.createClient({ phone: senderPhone, name: pushName });
+            client = await clientService.createClient({ phone: senderPhone, name: pushName }); // Usa pushName se disponível
             logger.info(`[WHATSAPP SERVICE] Novo Cliente criado: ID ${client.id}, Telefone: ${client.phone}, Nome: ${client.name}`);
             state = await initializeOrUpdateState(client, null, []); // Novo estado, sem contas ainda
             isNewUserForSessionLogic = true;
@@ -690,24 +722,28 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             if (!existingState) isNewUserForSessionLogic = true; // Se não tinha estado na memória, é novo para a lógica da sessão
         }
        
-        const clientNameToUse = state.clientName;
+        const clientNameToUse = state.clientName; // Nome do cliente para usar nas mensagens
 
-        // Adiciona mensagem ao histórico ANTES de qualquer processamento de onboarding ou IA
-        // Exceto se for um clique de botão, pois a 'messageText' é o label do botão, não uma msg nova do usuário.
-        // O rawPayload.text.message seria a mensagem original que continha os botões, não o clique.
+        // 2. Adicionar mensagem ao histórico do estado (se não for clique de botão)
+        // O clique de botão tem `messageText` como o label do botão, não uma nova mensagem do usuário.
+        // A mensagem original que continha os botões já estaria no histórico.
         if (!(rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string')) {
             state.messageHistory.push({ role: 'user', content: messageText });
         }
-        if (state.messageHistory.length > MAX_STATE_HISTORY) {
+        if (state.messageHistory.length > MAX_STATE_HISTORY) { // Limita tamanho do histórico
             state.messageHistory = state.messageHistory.slice(-MAX_STATE_HISTORY);
         }
        
-        let onboardingReply = "";
-        const lowerMessageText = messageText.toLowerCase().trim();
+        let onboardingReply = ""; // Mensagem de resposta do fluxo de onboarding
+        const lowerMessageText = messageText.toLowerCase().trim(); // Mensagem do usuário em minúsculas
        
         logger.debug(`[WHATSAPP ONBOARDING ENTRY] Cliente: ${client.id}, Stage: ${state.data.onboardingStage}, currentAction: ${state.currentAction}, hasPaidAccess: ${state.hasPaidAccess}, accessLevelText: ${state.accessLevelTextForUser}`);
 
         // ---- FLUXO DE ONBOARDING ----
+        // Processa o estágio atual de onboarding. Se uma resposta for gerada (onboardingReply),
+        // ela será enviada e, se o onboarding não estiver completo e uma ação estiver pendente,
+        // o fluxo retorna para aguardar a próxima mensagem do usuário.
+
         if (state.data.onboardingStage === 'awaiting_plan_confirmation') {
             // Sempre envia mensagem de boas-vindas/plano se está neste estágio
             onboardingReply = getOnboardingWelcomeNoPlanMessage(clientNameToUse);
@@ -721,9 +757,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 const emailInput = messageText.trim();
                 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
                 if (emailRegex.test(emailInput)) {
-                    state.data.tempEmail = emailInput;
+                    state.data.tempEmail = emailInput; // Guarda email temporariamente
                     onboardingReply = getOnboardingAskForPasswordMessage(clientNameToUse, emailInput);
-                    state.data.onboardingStage = 'setting_up_credentials_password';
+                    state.data.onboardingStage = 'setting_up_credentials_password'; // Avança
                     state.currentAction = 'awaiting_input_password_for_credentials';
                 } else {
                     onboardingReply = `Opa, ${clientNameToUse}! Esse e-mail não me pareceu muito certo... 🤔 Poderia tentar de novo, por favor? Algo como "seu_nome@exemplo.com".`;
@@ -733,22 +769,22 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         } else if (state.data.onboardingStage === 'setting_up_credentials_password') {
             const passwordInput = messageText.trim();
             if (passwordInput.length >= 6) {
-                state.data.tempPassword = passwordInput;
+                state.data.tempPassword = passwordInput; // Guarda senha temporariamente
                 onboardingReply = getOnboardingAskForFullNameMessage(clientNameToUse);
-                state.data.onboardingStage = 'setting_up_credentials_name';
+                state.data.onboardingStage = 'setting_up_credentials_name'; // Avança
                 state.currentAction = 'awaiting_input_name_for_credentials';
             } else {
                 onboardingReply = `Para sua segurança, ${clientNameToUse}, a senha precisa ter pelo menos 6 caracteres. 😉 Pode me dizer uma senha um pouquinho maior?`;
             }
         } else if (state.data.onboardingStage === 'setting_up_credentials_name') {
             const nameInput = messageText.trim();
-            if (nameInput.length >= 3 && nameInput.includes(" ")) { // Nome e sobrenome
+            if (nameInput.length >= 3 && nameInput.includes(" ")) { // Validação simples de nome e sobrenome
                 try {
                     await clientAuthService.setClientCredentials(senderPhone, state.data.tempPassword, nameInput, state.data.tempEmail);
                     client = await clientService.findClientByPhone(senderPhone); // Recarrega cliente com nome atualizado
                     state.clientName = client.name.split(" ")[0]; // Atualiza nome no estado da sessão
                     logger.info(`[WHATSAPP ONBOARDING] Credenciais definidas para ${senderPhone}.`);
-                    delete state.data.tempEmail; delete state.data.tempPassword;
+                    delete state.data.tempEmail; delete state.data.tempPassword; // Limpa dados temporários
                    
                     // Verifica se precisa criar conta PF
                     clientFinancialAccountsForOnboarding = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
@@ -791,7 +827,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 onboardingReply = `Para um toque mais pessoal, ${clientNameToUse}, poderia me dizer seu nome completo? ✨ Assim fica mais bacana no seu perfil!`;
             }
         } else if (state.data.onboardingStage === 'setting_up_pf_account_name') {
-            if (state.currentAction !== 'awaiting_input_pf_name') { // Se não estava esperando o nome da conta PF, pede
+            if (state.currentAction !== 'awaiting_input_pf_name' || isNewUserForSessionLogic) { // Se não estava esperando o nome da conta PF, pede
                 onboardingReply = getOnboardingAskForPFAccountNameMessage(clientNameToUse);
                 state.currentAction = 'awaiting_input_pf_name';
             } else { // Processa a msg como nome da conta PF
@@ -829,7 +865,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 }
             }
         } else if (state.data.onboardingStage === 'confirming_pj_mei_setup') {
-             if (state.currentAction !== 'awaiting_pj_mei_confirm') {
+             if (state.currentAction !== 'awaiting_pj_mei_confirm' || isNewUserForSessionLogic) {
                 // Busca a conta PF para usar o nome na mensagem
                 const pfAccount = (await clientService.getClientFinancialAccounts(client.id, { isActive: true })).find(a => a.accountType === 'PF');
                 onboardingReply = getOnboardingConfirmPJAccountSetupMessage(clientNameToUse, pfAccount?.accountName || "Pessoal", state.accessLevelTextForUser);
@@ -924,6 +960,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
            
             // Verificação PÓS-ONBOARDING: Se o onboarding está completo mas NENHUMA conta financeira está ativa na sessão
+            // Isso pode acontecer se o usuário completou o onboarding, saiu e voltou, e o estado foi recriado sem conta ativa.
             if (state.data.onboardingStage === 'onboarding_complete' && !state.activeFinancialAccountId) {
                 const accountsForSelection = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
                 if (accountsForSelection.length > 0) {
@@ -1150,7 +1187,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             // Se currentAction está definido (ex: aguardando confirmação, detalhes de edição) e não é um clique de botão novo
             // Isso permite que a IA processe a resposta do usuário a uma pergunta anterior do sistema.
             if (state.currentAction && state.data.onboardingStage === 'onboarding_complete') { // Garante que não é onboarding
-                let stateHandledInPreProcessing = false;
+                let stateHandledInPreProcessing = false; // Flag para indicar se a ação foi tratada aqui
                 let preProcAiIntro = "";
                 let preProcDataStructure = "";
                 let preProcPlatformLink = formatPlatformLink();
@@ -1534,35 +1571,34 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 const parcelData = {
                                     description: params.description,
                                     type: params.type,
-                                    totalValue: parseFloat(params.value || params.totalValue), // IA pode usar 'value' ou 'totalValue'
+                                    totalValue: parseFloat(params.totalValue || params.value), // IA pode usar 'value' ou 'totalValue'
                                     numberOfParcels: parseInt(params.numberOfParcels),
-                                    initialDueDate: params.initialDueDate, // Data da primeira parcela
+                                    initialDueDate: params.initialDueDate, // Data da primeira parcela (ou data da compra se não especificado)
                                     financialCategoryId: catIdParcel,
                                     creditCardId: cardIdParcel,
                                     notes: params.notes,
-                                    transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0] // Data da compra
+                                    transactionDate: params.transactionDate || params.initialDueDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0] // Data da compra
                                 };
                                  // Validação crucial
                                  if (!parcelData.description || !parcelData.type || isNaN(parcelData.totalValue) || parcelData.totalValue <=0 || isNaN(parcelData.numberOfParcels) || parcelData.numberOfParcels < 1 || !parcelData.initialDueDate) {
                                      throw new Error("Dados insuficientes ou inválidos para compra parcelada (descrição, tipo, valor total, nº parcelas, data 1ª parcela).");
                                  }
+                                 // Se transactionDate não foi explicitamente dada pela IA e initialDueDate foi, usa initialDueDate como data da compra.
+                                 if (!params.transactionDate && params.initialDueDate) {
+                                     parcelData.transactionDate = params.initialDueDate;
+                                 }
+
 
                                 const parcelResult = await financialService.createParcelledAccount(state.activeFinancialAccountId, parcelData);
 
-                                // Passa params (da IA) para formatação, pois pode ter nomes (cartão, categoria) que não estão no parcelResult imediato
-                                // E parcelResult (do BD) para ter os IDs e valores calculados das parcelas
                                 if (aiResponse.detected_actions.length === 1) { aiMessageIntro = aiResponse.overall_summary_suggestion || detectedAction.action_specific_reply_suggestion || `Sua compra parcelada foi registrada, ${clientNameToUse}!`;}
                                 else if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sua compra parcelada foi registrada, ${clientNameToUse}:`;
 
-                                // Para formatParcelledAccountDataStructure, é importante ter os nomes (categoria, cartão) que vieram da IA (em params)
-                                // e os dados calculados (valor da parcela) que vêm do parcelResult.
-                                // A função formatParcelledAccountDataStructure foi ajustada para usar params.creditCardName e params.financialCategoryName.
-                                currentActionFormattedData = formatParcelledAccountDataStructure(params, parcelResult);
+                                currentActionFormattedData = formatParcelledAccountDataStructure(parcelData, parcelResult); // Passa parcelData (IA) e parcelResult (BD)
 
                                 if (aiResponse.detected_actions.length === 1 && parcelResult.parcels && parcelResult.parcels.length > 0) {
-                                    // O ID para botões deve ser o ID da transação "mãe" do grupo de parcelas
                                     const originalTxId = parcelResult.parcels[0].originalAccountId || parcelResult.parcels[0].id;
-                                    resourceForButtonsContext = { type: 'parcelled_account', id: originalTxId, description: params.description };
+                                    resourceForButtonsContext = { type: 'parcelled_account', id: originalTxId, description: parcelData.description };
                                 }
                                 break;
                             }
@@ -1599,18 +1635,19 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     description: params.newDescription, type: params.newType || 'Saída', totalValue: parseFloat(params.newTotalValue),
                                     numberOfParcels: parseInt(params.newNumberOfParcels), initialDueDate: params.newInitialDueDate,
                                     financialCategoryId: newCatIdParcel, creditCardId: newCardIdParcel, notes: params.newNotes,
-                                    transactionDate: params.newTransactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0]
+                                    transactionDate: params.newTransactionDate || params.newInitialDueDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0]
                                 };
                                 if (!newParcelData.description || isNaN(newParcelData.totalValue) || newParcelData.totalValue <= 0 || isNaN(newParcelData.numberOfParcels) || newParcelData.numberOfParcels < 1 || !newParcelData.initialDueDate) {
                                      throw new Error("Para recriar a compra parcelada, preciso de: nova descrição, novo valor total, novo nº de parcelas e nova data da 1ª parcela.");
                                  }
-                                // Ação de recriar é destrutiva (deleta o antigo). Idealmente, pedir confirmação.
-                                // Por agora, vamos executar direto conforme o prompt.
+                                 if (!params.newTransactionDate && params.newInitialDueDate) {
+                                     newParcelData.transactionDate = params.newInitialDueDate;
+                                 }
+
                                 const recreatedResult = await financialService.recreateParcelledAccount(state.activeFinancialAccountId, originalAccountIdToUpdate, newParcelData);
 
                                 if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Compra parcelada atualizada com sucesso, ${clientNameToUse}! A antiga foi removida.`;
                                 else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a atualização da compra parcelada, ${clientNameToUse}:`;
-                                // Passa newParcelData (com nomes) e recreatedResult (com IDs e valores)
                                 currentActionFormattedData = formatParcelledAccountDataStructure(newParcelData, recreatedResult);
                                 actionWasAnEdit = true; state.editingResource = null; state.currentAction = null;
                                 break;
@@ -1618,7 +1655,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             case 'MARK_TRANSACTION_AS_PAID_RECEIVED': {
                                 if (!params.transactionDescription) throw new Error("Descrição da transação é obrigatória para marcar como paga/recebida.");
                                 const paymentDate = params.paymentDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0];
-                                const categoryIdForMark = params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId) : null;
+                                const categoryIdForMark = params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId) : null; // Tipo não é crucial aqui para buscar categoria de pagamento
 
                                 const result = await financialService.markTransactionAsPaidOrReceived(
                                     state.activeFinancialAccountId,
@@ -1629,7 +1666,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 );
                                 if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Ótimo, ${clientNameToUse}! Transação marcada como liquidada.`;
                                 else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a liquidação da transação, ${clientNameToUse}:`;
-                                currentActionFormattedData = `Transação "${result.description}" (R$ ${result.value.toFixed(2)}) foi marcada como ${result.type === 'Entrada' ? 'recebida' : 'paga'} em ${formatDate(result.paymentDate)}.`;
+                                currentActionFormattedData = `Transação "${result.description}" (${formatCurrency(result.value)}) foi marcada como ${result.type === 'Entrada' ? 'recebida' : 'paga'} em ${formatDate(result.paymentDate)}.`;
                                 break;
                             }
                             case 'CREATE_RECURRING_RULE': {
@@ -1937,11 +1974,18 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 if (!targetAccountIdentifier) throw new Error("Preciso do nome ou tipo da conta para qual você quer mudar.");
 
                                 const accounts = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
-                                if (accounts.length <= 1) {
-                                    aiMessageIntro = `Você só tem uma conta (${accounts[0]?.name || 'N/A'}) configurada, ${clientNameToUse}. Não há para onde mudar por enquanto. 😊`;
+                                if (accounts.length <= 1 && accounts[0]?.id === state.activeFinancialAccountId) {
+                                    aiMessageIntro = `Você só tem a conta "${accounts[0]?.name || 'N/A'}" (${accounts[0]?.type}) configurada e ela já está selecionada, ${clientNameToUse}. 😊`;
                                     currentActionFormattedData = ""; platformLinkFooter = "";
                                     break;
+                                } else if (accounts.length === 0) {
+                                    aiMessageIntro = `Você ainda não tem nenhuma conta configurada, ${clientNameToUse}. Não há para onde mudar por enquanto. Que tal criar uma?`;
+                                    currentActionFormattedData = ""; platformLinkFooter = "";
+                                    state.data.onboardingStage = 'setting_up_pf_account_name'; // Direciona para criar
+                                    state.currentAction = 'awaiting_input_pf_name';
+                                    break;
                                 }
+
                                 let foundAccount = accounts.find(acc =>
                                     acc.accountName.toLowerCase() === targetAccountIdentifier.toLowerCase() ||
                                     acc.accountType.toLowerCase() === targetAccountIdentifier.toLowerCase() ||
@@ -1968,8 +2012,11 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     accounts.forEach(a => accountListForMsg += `\n- ${a.accountName} (${a.accountType})`);
                                     currentActionFormattedData = accountListForMsg;
                                     platformLinkFooter = "";
+                                    state.currentAction = 'selecting_account_flow_active'; // Deixa no fluxo de seleção
+                                    state.data.accountsToList = accounts.map(a => ({id: a.id, name: a.accountName, type: a.accountType}));
                                 }
-                                state.currentAction = null; // Finaliza fluxo de troca
+                                // Se a troca foi bem sucedida ou se já estava na conta, currentAction é null
+                                if (foundAccount) state.currentAction = null;
                                 break;
                             }
                             case 'CREATE_FINANCIAL_ACCOUNT': {
