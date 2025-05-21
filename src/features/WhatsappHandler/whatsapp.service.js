@@ -153,7 +153,7 @@ function formatOldRecurringRuleSummary(rule, clientName, forMulti = false, forEd
     summary += `Frequência: ${frequencyDisplay}\n`;
     summary += `Início: ${formatDate(rule.startDate)}\n`;
     if(rule.endDate) summary += `Fim: ${formatDate(rule.endDate)}\n`;
-    if(rule.dayOfWeek !== null && rule.dayOfWeek !== undefined) { 
+    if(rule.dayOfWeek !== null && rule.dayOfWeek !== undefined) {
         const days = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
         summary += `Dia da Semana: ${days[rule.dayOfWeek]}\n`;
     }
@@ -374,11 +374,15 @@ function formatParcelledAccountDataStructure(parcelParams, parcelResult) {
     data += `📝 Descrição: ${parcelParams.description || firstParcel.description.replace(/ - Parcela \d+\/\d+$/, '')}\n`;
     data += `💰 Valor Total: ${formatCurrency(parcelParams.totalValue)}\n`;
     data += `📦 Parcelas: ${parcelParams.numberOfParcels}x de ${formatCurrency(firstParcel.value)} (aprox.)\n`;
-    if (parcelParams.creditCardName) {
+    if (parcelParams.creditCardName) { // Usa o nome do cartão dos parâmetros originais se disponível
         data += `💳 Cartão: ${parcelParams.creditCardName}\n`;
+    } else if (firstParcel.creditCard && firstParcel.creditCard.name) { // Senão, tenta pegar do objeto do resultado
+        data += `💳 Cartão: ${firstParcel.creditCard.name}\n`;
     }
-    if (parcelParams.financialCategoryName) {
+    if (parcelParams.financialCategoryName) { // Usa o nome da categoria dos parâmetros originais se disponível
         data += `🏷️ Categoria: ${parcelParams.financialCategoryName}\n`;
+    } else if (firstParcel.category && firstParcel.category.name) { // Senão, tenta pegar do objeto do resultado
+        data += `🏷️ Categoria: ${firstParcel.category.name}\n`;
     }
     data += `📅 Data da Compra: ${formatDate(parcelParams.transactionDate || firstParcel.transactionDate)}\n`;
     data += `🗓️ Venc. 1ª Parcela: ${formatDate(parcelParams.initialDueDate || firstParcel.dueDate || firstParcel.transactionDate)}\n`;
@@ -538,10 +542,10 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
     if (client.accessLevel && client.accessLevel !== 'gratuito') {
         if (client.accessLevel.startsWith('vitalicio_')) {
             hasPaidAccess = true;
-            accessLevelTextForUser = client.accessLevel.replace('vitalicio_', 'Vitalício ').replace('_', ' ').trim();
+            accessLevelTextForUser = client.accessLevel.replace('vitalicio_', 'Vitalício ').replace(/_/g, ' ').trim();
             accessLevelTextForUser = accessLevelTextForUser.charAt(0).toUpperCase() + accessLevelTextForUser.slice(1);
         } else if (client.accessExpiresAt) {
-            const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
+            const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z'); // Garante UTC
             const today = new Date(); today.setUTCHours(0, 0, 0, 0);
             if (expiryDate >= today) {
                 hasPaidAccess = true;
@@ -552,7 +556,7 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
                 let planNamePart = client.accessLevel.replace(/_/g, ' ');
                 planNamePart = planNamePart.charAt(0).toUpperCase() + planNamePart.slice(1);
                 accessLevelTextForUser = `Plano ${planNamePart} expirado`;
-                clientAccessLevel = 'gratuito';
+                clientAccessLevel = 'gratuito'; // Downgrade no nível de acesso localmente para a sessão
             }
         } else {
             logger.warn(`[WHATSAPP SERVICE - Initialize/UpdateState] Cliente ${client.id} com accessLevel ${client.accessLevel} mas sem accessExpiresAt. Considerando como sem plano pago.`);
@@ -561,8 +565,9 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
     } else {
          accessLevelTextForUser = "Nenhum plano ativo";
     }
-    
+   
     if (hasPaidAccess) {
+        // Se tinha acesso pago e o estágio de onboarding não reflete isso OU se o estágio anterior foi com 'sem acesso pago'
         if (onboardingStage === 'awaiting_plan_confirmation' || (existingState && !existingState.hasPaidAccess_whenStageLastSet) ) {
             if (!client.email || !client.passwordHash) {
                 onboardingStage = 'setting_up_credentials_email';
@@ -573,48 +578,55 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
                 } else {
                      const hasPjMei = clientAccountsFromDb.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
                      const planTier = clientAccessLevel.startsWith('avancado') || clientAccessLevel.startsWith('vitalicio_avancado') ? 'avancado' : 'basico';
-                     
-                     if (planTier === 'avancado' && !hasPjMei && existingState?.data?.onboardingStage !== 'confirming_pj_mei_setup' && existingState?.data?.onboardingStage !== 'awaiting_pj_mei_type' && existingState?.data?.onboardingStage !== 'creating_pj_mei_account_name') {
+                    
+                     // Apenas entra na confirmação de PJ/MEI se o plano for avançado, não tiver conta PJ/MEI
+                     // E não estiver já em algum estágio de criação de PJ/MEI
+                     if (planTier === 'avancado' && !hasPjMei &&
+                         existingState?.data?.onboardingStage !== 'confirming_pj_mei_setup' &&
+                         existingState?.data?.onboardingStage !== 'awaiting_pj_mei_type' &&
+                         existingState?.data?.onboardingStage !== 'creating_pj_mei_account_name') {
                         onboardingStage = 'confirming_pj_mei_setup';
-                     } else if (existingState?.data?.onboardingStage !== 'onboarding_complete') { 
+                     } else if (existingState?.data?.onboardingStage !== 'onboarding_complete') { // Se já passou por tudo, marca como completo
                         onboardingStage = 'onboarding_complete';
                      }
                 }
             }
         }
-    } else { 
+    } else { // Se não tem acesso pago (ou expirou)
         onboardingStage = 'awaiting_plan_confirmation';
     }
 
     const defaultAccount = (onboardingStage === 'onboarding_complete' && hasPaidAccess && clientAccountsFromDb.length > 0)
-        ? (clientAccountsFromDb.find(a=>a.isDefault) || clientAccountsFromDb[0])
+        ? (clientAccountsFromDb.find(a=>a.isDefault) || clientAccountsFromDb[0]) // Pega default ou a primeira
         : null;
 
     if (existingState) {
         existingState.clientName = clientName;
-        existingState.currentAccessLevel = clientAccessLevel;
+        existingState.currentAccessLevel = clientAccessLevel; // Nível de acesso atual (pode ter sido 'gratuito' se expirou)
         existingState.accessExpiresAt = clientAccessExpiresAt;
-        existingState.hasPaidAccess = hasPaidAccess;
-        existingState.accessLevelTextForUser = accessLevelTextForUser;
-        
+        existingState.hasPaidAccess = hasPaidAccess; // Flag se tem acesso pago VÁLIDO
+        existingState.accessLevelTextForUser = accessLevelTextForUser; // Texto para o usuário
+       
+        // Se o onboardingStage mudou E NÃO FOI para 'onboarding_complete', reseta currentAction
+        // para evitar que uma ação de um estágio anterior interfira no novo.
         if (existingState.data.onboardingStage !== onboardingStage && onboardingStage !== 'onboarding_complete') {
             existingState.currentAction = null;
         }
         existingState.data.onboardingStage = onboardingStage;
-        existingState.hasPaidAccess_whenStageLastSet = hasPaidAccess;
+        existingState.hasPaidAccess_whenStageLastSet = hasPaidAccess; // Guarda o status de acesso pago no momento que o estágio foi setado
 
         if (onboardingStage === 'onboarding_complete' && hasPaidAccess) {
-            if (!existingState.activeFinancialAccountId && defaultAccount) {
+            if (!existingState.activeFinancialAccountId && defaultAccount) { // Se não tem conta ativa e existe uma default
                 existingState.activeFinancialAccountId = defaultAccount.id;
                 existingState.activeFinancialAccountName = defaultAccount.accountName;
                 existingState.activeFinancialAccountType = defaultAccount.accountType;
             }
-        } else { 
+        } else { // Se não completou onboarding ou não tem acesso pago, não define conta ativa
             existingState.activeFinancialAccountId = null;
             existingState.activeFinancialAccountName = null;
             existingState.activeFinancialAccountType = null;
         }
-        
+       
         logger.debug(`[WHATSAPP SERVICE - UpdateState] Estado atualizado para cliente ${client.id}: `, {
             onboardingStage: existingState.data.onboardingStage,
             currentAction: existingState.currentAction,
@@ -625,9 +637,10 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
         return existingState;
     }
 
+    // Novo estado
     const newState = {
-        currentAction: null, 
-        data: { onboardingStage }, 
+        currentAction: null, // Ação atual do usuário (ex: 'awaiting_input_email')
+        data: { onboardingStage }, // Dados temporários para o fluxo atual
         activeFinancialAccountId: defaultAccount ? defaultAccount.id : null,
         activeFinancialAccountName: defaultAccount ? defaultAccount.accountName : null,
         activeFinancialAccountType: defaultAccount ? defaultAccount.accountType : null,
@@ -636,13 +649,13 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
         pendingConfirmation: null,
         editingResource: null,
         lastAiResponse: null,
-        currentAccessLevel: clientAccessLevel, 
-        accessExpiresAt: clientAccessExpiresAt,
-        hasPaidAccess: hasPaidAccess,
-        accessLevelTextForUser: accessLevelTextForUser,
-        hasPaidAccess_whenStageLastSet: hasPaidAccess,
+        currentAccessLevel: clientAccessLevel, // Nível de acesso original do cliente ou 'gratuito'
+        accessExpiresAt: clientAccessExpiresAt, // Data de expiração
+        hasPaidAccess: hasPaidAccess,           // Se tem acesso pago e válido
+        accessLevelTextForUser: accessLevelTextForUser, // Texto do plano para o usuário
+        hasPaidAccess_whenStageLastSet: hasPaidAccess, // Status de acesso ao setar este estágio
     };
-    
+   
     logger.debug(`[WHATSAPP SERVICE - InitializeState] Novo estado criado para cliente ${client.id}: `, {
         onboardingStage: newState.data.onboardingStage,
         hasPaidAccess: newState.hasPaidAccess,
@@ -660,45 +673,51 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
     try {
         let client = await clientService.findClientByPhone(senderPhone);
-        let isNewUserForSessionLogic = !conversationState.has(senderPhone);
+        let isNewUserForSessionLogic = !conversationState.has(senderPhone); // Se não tem estado na memória
         let clientFinancialAccountsForOnboarding = [];
 
         if (!client) {
             logger.info(`[WHATSAPP SERVICE] Cliente com telefone ${senderPhone} não encontrado no banco. Criando novo...`);
             client = await clientService.createClient({ phone: senderPhone, name: pushName });
             logger.info(`[WHATSAPP SERVICE] Novo Cliente criado: ID ${client.id}, Telefone: ${client.phone}, Nome: ${client.name}`);
-            state = await initializeOrUpdateState(client, null, []); 
+            state = await initializeOrUpdateState(client, null, []); // Novo estado, sem contas ainda
             isNewUserForSessionLogic = true;
         } else {
             const existingState = conversationState.get(senderPhone);
+            // Busca contas ANTES de atualizar o estado para que o onboardingStage seja determinado corretamente
             clientFinancialAccountsForOnboarding = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
             state = await initializeOrUpdateState(client, existingState, clientFinancialAccountsForOnboarding);
-            if (!existingState) isNewUserForSessionLogic = true;
+            if (!existingState) isNewUserForSessionLogic = true; // Se não tinha estado na memória, é novo para a lógica da sessão
         }
-        
+       
         const clientNameToUse = state.clientName;
 
+        // Adiciona mensagem ao histórico ANTES de qualquer processamento de onboarding ou IA
+        // Exceto se for um clique de botão, pois a 'messageText' é o label do botão, não uma msg nova do usuário.
+        // O rawPayload.text.message seria a mensagem original que continha os botões, não o clique.
         if (!(rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string')) {
             state.messageHistory.push({ role: 'user', content: messageText });
         }
         if (state.messageHistory.length > MAX_STATE_HISTORY) {
             state.messageHistory = state.messageHistory.slice(-MAX_STATE_HISTORY);
         }
-        
+       
         let onboardingReply = "";
         const lowerMessageText = messageText.toLowerCase().trim();
-        
+       
         logger.debug(`[WHATSAPP ONBOARDING ENTRY] Cliente: ${client.id}, Stage: ${state.data.onboardingStage}, currentAction: ${state.currentAction}, hasPaidAccess: ${state.hasPaidAccess}, accessLevelText: ${state.accessLevelTextForUser}`);
 
         // ---- FLUXO DE ONBOARDING ----
         if (state.data.onboardingStage === 'awaiting_plan_confirmation') {
+            // Sempre envia mensagem de boas-vindas/plano se está neste estágio
             onboardingReply = getOnboardingWelcomeNoPlanMessage(clientNameToUse);
-            state.currentAction = 'awaiting_plan_interest_generic';
+            state.currentAction = 'awaiting_plan_interest_generic'; // Aguardando resposta sobre interesse no plano
         } else if (state.data.onboardingStage === 'setting_up_credentials_email') {
+            // Se a ação não é esperar email, ou se é um novo usuário na sessão, envia o pedido de email
             if (state.currentAction !== 'awaiting_input_email_for_credentials' || isNewUserForSessionLogic) {
                  onboardingReply = getOnboardingAskForEmailMessage(clientNameToUse, state.accessLevelTextForUser);
                  state.currentAction = 'awaiting_input_email_for_credentials';
-            } else { 
+            } else { // Se já estava esperando email, processa a mensagem atual como o email
                 const emailInput = messageText.trim();
                 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
                 if (emailRegex.test(emailInput)) {
@@ -708,6 +727,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     state.currentAction = 'awaiting_input_password_for_credentials';
                 } else {
                     onboardingReply = `Opa, ${clientNameToUse}! Esse e-mail não me pareceu muito certo... 🤔 Poderia tentar de novo, por favor? Algo como "seu_nome@exemplo.com".`;
+                    // Mantém currentAction e onboardingStage para tentar de novo o email
                 }
             }
         } else if (state.data.onboardingStage === 'setting_up_credentials_password') {
@@ -722,14 +742,15 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
         } else if (state.data.onboardingStage === 'setting_up_credentials_name') {
             const nameInput = messageText.trim();
-            if (nameInput.length >= 3 && nameInput.includes(" ")) { 
+            if (nameInput.length >= 3 && nameInput.includes(" ")) { // Nome e sobrenome
                 try {
                     await clientAuthService.setClientCredentials(senderPhone, state.data.tempPassword, nameInput, state.data.tempEmail);
-                    client = await clientService.findClientByPhone(senderPhone); 
-                    state.clientName = client.name.split(" ")[0];
+                    client = await clientService.findClientByPhone(senderPhone); // Recarrega cliente com nome atualizado
+                    state.clientName = client.name.split(" ")[0]; // Atualiza nome no estado da sessão
                     logger.info(`[WHATSAPP ONBOARDING] Credenciais definidas para ${senderPhone}.`);
                     delete state.data.tempEmail; delete state.data.tempPassword;
-                    
+                   
+                    // Verifica se precisa criar conta PF
                     clientFinancialAccountsForOnboarding = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
                     const hasPf = clientFinancialAccountsForOnboarding.some(acc => acc.accountType === 'PF');
                     if (!hasPf) {
@@ -737,6 +758,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         onboardingReply = getOnboardingAskForPFAccountNameMessage(clientNameToUse);
                         state.currentAction = 'awaiting_input_pf_name';
                     } else {
+                        // Se já tem PF, verifica se precisa de PJ/MEI (plano avançado)
                         const hasPjMei = clientFinancialAccountsForOnboarding.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
                         const planTier = state.currentAccessLevel.startsWith('avancado') || state.currentAccessLevel.startsWith('vitalicio_avancado') ? 'avancado' : 'basico';
                         if (planTier === 'avancado' && !hasPjMei) {
@@ -750,39 +772,41 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const dataStructure = `💼 Seu plano ${state.accessLevelTextForUser} está pronto para uso!`;
                             const linkText = `Como posso te ajudar agora? 🚀`;
                             onboardingReply = `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
-                            state.currentAction = null; 
+                            state.currentAction = null; // Onboarding completo
                         }
                     }
                 } catch (e) {
                     logger.error(`[WHATSAPP ONBOARDING] Erro ao definir credenciais para ${senderPhone}: ${e.message}`);
                     if (e.message && e.message.toLowerCase().includes('email já está em uso')) {
                          onboardingReply = `Puxa, ${clientNameToUse}, parece que o e-mail "${state.data.tempEmail}" já está sendo usado por outra pessoa. 😬 Você teria outro e-mail para cadastrarmos?`;
-                         state.data.onboardingStage = 'setting_up_credentials_email';
+                         state.data.onboardingStage = 'setting_up_credentials_email'; // Volta para pedir email
                          state.currentAction = 'awaiting_input_email_for_credentials';
-                         delete state.data.tempEmail; delete state.data.tempPassword; 
+                         delete state.data.tempEmail; delete state.data.tempPassword; // Limpa dados temporários
                     } else {
                         onboardingReply = `Xi, ${clientNameToUse}, algo não saiu como o esperado ao salvar seus dados (${e.message.substring(0,60)}). 😥 Vamos tentar seu nome completo de novo?`;
+                        // Mantém estágio e ação para tentar o nome novamente
                     }
                 }
             } else {
                 onboardingReply = `Para um toque mais pessoal, ${clientNameToUse}, poderia me dizer seu nome completo? ✨ Assim fica mais bacana no seu perfil!`;
             }
         } else if (state.data.onboardingStage === 'setting_up_pf_account_name') {
-            if (state.currentAction !== 'awaiting_input_pf_name') { 
+            if (state.currentAction !== 'awaiting_input_pf_name') { // Se não estava esperando o nome da conta PF, pede
                 onboardingReply = getOnboardingAskForPFAccountNameMessage(clientNameToUse);
                 state.currentAction = 'awaiting_input_pf_name';
-            } else { 
+            } else { // Processa a msg como nome da conta PF
                 const pfAccountName = messageText.trim();
                 if (pfAccountName.length >= 3 && pfAccountName.length <= 50) {
                     try {
                         const newPfAccount = await clientService.createFinancialAccount(client.id, {
-                            accountName: pfAccountName, accountType: 'PF', isDefault: true 
+                            accountName: pfAccountName, accountType: 'PF', isDefault: true // Primeira PF é default
                         });
+                        // Define a conta recém-criada como ativa na sessão
                         state.activeFinancialAccountId = newPfAccount.id;
                         state.activeFinancialAccountName = newPfAccount.accountName;
                         state.activeFinancialAccountType = newPfAccount.accountType;
                         logger.info(`[WHATSAPP ONBOARDING] Conta PF "${pfAccountName}" criada para ${senderPhone}.`);
-                        
+                       
                         const planTier = state.currentAccessLevel.startsWith('avancado') || state.currentAccessLevel.startsWith('vitalicio_avancado') ? 'avancado' : 'basico';
                         if (planTier === 'avancado') {
                             state.data.onboardingStage = 'confirming_pj_mei_setup';
@@ -806,6 +830,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
         } else if (state.data.onboardingStage === 'confirming_pj_mei_setup') {
              if (state.currentAction !== 'awaiting_pj_mei_confirm') {
+                // Busca a conta PF para usar o nome na mensagem
                 const pfAccount = (await clientService.getClientFinancialAccounts(client.id, { isActive: true })).find(a => a.accountType === 'PF');
                 onboardingReply = getOnboardingConfirmPJAccountSetupMessage(clientNameToUse, pfAccount?.accountName || "Pessoal", state.accessLevelTextForUser);
                 state.currentAction = 'awaiting_pj_mei_confirm';
@@ -813,25 +838,26 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 const userResponseLower = lowerMessageText;
                 let wantsPjMei = false;
                 let pjMeiType = null;
-    
+   
+                // Verifica se a resposta indica "sim" ou já especifica o tipo PJ/MEI
                 if (userResponseLower.includes("sim") || userResponseLower === "pj" || userResponseLower === "mei" || userResponseLower.includes("quero") || userResponseLower.includes("bora")) {
                     wantsPjMei = true;
                     if (userResponseLower.includes("pj")) pjMeiType = "PJ";
                     else if (userResponseLower.includes("mei")) pjMeiType = "MEI";
                 }
-    
+   
                 if (wantsPjMei) {
-                    if (pjMeiType) { 
+                    if (pjMeiType) { // Se já especificou o tipo (ex: "sim, quero pj")
                         state.data.tempPjMeiType = pjMeiType;
                         onboardingReply = getOnboardingAskForCompanyNameMessage(clientNameToUse, pjMeiType);
                         state.data.onboardingStage = 'creating_pj_mei_account_name';
                         state.currentAction = 'awaiting_input_pj_mei_name';
-                    } else { 
+                    } else { // Se disse apenas "sim", pergunta o tipo
                         onboardingReply = getOnboardingAskForPJTypeMessage(clientNameToUse);
                         state.data.onboardingStage = 'awaiting_pj_mei_type';
                         state.currentAction = 'awaiting_input_pj_mei_type';
                     }
-                } else { 
+                } else { // Se respondeu "não" ou algo não relacionado
                     const aiIntro = `Tranquilo, ${clientNameToUse}! Sem pressa. Se mais pra frente você quiser adicionar sua conta empresarial, é só me avisar! 😉`;
                     const dataStructure = `Sua conta "${state.activeFinancialAccountName || 'Pessoal'}" está prontinha para uso com seu plano ${state.accessLevelTextForUser}!`;
                     const linkText = `O que você gostaria de fazer primeiro? Estou a postos! 🚀`;
@@ -852,12 +878,13 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
         } else if (state.data.onboardingStage === 'creating_pj_mei_account_name') {
             const companyName = messageText.trim();
-            const companyType = state.data.tempPjMeiType;
+            const companyType = state.data.tempPjMeiType; // Tipo guardado no passo anterior
             if (companyName.length >= 3 && companyName.length <= 50) {
                 try {
                     await clientService.createFinancialAccount(client.id, {
-                        accountName: companyName, accountType: companyType, isDefault: false 
+                        accountName: companyName, accountType: companyType, isDefault: false // PJ/MEI não é default inicialmente
                     });
+                    // Pega o nome da conta pessoal ativa para a mensagem
                     const personalAccountName = state.activeFinancialAccountName || (await clientService.getClientFinancialAccounts(client.id, {isActive:true})).find(a => a.accountType === 'PF')?.accountName || "Pessoal";
                     onboardingReply = getOnboardingCompanyCreatedMessage(clientNameToUse, companyType, companyName, personalAccountName);
                     logger.info(`[WHATSAPP ONBOARDING] Conta ${companyType} "${companyName}" criada para ${senderPhone}.`);
@@ -873,25 +900,34 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         }
 
 
+        // Se houve uma resposta de onboarding, envia e atualiza o estado.
+        // Se o onboarding NÃO estiver completo E uma ação de onboarding estiver pendente (currentAction não nulo),
+        // então retorna para aguardar a próxima mensagem do usuário para essa ação de onboarding.
         if (onboardingReply) {
             state.messageHistory.push({ role: 'assistant', content: onboardingReply });
             await sendWhatsappMessage(senderPhone, onboardingReply);
             conversationState.set(senderPhone, state);
+            // Se o onboarding não está completo E há uma ação de onboarding pendente, não prossegue para a IA.
             if (state.data.onboardingStage !== 'onboarding_complete' && state.currentAction !== null) {
-                return; 
+                return;
             }
         }
-        
+       
+        // ---- FIM DO FLUXO DE ONBOARDING / INÍCIO DO FLUXO NORMAL COM IA ----
+        // Só continua se o onboarding estiver completo OU se não houve onboardingReply (implica que já passou ou não se aplica)
         if (state.data.onboardingStage === 'onboarding_complete' || !onboardingReply) {
-            if (state.data.onboardingStage === 'onboarding_complete' && state.currentAction && 
+           
+            // Se o onboarding acabou de completar e tinha uma currentAction de onboarding, limpa ela.
+            if (state.data.onboardingStage === 'onboarding_complete' && state.currentAction &&
                 (state.currentAction.startsWith('awaiting_input_') || state.currentAction.startsWith('awaiting_pj_mei_') || state.currentAction.startsWith('awaiting_plan_'))) {
                 state.currentAction = null;
             }
-            
+           
+            // Verificação PÓS-ONBOARDING: Se o onboarding está completo mas NENHUMA conta financeira está ativa na sessão
             if (state.data.onboardingStage === 'onboarding_complete' && !state.activeFinancialAccountId) {
                 const accountsForSelection = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
                 if (accountsForSelection.length > 0) {
-                    if (accountsForSelection.length === 1) {
+                    if (accountsForSelection.length === 1) { // Se só tem UMA conta, seleciona automaticamente
                         const acc = accountsForSelection[0];
                         state.activeFinancialAccountId = acc.id;
                         state.activeFinancialAccountName = acc.accountName;
@@ -901,16 +937,16 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         const linkText = `Como posso te ajudar a organizar suas finanças hoje? 🚀`;
                         const selectMsg = `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
                         state.messageHistory.push({ role: 'assistant', content: selectMsg });
-                        state.currentAction = null; 
-                        if(state.data) state.data.accountsToList = null;
+                        state.currentAction = null; // Limpa qualquer ação anterior de seleção
+                        if(state.data) state.data.accountsToList = null; // Limpa lista temporária
                         await sendWhatsappMessage(senderPhone, selectMsg);
-                    } else if (state.currentAction !== 'selecting_account_flow_active') { 
-                        state.currentAction = 'selecting_account_flow_active'; 
+                    } else if (state.currentAction !== 'selecting_account_flow_active') { // Se tem MÚLTIPLAS contas e não está no fluxo de seleção
+                        state.currentAction = 'selecting_account_flow_active'; // Inicia fluxo de seleção
                         state.data.accountsToList = accountsForSelection.map(a => ({id: a.id, name: a.accountName, type: a.accountType}));
                         const accountOptionsText = formatAccountSelectionMessage(clientNameToUse, state.accessLevelTextForUser, state.data.accountsToList);
                         state.messageHistory.push({ role: 'assistant', content: accountOptionsText });
                         await sendWhatsappMessage(senderPhone, accountOptionsText);
-                    } else { 
+                    } else { // Está no fluxo de seleção (currentAction === 'selecting_account_flow_active'), processa a msg atual como escolha
                         const chosenIdentifier = messageText.trim();
                         let accountToSelect = null;
                         const chosenNumber = parseInt(chosenIdentifier, 10);
@@ -920,7 +956,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         } else if (state.data.accountsToList) {
                             accountToSelect = state.data.accountsToList.find(acc =>
                                 acc.name.toLowerCase() === chosenIdentifier.toLowerCase() ||
-                                acc.name.toLowerCase().includes(chosenIdentifier.toLowerCase())
+                                acc.name.toLowerCase().includes(chosenIdentifier.toLowerCase()) // Permite nomes parciais
                             );
                         }
 
@@ -933,8 +969,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const linkText = `Como posso te ajudar a colocar tudo em ordem agora? 🚀`;
                             const confirmSelectionMsg = `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
                             state.messageHistory.push({ role: 'assistant', content: confirmSelectionMsg });
-                            state.currentAction = null; 
-                            if(state.data) state.data.accountsToList = null;
+                            state.currentAction = null; // Finaliza fluxo de seleção
+                            if(state.data) state.data.accountsToList = null; // Limpa lista temporária
                             await sendWhatsappMessage(senderPhone, confirmSelectionMsg);
                         } else {
                             let errorReplyIntro = `Hummm, ${clientNameToUse}, não consegui identificar essa conta. 😕`;
@@ -946,17 +982,19 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             const fullErrorReply = `${errorReplyIntro}\n\n${errorReplyData}\n${errorReplyLink}`;
                             state.messageHistory.push({ role: 'assistant', content: fullErrorReply });
                             await sendWhatsappMessage(senderPhone, fullErrorReply);
+                            // Mantém currentAction = 'selecting_account_flow_active' para nova tentativa
                         }
                     }
+                    // Se o fluxo de seleção de conta ainda está ativo ou se nenhuma conta foi selecionada, retorna
                     conversationState.set(senderPhone, state);
                     if (state.currentAction === 'selecting_account_flow_active' || !state.activeFinancialAccountId) return;
-                } else { 
+                } else { // Onboarding completo, mas NENHUMA conta financeira existe no BD. Direciona para criar PF.
                     const aiIntro = `Olá ${clientNameToUse}! Seu plano ${state.accessLevelTextForUser} está tinindo, mas não encontrei nenhuma conta financeira.`;
                     const dataStructure = `Vamos criar sua conta Pessoal agora?`;
                     const linkText = `Diga "criar conta pessoal"! 😉`;
                     const noAccountsMsg = `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
                     state.messageHistory.push({ role: 'assistant', content: noAccountsMsg });
-                    state.data.onboardingStage = 'setting_up_pf_account_name'; 
+                    state.data.onboardingStage = 'setting_up_pf_account_name'; // Volta para o estágio de criar conta PF
                     state.currentAction = 'awaiting_input_pf_name';
                     await sendWhatsappMessage(senderPhone, noAccountsMsg);
                     conversationState.set(senderPhone, state);
@@ -965,24 +1003,26 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
 
 
-            // ---- PROCESSAMENTO COM IA ----
+            // ---- PROCESSAMENTO COM IA (continuação) ----
+            // Se foi um clique de botão, trata a lógica específica do botão
             if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
                 const buttonId = rawPayload.selectedButtonId;
-                logger.info(`[WHATSAPP SERVICE] Botão clicado por ${senderPhone} (${clientNameToUse}): ID '${buttonId}', Texto: '${messageText}'`);
-                let buttonClickHandledByServiceLogic = true;
+                // messageText aqui é o label do botão
+                logger.info(`[WHATSAPP SERVICE] Botão clicado por ${senderPhone} (${clientNameToUse}): ID '${buttonId}', Texto (label): '${messageText}'`);
+                let buttonClickHandledByServiceLogic = true; // Flag para indicar se o clique foi tratado aqui ou deve ir para IA
                 let aiMessageIntroForButton = "";
                 let structuredDataBodyForButton = "";
                 let platformLinkFooterForButton = formatPlatformLink();
 
-                let resourceTypeForEditMessage = "item";
-    
+                let resourceTypeForEditMessage = "item"; // Default
+   
                 if (buttonId.startsWith('edit_transaction_')) {
                     const transactionId = buttonId.replace('edit_transaction_', '');
                     state.editingResource = { type: 'transaction', id: transactionId };
                     resourceTypeForEditMessage = "transação";
                     aiMessageIntroForButton = `Claro, ${clientNameToUse}! 😉`;
                     structuredDataBodyForButton = `Descreva na próxima mensagem o que você precisa que eu altere na ${resourceTypeForEditMessage} (ID: ${transactionId}). Por exemplo: "mude a descrição para X e o valor para Y".`;
-                    platformLinkFooterForButton = "";
+                    platformLinkFooterForButton = ""; // Não adiciona link, pois espera input
                     state.currentAction = 'awaiting_transaction_edit_details';
                 } else if (buttonId.startsWith('delete_transaction_')) {
                     const transactionId = buttonId.replace('delete_transaction_', '');
@@ -990,7 +1030,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         await financialService.deleteTransaction(state.activeFinancialAccountId, transactionId);
                         aiMessageIntroForButton = `Transação removida com sucesso, ${clientNameToUse}! 👍`;
                         structuredDataBodyForButton = "Se precisar de mais alguma coisa, é só chamar.";
-                    } catch (e) { 
+                    } catch (e) {
                         logger.error(`[WHATSAPP SERVICE] Erro ao excluir transação ${transactionId} por botão: ${e.message}`);
                         aiMessageIntroForButton = `Ops! Tive um problema ao tentar excluir a transação.`;
                         structuredDataBodyForButton = `Detalhe: ${e.message.substring(0,70)}`;
@@ -1007,16 +1047,17 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 } else if (buttonId.startsWith('delete_appointment_')) {
                     const appointmentId = buttonId.replace('delete_appointment_', '');
                     try {
-                        await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, appointmentId, true);
+                        await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, appointmentId, true); // true para deletar
                         aiMessageIntroForButton = `Compromisso removido da sua agenda, ${clientNameToUse}! ✅`;
                         structuredDataBodyForButton = "Fico à disposição se precisar de algo mais.";
-                    } catch (e) { 
+                    } catch (e) {
                         logger.error(`[WHATSAPP SERVICE] Erro ao excluir compromisso ${appointmentId} por botão: ${e.message}`);
                         aiMessageIntroForButton = `Ops! Tive um problema ao tentar excluir o compromisso.`;
                         structuredDataBodyForButton = `Detalhe: ${e.message.substring(0,70)}`;
                     }
                     state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                 }
+                // Adicione aqui outros handlers de botões (crédito, recorrência, etc.) seguindo o padrão acima
                 else if (buttonId.startsWith('edit_credit_card_')) {
                     const cardId = buttonId.replace('edit_credit_card_', '');
                     state.editingResource = { type: 'credit_card', id: cardId };
@@ -1051,7 +1092,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         await recurringTransactionService.deleteRecurringRule(state.activeFinancialAccountId, ruleId);
                         aiMessageIntroForButton = `Regra de recorrência removida, ${clientNameToUse}! 👍`;
                         structuredDataBodyForButton = "";
-                    } catch (e) { 
+                    } catch (e) {
                         logger.error(`[WHATSAPP SERVICE] Erro ao excluir regra ${ruleId} por botão: ${e.message}`);
                         aiMessageIntroForButton = `Ops! Tive um problema ao tentar excluir a regra.`;
                         structuredDataBodyForButton = `Detalhe: ${e.message.substring(0,70)}`;
@@ -1060,18 +1101,20 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 }
                 else if (buttonId.startsWith('edit_parcelled_account_')) {
                     const originalAccountId = buttonId.replace('edit_parcelled_account_', '');
+                    // Busca a transação original para pegar a descrição e outros dados
                     const parcelGroupInfo = await financialService.getTransactionById(state.activeFinancialAccountId, originalAccountId);
                     let originalDescriptionForEdit = "sua compra parcelada";
-                    if (parcelGroupInfo && parcelGroupInfo.isParcel && parcelGroupInfo.originalAccountId === parcelGroupInfo.id) {
+                    if (parcelGroupInfo && parcelGroupInfo.isParcel && parcelGroupInfo.originalAccountId === parcelGroupInfo.id) { // É a transação "mãe" do grupo
                         originalDescriptionForEdit = parcelGroupInfo.description.replace(/ - Parcela \d+\/\d+$/, '').trim();
-                    } else if (parcelGroupInfo) {
+                    } else if (parcelGroupInfo) { // É uma parcela individual, mas usamos a descrição dela como base
                         originalDescriptionForEdit = parcelGroupInfo.description;
                     }
-        
-                    state.editingResource = { 
-                        type: 'parcelled_account', 
-                        id: originalAccountId,
-                        originalDescription: originalDescriptionForEdit
+       
+                    state.editingResource = {
+                        type: 'parcelled_account',
+                        id: originalAccountId, // ID da transação original (mãe do grupo)
+                        originalDescription: originalDescriptionForEdit // Descrição original para exibir ao usuário
+                        // Poderia adicionar aqui os dados originais (valor, parcelas, cartão) para a IA ter mais contexto, se necessário
                     };
                     aiMessageIntroForButton = `Ok, ${clientNameToUse}! Você quer editar a compra parcelada de "${originalDescriptionForEdit}".`;
                     structuredDataBodyForButton = `O que gostaria de alterar? Você pode me dizer os novos detalhes, como por exemplo: "mudar para R$250 em 5x no cartão XP com nova descrição 'Presente Dia das Mães'".\n\nLembre-se que alterar valor, número de parcelas ou o cartão irá refazer essa compra com os novos dados. Se quiser mudar apenas a descrição, diga "mudar descrição para [nova descrição]".`;
@@ -1090,35 +1133,40 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     }
                     state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                 }
+                // ... outros botões
                 else {
-                    buttonClickHandledByServiceLogic = false; 
+                    buttonClickHandledByServiceLogic = false; // Botão não reconhecido, deixa a IA processar o texto do botão
                 }
-        
+       
                 if (buttonClickHandledByServiceLogic) {
                     const finalMsg = `${aiMessageIntroForButton}${structuredDataBodyForButton ? `\n\n${structuredDataBodyForButton}` : ''}${platformLinkFooterForButton ? `\n\n${platformLinkFooterForButton}` : ''}`.trim();
                     state.messageHistory.push({ role: 'assistant', content: finalMsg });
                     await sendWhatsappMessage(senderPhone, finalMsg);
-                    conversationState.set(senderPhone, state); 
-                    return;
+                    conversationState.set(senderPhone, state);
+                    return; // Interrompe o fluxo aqui, pois o clique do botão foi tratado
                 }
             }
-        
-            if (state.currentAction && state.data.onboardingStage === 'onboarding_complete') {
+       
+            // Se currentAction está definido (ex: aguardando confirmação, detalhes de edição) e não é um clique de botão novo
+            // Isso permite que a IA processe a resposta do usuário a uma pergunta anterior do sistema.
+            if (state.currentAction && state.data.onboardingStage === 'onboarding_complete') { // Garante que não é onboarding
                 let stateHandledInPreProcessing = false;
                 let preProcAiIntro = "";
                 let preProcDataStructure = "";
                 let preProcPlatformLink = formatPlatformLink();
-        
+       
                 if (state.currentAction === 'awaiting_confirmation' && state.pendingConfirmation) {
-                     const lowerMsgForConfirm = messageText.toLowerCase().trim(); 
+                     const lowerMsgForConfirm = messageText.toLowerCase().trim(); // a msg do usuário
                      if (lowerMsgForConfirm === 'sim' || lowerMsgForConfirm === 's' || lowerMsgForConfirm.includes('correto') || lowerMsgForConfirm.includes('ok') || lowerMsgForConfirm.includes('pode')) {
+                        // Lógica para executar a ação pendente
+                        // Exemplo para RECREATE_PARCELLED_ACCOUNT (se fosse o caso de confirmação)
                         if (state.pendingConfirmation.action === 'RECREATE_PARCELLED_ACCOUNT' && state.pendingConfirmation.parameters) {
                             try {
                                 const { financialAccountId, originalAccountIdToDelete, newParcelData } = state.pendingConfirmation.parameters;
                                 const recreatedResult = await financialService.recreateParcelledAccount(financialAccountId, originalAccountIdToDelete, newParcelData);
-                                
+                               
                                 preProcAiIntro = state.lastAiResponse?.overall_summary_suggestion || `🎉 Sensacional, ${clientNameToUse}! Sua compra parcelada foi atualizada!`;
-                                preProcDataStructure = formatParcelledAccountDataStructure(newParcelData, recreatedResult);
+                                preProcDataStructure = formatParcelledAccountDataStructure(newParcelData, recreatedResult); // Usa os parâmetros originais para formatação
                                 state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                                 stateHandledInPreProcessing = true;
                             } catch(e) {
@@ -1126,14 +1174,15 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 preProcAiIntro = `Puxa, ${clientNameToUse}, algo deu errado ao tentar atualizar sua compra parcelada. 😥`;
                                 preProcDataStructure = `Detalhe: ${e.message.substring(0,70)}.\nA compra original não foi alterada. Quer tentar de novo os detalhes ou cancelar?`;
                                 preProcPlatformLink = "";
-                                state.currentAction = 'awaiting_confirmation'; 
+                                state.currentAction = 'awaiting_confirmation'; // Permanece esperando se erro
                                 stateHandledInPreProcessing = true;
                             }
                         } else {
+                            // Para outras confirmações genéricas (se houver)
                             preProcAiIntro = `Entendido, ${clientNameToUse}! Confirmado! 👍`;
                             preProcDataStructure = "Vou prosseguir com base nisso. O que mais posso fazer?";
                             preProcPlatformLink = "";
-                            state.currentAction = null; state.pendingConfirmation = null; 
+                            state.currentAction = null; state.pendingConfirmation = null; // Limpa após confirmação
                             stateHandledInPreProcessing = true;
                         }
                     } else if (lowerMsgForConfirm === 'não' || lowerMsgForConfirm === 'n' || lowerMsgForConfirm.includes('incorreto') || lowerMsgForConfirm.includes('cancela')) {
@@ -1143,29 +1192,35 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                         stateHandledInPreProcessing = true;
                     }
+                    // Se não for sim/não claro, deixa a IA reinterpretar a mensagem do usuário
                 }
-                else if (state.currentAction === 'awaiting_explicit_account_type_from_ai') {
+                // Adicionar aqui lógicas para outros currentAction que não dependem da IA para a próxima resposta direta
+                // Ex: se state.currentAction for 'awaiting_explicit_account_type_from_ai' (usado em CREATE_FINANCIAL_ACCOUNT)
+                else if (state.currentAction === 'awaiting_explicit_account_type_from_ai') { // Usado por CREATE_FINANCIAL_ACCOUNT via IA
                     const typeInput = messageText.trim().toUpperCase();
                     if (typeInput === 'PF' || typeInput === 'PJ' || typeInput === 'MEI') {
-                        state.data.accountTypeToCreate = typeInput; 
-                        const formattedMsg = getOnboardingAskForCompanyNameMessage(clientNameToUse, typeInput);
+                        state.data.accountTypeToCreate = typeInput; // Guarda o tipo
+                        const formattedMsg = getOnboardingAskForCompanyNameMessage(clientNameToUse, typeInput); // Reusa msg de onboarding
                         preProcAiIntro = formattedMsg.split('\n\n')[0];
                         preProcDataStructure = formattedMsg.split('\n\n')[1];
                         preProcPlatformLink = formattedMsg.split('\n\n')[2] || "";
-                        state.currentAction = 'awaiting_explicit_account_name_from_ai';
+                        state.currentAction = 'awaiting_explicit_account_name_from_ai'; // Próximo passo
                     } else {
-                        const formattedMsg = getOnboardingAskForPJTypeMessage(clientNameToUse);
+                        // Pede o tipo novamente
+                        const formattedMsg = getOnboardingAskForPJTypeMessage(clientNameToUse); // Reusa msg de onboarding
                         preProcAiIntro = formattedMsg.split('\n\n')[0];
                         preProcDataStructure = formattedMsg.split('\n\n')[1];
                         preProcPlatformLink = formattedMsg.split('\n\n')[2] || "";
+                        // Mantém currentAction = 'awaiting_explicit_account_type_from_ai'
                     }
                     stateHandledInPreProcessing = true;
                 } else if (state.currentAction === 'awaiting_explicit_account_name_from_ai') {
                     const newAccName = messageText.trim();
-                    const typeToCreate = state.data.accountTypeToCreate; 
+                    const typeToCreate = state.data.accountTypeToCreate; // Pega tipo guardado
                     if (newAccName.length >= 3 && newAccName.length <= 50) {
                         try {
-                            const currentClientAccountsForCreate = await clientService.getClientFinancialAccounts(client.id, { isActive: true }); 
+                            // Verifica se já existe PJ/MEI ou se o plano permite
+                            const currentClientAccountsForCreate = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
                             const existingPjMei = currentClientAccountsForCreate.find(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
                             if ((typeToCreate === 'PJ' || typeToCreate === 'MEI') && existingPjMei) {
                                 preProcAiIntro = `Opa, ${clientNameToUse}! Você já tem uma conta empresarial (${existingPjMei.accountType}) chamada "${existingPjMei.accountName}".`;
@@ -1175,13 +1230,14 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 preProcAiIntro = `Ah, ${clientNameToUse}! Para criar uma conta empresarial (${typeToCreate}), você precisa de um dos nossos Planos Avançados. 🚀`;
                                 preProcDataStructure = `Confira em ${process.env.PLAN_SITE_URL || "https://mapnocontrole.com.br/planos"} e depois me avise! 😉`;
                                 preProcPlatformLink = "";
-                                state.data.onboardingStage = 'awaiting_plan_confirmation'; 
+                                state.data.onboardingStage = 'awaiting_plan_confirmation'; // Volta para o fluxo de plano
                             } else {
                                 const newFA = await clientService.createFinancialAccount(client.id, { accountName: newAccName, accountType: typeToCreate });
                                 const formattedMsg = getOnboardingCompanyCreatedMessage(clientNameToUse, newFA.accountType, newFA.accountName, state.activeFinancialAccountName || "Pessoal");
                                 preProcAiIntro = formattedMsg.split('\n\n')[0];
                                 preProcDataStructure = formattedMsg.split('\n\n')[1];
                                 preProcPlatformLink = formattedMsg.split('\n\n')[2] || "";
+                                // Define a nova conta como ativa
                                 state.activeFinancialAccountId = newFA.id;
                                 state.activeFinancialAccountName = newFA.accountName;
                                 state.activeFinancialAccountType = newFA.accountType;
@@ -1195,34 +1251,42 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                          preProcAiIntro = `Esse nome parece um pouco curto ou longo demais, ${clientNameToUse}.`;
                          preProcDataStructure = `Para sua conta ${typeToCreate}, que tal um nome entre 3 e 50 letras? ✍️`;
                          preProcPlatformLink = "";
+                         // Mantém currentAction para tentar nome de novo
                     }
-                    state.currentAction = null; delete state.data.accountTypeToCreate; 
+                    // Se não deu erro de validação de nome, limpa a ação e o tipo guardado
+                    if (newAccName.length >= 3 && newAccName.length <= 50) {
+                        state.currentAction = null; delete state.data.accountTypeToCreate;
+                    }
                     stateHandledInPreProcessing = true;
                 }
-        
-        
+       
+       
                 if (stateHandledInPreProcessing) {
                     const finalMsg = `${preProcAiIntro}${preProcDataStructure ? `\n\n${preProcDataStructure}` : ''}${preProcPlatformLink ? `\n\n${preProcPlatformLink}` : ''}`.trim();
                     state.messageHistory.push({ role: 'assistant', content: finalMsg });
                     await sendWhatsappMessage(senderPhone, finalMsg);
-                    conversationState.set(senderPhone, state); 
-                    if (state.currentAction === null && !state.pendingConfirmation && 
-                        !(state.currentAction?.startsWith('awaiting_explicit_'))) {
+                    conversationState.set(senderPhone, state);
+                    // Se a ação foi resolvida e não há mais pendências, retorna
+                    if (state.currentAction === null && !state.pendingConfirmation &&
+                        !(state.currentAction?.startsWith('awaiting_explicit_'))) { // Não retorna se ainda está em um fluxo de pedir nome/tipo
                             return;
                     }
                 }
             }
-        
+       
             logger.info(`[WHATSAPP HANDLER - PÓS-ONBOARDING] Cliente: ${client.id} (${clientNameToUse}), Plano: ${state.currentAccessLevel}, Conta Ativa: ${state.activeFinancialAccountName || 'N/A'} (ID: ${state.activeFinancialAccountId || 'N/A'}), Msg: "${messageText}"`);
+            // Segurança: se por algum motivo chegou aqui com onboarding completo, acesso pago, mas sem conta ativa, força seleção/criação.
             if(!state.activeFinancialAccountId && state.hasPaidAccess && state.data.onboardingStage === 'onboarding_complete') {
                  logger.error(`[WHATSAPP HANDLER CRITICAL - PÓS-ONBOARDING] Cliente ${client.id} tem acesso pago e onboarding completo, mas NENHUMA conta financeira ativa no estado ANTES DE CHAMAR A IA.`);
+                 // Tenta resolver como no início do bloco "if (state.data.onboardingStage === 'onboarding_complete' || !onboardingReply)"
                  let noActiveAccountForAIMsg = "";
                  const clientAccountsForAI = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
                  if (clientAccountsForAI.length > 0) {
                      noActiveAccountForAIMsg = formatAccountSelectionMessage(clientNameToUse, state.accessLevelTextForUser, clientAccountsForAI.map(a => ({id: a.id, name: a.accountName, type: a.accountType})));
-                     state.currentAction = 'selecting_account_flow_active'; 
+                     state.currentAction = 'selecting_account_flow_active'; // Força seleção
                      state.data.accountsToList = clientAccountsForAI.map(a => ({id: a.id, name: a.accountName, type: a.accountType}));
                  } else {
+                     // Se não tem contas mesmo, direciona para criar PF
                      const aiIntro = `Olá ${clientNameToUse}! Seu plano ${state.accessLevelTextForUser} está tinindo, mas não encontrei nenhuma conta financeira.`;
                      const dataStructure = `Vamos criar sua conta Pessoal agora?`;
                      const linkText = `Diga "criar conta pessoal"! 😉`;
@@ -1233,72 +1297,83 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                  state.messageHistory.push({ role: 'assistant', content: noActiveAccountForAIMsg });
                  await sendWhatsappMessage(senderPhone, noActiveAccountForAIMsg);
                  conversationState.set(senderPhone, state);
-                 return;
+                 return; // Importante retornar para não chamar a IA sem conta.
             }
-        
-        
+       
+       
             const aiContext = {
                 currentFinancialAccountId: state.activeFinancialAccountId,
                 currentFinancialAccountType: state.activeFinancialAccountType,
                 currentFinancialAccountName: state.activeFinancialAccountName,
                 clientName: clientNameToUse,
-                conversationHistory: state.messageHistory.slice(-MAX_HISTORY_FOR_AI * 2),
-                currentStateData: state.data, 
+                conversationHistory: state.messageHistory.slice(-MAX_HISTORY_FOR_AI * 2), // Histórico para IA
+                currentStateData: state.data, // Dados como clarificationContext, etc.
                 editingResource: state.editingResource,
-                currentAccessLevel: state.currentAccessLevel, 
-                hasPaidAccess: state.hasPaidAccess, 
+                currentAccessLevel: state.currentAccessLevel, // Para IA saber o nível do plano
+                hasPaidAccess: state.hasPaidAccess, // Para IA saber se tem acesso válido
             };
             const aiResponse = await aiModelService.interpretUserMessage(messageText, aiContext);
             logger.info(`[WHATSAPP HANDLER] AI Response for ${senderPhone}:`, {aiResponsePreview: JSON.stringify(aiResponse).substring(0,500) + "..."});
-            state.lastAiResponse = aiResponse;
-        
+            state.lastAiResponse = aiResponse; // Guarda a última resposta da IA completa
+       
+            // Se currentAction era de um fluxo de espera (ex: edição, clarificação) e a IA não pediu mais clarificações,
+            // limpa currentAction para não ficar preso.
             if(state.currentAction && typeof state.currentAction === 'string' &&
-               (state.currentAction.startsWith('awaiting_')) && 
-               state.data.onboardingStage === 'onboarding_complete' &&
+               (state.currentAction.startsWith('awaiting_')) &&
+               state.data.onboardingStage === 'onboarding_complete' && // Garante que não é onboarding
                (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0) ) {
-                    if (!state.currentAction.includes('_edit_') && !state.currentAction.includes('_choice') && state.currentAction !== 'awaiting_confirmation' && !state.currentAction.startsWith('awaiting_explicit_')) { 
+                    // Não limpa se for um fluxo de edição ou escolha que precisa de mais input,
+                    // ou se a IA confirmou uma ação pendente
+                    if (!state.currentAction.includes('_edit_') && !state.currentAction.includes('_choice') && state.currentAction !== 'awaiting_confirmation' && !state.currentAction.startsWith('awaiting_explicit_')) {
                         state.currentAction = null;
                     }
             }
-            
-            let aiMessageIntro = aiResponse.overall_summary_suggestion || 
-                                (aiResponse.reply_to_user_suggestion && (!aiResponse.detected_actions || aiResponse.detected_actions.length === 0 || aiResponse.detected_actions.every(a => (a.action || a.action_type)?.startsWith("GENERAL_"))) 
-                                    ? aiResponse.reply_to_user_suggestion 
+           
+            let aiMessageIntro = aiResponse.overall_summary_suggestion ||
+                                (aiResponse.reply_to_user_suggestion && (!aiResponse.detected_actions || aiResponse.detected_actions.length === 0 || aiResponse.detected_actions.every(a => (a.action || a.action_type)?.startsWith("GENERAL_")))
+                                    ? aiResponse.reply_to_user_suggestion
                                     : `Ok, ${clientNameToUse}!`);
             if (typeof aiMessageIntro !== 'string' || aiMessageIntro.trim() === "") {
-                aiMessageIntro = `Ok, ${clientNameToUse}!`; 
+                aiMessageIntro = `Ok, ${clientNameToUse}!`; // Fallback absoluto
             }
 
             let structuredDataBody = "";
             let platformLinkFooter = formatPlatformLink();
             let finalMessageToSend = "";
-        
-            state.pendingConfirmation = null;
-            actionWasAnEdit = false;
-            resourceForButtonsContext = null;
-            let multipleActionBodiesList = []; 
+       
+            state.pendingConfirmation = null; // Limpa confirmação pendente antes de processar novas ações
+            actionWasAnEdit = false; // Flag para saber se a ação foi uma edição bem-sucedida
+            resourceForButtonsContext = null; // Para decidir se mostra botões de editar/excluir
+            let multipleActionBodiesList = []; // Para acumular corpos de múltiplas ações
 
             if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
                 for (const detectedAction of aiResponse.detected_actions) {
-                    const actionName = detectedAction.action || detectedAction.action_type; 
+                    // *** ALTERAÇÃO PRINCIPAL AQUI ***
+                    // Se detectedAction.parameters existir, usa ele. Senão, usa o próprio detectedAction.
+                    const params = detectedAction.parameters || detectedAction;
+                    // *******************************
+
+                    const actionName = detectedAction.action || detectedAction.action_type; // Nome da ação
                     if (!actionName) { // Pula se a ação não tiver nome (improvável, mas seguro)
                         logger.warn('[WHATSAPP HANDLER] Ação detectada pela IA sem nome (action/action_type). Pulando.', { detectedAction });
                         continue;
                     }
-                    const params = detectedAction.parameters || {};
-                    let currentActionBlocked = false; 
-                    let currentActionFormattedData = "";
+                    // Verifica se a ação é permitida pelo plano/contexto
+                    let currentActionBlocked = false; // Flag para bloquear a execução desta ação específica
+                    let currentActionFormattedData = ""; // Dados formatados para esta ação (ou msg de bloqueio)
 
+                    // 1. Verifica acesso pago para ações não públicas
                     const publicActions = ['GENERAL_GREETING_OR_SMALLTALK', 'GENERAL_QUESTION_OR_HELP', 'ACTION_CONFIRMATION_YES', 'ACTION_CONFIRMATION_NO', 'SWITCH_FINANCIAL_ACCOUNT', 'CREATE_FINANCIAL_ACCOUNT', 'SET_MOTIVATIONAL_MESSAGE_PREFERENCE', 'SET_WATER_REMINDER_PREFERENCE'];
                     if (!state.hasPaidAccess && !publicActions.includes(actionName)) {
-                        const noPlanIntro = getOnboardingWelcomeNoPlanMessage(clientNameToUse).split('\n\n')[0]; 
-                        const noPlanData = getOnboardingWelcomeNoPlanMessage(clientNameToUse).split('\n\n').slice(1).join('\n\n');
+                        const noPlanIntro = getOnboardingWelcomeNoPlanMessage(clientNameToUse).split('\n\n')[0]; // Pega só a intro da msg de plano
+                        const noPlanData = getOnboardingWelcomeNoPlanMessage(clientNameToUse).split('\n\n').slice(1).join('\n\n'); // Pega o resto
                         if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(noPlanIntro)) && aiMessageIntro !== aiResponse.overall_summary_suggestion) aiMessageIntro = noPlanIntro;
                         currentActionFormattedData = noPlanData;
-                        platformLinkFooter = ""; 
-                        state.data.onboardingStage = 'awaiting_plan_confirmation'; 
+                        platformLinkFooter = ""; // Não mostra link da plataforma, mostra link dos planos
+                        state.data.onboardingStage = 'awaiting_plan_confirmation'; // Reverte para o estágio de plano
                         currentActionBlocked = true;
                     }
+                    // 2. Verifica se a conta financeira está ativa para ações que a requerem
                     const accountRequiredActions = [
                         'CREATE_FINANCIAL_TRANSACTION', 'SCHEDULE_APPOINTMENT', 'CREATE_PARCELLED_ACCOUNT',
                         'UPDATE_FINANCIAL_TRANSACTION', 'UPDATE_APPOINTMENT', 'GET_FINANCIAL_SUMMARY',
@@ -1314,6 +1389,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         currentActionFormattedData = `Se você já configurou alguma, me diga o nome dela. Se não, diga "criar conta pessoal"! 😊`;
                         platformLinkFooter = ""; state.currentAction = 'selecting_account_flow_active'; currentActionBlocked = true;
                     }
+                    // 3. Verifica se a conta é PJ/MEI para ações específicas e se o plano permite
                     const pjMeiActions = ['CREATE_PRODUCT', 'GET_STOCK_INFO', 'RECORD_STOCK_MOVEMENT', 'UPDATE_PRODUCT'];
                      if (pjMeiActions.includes(actionName) && state.activeFinancialAccountType && !['PJ', 'MEI'].includes(state.activeFinancialAccountType)  && !currentActionBlocked) {
                         if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.startsWith("Desculpe, ")) && aiMessageIntro !== aiResponse.overall_summary_suggestion) aiMessageIntro = `Desculpe, ${clientNameToUse}, mas "${actionName.toLowerCase().replace(/_/g, " ")}" é apenas para contas PJ ou MEI.`;
@@ -1325,15 +1401,16 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         currentActionFormattedData = `Eles são perfeitos para quem quer ir além! Confira em ${siteUrlPjMei} e depois me avise para continuarmos! 😉`;
                         platformLinkFooter = ""; state.data.onboardingStage = 'awaiting_plan_confirmation'; currentActionBlocked = true;
                     }
-        
-        
+       
+       
                     if (currentActionBlocked) {
                         if (currentActionFormattedData) multipleActionBodiesList.push(currentActionFormattedData);
-                        continue; 
+                        continue; // Pula para a próxima ação detectada, se houver
                     }
 
+                    // Executa a ação
                     try {
-                        switch (actionName) { 
+                        switch (actionName) {
                             case 'CREATE_FINANCIAL_TRANSACTION': {
                                 const categoryId = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type);
                                 const cardId = params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null;
@@ -1341,168 +1418,747 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     description: params.description, type: params.type, value: parseFloat(params.value),
                                     transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0],
                                     financialCategoryId: categoryId, creditCardId: cardId, notes: params.notes,
-                                    isPayableOrReceivable: params.isPayableOrReceivable !== undefined ? params.isPayableOrReceivable : (params.dueDate ? true : (cardId ? false : false)),
-                                    dueDate: cardId ? null : params.dueDate, 
-                                    isPaidOrReceived: params.isPaidOrReceived !== undefined ? params.isPaidOrReceived : (cardId ? true : (!params.dueDate))
+                                    // Define isPayableOrReceivable e isPaidOrReceived com base nos inputs ou defaults lógicos
+                                    isPayableOrReceivable: params.isPayableOrReceivable !== undefined ? params.isPayableOrReceivable : (params.dueDate ? true : (cardId ? false : false)), // Se tem dueDate é a pagar/receber; Se é cartão à vista, não é a pagar/receber.
+                                    dueDate: cardId ? null : params.dueDate, // Cartão à vista não tem dueDate aqui (vai pra fatura)
+                                    isPaidOrReceived: params.isPaidOrReceived !== undefined ? params.isPaidOrReceived : (cardId ? true : (!params.dueDate)) // Cartão à vista é 'pago' na origem; Sem vencimento é 'pago/recebido'
                                 };
                                 if (!txData.description || !txData.type || isNaN(txData.value) || txData.value <= 0) {
                                     throw new Error("Dados insuficientes ou inválidos para criar transação (descrição, tipo, valor).");
                                 }
                                 const newTx = await financialService.createTransaction(state.activeFinancialAccountId, txData);
-                                const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, newTx.id);
-                                
-                                if (aiResponse.detected_actions.length === 1) { 
+                                const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, newTx.id); // Recarrega para ter dados completos (categoria, cartão)
+                               
+                                // Define a mensagem de introdução da IA
+                                if (aiResponse.detected_actions.length === 1) { // Ação única
                                     aiMessageIntro = aiResponse.overall_summary_suggestion || detectedAction.action_specific_reply_suggestion || `Sua transação foi registrada, ${clientNameToUse}!`;
-                                } else if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && !aiResponse.overall_summary_suggestion) {
-                                     aiMessageIntro = `Registrei o seguinte para você, ${clientNameToUse}:`; 
+                                } else if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && !aiResponse.overall_summary_suggestion) { // Primeira de múltiplas ações
+                                     aiMessageIntro = `Registrei o seguinte para você, ${clientNameToUse}:`; // Intro genérica para múltiplas ações
                                 }
+                                // Senão (é uma ação subsequente de múltiplas), mantém o aiMessageIntro da primeira ação (overall_summary)
 
                                 currentActionFormattedData = formatFinancialTransactionDataStructure(reloadedTx);
                                 if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'transaction', id: newTx.id, description: newTx.description };
                                 break;
                             }
-                            case 'UPDATE_FINANCIAL_TRANSACTION': { /* ... (como antes) ... */ }
-                            case 'SCHEDULE_APPOINTMENT': { /* ... (como antes) ... */ }
-                            case 'UPDATE_APPOINTMENT': { /* ... (como antes) ... */ }
+                            case 'UPDATE_FINANCIAL_TRANSACTION': {
+                                const transactionIdToUpdate = state.editingResource?.type === 'transaction' && state.editingResource?.id
+                                    ? parseInt(state.editingResource.id, 10)
+                                    : (params.transactionIdToUpdate ? parseInt(params.transactionIdToUpdate, 10) : null);
+                                if (!transactionIdToUpdate) throw new Error("ID da transação para atualizar não foi fornecido ou não está em contexto de edição.");
+
+                                const updateDataTx = {};
+                                if (params.hasOwnProperty('description')) updateDataTx.description = params.description;
+                                if (params.hasOwnProperty('value')) updateDataTx.value = parseFloat(params.value);
+                                if (params.hasOwnProperty('transactionDate')) updateDataTx.transactionDate = params.transactionDate;
+                                if (params.hasOwnProperty('notes')) updateDataTx.notes = params.notes;
+                                if (params.hasOwnProperty('dueDate')) updateDataTx.dueDate = params.dueDate;
+                                if (params.hasOwnProperty('isPaidOrReceived')) updateDataTx.isPaidOrReceived = params.isPaidOrReceived;
+                                if (params.financialCategoryName) updateDataTx.financialCategoryId = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type || (await financialService.getTransactionById(state.activeFinancialAccountId, transactionIdToUpdate)).type);
+                                if (params.creditCardName) updateDataTx.creditCardId = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
+                                else if (params.hasOwnProperty('creditCardName') && params.creditCardName === null) updateDataTx.creditCardId = null; // Remover cartão
+
+                                if (Object.keys(updateDataTx).length === 0) throw new Error("Nenhum dado fornecido para atualizar a transação.");
+
+                                const updatedTx = await financialService.updateTransaction(state.activeFinancialAccountId, transactionIdToUpdate, updateDataTx);
+                                const reloadedUpdatedTx = await financialService.getTransactionById(state.activeFinancialAccountId, updatedTx.id);
+
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Transação atualizada com sucesso, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a edição da transação, ${clientNameToUse}:`;
+                                currentActionFormattedData = formatFinancialTransactionDataStructure(reloadedUpdatedTx);
+                                actionWasAnEdit = true; state.editingResource = null; state.currentAction = null;
+                                break;
+                            }
+                            case 'SCHEDULE_APPOINTMENT': {
+                                const eventDateTime = params.eventDateTime; // "YYYY-MM-DD HH:MM"
+                                if (!params.title || !eventDateTime) throw new Error("Título e data/hora são obrigatórios para agendar.");
+
+                                const appointmentData = {
+                                    title: params.title,
+                                    eventDateTime: eventDateTime,
+                                    durationMinutes: params.durationMinutes ? parseInt(params.durationMinutes) : null,
+                                    location: params.location,
+                                    reminderLeadTimeMinutes: params.reminderLeadTimeMinutes ? parseInt(params.reminderLeadTimeMinutes) : 15,
+                                    notes: params.notes,
+                                    associatedValue: params.associatedValue ? parseFloat(params.associatedValue) : null,
+                                    associatedTransactionType: params.associatedTransactionType // "Entrada" ou "Saída"
+                                };
+                                const newAppt = await appointmentService.createAppointment(state.activeFinancialAccountId, appointmentData);
+                                const reloadedAppt = await appointmentService.getAppointmentById(state.activeFinancialAccountId, newAppt.id);
+
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Seu compromisso foi agendado, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Agendei o seguinte para você, ${clientNameToUse}:`;
+                                currentActionFormattedData = formatAppointmentDataStructure(reloadedAppt);
+                                if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'appointment', id: newAppt.id, description: newAppt.title };
+                                break;
+                            }
+                            case 'UPDATE_APPOINTMENT': {
+                                const appointmentIdToUpdate = state.editingResource?.type === 'appointment' && state.editingResource?.id
+                                    ? parseInt(state.editingResource.id, 10)
+                                    : (params.appointmentIdToUpdate ? parseInt(params.appointmentIdToUpdate, 10) : null);
+                                if (!appointmentIdToUpdate) throw new Error("ID do compromisso para atualizar não foi fornecido.");
+
+                                const updateDataAppt = {};
+                                if (params.hasOwnProperty('title')) updateDataAppt.title = params.title;
+                                if (params.hasOwnProperty('eventDateTime')) updateDataAppt.eventDateTime = params.eventDateTime;
+                                if (params.hasOwnProperty('durationMinutes')) updateDataAppt.durationMinutes = parseInt(params.durationMinutes);
+                                if (params.hasOwnProperty('location')) updateDataAppt.location = params.location;
+                                if (params.hasOwnProperty('reminderLeadTimeMinutes')) updateDataAppt.reminderLeadTimeMinutes = parseInt(params.reminderLeadTimeMinutes);
+                                if (params.hasOwnProperty('status')) updateDataAppt.status = params.status;
+                                if (params.hasOwnProperty('notes')) updateDataAppt.notes = params.notes;
+                                if (params.hasOwnProperty('associatedValue')) updateDataAppt.associatedValue = parseFloat(params.associatedValue);
+                                if (params.hasOwnProperty('associatedTransactionType')) updateDataAppt.associatedTransactionType = params.associatedTransactionType;
+
+                                if (Object.keys(updateDataAppt).length === 0) throw new Error("Nenhum dado fornecido para atualizar o compromisso.");
+
+                                const updatedAppt = await appointmentService.updateAppointment(state.activeFinancialAccountId, appointmentIdToUpdate, updateDataAppt);
+                                const reloadedUpdatedAppt = await appointmentService.getAppointmentById(state.activeFinancialAccountId, updatedAppt.id);
+
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Compromisso atualizado, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a edição do compromisso, ${clientNameToUse}:`;
+                                currentActionFormattedData = formatAppointmentDataStructure(reloadedUpdatedAppt);
+                                actionWasAnEdit = true; state.editingResource = null; state.currentAction = null;
+                                break;
+                            }
                             case 'CREATE_PARCELLED_ACCOUNT': {
                                 const catIdParcel = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type);
                                 const cardIdParcel = params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null;
-                                if (params.creditCardName && !cardIdParcel) {
+
+                                if (params.creditCardName && !cardIdParcel) { // Se especificou nome do cartão mas não foi encontrado
                                     const errorMsg = `Hum, ${clientNameToUse}, não encontrei um cartão chamado "${params.creditCardName}" para registrar essa compra parcelada. 😕 Você pode cadastrar o cartão primeiro ou tentar com outro nome.`;
                                     if (aiResponse.detected_actions.length === 1) { aiMessageIntro = errorMsg; currentActionFormattedData = ""; platformLinkFooter = ""; }
-                                    else { multipleActionBodiesList.push(errorMsg); }
-                                    break;
+                                    else { multipleActionBodiesList.push(errorMsg); } // Se for parte de múltiplas ações
+                                    break; // Interrompe esta ação específica
                                 }
-                                const parcelData = { description: params.description, type: params.type, totalValue: parseFloat(params.totalValue), numberOfParcels: parseInt(params.numberOfParcels), initialDueDate: params.initialDueDate, financialCategoryId: catIdParcel, creditCardId: cardIdParcel, notes: params.notes, transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0], };
+
+                                const parcelData = {
+                                    description: params.description,
+                                    type: params.type,
+                                    totalValue: parseFloat(params.value || params.totalValue), // IA pode usar 'value' ou 'totalValue'
+                                    numberOfParcels: parseInt(params.numberOfParcels),
+                                    initialDueDate: params.initialDueDate, // Data da primeira parcela
+                                    financialCategoryId: catIdParcel,
+                                    creditCardId: cardIdParcel,
+                                    notes: params.notes,
+                                    transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0] // Data da compra
+                                };
+                                 // Validação crucial
                                  if (!parcelData.description || !parcelData.type || isNaN(parcelData.totalValue) || parcelData.totalValue <=0 || isNaN(parcelData.numberOfParcels) || parcelData.numberOfParcels < 1 || !parcelData.initialDueDate) {
                                      throw new Error("Dados insuficientes ou inválidos para compra parcelada (descrição, tipo, valor total, nº parcelas, data 1ª parcela).");
                                  }
+
                                 const parcelResult = await financialService.createParcelledAccount(state.activeFinancialAccountId, parcelData);
+
+                                // Passa params (da IA) para formatação, pois pode ter nomes (cartão, categoria) que não estão no parcelResult imediato
+                                // E parcelResult (do BD) para ter os IDs e valores calculados das parcelas
                                 if (aiResponse.detected_actions.length === 1) { aiMessageIntro = aiResponse.overall_summary_suggestion || detectedAction.action_specific_reply_suggestion || `Sua compra parcelada foi registrada, ${clientNameToUse}!`;}
                                 else if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sua compra parcelada foi registrada, ${clientNameToUse}:`;
-                                currentActionFormattedData = formatParcelledAccountDataStructure(parcelData, parcelResult);
+
+                                // Para formatParcelledAccountDataStructure, é importante ter os nomes (categoria, cartão) que vieram da IA (em params)
+                                // e os dados calculados (valor da parcela) que vêm do parcelResult.
+                                // A função formatParcelledAccountDataStructure foi ajustada para usar params.creditCardName e params.financialCategoryName.
+                                currentActionFormattedData = formatParcelledAccountDataStructure(params, parcelResult);
+
                                 if (aiResponse.detected_actions.length === 1 && parcelResult.parcels && parcelResult.parcels.length > 0) {
+                                    // O ID para botões deve ser o ID da transação "mãe" do grupo de parcelas
                                     const originalTxId = parcelResult.parcels[0].originalAccountId || parcelResult.parcels[0].id;
                                     resourceForButtonsContext = { type: 'parcelled_account', id: originalTxId, description: params.description };
                                 }
                                 break;
                             }
-                            case 'UPDATE_PARCELLED_ACCOUNT_DESCRIPTION': { /* ... (como antes) ... */ }
-                            case 'RECREATE_PARCELLED_ACCOUNT': { /* ... (como antes) ... */ }
-                            case 'MARK_TRANSACTION_AS_PAID_RECEIVED': { /* ... (como antes) ... */ }
-                            case 'CREATE_RECURRING_RULE': { /* ... (como antes) ... */ }
-                            case 'CREATE_PRODUCT': { /* ... (como antes) ... */ }
-                            case 'GET_STOCK_INFO': { /* ... (como antes) ... */ }
-                            case 'RECORD_STOCK_MOVEMENT': { /* ... (como antes) ... */ }
+                            case 'UPDATE_PARCELLED_ACCOUNT_DESCRIPTION': {
+                                const accountIdToUpdateDesc = state.editingResource?.type === 'parcelled_account' && state.editingResource?.id
+                                    ? parseInt(state.editingResource.id, 10)
+                                    : (params.originalAccountIdToUpdate ? parseInt(params.originalAccountIdToUpdate, 10) : null);
+                                if (!accountIdToUpdateDesc || !params.newDescription) throw new Error("ID da compra parcelada e nova descrição são obrigatórios.");
+
+                                await financialService.updateParcelledAccountDescription(state.activeFinancialAccountId, accountIdToUpdateDesc, params.newDescription);
+
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Descrição da compra parcelada atualizada para "${params.newDescription}", ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a edição da compra parcelada, ${clientNameToUse}:`;
+                                currentActionFormattedData = `📝 Descrição atualizada para: ${params.newDescription}`;
+                                actionWasAnEdit = true; state.editingResource = null; state.currentAction = null;
+                                break;
+                            }
+                            case 'RECREATE_PARCELLED_ACCOUNT': {
+                                const originalAccountIdToUpdate = state.editingResource?.type === 'parcelled_account' && state.editingResource?.id
+                                    ? parseInt(state.editingResource.id, 10)
+                                    : (params.originalAccountIdToUpdate ? parseInt(params.originalAccountIdToUpdate, 10) : null);
+                                if (!originalAccountIdToUpdate) throw new Error("ID da compra parcelada original é obrigatório para recriar.");
+
+                                const newCatIdParcel = await findFinancialCategoryIdByName(params.newFinancialCategoryName, state.activeFinancialAccountId, params.newType);
+                                const newCardIdParcel = params.newCreditCardName ? await findCreditCardIdByName(params.newCreditCardName, state.activeFinancialAccountId) : null;
+
+                                if (params.newCreditCardName && !newCardIdParcel) {
+                                    const errorMsgRec = `Hum, ${clientNameToUse}, não encontrei um cartão chamado "${params.newCreditCardName}" para registrar essa nova compra parcelada. 😕`;
+                                    if (aiResponse.detected_actions.length === 1) { aiMessageIntro = errorMsgRec; currentActionFormattedData = "A compra original não foi alterada. Você pode cadastrar o cartão ou tentar com outro nome."; platformLinkFooter = ""; }
+                                    else { multipleActionBodiesList.push(errorMsgRec); }
+                                    break;
+                                }
+                                const newParcelData = {
+                                    description: params.newDescription, type: params.newType || 'Saída', totalValue: parseFloat(params.newTotalValue),
+                                    numberOfParcels: parseInt(params.newNumberOfParcels), initialDueDate: params.newInitialDueDate,
+                                    financialCategoryId: newCatIdParcel, creditCardId: newCardIdParcel, notes: params.newNotes,
+                                    transactionDate: params.newTransactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0]
+                                };
+                                if (!newParcelData.description || isNaN(newParcelData.totalValue) || newParcelData.totalValue <= 0 || isNaN(newParcelData.numberOfParcels) || newParcelData.numberOfParcels < 1 || !newParcelData.initialDueDate) {
+                                     throw new Error("Para recriar a compra parcelada, preciso de: nova descrição, novo valor total, novo nº de parcelas e nova data da 1ª parcela.");
+                                 }
+                                // Ação de recriar é destrutiva (deleta o antigo). Idealmente, pedir confirmação.
+                                // Por agora, vamos executar direto conforme o prompt.
+                                const recreatedResult = await financialService.recreateParcelledAccount(state.activeFinancialAccountId, originalAccountIdToUpdate, newParcelData);
+
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Compra parcelada atualizada com sucesso, ${clientNameToUse}! A antiga foi removida.`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a atualização da compra parcelada, ${clientNameToUse}:`;
+                                // Passa newParcelData (com nomes) e recreatedResult (com IDs e valores)
+                                currentActionFormattedData = formatParcelledAccountDataStructure(newParcelData, recreatedResult);
+                                actionWasAnEdit = true; state.editingResource = null; state.currentAction = null;
+                                break;
+                            }
+                            case 'MARK_TRANSACTION_AS_PAID_RECEIVED': {
+                                if (!params.transactionDescription) throw new Error("Descrição da transação é obrigatória para marcar como paga/recebida.");
+                                const paymentDate = params.paymentDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0];
+                                const categoryIdForMark = params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId) : null;
+
+                                const result = await financialService.markTransactionAsPaidOrReceived(
+                                    state.activeFinancialAccountId,
+                                    params.transactionDescription,
+                                    params.transactionValue ? parseFloat(params.transactionValue) : null,
+                                    paymentDate,
+                                    categoryIdForMark
+                                );
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Ótimo, ${clientNameToUse}! Transação marcada como liquidada.`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a liquidação da transação, ${clientNameToUse}:`;
+                                currentActionFormattedData = `Transação "${result.description}" (R$ ${result.value.toFixed(2)}) foi marcada como ${result.type === 'Entrada' ? 'recebida' : 'paga'} em ${formatDate(result.paymentDate)}.`;
+                                break;
+                            }
+                            case 'CREATE_RECURRING_RULE': {
+                                const categoryIdRule = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type);
+                                const ruleData = {
+                                    description: params.description, type: params.type, value: parseFloat(params.value),
+                                    frequency: params.frequency, startDate: params.startDate,
+                                    interval: params.interval ? parseInt(params.interval) : 1,
+                                    dayOfMonth: params.dayOfMonth ? parseInt(params.dayOfMonth) : null,
+                                    dayOfWeek: params.dayOfWeek !== undefined && params.dayOfWeek !== null ? parseInt(params.dayOfWeek) : null,
+                                    endDate: params.endDate, autoCreateTransaction: params.autoCreateTransaction !== undefined ? params.autoCreateTransaction : false,
+                                    financialCategoryId: categoryIdRule, notes: params.notes
+                                };
+                                if (!ruleData.description || !ruleData.type || isNaN(ruleData.value) || ruleData.value <=0 || !ruleData.frequency || !ruleData.startDate) {
+                                    throw new Error("Dados insuficientes para criar regra recorrente (desc, tipo, valor, frequência, data início).");
+                                }
+                                const newRule = await recurringTransactionService.createRecurringRule(state.activeFinancialAccountId, ruleData);
+                                const reloadedRule = await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, newRule.id);
+
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Sua regra de recorrência foi criada, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Criei a seguinte regra de recorrência para você, ${clientNameToUse}:`;
+                                currentActionFormattedData = formatRecurringRuleDataStructure(reloadedRule);
+                                if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'recurring_rule', id: newRule.id, description: newRule.description };
+                                break;
+                            }
+                            case 'CREATE_PRODUCT': {
+                                // Validação de tipo de conta e plano já feita antes do switch
+                                const productData = {
+                                    name: params.name, salePrice: parseFloat(params.salePrice), code: params.code,
+                                    costPrice: params.costPrice ? parseFloat(params.costPrice) : null,
+                                    initialQuantity: params.initialQuantity ? parseInt(params.initialQuantity) : 0,
+                                    minimumStock: params.minimumStock ? parseInt(params.minimumStock) : 0,
+                                    unit: params.unit || 'UN'
+                                };
+                                if (!productData.name || isNaN(productData.salePrice) || productData.salePrice <= 0) {
+                                     throw new Error("Nome e preço de venda são obrigatórios para o produto.");
+                                 }
+                                const newProduct = await productService.createProduct(state.activeFinancialAccountId, productData);
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Produto "${newProduct.name}" cadastrado com sucesso, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Cadastrei o produto, ${clientNameToUse}:`;
+                                currentActionFormattedData = formatProductDataStructure(newProduct);
+                                if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'product', id: newProduct.id, description: newProduct.name };
+                                break;
+                            }
+                            case 'GET_STOCK_INFO': {
+                                if(!params.productNameOrCode) throw new Error("Nome ou código do produto é obrigatório para ver o estoque.");
+                                const stockInfo = await stockService.getProductStockInfoByNameOrCode(state.activeFinancialAccountId, params.productNameOrCode);
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Aqui estão as informações de estoque para "${stockInfo.name}", ${clientNameToUse}:`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre o estoque de "${stockInfo.name}", ${clientNameToUse}:`;
+                                currentActionFormattedData = `📦 ${stockInfo.name} (${stockInfo.code || 'Sem código'}):\n` +
+                                                            `🛍️ Estoque Atual: ${stockInfo.quantity} ${stockInfo.unit || 'UN'}\n` +
+                                                            `📉 Estoque Mínimo: ${stockInfo.minimumStock || 0} ${stockInfo.unit || 'UN'}`;
+                                if (stockInfo.quantity <= (stockInfo.minimumStock || 0)) currentActionFormattedData += "\n⚠️ Atenção: Estoque baixo ou zerado!";
+                                break;
+                            }
+                            case 'RECORD_STOCK_MOVEMENT': {
+                                if(!params.productNameOrCode || !params.movementType || !params.quantity) throw new Error("Produto, tipo de movimento e quantidade são obrigatórios.");
+                                const productId = await findProductIdByNameOrCode(params.productNameOrCode, state.activeFinancialAccountId);
+                                if(!productId) throw new Error(`Produto "${params.productNameOrCode}" não encontrado.`);
+
+                                await stockService.recordStockMovement(state.activeFinancialAccountId, productId, {
+                                    movementType: params.movementType, // "Entrada", "Saída", "Ajuste"
+                                    quantity: parseInt(params.quantity),
+                                    reason: params.reason,
+                                    // transactionId: null // Se fosse vinculado a uma venda/compra específica
+                                });
+                                const updatedStockInfo = await stockService.getProductStockInfoById(state.activeFinancialAccountId, productId);
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Movimentação de estoque registrada para "${updatedStockInfo.name}", ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a movimentação de estoque, ${clientNameToUse}:`;
+                                currentActionFormattedData = `✅ Movimento de ${params.movementType.toLowerCase()} (${params.quantity} ${updatedStockInfo.unit || 'UN'}) para "${updatedStockInfo.name}" registrado.\n` +
+                                                            `📦 Estoque Atual: ${updatedStockInfo.quantity} ${updatedStockInfo.unit || 'UN'}.`;
+                                break;
+                            }
                             case 'CREATE_CREDIT_CARD': {
-                                const cardData = { name: params.name, limit: parseFloat(params.limit), closingDay: parseInt(params.closingDay), paymentDay: parseInt(params.paymentDay), lastFourDigits: params.lastFourDigits, flag: params.flag, isDefault: params.isDefault === undefined ? false : params.isDefault };
+                                const cardData = {
+                                    name: params.name, limit: parseFloat(params.limit),
+                                    closingDay: parseInt(params.closingDay), paymentDay: parseInt(params.paymentDay),
+                                    lastFourDigits: params.lastFourDigits, flag: params.flag,
+                                    isDefault: params.isDefault === undefined ? false : params.isDefault
+                                };
                                 if (!cardData.name || isNaN(cardData.limit) || cardData.limit <= 0 || isNaN(cardData.closingDay) || isNaN(cardData.paymentDay) ) {
                                     throw new Error("Dados insuficientes ou inválidos para criar cartão (nome, limite, dia fechamento/pagamento).");
                                 }
                                 const newCard = await creditCardService.createCreditCard(state.activeFinancialAccountId, cardData);
                                 if (aiResponse.detected_actions.length === 1) { aiMessageIntro = aiResponse.overall_summary_suggestion || detectedAction.action_specific_reply_suggestion || `Seu novo cartão foi cadastrado, ${clientNameToUse}!`; }
                                 else if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Seu novo cartão foi cadastrado, ${clientNameToUse}:`;
-                                currentActionFormattedData = formatOldCreditCardSummary(newCard, clientNameToUse, false, false); 
+                                // Usa a formatação antiga pois a nova (DataStructure) é para lista.
+                                currentActionFormattedData = formatOldCreditCardSummary(newCard, clientNameToUse, false, false);
                                 if (aiResponse.detected_actions.length === 1) resourceForButtonsContext = { type: 'credit_card', id: newCard.id, description: newCard.name };
                                 break;
                             }
-                            case 'UPDATE_CREDIT_CARD': { /* ... (como antes) ... */ }
-                            case 'UPDATE_RECURRING_RULE': { /* ... (como antes) ... */ }
-                            case 'UPDATE_PRODUCT': { /* ... (como antes) ... */ }
-                            case 'LIST_APPOINTMENTS': { /* ... (como antes) ... */ }
-                            case 'LIST_CREDIT_CARDS': { /* ... (como antes) ... */ }
+                            case 'UPDATE_CREDIT_CARD': {
+                                const cardIdToUpdate = state.editingResource?.type === 'credit_card' && state.editingResource?.id
+                                    ? parseInt(state.editingResource.id, 10)
+                                    : (params.cardIdToUpdate ? parseInt(params.cardIdToUpdate, 10) : null);
+                                if (!cardIdToUpdate) throw new Error("ID do cartão para atualizar não foi fornecido.");
+
+                                const updateDataCard = {};
+                                if (params.hasOwnProperty('name')) updateDataCard.name = params.name;
+                                if (params.hasOwnProperty('limit')) updateDataCard.limit = parseFloat(params.limit);
+                                if (params.hasOwnProperty('closingDay')) updateDataCard.closingDay = parseInt(params.closingDay);
+                                if (params.hasOwnProperty('paymentDay')) updateDataCard.paymentDay = parseInt(params.paymentDay);
+                                if (params.hasOwnProperty('lastFourDigits')) updateDataCard.lastFourDigits = params.lastFourDigits;
+                                if (params.hasOwnProperty('flag')) updateDataCard.flag = params.flag;
+                                if (params.hasOwnProperty('isDefault')) updateDataCard.isDefault = params.isDefault;
+                                if (params.hasOwnProperty('isActive')) updateDataCard.isActive = params.isActive;
+
+                                if (Object.keys(updateDataCard).length === 0) throw new Error("Nenhum dado fornecido para atualizar o cartão.");
+
+                                const updatedCard = await creditCardService.updateCreditCard(state.activeFinancialAccountId, cardIdToUpdate, updateDataCard);
+
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Cartão atualizado com sucesso, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a edição do cartão, ${clientNameToUse}:`;
+                                currentActionFormattedData = formatOldCreditCardSummary(updatedCard, clientNameToUse, false, true); // forEdit = true
+                                actionWasAnEdit = true; state.editingResource = null; state.currentAction = null;
+                                break;
+                            }
+                            case 'UPDATE_RECURRING_RULE': {
+                                const ruleIdToUpdate = state.editingResource?.type === 'recurring_rule' && state.editingResource?.id
+                                    ? parseInt(state.editingResource.id, 10)
+                                    : (params.ruleIdToUpdate ? parseInt(params.ruleIdToUpdate, 10) : null);
+                                if (!ruleIdToUpdate) throw new Error("ID da regra recorrente para atualizar não foi fornecido.");
+
+                                const updateDataRule = {};
+                                // Preencher updateDataRule com os campos de params...
+                                if (params.hasOwnProperty('description')) updateDataRule.description = params.description;
+                                if (params.hasOwnProperty('type')) updateDataRule.type = params.type;
+                                if (params.hasOwnProperty('value')) updateDataRule.value = parseFloat(params.value);
+                                if (params.hasOwnProperty('frequency')) updateDataRule.frequency = params.frequency;
+                                if (params.hasOwnProperty('startDate')) updateDataRule.startDate = params.startDate;
+                                if (params.hasOwnProperty('interval')) updateDataRule.interval = parseInt(params.interval);
+                                if (params.hasOwnProperty('dayOfMonth')) updateDataRule.dayOfMonth = params.dayOfMonth === null ? null : parseInt(params.dayOfMonth);
+                                if (params.hasOwnProperty('dayOfWeek')) updateDataRule.dayOfWeek = params.dayOfWeek === null ? null : parseInt(params.dayOfWeek);
+                                if (params.hasOwnProperty('endDate')) updateDataRule.endDate = params.endDate; else if (params.hasOwnProperty('endDate') && params.endDate === null) updateDataRule.endDate = null;
+                                if (params.hasOwnProperty('autoCreateTransaction')) updateDataRule.autoCreateTransaction = params.autoCreateTransaction;
+                                if (params.hasOwnProperty('isActive')) updateDataRule.isActive = params.isActive;
+                                if (params.hasOwnProperty('notes')) updateDataRule.notes = params.notes;
+                                if (params.financialCategoryName) updateDataRule.financialCategoryId = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type || (await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, ruleIdToUpdate)).type);
+                                else if (params.hasOwnProperty('financialCategoryName') && params.financialCategoryName === null) updateDataRule.financialCategoryId = null;
+
+
+                                if (Object.keys(updateDataRule).length === 0) throw new Error("Nenhum dado fornecido para atualizar a regra.");
+
+                                const updatedRule = await recurringTransactionService.updateRecurringRule(state.activeFinancialAccountId, ruleIdToUpdate, updateDataRule);
+                                const reloadedUpdatedRule = await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, updatedRule.id);
+
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Regra de recorrência atualizada, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a edição da regra, ${clientNameToUse}:`;
+                                currentActionFormattedData = formatRecurringRuleDataStructure(reloadedUpdatedRule);
+                                actionWasAnEdit = true; state.editingResource = null; state.currentAction = null;
+                                break;
+                            }
+                            case 'UPDATE_PRODUCT': {
+                                const productIdToUpdate = state.editingResource?.type === 'product' && state.editingResource?.id
+                                    ? parseInt(state.editingResource.id, 10)
+                                    : (params.productIdToUpdate ? parseInt(params.productIdToUpdate, 10) : null);
+                                if (!productIdToUpdate) throw new Error("ID do produto para atualizar não fornecido.");
+
+                                const updateDataProd = {};
+                                // Preencher updateDataProd com os campos de params...
+                                if (params.hasOwnProperty('name')) updateDataProd.name = params.name;
+                                if (params.hasOwnProperty('salePrice')) updateDataProd.salePrice = parseFloat(params.salePrice);
+                                if (params.hasOwnProperty('code')) updateDataProd.code = params.code;
+                                if (params.hasOwnProperty('costPrice')) updateDataProd.costPrice = parseFloat(params.costPrice);
+                                if (params.hasOwnProperty('minimumStock')) updateDataProd.minimumStock = parseInt(params.minimumStock);
+                                if (params.hasOwnProperty('unit')) updateDataProd.unit = params.unit;
+                                if (params.hasOwnProperty('description')) updateDataProd.description = params.description; // Descrição do produto
+                                if (params.hasOwnProperty('isActive')) updateDataProd.isActive = params.isActive;
+
+                                if (Object.keys(updateDataProd).length === 0) throw new Error("Nenhum dado para atualizar o produto.");
+
+                                const updatedProduct = await productService.updateProduct(state.activeFinancialAccountId, productIdToUpdate, updateDataProd);
+
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Produto atualizado com sucesso, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a edição do produto, ${clientNameToUse}:`;
+                                currentActionFormattedData = formatProductDataStructure(updatedProduct);
+                                actionWasAnEdit = true; state.editingResource = null; state.currentAction = null;
+                                break;
+                            }
+                            case 'LIST_APPOINTMENTS': {
+                                const filterParamsAppt = {
+                                    dateStart: params.dateStart, dateEnd: params.dateEnd, status: params.status,
+                                    limit: params.limit || 5, page: params.page || 1,
+                                    // period: params.period // O service lida com 'period' internamente
+                                };
+                                const { appointments, totalItems: totalAppts } = await appointmentService.getAllAppointments(state.activeFinancialAccountId, filterParamsAppt, params.period);
+
+                                if (aiResponse.detected_actions.length === 1) {
+                                    aiMessageIntro = aiResponse.overall_summary_suggestion || (totalAppts === 0 ? `Nenhum compromisso encontrado para os filtros, ${clientNameToUse}. 👍` : `📅 Encontrei ${totalAppts} compromissos. Os ${appointments.length > 1 ? appointments.length + " " : ""}próximos são:`);
+                                } else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) {
+                                    aiMessageIntro = totalAppts === 0 ? `Nenhum compromisso encontrado, ${clientNameToUse}.` : `Sobre os compromissos:`;
+                                }
+
+                                if (totalAppts === 0 && aiResponse.detected_actions.length === 1) {
+                                    currentActionFormattedData = "Tente outros filtros ou adicione novos compromissos!";
+                                } else if (totalAppts > 0) {
+                                    let listTextAppt = (aiResponse.detected_actions.length > 1 && multipleActionBodiesList.length > 0) ? "Compromissos Listados:\n" : "🎯 Detalhamento dos Compromissos:\n";
+                                    for (const appt of appointments) {
+                                        listTextAppt += `\n🗓️ ${appt.title} - ${formatDate(appt.eventDateTime)} às ${formatTime(appt.eventDateTime, false)} (ID: ${appt.id})`;
+                                        if (appt.status) listTextAppt += ` (Status: ${appt.status})`;
+                                    }
+                                    currentActionFormattedData = listTextAppt.trim();
+                                    if (totalAppts > appointments.length) platformLinkFooter = formatPlatformLink(`E mais ${totalAppts - appointments.length} compromissos. Peça para ver mais ou veja tudo na plataforma!`);
+                                } else {
+                                    currentActionFormattedData = ""; // Se não tem items mas não é ação única
+                                }
+                                break;
+                            }
+                            case 'LIST_CREDIT_CARDS': {
+                                const { cards, totalItems: totalCards } = await creditCardService.getAllCreditCards(state.activeFinancialAccountId, { includeSummary: true }); // includeSummary para limite disponível
+
+                                if (aiResponse.detected_actions.length === 1) {
+                                    aiMessageIntro = aiResponse.overall_summary_suggestion || (totalCards === 0 ? `Você ainda não tem cartões cadastrados, ${clientNameToUse}. Que tal adicionar um?` : `💳 Você tem ${totalCards} cartão(ões) cadastrado(s):`);
+                                } else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) {
+                                    aiMessageIntro = totalCards === 0 ? `Nenhum cartão cadastrado, ${clientNameToUse}.` : `Sobre seus cartões:`;
+                                }
+
+                                if (totalCards > 0) {
+                                    currentActionFormattedData = formatCreditCardListDataStructure(cards);
+                                } else if (aiResponse.detected_actions.length === 1) { // Ação única e sem cartões
+                                    currentActionFormattedData = "Diga, por exemplo: \"cadastrar cartão Nubank com limite de 2000, fechamento dia 20 e pagamento dia 28\".";
+                                } else {
+                                    currentActionFormattedData = "";
+                                }
+                                break;
+                            }
                             case 'LIST_FINANCIAL_TRANSACTIONS': {
-                                const filterParamsList = { dateStart: params.dateStart, dateEnd: params.dateEnd, type: params.type, financialCategoryId: params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type) : null, creditCardId: params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null, isPayableOrReceivable: params.isPayableOrReceivable, isPaidOrReceived: params.isPaidOrReceived, search: params.searchTerm || params.description, limit: params.limit || 7, page: params.page || 1, sortBy: params.sortBy || 'transactionDate', sortOrder: params.sortOrder || 'DESC' };
-                                const { transactions, totalItems } = await financialService.getAllTransactions(state.activeFinancialAccountId, filterParamsList);
-                                
-                                if (aiResponse.detected_actions.length === 1) { 
+                                const filterParamsList = {
+                                    dateStart: params.dateStart, dateEnd: params.dateEnd, type: params.type,
+                                    financialCategoryId: params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type) : null,
+                                    creditCardId: params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null,
+                                    isPayableOrReceivable: params.isPayableOrReceivable, isPaidOrReceived: params.isPaidOrReceived,
+                                    search: params.searchTerm || params.description, // IA pode usar searchTerm ou description
+                                    limit: params.limit || 7, page: params.page || 1,
+                                    sortBy: params.sortBy || 'transactionDate', sortOrder: params.sortOrder || 'DESC'
+                                };
+                                const { transactions, totalItems } = await financialService.getAllTransactions(state.activeFinancialAccountId, filterParamsList, params.period);
+                               
+                                if (aiResponse.detected_actions.length === 1) {
                                     aiMessageIntro = aiResponse.overall_summary_suggestion || (totalItems === 0 ? `Nenhuma transação encontrada para os filtros que você pediu, ${clientNameToUse}. 👍` : `📜 Encontrei ${totalItems} transações. As ${transactions.length > 1 ? transactions.length + " " : ""}mais recentes são:`);
-                                } else if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && !aiResponse.overall_summary_suggestion) { 
+                                } else if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && !aiResponse.overall_summary_suggestion) {
                                     aiMessageIntro = totalItems === 0 ? `Nenhuma transação encontrada para os filtros, ${clientNameToUse}.` : `Sobre as transações:`;
-                                } 
+                                }
 
                                 if (totalItems === 0 && aiResponse.detected_actions.length === 1) {
                                     currentActionFormattedData = "Tente outros filtros ou adicione novas transações!";
                                 } else if (totalItems > 0) {
-                                    let listText = (aiResponse.detected_actions.length > 1 && multipleActionBodiesList.length > 0) ? "Transações Listadas:\n" : "🎯 Detalhamento das Transações:\n"; 
+                                    let listText = (aiResponse.detected_actions.length > 1 && multipleActionBodiesList.length > 0) ? "Transações Listadas:\n" : "🎯 Detalhamento das Transações:\n";
                                     for (const t of transactions) {
                                         const catName = t.category ? t.category.name : 'Sem Categoria';
                                         let emoji = t.type === 'Entrada' ? '🟢' : (t.creditCardId ? '💳' : '🔴');
-                                        if (t.isParcel && t.originalAccount) emoji = '📦';
+                                        if (t.isParcel && t.originalAccount) emoji = '📦'; // Emoji de pacote para parcelas
                                         const date = formatDate(t.transactionDate);
                                         let descriptionText = t.description;
+                                        // Adiciona info da parcela na descrição se for parcela
                                         if (t.isParcel && t.parcelNumber && t.totalParcels && t.originalAccount) {
                                             const originalDesc = t.originalAccount.description.replace(/ - Parcela \d+\/\d+$/, '').trim();
-                                             if (!descriptionText.toLowerCase().includes(`parcela ${t.parcelNumber}/${t.totalParcels}`)) {
+                                             if (!descriptionText.toLowerCase().includes(`parcela ${t.parcelNumber}/${t.totalParcels}`)) { // Evita duplicar se já estiver
                                                 descriptionText = `${originalDesc} - Pcl ${t.parcelNumber}/${t.totalParcels}`;
                                              }
                                         }
                                         listText += `\n${emoji} ${descriptionText} - ${formatCurrency(t.value)}\n    (Cat: ${catName}, Data: ${date}, ID: ${t.id})`;
-                                        if (t.isPayableOrReceivable && !t.creditCardId) {
+                                        if (t.isPayableOrReceivable && !t.creditCardId) { // Se for conta a pagar/receber (não cartão)
                                             listText += t.isPaidOrReceived ? " (Liquidada ✅)" : ` (Vence ${formatDate(t.dueDate)} 🗓️)`;
                                         }
                                     }
                                     currentActionFormattedData = listText.trim();
                                     if (totalItems > transactions.length) platformLinkFooter = formatPlatformLink(`E mais ${totalItems - transactions.length} transações. Peça para ver mais ou veja tudo na plataforma!`);
                                 } else {
+                                    currentActionFormattedData = ""; // Se não tem items mas não é ação única
+                                }
+                                break;
+                            }
+                            case 'LIST_RECURRING_RULES': {
+                                const filterParamsRules = {
+                                    isActive: params.isActive !== undefined ? params.isActive : null, // true, false ou null (todos)
+                                    type: params.type,
+                                    limit: params.limit || 5, page: params.page || 1
+                                };
+                                const { rules, totalItems: totalRules } = await recurringTransactionService.getAllRecurringRules(state.activeFinancialAccountId, filterParamsRules);
+
+                                if (aiResponse.detected_actions.length === 1) {
+                                    aiMessageIntro = aiResponse.overall_summary_suggestion || (totalRules === 0 ? `Nenhuma regra de recorrência encontrada, ${clientNameToUse}.` : `📋 Você tem ${totalRules} regra(s) de recorrência:`);
+                                } else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) {
+                                    aiMessageIntro = totalRules === 0 ? `Nenhuma regra de recorrência encontrada, ${clientNameToUse}.` : `Sobre as regras de recorrência:`;
+                                }
+
+                                if (totalRules === 0 && aiResponse.detected_actions.length === 1) {
+                                    currentActionFormattedData = "Que tal criar uma? Diga, por exemplo: \"criar recorrência de aluguel, saída de 1500, mensal, todo dia 5\".";
+                                } else if (totalRules > 0) {
+                                    let listTextRules = (aiResponse.detected_actions.length > 1 && multipleActionBodiesList.length > 0) ? "Regras Listadas:\n" : "🎯 Detalhamento das Regras:\n";
+                                    for (const rule of rules) {
+                                        listTextRules += `\n🔄 ${rule.description} - ${formatCurrency(rule.value)} (${rule.type})\n    (Próx: ${formatDate(rule.nextDueDate)}, Freq: ${rule.frequency}, ID: ${rule.id})`;
+                                        if(!rule.isActive) listTextRules += " (Inativa)";
+                                    }
+                                    currentActionFormattedData = listTextRules.trim();
+                                    if (totalRules > rules.length) platformLinkFooter = formatPlatformLink(`E mais ${totalRules - rules.length} regras. Peça para ver mais ou veja tudo na plataforma!`);
+                                } else {
                                     currentActionFormattedData = "";
                                 }
                                 break;
                             }
-                            case 'LIST_RECURRING_RULES': { /* ... (como antes) ... */ }
-                            case 'SWITCH_FINANCIAL_ACCOUNT': { /* ... (como antes) ... */ }
-                            case 'CREATE_FINANCIAL_ACCOUNT': { /* ... (como antes) ... */ }
-                            case 'GET_CREDIT_CARD_INVOICE': { 
-                                const cardIdForInvoice = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
-                                if (!cardIdForInvoice) { 
-                                    aiMessageIntro = `Hum, não consegui identificar o cartão "${params.creditCardName}", ${clientNameToUse}.`; 
-                                    currentActionFormattedData = `Pode tentar de novo ou verificar se ele está cadastrado? 🤔`; 
-                                    platformLinkFooter = ""; 
-                                    break; 
+                            case 'SWITCH_FINANCIAL_ACCOUNT': {
+                                const targetAccountIdentifier = params.targetAccountNameOrType;
+                                if (!targetAccountIdentifier) throw new Error("Preciso do nome ou tipo da conta para qual você quer mudar.");
+
+                                const accounts = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
+                                if (accounts.length <= 1) {
+                                    aiMessageIntro = `Você só tem uma conta (${accounts[0]?.name || 'N/A'}) configurada, ${clientNameToUse}. Não há para onde mudar por enquanto. 😊`;
+                                    currentActionFormattedData = ""; platformLinkFooter = "";
+                                    break;
+                                }
+                                let foundAccount = accounts.find(acc =>
+                                    acc.accountName.toLowerCase() === targetAccountIdentifier.toLowerCase() ||
+                                    acc.accountType.toLowerCase() === targetAccountIdentifier.toLowerCase() ||
+                                    (acc.id && acc.id.toString() === targetAccountIdentifier) // Permite ID também
+                                );
+                                // Se não achou por nome/tipo exato, tenta por inclusão no nome
+                                if (!foundAccount) {
+                                    foundAccount = accounts.find(acc => acc.accountName.toLowerCase().includes(targetAccountIdentifier.toLowerCase()));
+                                }
+
+                                if (foundAccount && foundAccount.id !== state.activeFinancialAccountId) {
+                                    state.activeFinancialAccountId = foundAccount.id;
+                                    state.activeFinancialAccountName = foundAccount.accountName;
+                                    state.activeFinancialAccountType = foundAccount.accountType;
+                                    aiMessageIntro = aiResponse.overall_summary_suggestion || `Prontinho, ${clientNameToUse}! Mudei para a conta "${foundAccount.accountName}" (${foundAccount.accountType}).`;
+                                    currentActionFormattedData = "O que vamos fazer por aqui agora?";
+                                    platformLinkFooter = ""; // Sem link da plataforma, só confirmação
+                                } else if (foundAccount && foundAccount.id === state.activeFinancialAccountId) {
+                                    aiMessageIntro = `Você já está usando a conta "${foundAccount.accountName}", ${clientNameToUse}! 😉`;
+                                    currentActionFormattedData = ""; platformLinkFooter = "";
+                                } else {
+                                    aiMessageIntro = `Não encontrei uma conta chamada ou do tipo "${targetAccountIdentifier}", ${clientNameToUse}. 😕`;
+                                    let accountListForMsg = "Suas contas são:\n";
+                                    accounts.forEach(a => accountListForMsg += `\n- ${a.accountName} (${a.accountType})`);
+                                    currentActionFormattedData = accountListForMsg;
+                                    platformLinkFooter = "";
+                                }
+                                state.currentAction = null; // Finaliza fluxo de troca
+                                break;
+                            }
+                            case 'CREATE_FINANCIAL_ACCOUNT': {
+                                const accountTypeToCreate = params.accountTypeToCreate; // PF, PJ, MEI
+                                const newAccountName = params.newAccountName;
+
+                                if (!accountTypeToCreate) { // Se a IA não conseguiu inferir o tipo
+                                    state.currentAction = 'awaiting_explicit_account_type_from_ai'; // Pede tipo explicitamente
+                                    aiMessageIntro = `Entendido, ${clientNameToUse}! Você quer criar uma nova conta.`;
+                                    currentActionFormattedData = `Ela será para Pessoa Física (PF), Pessoa Jurídica (PJ) ou MEI?`;
+                                    platformLinkFooter = "";
+                                    break;
+                                }
+                                if (!newAccountName) { // Se a IA pegou o tipo mas não o nome
+                                    state.currentAction = 'awaiting_explicit_account_name_from_ai';
+                                    state.data.accountTypeToCreate = accountTypeToCreate; // Guarda o tipo
+                                    const msgParts = getOnboardingAskForCompanyNameMessage(clientNameToUse, accountTypeToCreate).split('\n\n'); // Reusa msg
+                                    aiMessageIntro = msgParts[0];
+                                    currentActionFormattedData = msgParts[1];
+                                    platformLinkFooter = msgParts[2] || "";
+                                    break;
+                                }
+                                // Se chegou aqui, IA forneceu tipo E nome. Valida e cria.
+                                if (!['PF', 'PJ', 'MEI'].includes(accountTypeToCreate)) throw new Error("Tipo de conta inválido. Use PF, PJ ou MEI.");
+                                if (newAccountName.length < 3 || newAccountName.length > 50) throw new Error("Nome da conta deve ter entre 3 e 50 caracteres.");
+
+                                const currentClientAccounts = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
+                                const existingPjMei = currentClientAccounts.find(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
+
+                                if ((accountTypeToCreate === 'PJ' || accountTypeToCreate === 'MEI') && existingPjMei) {
+                                    throw new Error(`Você já possui uma conta ${existingPjMei.accountType} ("${existingPjMei.accountName}"). Só é permitida uma conta empresarial (PJ/MEI) por vez.`);
+                                }
+                                if ((accountTypeToCreate === 'PJ' || accountTypeToCreate === 'MEI') && !state.currentAccessLevel.startsWith('avancado') && !state.currentAccessLevel.startsWith('vitalicio_avancado')) {
+                                    state.data.onboardingStage = 'awaiting_plan_confirmation'; // Reverte para fluxo de plano
+                                    throw new Error(`Para criar contas PJ ou MEI, você precisa de um Plano Avançado. Confira nossos planos! (Link no app ou site)`);
+                                }
+
+                                const newFinancialAccount = await clientService.createFinancialAccount(client.id, { accountName: newAccountName, accountType: accountTypeToCreate });
+                                // Define a nova conta como ativa
+                                state.activeFinancialAccountId = newFinancialAccount.id;
+                                state.activeFinancialAccountName = newFinancialAccount.accountName;
+                                state.activeFinancialAccountType = newFinancialAccount.accountType;
+
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Conta "${newFinancialAccount.accountName}" (${newFinancialAccount.accountType}) criada e selecionada, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Criei e selecionei a conta, ${clientNameToUse}:`;
+                                currentActionFormattedData = `✨ Conta: ${newFinancialAccount.accountName}\n✨ Tipo: ${newFinancialAccount.accountType}`;
+                                platformLinkFooter = ""; state.currentAction = null;
+                                break;
+                            }
+                            case 'GET_CREDIT_CARD_INVOICE': {
+                                const cardNameForInvoice = params.creditCardName;
+                                if (!cardNameForInvoice) throw new Error("Nome do cartão é obrigatório para ver a fatura.");
+                                const cardIdForInvoice = await findCreditCardIdByName(cardNameForInvoice, state.activeFinancialAccountId);
+                                if (!cardIdForInvoice) {
+                                    aiMessageIntro = `Hum, não consegui identificar o cartão "${cardNameForInvoice}", ${clientNameToUse}.`;
+                                    currentActionFormattedData = `Pode tentar de novo ou verificar se ele está cadastrado? 🤔`;
+                                    platformLinkFooter = "";
+                                    break;
                                 }
                                 const periodOpts = { type: params.invoicePeriodType || 'aberta', month: params.invoiceMonth, year: params.invoiceYear };
-                                const card = await creditCardService.getCreditCardById(state.activeFinancialAccountId, cardIdForInvoice);
+                                const cardForLimit = await creditCardService.getCreditCardById(state.activeFinancialAccountId, cardIdForInvoice); // Para pegar o limite total do cartão
                                 const invoiceDetails = await creditCardService.getCreditCardInvoiceDetails(state.activeFinancialAccountId, cardIdForInvoice, periodOpts);
-                                if(card) invoiceDetails.cardTotalLimit = card.limit;
-                                
-                                if (aiResponse.detected_actions.length === 1) { aiMessageIntro = aiResponse.overall_summary_suggestion || `🛍️ ${clientNameToUse}, aqui está a fatura do seu cartão!`; }
-                                else if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a fatura do cartão ${params.creditCardName}:`;
+                                if(cardForLimit) invoiceDetails.cardTotalLimit = cardForLimit.limit; // Adiciona limite total para cálculo de disponível
+
+                                if (aiResponse.detected_actions.length === 1) { aiMessageIntro = aiResponse.overall_summary_suggestion || `🛍️ ${clientNameToUse}, aqui está a fatura do seu cartão ${cardNameForInvoice}!`; }
+                                else if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a fatura do cartão ${cardNameForInvoice}:`;
                                 currentActionFormattedData = formatCreditCardInvoiceDataStructure(invoiceDetails, params.listTransactions !== false);
                                 break;
                             }
-                            case 'GET_CREDIT_CARD_AVAILABLE_LIMIT': { /* ... (como antes) ... */ }
-                            case 'PAY_CREDIT_CARD_INVOICE': { /* ... (como antes) ... */ }
-                            case 'SET_MOTIVATIONAL_MESSAGE_PREFERENCE': { /* ... (como antes) ... */ }
-                            case 'SET_WATER_REMINDER_PREFERENCE': { /* ... (como antes) ... */ }
+                            case 'GET_CREDIT_CARD_AVAILABLE_LIMIT': {
+                                const cardNameForLimit = params.creditCardName;
+                                if (!cardNameForLimit) throw new Error("Nome do cartão é obrigatório para ver o limite.");
+                                const cardIdForLimit = await findCreditCardIdByName(cardNameForLimit, state.activeFinancialAccountId);
+                                if (!cardIdForLimit) {
+                                    aiMessageIntro = `Não encontrei o cartão "${cardNameForLimit}", ${clientNameToUse}. Verifique o nome ou cadastre o cartão.`;
+                                    currentActionFormattedData = ""; platformLinkFooter = "";
+                                    break;
+                                }
+                                const limitInfo = await creditCardService.getCreditCardAvailableLimit(state.activeFinancialAccountId, cardIdForLimit);
+
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Aqui está o limite do seu cartão ${limitInfo.cardName}, ${clientNameToUse}:`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre o limite do cartão ${limitInfo.cardName}:`;
+                                currentActionFormattedData = formatAvailableLimitDataStructure(limitInfo);
+                                break;
+                            }
+                            case 'PAY_CREDIT_CARD_INVOICE': {
+                                const cardNameToPay = params.creditCardName;
+                                const paymentAmount = parseFloat(params.paymentAmount);
+                                if (!cardNameToPay || isNaN(paymentAmount) || paymentAmount <= 0) throw new Error("Nome do cartão e valor do pagamento (maior que zero) são obrigatórios.");
+
+                                const cardIdToPay = await findCreditCardIdByName(cardNameToPay, state.activeFinancialAccountId);
+                                if (!cardIdToPay) {
+                                    aiMessageIntro = `Não encontrei o cartão "${cardNameToPay}" para registrar o pagamento da fatura, ${clientNameToUse}.`;
+                                    currentActionFormattedData = ""; platformLinkFooter = "";
+                                    break;
+                                }
+                                const paymentDateCard = params.paymentDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0];
+                                // Tenta encontrar a categoria "Pagamento de Fatura" ou usa a fornecida pela IA
+                                let categoryIdPay = await findFinancialCategoryIdByName(params.financialCategoryName || "Pagamento de Fatura", state.activeFinancialAccountId, "Saída");
+                                // Se não achou "Pagamento de Fatura" E a IA não forneceu outra, pode deixar null ou criar uma categoria padrão.
+                                // Por agora, se financialCategoryName for null e "Pagamento de Fatura" não existir, categoryIdPay será null.
+
+                                const paymentTransaction = await creditCardService.payCreditCardInvoice(
+                                    state.activeFinancialAccountId, cardIdToPay, paymentAmount, paymentDateCard,
+                                    params.originatingAccountDescription, // Descrição da conta de origem do pagamento (opcional)
+                                    categoryIdPay // ID da categoria
+                                );
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Pagamento da fatura do cartão "${cardNameToPay}" registrado, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre o pagamento da fatura, ${clientNameToUse}:`;
+                                currentActionFormattedData = `✅ Pagamento de ${formatCurrency(paymentAmount)} para o cartão "${cardNameToPay}" registrado em ${formatDate(paymentDateCard)}.`;
+                                if (paymentTransaction.category) currentActionFormattedData += `\nCategoria: ${paymentTransaction.category.name}.`;
+                                break;
+                            }
+                            case 'SET_MOTIVATIONAL_MESSAGE_PREFERENCE': {
+                                if (params.enable === undefined || (params.enable && !params.time)) throw new Error("Preciso saber se quer ativar/desativar e, se ativar, o horário (HH:MM).");
+                                await clientService.updateClientPreferences(client.id, {
+                                    enableMotivationMessage: params.enable,
+                                    motivationMessageTime: params.enable ? params.time : null
+                                });
+                                const updatedPrefsMotiv = await clientService.getClientPreferences(client.id);
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Preferências de mensagem motivacional atualizadas, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre as mensagens motivacionais, ${clientNameToUse}:`;
+                                currentActionFormattedData = formatMotivationalMessagePreferenceDataStructure(updatedPrefsMotiv);
+                                break;
+                            }
+                            case 'SET_WATER_REMINDER_PREFERENCE': {
+                                if (params.enable === undefined || (params.enable && (!params.frequencyType || !params.startTime || !params.endTime))) {
+                                    throw new Error("Preciso saber se quer ativar/desativar e, se ativar, a frequência, horário de início e fim.");
+                                }
+                                if (params.enable && params.frequencyType === 'custom' && !params.customIntervalMinutes) {
+                                    throw new Error("Para frequência personalizada de lembrete de água, preciso do intervalo em minutos.");
+                                }
+                                await clientService.updateClientPreferences(client.id, {
+                                    enableWaterReminder: params.enable,
+                                    waterReminderFrequencyType: params.enable ? params.frequencyType : null,
+                                    waterReminderCustomIntervalMinutes: params.enable && params.frequencyType === 'custom' ? parseInt(params.customIntervalMinutes) : null,
+                                    waterReminderStartTime: params.enable ? params.startTime : null,
+                                    waterReminderEndTime: params.enable ? params.endTime : null,
+                                    dailyGoalMl: params.enable && params.dailyGoalMl ? parseInt(params.dailyGoalMl) : null
+                                });
+                                const updatedPrefsWater = await clientService.getClientPreferences(client.id);
+                                if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Preferências de lembrete de água atualizadas, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre os lembretes de água, ${clientNameToUse}:`;
+                                currentActionFormattedData = formatWaterReminderPreferenceDataStructure(updatedPrefsWater);
+                                break;
+                            }
+                            // Casos para GENERAL*, ACTION_CONFIRMATION*
                             case 'GENERAL_GREETING_OR_SMALLTALK':
                             case 'GENERAL_QUESTION_OR_HELP':
                             case 'ACTION_CONFIRMATION_YES':
                             case 'ACTION_CONFIRMATION_NO':
+                                // Se overall_summary_suggestion for específico (não fallback da IA) e diferente do reply_to_user, usa overall.
+                                // Senão, usa reply_to_user_suggestion se existir.
+                                // Senão, usa um fallback genérico.
                                 if (aiResponse.overall_summary_suggestion && aiResponse.overall_summary_suggestion !== aiResponse.reply_to_user_suggestion && aiResponse.detected_actions.length === 1) {
                                     aiMessageIntro = aiResponse.overall_summary_suggestion;
                                 } else if (aiResponse.reply_to_user_suggestion) {
                                     aiMessageIntro = aiResponse.reply_to_user_suggestion;
                                 } else {
-                                    aiMessageIntro = `Entendido, ${clientNameToUse}! 😊`;
+                                    aiMessageIntro = `Entendido, ${clientNameToUse}! 😊`; // Fallback
                                 }
-                                 currentActionFormattedData = ""; 
+                                 currentActionFormattedData = ""; // Sem corpo de dados estruturado para estas
                                  platformLinkFooter = (actionName === 'GENERAL_QUESTION_OR_HELP' && !(aiMessageIntro && aiMessageIntro.includes('app.mapnocontrole.com.br'))) ? formatPlatformLink("Se precisar de mais funcionalidades, explore nossa plataforma!") : "";
 
                                 if (actionName === 'ACTION_CONFIRMATION_YES' || actionName === 'ACTION_CONFIRMATION_NO') {
+                                    // Se a confirmação foi tratada na lógica de pré-processamento (state.currentAction === 'awaiting_confirmation'),
+                                    // currentAction, pendingConfirmation e editingResource já terão sido limpos lá.
+                                    // Se chegou aqui, é uma confirmação genérica da IA, então limpa também.
                                     state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                                 }
                                 break;
                             default:
+                                // Ação não explicitamente tratada no switch
                                 let defaultIntro = `Ok, ${clientNameToUse}!`;
                                 if (aiResponse.detected_actions.length === 1 && aiResponse.overall_summary_suggestion) defaultIntro = aiResponse.overall_summary_suggestion;
                                 else if (aiResponse.reply_to_user_suggestion) defaultIntro = aiResponse.reply_to_user_suggestion;
-                                
-                                if (multipleActionBodiesList.length === 0 && 
+                               
+                                // Se aiMessageIntro não foi definido por uma ação anterior (múltiplas ações)
+                                // E não é uma mensagem de erro já definida
+                                // E não é o overall_summary_suggestion já capturado
+                                // E não é o reply_to_user_suggestion já capturado
+                                // Usa o defaultIntro.
+                                if (multipleActionBodiesList.length === 0 &&
                                     (!(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && aiMessageIntro !== aiResponse.overall_summary_suggestion && aiMessageIntro !== aiResponse.reply_to_user_suggestion)) {
                                      aiMessageIntro = defaultIntro;
                                 } else if (aiResponse.detected_actions.length > 1 && aiResponse.overall_summary_suggestion && aiMessageIntro !== aiResponse.overall_summary_suggestion) {
                                     // Mantém o intro específico se já definido para a primeira ação de múltiplas
                                 } else if (aiResponse.overall_summary_suggestion && (typeof aiMessageIntro !== 'string' || aiMessageIntro === `Ok, ${clientNameToUse}!`)) {
+                                    // Se overall_summary_suggestion existe e aiMessageIntro é fallback, usa overall_summary
                                     aiMessageIntro = aiResponse.overall_summary_suggestion;
                                 }
 
@@ -1512,158 +2168,177 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 break;
                         }
                     } catch (e) {
-                         logger.error(`[WHATSAPP HANDLER] Erro executando "${actionName}" para ${senderPhone}: ${e.message}`, { stack: e.stack?.substring(0,300), params: params });
+                         logger.error(`[WHATSAPP HANDLER] Erro executando "${actionName}" para ${senderPhone}: ${e.message}`, { stack: e.stack?.substring(0,300), paramsUsed: params }); // Loga os parâmetros que foram usados
                          let errorIntroPart = `Ops! 😬 Tive um problema ao tentar processar "${params.description || actionName.toLowerCase().replace(/_/g," ")}".`;
                          let errorDataPart = `Detalhe do erro: ${e.message.length < 80 ? e.message : 'Erro interno, desculpe!'}\n\nPode tentar de novo ou com outros termos?`;
-                         
-                         if (aiResponse.detected_actions.length === 1) {
+                        
+                         if (aiResponse.detected_actions.length === 1) { // Se for ação única
+                            // Só sobrescreve aiMessageIntro se não for já uma mensagem de erro/problema
                             if (!(aiMessageIntro && typeof aiMessageIntro === 'string' && (aiMessageIntro.toLowerCase().includes("ops") || aiMessageIntro.toLowerCase().includes("problema")))) {
                                 aiMessageIntro = errorIntroPart;
                             }
                             currentActionFormattedData = errorDataPart;
-                         } else {
+                         } else { // Se for parte de múltiplas ações, adiciona o erro à lista
                             multipleActionBodiesList.push(`❌ ${errorIntroPart}\n${errorDataPart}`);
-                            currentActionFormattedData = "";
+                            currentActionFormattedData = ""; // Não define como corpo principal
                          }
                     }
 
-                    if (currentActionFormattedData && !currentActionBlocked) {
+                    // Adiciona os dados formatados (ou mensagem de erro da ação) à lista
+                    if (currentActionFormattedData && !currentActionBlocked) { // Não adiciona se foi bloqueado
                         multipleActionBodiesList.push(currentActionFormattedData);
                     }
                 } // Fim do loop for detected_actions
 
+                // Monta o corpo da mensagem com base na lista de ações processadas
                 if (multipleActionBodiesList.length > 0) {
-                    structuredDataBody = multipleActionBodiesList.join("\n\n---\n\n");
-                    // Se aiMessageIntro ainda for o fallback genérico e houver um overall_summary, e não for uma mensagem de erro já definida
-                    if ((typeof aiMessageIntro === 'string' && (aiMessageIntro === `Ok, ${clientNameToUse}!` || !aiMessageIntro.includes(clientNameToUse))) && 
-                        aiResponse.overall_summary_suggestion && 
+                    structuredDataBody = multipleActionBodiesList.join("\n\n---\n\n"); // Separador para múltiplas ações
+                    // Se aiMessageIntro ainda for o fallback genérico E houver um overall_summary_suggestion E não for uma mensagem de erro já definida
+                    if ((typeof aiMessageIntro === 'string' && (aiMessageIntro === `Ok, ${clientNameToUse}!` || !aiMessageIntro.includes(clientNameToUse))) &&
+                        aiResponse.overall_summary_suggestion &&
                         !(aiMessageIntro && (aiMessageIntro.toLowerCase().includes("ops") || aiMessageIntro.toLowerCase().includes("problema")) ) ) {
                         aiMessageIntro = aiResponse.overall_summary_suggestion;
                     }
-                } else if (aiResponse.detected_actions.length === 0) { 
+                } else if (aiResponse.detected_actions.length === 0) { // Nenhuma ação detectada (e nenhuma bloqueada resultou em dados)
                     structuredDataBody = "";
+                    // Se não há ações, e aiMessageIntro é fallback, e há reply_to_user_suggestion, usa ele.
                     if (aiResponse.reply_to_user_suggestion && (typeof aiMessageIntro !== 'string' || aiMessageIntro === `Ok, ${clientNameToUse}!`)) {
-                        aiMessageIntro = aiResponse.reply_to_user_suggestion;
+                        // Apenas sobrescreve se reply_to_user_suggestion for diferente do overall_summary_suggestion
+                        // (caso overall_summary já tenha sido usado para aiMessageIntro) OU se aiMessageIntro é o fallback
+                        if (aiResponse.reply_to_user_suggestion !== aiResponse.overall_summary_suggestion || aiMessageIntro === `Ok, ${clientNameToUse}!`) {
+                            aiMessageIntro = aiResponse.reply_to_user_suggestion;
+                        }
                     }
                 }
-            }
-        
+            } // Fim if (aiResponse.detected_actions)
+       
+            // Se há clarificações necessárias
             if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
                 aiMessageIntro = aiResponse.reply_to_user_suggestion || `Opa, ${clientNameToUse}! Para continuarmos, preciso de um detalhe:`;
                 structuredDataBody = aiResponse.clarifications_needed[0].clarification_question;
-                platformLinkFooter = ""; // Não adiciona link em clarificações
-                state.currentAction = 'awaiting_clarification_response'; 
-                state.data.clarificationContext = { 
-                    action: aiResponse.clarifications_needed[0].original_intent_action_suggestion,
+                platformLinkFooter = ""; // Não adiciona link da plataforma em clarificações
+                state.currentAction = 'awaiting_clarification_response'; // Define ação para esperar resposta à clarificação
+                // Guarda o contexto da clarificação para uso futuro (opcional, mas pode ser útil)
+                state.data.clarificationContext = {
+                    action: aiResponse.clarifications_needed[0].original_intent_action_suggestion, // Ação que a IA estava tentando
                     original_message: messageText,
-                    parameters_so_far: aiResponse.clarifications_needed[0].parameters_so_far || {}
+                    parameters_so_far: aiResponse.clarifications_needed[0].parameters_so_far || {} // Parâmetros já coletados
                 };
             } else if ((!aiResponse.detected_actions || aiResponse.detected_actions.length === 0) && !structuredDataBody) {
-                // Se não houve ação detectada, nem clarificação, nem corpo de dados estruturado, usa reply_to_user_suggestion.
-                if (aiResponse.reply_to_user_suggestion && 
+                // Se não houve ação detectada, nem clarificação, nem corpo de dados estruturado já montado.
+                // Usa reply_to_user_suggestion se existir e for diferente do que já está em aiMessageIntro (ou se aiMessageIntro for fallback)
+                if (aiResponse.reply_to_user_suggestion &&
                     (typeof aiMessageIntro !== 'string' || aiMessageIntro === `Ok, ${clientNameToUse}!` || aiMessageIntro === aiResponse.overall_summary_suggestion )) {
-                    // Apenas sobrescreve aiMessageIntro se reply_to_user_suggestion for diferente do overall_summary (caso este já tenha sido usado para aiMessageIntro)
-                    // ou se aiMessageIntro for o fallback.
                     if (aiResponse.reply_to_user_suggestion !== aiResponse.overall_summary_suggestion || aiMessageIntro === `Ok, ${clientNameToUse}!`) {
                         aiMessageIntro = aiResponse.reply_to_user_suggestion;
                     }
                 }
-                if(multipleActionBodiesList.length === 0) structuredDataBody = ""; // Garante que está vazio
+                if(multipleActionBodiesList.length === 0) structuredDataBody = ""; // Garante que está vazio se não houve ações
 
                 // Fallback final se aiMessageIntro ainda for o genérico e não houver corpo de dados.
                 if ((typeof aiMessageIntro === 'string' && aiMessageIntro === `Ok, ${clientNameToUse}!`) && !structuredDataBody && !aiResponse.overall_summary_suggestion && !aiResponse.reply_to_user_suggestion) {
                     aiMessageIntro = `Entendido, ${clientNameToUse}! Se precisar de mais alguma coisa, é só chamar. 😊`;
                 }
             }
-        
+       
+            // Montagem final da mensagem
             if (typeof aiMessageIntro !== 'string' || aiMessageIntro.trim() === "") {
-                aiMessageIntro = `Ok, ${clientNameToUse}!`; 
+                aiMessageIntro = `Ok, ${clientNameToUse}!`; // Último fallback para intro
             }
 
             finalMessageToSend = aiMessageIntro.trim();
             if (structuredDataBody && structuredDataBody.trim() !== "") {
                 finalMessageToSend += `\n\n${structuredDataBody.trim()}`;
             }
-            
-            let noLinkCurrentAction = state.currentAction === 'awaiting_clarification_response' || state.currentAction === 'selecting_account_flow_active';
+           
+            // Condições para NÃO adicionar o link da plataforma
+            let noLinkCurrentAction = state.currentAction === 'awaiting_clarification_response' || state.currentAction === 'selecting_account_flow_active' || state.currentAction?.startsWith('awaiting_explicit_');
             let noLinkDetectedAction = false;
             if(aiResponse.detected_actions && aiResponse.detected_actions.length > 0){
                 noLinkDetectedAction = aiResponse.detected_actions.some(da => {
                     const actionNameCheck = da.action || da.action_type;
-                    // Não adiciona link para saudações simples, confirmações, ou quando já está em fluxo de pergunta de conta
-                    return actionNameCheck?.startsWith("GENERAL_GREETING") || actionNameCheck?.startsWith("ACTION_CONFIRMATION_") || actionNameCheck === "SWITCH_FINANCIAL_ACCOUNT";
+                    // Não adiciona link para saudações simples, confirmações, ou quando já está em fluxo de pergunta de conta/plano
+                    return actionNameCheck?.startsWith("GENERAL_GREETING") || actionNameCheck?.startsWith("ACTION_CONFIRMATION_") || actionNameCheck === "SWITCH_FINANCIAL_ACCOUNT" || actionNameCheck === "CREATE_FINANCIAL_ACCOUNT";
                 });
             }
-            // Condição para não adicionar link da plataforma
             const noLinkConditions = noLinkCurrentAction ||
-                                     (finalMessageToSend && finalMessageToSend.includes('https://app.mapnocontrole.com.br')) ||
-                                     (finalMessageToSend && finalMessageToSend.includes('https://mapnocontrole.com.br/planos')) ||
+                                     (finalMessageToSend && finalMessageToSend.includes('https://app.mapnocontrole.com.br')) || // Já tem o link
+                                     (finalMessageToSend && finalMessageToSend.includes('https://mapnocontrole.com.br/planos')) || // Já tem link de planos
+                                     (state.data.onboardingStage === 'awaiting_plan_confirmation' && !state.hasPaidAccess) || // Se está mostrando msg de plano
                                      noLinkDetectedAction;
 
 
             if (platformLinkFooter && platformLinkFooter.trim() !== "" && !noLinkConditions ) {
                  finalMessageToSend += `\n\n${platformLinkFooter.trim()}`;
             }
-            finalMessageToSend = finalMessageToSend.replace(/\n{3,}/g, '\n\n').trim();
-        
-            if (finalMessageToSend) { 
+            finalMessageToSend = finalMessageToSend.replace(/\n{3,}/g, '\n\n').trim(); // Limpa espaços extras
+       
+            // Envia a mensagem se houver algo para enviar
+            if (finalMessageToSend) {
                 state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
             }
-        
+       
+            // Limpa estado de edição se uma ação de edição foi realizada com sucesso, ou se não houve ação de edição
             if (actionWasAnEdit || (state.editingResource && (!aiResponse.detected_actions || aiResponse.detected_actions.every(a => !(a.action || a.action_type)?.startsWith("UPDATE_") && (a.action || a.action_type) !== 'RECREATE_PARCELLED_ACCOUNT')))) {
                 state.editingResource = null;
             }
+            // Limpa contexto de clarificação se não há mais clarificações pedidas
             if (state.data.clarificationContext && (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0)) {
                 delete state.data.clarificationContext;
             }
-        
+       
+            // Envio da mensagem com ou sem botões
             if (finalMessageToSend) {
+                // Verifica se uma ação CONCRETA (não lista, não get, não saudação, não switch) e NÃO EDIÇÃO foi feita com sucesso
                 const performedConcreteAction = (aiResponse.detected_actions && aiResponse.detected_actions.length > 0 &&
                                            aiResponse.detected_actions.some(a => {
                                                const actionNameCheck = a.action || a.action_type;
                                                return !(actionNameCheck?.startsWith("GENERAL_") || actionNameCheck?.startsWith("LIST_") || actionNameCheck?.startsWith("GET_") || actionNameCheck?.startsWith("SWITCH_") || actionNameCheck?.startsWith("ACTION_CONFIRMATION_"));
                                            })) &&
-                                           (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0);
+                                           (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0); // E não pediu clarificação
 
+                // Verifica se foi UMA ÚNICA ação concreta e que NÃO FOI UMA EDIÇÃO
                 const singleConcreteNonEditAction = performedConcreteAction && aiResponse.detected_actions.filter(a => {
                     const actionNameCheck = a.action || a.action_type;
-                    return !(actionNameCheck?.startsWith("GENERAL_") || 
-                             actionNameCheck?.startsWith("LIST_") || 
-                             actionNameCheck?.startsWith("GET_") || 
-                             actionNameCheck?.startsWith("SWITCH_") || 
+                    return !(actionNameCheck?.startsWith("GENERAL_") ||
+                             actionNameCheck?.startsWith("LIST_") ||
+                             actionNameCheck?.startsWith("GET_") ||
+                             actionNameCheck?.startsWith("SWITCH_") ||
                              actionNameCheck?.startsWith("ACTION_CONFIRMATION_") ||
-                             actionNameCheck?.startsWith("UPDATE_") ||
-                             actionNameCheck === "RECREATE_PARCELLED_ACCOUNT");
+                             actionNameCheck?.startsWith("UPDATE_") || // Exclui UPDATES
+                             actionNameCheck === "RECREATE_PARCELLED_ACCOUNT"); // Exclui RECREATE (que é um tipo de update)
                 }).length === 1;
 
+                // Se resourceForButtonsContext foi definido E foi uma única ação concreta de criação (não edição), mostra botões
                 if (resourceForButtonsContext && singleConcreteNonEditAction) {
                     let buttons = [];
-                    let buttonItemDesc = "item";
+                    let buttonItemDesc = "item"; // Descrição default para o botão
                     if (resourceForButtonsContext.description && typeof resourceForButtonsContext.description === 'string') {
                         buttonItemDesc = resourceForButtonsContext.description.length > 24 ? resourceForButtonsContext.description.substring(0, 21) + "..." : resourceForButtonsContext.description;
                     }
-                    const buttonTitle = `Opções para "${buttonItemDesc}":`;
-        
+                    const buttonTitle = `Opções para "${buttonItemDesc}":`; // Título da lista de botões
+       
                     switch(resourceForButtonsContext.type) {
                         case 'transaction': buttons = [ { id: `edit_transaction_${resourceForButtonsContext.id}`, label: "Editar Transação ✍️" }, { id: `delete_transaction_${resourceForButtonsContext.id}`, label: "Excluir Transação 🗑️" }, ]; break;
                         case 'appointment': buttons = [ { id: `edit_appointment_${resourceForButtonsContext.id}`, label: "Editar Compromisso ✍️" }, { id: `delete_appointment_${resourceForButtonsContext.id}`, label: "Excluir Compromisso 🗑️" }, ]; break;
                         case 'credit_card': buttons = [ { id: `edit_credit_card_${resourceForButtonsContext.id}`, label: "Editar Cartão ✍️" }, { id: `delete_credit_card_${resourceForButtonsContext.id}`, label: "Excluir Cartão 🗑️" }, ]; break;
                         case 'recurring_rule': buttons = [ { id: `edit_recurring_rule_${resourceForButtonsContext.id}`, label: "Editar Recorrência ✍️" }, { id: `delete_recurring_rule_${resourceForButtonsContext.id}`, label: "Excluir Recorrência 🗑️" }, ]; break;
-                        case 'product': buttons = [ { id: `edit_product_${resourceForButtonsContext.id}`, label: "Editar Produto ✍️" }, { id: `delete_product_${resourceForButtonsContext.id}`, label: "Excluir Produto 🗑️" }, ]; break;
+                        case 'product': buttons = [ { id: `edit_product_${resourceForButtonsContext.id}`, label: "Editar Produto ✍️" }, /* { id: `delete_product_${resourceForButtonsContext.id}`, label: "Excluir Produto 🗑️" }, */ ]; break; // Excluir produto pode ser complexo, talvez remover botão por ora
                         case 'parcelled_account': buttons = [ { id: `edit_parcelled_account_${resourceForButtonsContext.id}`, label: "Alterar Compra Parcelada ✍️" }, { id: `delete_parcelled_account_${resourceForButtonsContext.id}`, label: "Excluir Compra Parcelada 🗑️" }, ]; break;
                     }
-        
+       
                     if (buttons.length > 0) {
                         await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, buttonTitle, "Ver Opções 👇");
                     } else {
                         await sendWhatsappMessage(senderPhone, finalMessageToSend);
                     }
-                } else {
+                } else { // Se não for para mostrar botões (múltiplas ações, edição, etc.)
                     await sendWhatsappMessage(senderPhone, finalMessageToSend);
+                    // Se editingResource ainda existe, não houve ação de edição bem sucedida, e não é um resourceForButtons, limpa.
                     if(state.editingResource && !resourceForButtonsContext && !actionWasAnEdit) state.editingResource = null;
                 }
             }
-        } 
+        } // Fim if (state.data.onboardingStage === 'onboarding_complete' || !onboardingReply)
 
     } catch (error) {
         logger.error(`[WHATSAPP HANDLER] Erro CRÍTICO processando msg de ${senderPhone}: ${error.message}`, { stack: error.stack?.substring(0,1000), messageText, rawPayload });
@@ -1679,18 +2354,18 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
     } finally {
         const endTime = Date.now();
         logger.info(`[WHATSAPP HANDLER] Processamento para ${senderPhone} finalizado em ${endTime - startTime}ms.`);
-        if (state) { 
-            logger.debug(`[WHATSAPP HANDLER] Estado final da sessão para ${senderPhone}:`, { 
-                currentAction: state.currentAction, 
-                onboardingStage: state.data.onboardingStage,
+        if (state) { // Garante que 'state' existe antes de tentar acessá-lo
+            logger.debug(`[WHATSAPP HANDLER] Estado final da sessão para ${senderPhone}:`, {
+                currentAction: state.currentAction,
+                onboardingStage: state.data?.onboardingStage, // Usa optional chaining para data
                 hasPaidAccess: state.hasPaidAccess,
                 activeFinancialAccountId: state.activeFinancialAccountId,
                 accessLevelTextForUser: state.accessLevelTextForUser,
-                tempData: JSON.parse(JSON.stringify(state.data)) 
+                tempData: state.data ? JSON.parse(JSON.stringify(state.data)) : {} // Clona se existir
             });
-            conversationState.set(senderPhone, state); 
+            conversationState.set(senderPhone, state); // Salva o estado atualizado
         }
-        pushNameFromPayload = null;
+        pushNameFromPayload = null; // Limpa para a próxima mensagem
     }
 }
 
