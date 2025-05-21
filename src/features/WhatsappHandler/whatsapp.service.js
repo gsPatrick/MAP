@@ -1,7 +1,6 @@
 // src/features/WhatsappHandler/whatsapp.service.js
 const clientService = require('../Client/client.service');
 const clientAuthService = require('../ClientAuth/clientAuth.service');
-// ... outros imports ...
 const financialService = require('../Financial/financial.service');
 const productService = require('../Product/product.service');
 const stockService = require('../Stock/stock.service');
@@ -18,12 +17,12 @@ const conversationState = new Map();
 const MAX_HISTORY_FOR_AI = 8;
 const MAX_STATE_HISTORY = 20;
 
-// --- Helper Functions (mantidas como antes) ---
+// --- Helper Functions (sem alterações) ---
 async function findFinancialCategoryIdByName(name, financialAccountId, transactionType = null) { /* ... */ }
 async function findCreditCardIdByName(name, financialAccountId) { /* ... */ }
 async function findProductIdByNameOrCode(nameOrCode, financialAccountId) { /* ... */ }
 
-// --- Funções de Formatação de Resumo (mantidas como antes) ---
+// --- Funções de Formatação de Resumo (sem alterações) ---
 function formatFinancialTransactionSummary(transaction, clientName, forMulti = false, forEdit = false) { /* ... */ }
 function formatAppointmentSummary(appointment, clientName, forMulti = false, forEdit = false) { /* ... */ }
 function formatRecurringRuleSummary(rule, clientName, forMulti = false, forEdit = false) { /* ... */ }
@@ -35,7 +34,7 @@ function formatParcelledAccountSummary(params, parcelResult, clientName, forEdit
 
 
 // --- Initialize or Update State ---
-async function initializeOrUpdateState(client, existingState = null, clientAccountsFromDb = []) { // Adicionado clientAccountsFromDb
+async function initializeOrUpdateState(client, existingState = null, clientAccountsFromDb = []) {
     const clientName = client.name && client.name.trim() !== "" && client.name.trim().toLowerCase() !== "unknown" && client.name.trim().toLowerCase() !== "null"
         ? client.name.split(" ")[0]
         : (client.name || "pessoa incrível");
@@ -67,8 +66,7 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
     }
     
     if (hasPaidAccess) {
-        // Se tem plano, mas o onboarding stage ainda é de espera de plano, avança.
-        if (onboardingStage === 'awaiting_plan_confirmation') {
+        if (onboardingStage === 'awaiting_plan_confirmation' || (existingState && !existingState.hasPaidAccess_whenStageLastSet) ) { // Se o plano acabou de ser ativado ou estava aguardando
             if (!client.email || !client.passwordHash) {
                 onboardingStage = 'setting_up_credentials_email';
             } else {
@@ -77,25 +75,20 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
                      onboardingStage = 'setting_up_pf_account_name';
                 } else {
                      const hasPjMei = clientAccountsFromDb.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
-                     if (clientAccessLevel.startsWith('avancado') && !hasPjMei) {
+                     if (clientAccessLevel.startsWith('avancado') && !hasPjMei && existingState?.data?.onboardingStage !== 'confirming_pj_mei_setup' && existingState?.data?.onboardingStage !== 'awaiting_pj_mei_type' && existingState?.data?.onboardingStage !== 'creating_pj_mei_account_name') { // Adicionado para não regredir
                         onboardingStage = 'confirming_pj_mei_setup';
-                     } else {
+                     } else if (existingState?.data?.onboardingStage !== 'onboarding_complete') { // Só marca completo se não estava já
                         onboardingStage = 'onboarding_complete';
                      }
                 }
             }
-        } else if (existingState && existingState.data.onboardingStage === onboardingStage && !hasPaidAccess && existingState.hasPaidAccess_whenStageLastSet) {
-            // Caso onde o plano expirou e o estágio não era 'awaiting_plan_confirmation', força de volta
-            logger.info(`[WHATSAPP SERVICE - UpdateState] Cliente ${client.id} não tem mais plano pago. Revertendo para 'awaiting_plan_confirmation'. Stage anterior: ${existingState.data.onboardingStage}`);
-            onboardingStage = 'awaiting_plan_confirmation';
         }
-    } else { // Não tem plano pago
+    } else { 
         onboardingStage = 'awaiting_plan_confirmation';
     }
 
-
     const defaultAccount = (onboardingStage === 'onboarding_complete' && hasPaidAccess)
-        ? (clientAccountsFromDb.find(a => a.isDefault) || clientAccountsFromDb[0]) // Pega default ou a primeira
+        ? (clientAccountsFromDb.find(a=>a.isDefault) || clientAccountsFromDb[0])
         : null;
 
     if (existingState) {
@@ -105,8 +98,7 @@ async function initializeOrUpdateState(client, existingState = null, clientAccou
         existingState.hasPaidAccess = hasPaidAccess;
         existingState.accessLevelTextForUser = accessLevelTextForUser;
         
-        // Se o onboardingStage mudou devido à reavaliação do plano, limpa currentAction
-        if (existingState.data.onboardingStage !== onboardingStage) {
+        if (existingState.data.onboardingStage !== onboardingStage && onboardingStage !== 'onboarding_complete') { // Se mudou E não para completo, limpa currentAction
             existingState.currentAction = null;
         }
         existingState.data.onboardingStage = onboardingStage;
@@ -195,8 +187,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         let onboardingReply = "";
         const lowerMessageText = messageText.toLowerCase().trim();
         const siteUrl = process.env.PLAN_SITE_URL || "https://mapnocontrole.com.br/planos";
-
-        logger.debug(`[WHATSAPP ONBOARDING ENTRY] Cliente: ${client.id}, Stage: ${state.data.onboardingStage}, currentAction: ${state.currentAction}, isNewUserForSessionLogic: ${isNewUserForSessionLogic}, hasPaidAccess: ${state.hasPaidAccess}`);
+        
+        logger.debug(`[WHATSAPP ONBOARDING ENTRY] Cliente: ${client.id}, Stage: ${state.data.onboardingStage}, currentAction: ${state.currentAction}, hasPaidAccess: ${state.hasPaidAccess}`);
 
         // ---- FLUXO DE ONBOARDING ----
         if (state.data.onboardingStage === 'awaiting_plan_confirmation') {
@@ -220,7 +212,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 }
             }
         } else if (state.data.onboardingStage === 'setting_up_credentials_email') {
-            if (state.currentAction !== 'awaiting_input_email_for_credentials') {
+            if (state.currentAction !== 'awaiting_input_email_for_credentials' || isNewUserForSessionLogic) { // Envia se for novo na sessão ou ação diferente
                  onboardingReply = `E aí, ${clientNameToUse}! Boas-vindas ao seu plano ${state.accessLevelTextForUser}! 🎉\n\nPara que você também possa acessar nosso aplicativo web e ver tudo detalhado, vamos configurar seu acesso rapidinho. Qual o seu melhor e-mail para usarmos? 📧`;
                  state.currentAction = 'awaiting_input_email_for_credentials';
             } else { 
@@ -265,7 +257,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         const hasPjMei = clientFinancialAccountsForOnboarding.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
                         if (state.currentAccessLevel.startsWith('avancado') && !hasPjMei) {
                             state.data.onboardingStage = 'confirming_pj_mei_setup';
-                             onboardingReply = `Uhuul, ${state.clientName}! Tudo certo com seu acesso e credenciais! 🎉\n\nComo você tem o plano ${state.accessLevelTextForUser.split(' (')[0]}, que tal configurarmos também uma conta para sua empresa (PJ) ou MEI? (Responda "sim" ou "não") ✨`;
+                             onboardingReply = `Uhuul, ${state.clientName}! Tudo certo com seu acesso e credenciais! 🎉\n\nSua conta pessoal já está configurada. Como você tem o plano ${state.accessLevelTextForUser.split(' (')[0]}, que tal configurarmos também uma conta para sua empresa (PJ) ou MEI? (Responda "sim" ou "não") ✨`;
                              state.currentAction = 'awaiting_pj_mei_confirm';
                         } else {
                             state.data.onboardingStage = 'onboarding_complete';
@@ -302,7 +294,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         state.activeFinancialAccountName = newPfAccount.accountName;
                         state.activeFinancialAccountType = newPfAccount.accountType;
                         logger.info(`[WHATSAPP ONBOARDING] Conta PF "${pfAccountName}" criada para ${senderPhone}.`);
-                        state.currentAction = null;
                         clientFinancialAccountsForOnboarding = await clientService.getClientFinancialAccounts(client.id, { isActive: true }); 
     
                         const hasPjMei = clientFinancialAccountsForOnboarding.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
@@ -313,6 +304,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         } else {
                             state.data.onboardingStage = 'onboarding_complete';
                             onboardingReply = `Conta Pessoal "${pfAccountName}" criada com sucesso, ${clientNameToUse}! 🏦 Ela já está selecionada e seu plano ${state.accessLevelTextForUser.split(' (')[0]} está pronto para uso! Como posso te ajudar agora? 🚀`;
+                            state.currentAction = null;
                         }
                     } catch (e) {
                         logger.error(`[WHATSAPP ONBOARDING] Erro ao criar conta PF "${pfAccountName}" para ${senderPhone}: ${e.message}`);
@@ -395,81 +387,85 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
         }
         
+        // ONBOARDING COMPLETO - Verifica seleção de conta ou prossegue para IA
         if (state.data.onboardingStage === 'onboarding_complete' || !onboardingReply) {
-            // Limpa currentAction se o onboarding terminou ou não está mais ativo
             if (state.data.onboardingStage === 'onboarding_complete' && state.currentAction && 
                 (state.currentAction.startsWith('awaiting_input_') || state.currentAction.startsWith('awaiting_pj_mei_') || state.currentAction.startsWith('awaiting_plan_'))) {
                 state.currentAction = null;
             }
             
-            const currentClientAccountsAfterOnboarding = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
-            if (state.data.onboardingStage === 'onboarding_complete' && !state.activeFinancialAccountId && currentClientAccountsAfterOnboarding.length > 0) {
-                if (currentClientAccountsAfterOnboarding.length === 1) {
-                    const acc = currentClientAccountsAfterOnboarding[0];
-                    state.activeFinancialAccountId = acc.id;
-                    state.activeFinancialAccountName = acc.accountName;
-                    state.activeFinancialAccountType = acc.accountType;
-                    const selectMsg = `Tudo pronto, ${clientNameToUse}! 🎉 Sua conta "${acc.accountName}" (${acc.accountType}) já está selecionada com seu plano ${state.accessLevelTextForUser}. Como posso te ajudar a organizar suas finanças hoje? 🚀`;
-                    state.messageHistory.push({ role: 'assistant', content: selectMsg });
-                    state.currentAction = null; 
-                    if(state.data) state.data.accountsToList = null;
-                    await sendWhatsappMessage(senderPhone, selectMsg);
-                } else if (state.currentAction !== 'selecting_account_flow_active') { 
-                    state.currentAction = 'selecting_account_flow_active'; 
-                    state.data.accountsToList = currentClientAccountsAfterOnboarding.map(a => ({id: a.id, name: a.accountName, type: a.accountType}));
-                    let accountOptionsText = `Que bom te ver, ${clientNameToUse}! 👋 Seu plano ${state.accessLevelTextForUser} está ativo! Você tem estas contas configuradas:\n`;
-                    state.data.accountsToList.forEach((acc, index) => { accountOptionsText += `\n${index + 1}. *${acc.name}* (${acc.type})`; });
-                    accountOptionsText += `\n\nEm qual delas vamos trabalhar hoje? É só me dizer o *nome* ou o *número* da conta. Estou no aguardo! 😉`;
-                    state.messageHistory.push({ role: 'assistant', content: accountOptionsText });
-                    await sendWhatsappMessage(senderPhone, accountOptionsText);
-                } else { 
-                    const chosenIdentifier = messageText.trim();
-                    let accountToSelect = null;
-                    const chosenNumber = parseInt(chosenIdentifier, 10);
-
-                    if (state.data.accountsToList && !isNaN(chosenNumber) && chosenNumber > 0 && chosenNumber <= state.data.accountsToList.length) {
-                        accountToSelect = state.data.accountsToList[chosenNumber - 1];
-                    } else if (state.data.accountsToList) {
-                        accountToSelect = state.data.accountsToList.find(acc =>
-                            acc.name.toLowerCase() === chosenIdentifier.toLowerCase() ||
-                            acc.name.toLowerCase().includes(chosenIdentifier.toLowerCase())
-                        );
-                    }
-
-                    if (accountToSelect) {
-                        state.activeFinancialAccountId = accountToSelect.id;
-                        state.activeFinancialAccountName = accountToSelect.name;
-                        state.activeFinancialAccountType = accountToSelect.type;
-                        const confirmSelectionMsg = `Maravilha, ${clientNameToUse}! Selecionei a conta "${state.activeFinancialAccountName}" para você. Como posso te ajudar a colocar tudo em ordem agora? 🚀`;
-                        state.messageHistory.push({ role: 'assistant', content: confirmSelectionMsg });
+            // Se onboarding está completo, mas não tem conta ativa no ESTADO, tenta definir ou pedir seleção.
+            if (state.data.onboardingStage === 'onboarding_complete' && !state.activeFinancialAccountId) {
+                const accountsForSelection = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
+                if (accountsForSelection.length > 0) {
+                    if (accountsForSelection.length === 1) {
+                        const acc = accountsForSelection[0];
+                        state.activeFinancialAccountId = acc.id;
+                        state.activeFinancialAccountName = acc.accountName;
+                        state.activeFinancialAccountType = acc.accountType;
+                        const selectMsg = `Tudo pronto, ${clientNameToUse}! 🎉 Sua conta "${acc.accountName}" (${acc.accountType}) já está selecionada com seu plano ${state.accessLevelTextForUser}. Como posso te ajudar a organizar suas finanças hoje? 🚀`;
+                        state.messageHistory.push({ role: 'assistant', content: selectMsg });
                         state.currentAction = null; 
                         if(state.data) state.data.accountsToList = null;
-                        await sendWhatsappMessage(senderPhone, confirmSelectionMsg);
-                    } else {
-                        let errorReply = `Hummm, ${clientNameToUse}, não consegui identificar essa conta. 😕 Poderia escolher uma da lista?\n`;
-                        if (state.data.accountsToList) {
-                            state.data.accountsToList.forEach((acc, index) => {errorReply += `\n${index + 1}. *${acc.name}* (${acc.type})`});
+                        await sendWhatsappMessage(senderPhone, selectMsg);
+                    } else if (state.currentAction !== 'selecting_account_flow_active') { 
+                        state.currentAction = 'selecting_account_flow_active'; 
+                        state.data.accountsToList = accountsForSelection.map(a => ({id: a.id, name: a.accountName, type: a.accountType}));
+                        let accountOptionsText = `Que bom te ver por aqui, ${clientNameToUse}! 👋 Seu plano ${state.accessLevelTextForUser} está a todo vapor! Você tem estas contas configuradas:\n`;
+                        state.data.accountsToList.forEach((acc, index) => { accountOptionsText += `\n${index + 1}. *${acc.name}* (${acc.type})`; });
+                        accountOptionsText += `\n\nQual delas vamos usar hoje? Me diga o *nome* ou o *número* da conta. 😉`;
+                        state.messageHistory.push({ role: 'assistant', content: accountOptionsText });
+                        await sendWhatsappMessage(senderPhone, accountOptionsText);
+                    } else { // Usuário está respondendo à pergunta de seleção de conta
+                        const chosenIdentifier = messageText.trim();
+                        let accountToSelect = null;
+                        const chosenNumber = parseInt(chosenIdentifier, 10);
+
+                        if (state.data.accountsToList && !isNaN(chosenNumber) && chosenNumber > 0 && chosenNumber <= state.data.accountsToList.length) {
+                            accountToSelect = state.data.accountsToList[chosenNumber - 1];
+                        } else if (state.data.accountsToList) {
+                            accountToSelect = state.data.accountsToList.find(acc =>
+                                acc.name.toLowerCase() === chosenIdentifier.toLowerCase() ||
+                                acc.name.toLowerCase().includes(chosenIdentifier.toLowerCase())
+                            );
                         }
-                        errorReply += "\n\nÉ só me dizer o nome ou o número. Estou aqui para ajudar! 🤔"
-                        state.messageHistory.push({ role: 'assistant', content: errorReply });
-                        await sendWhatsappMessage(senderPhone, errorReply);
+
+                        if (accountToSelect) {
+                            state.activeFinancialAccountId = accountToSelect.id;
+                            state.activeFinancialAccountName = accountToSelect.name;
+                            state.activeFinancialAccountType = accountToSelect.type;
+                            const confirmSelectionMsg = `Maravilha, ${clientNameToUse}! Selecionei a conta "${state.activeFinancialAccountName}" para você. Como posso te ajudar a colocar tudo em ordem agora? 🚀`;
+                            state.messageHistory.push({ role: 'assistant', content: confirmSelectionMsg });
+                            state.currentAction = null; 
+                            if(state.data) state.data.accountsToList = null;
+                            await sendWhatsappMessage(senderPhone, confirmSelectionMsg);
+                        } else {
+                            let errorReply = `Hummm, ${clientNameToUse}, não consegui identificar essa conta. 😕 Poderia escolher uma da lista?\n`;
+                            if (state.data.accountsToList) {
+                                state.data.accountsToList.forEach((acc, index) => {errorReply += `\n${index + 1}. *${acc.name}* (${acc.type})`});
+                            }
+                            errorReply += "\n\nÉ só me dizer o nome ou o número. Estou aqui para ajudar! 🤔"
+                            state.messageHistory.push({ role: 'assistant', content: errorReply });
+                            await sendWhatsappMessage(senderPhone, errorReply);
+                        }
                     }
+                    conversationState.set(senderPhone, state);
+                    if (state.currentAction === 'selecting_account_flow_active' || !state.activeFinancialAccountId) return;
+                } else { // Onboarding completo, tem plano, mas NENHUMA conta financeira
+                    const noAccountsMsg = `Olá ${clientNameToUse}! Seu plano ${state.accessLevelTextForUser} está tinindo, mas não encontrei nenhuma conta financeira. Vamos criar sua conta Pessoal agora? Diga "criar conta pessoal"! 😉`;
+                    state.messageHistory.push({ role: 'assistant', content: noAccountsMsg });
+                    state.data.onboardingStage = 'setting_up_pf_account_name'; // Volta para o onboarding de PF
+                    state.currentAction = 'awaiting_input_pf_name';
+                    await sendWhatsappMessage(senderPhone, noAccountsMsg);
+                    conversationState.set(senderPhone, state);
+                    return;
                 }
-                conversationState.set(senderPhone, state);
-                if (state.currentAction === 'selecting_account_flow_active' || !state.activeFinancialAccountId) return;
-            } else if (state.data.onboardingStage === 'onboarding_complete' && !state.activeFinancialAccountId && currentClientAccountsAfterOnboarding.length === 0) {
-                const noAccountsMsg = `Olá ${clientNameToUse}! Seu plano ${state.accessLevelTextForUser} está tinindo, mas não encontrei nenhuma conta financeira. Vamos criar sua conta Pessoal agora? Diga "criar conta pessoal"! 😉`;
-                state.messageHistory.push({ role: 'assistant', content: noAccountsMsg });
-                state.data.onboardingStage = 'setting_up_pf_account_name';
-                state.currentAction = 'awaiting_input_pf_name';
-                await sendWhatsappMessage(senderPhone, noAccountsMsg);
-                conversationState.set(senderPhone, state);
-                return;
             }
 
 
             // ---- PROCESSAMENTO COM IA ----
-            // ... (código da IA e execução de ações, como na versão anterior)
+            // ... (resto do código da IA e execução de ações - SEM ALTERAÇÕES NESTA SEÇÃO)
+            // O código a partir daqui é o mesmo da versão anterior, pois assume que o onboarding e a seleção de conta já ocorreram.
             if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
                 // ... (código de tratamento de botões, mantido como antes)
                  const buttonId = rawPayload.selectedButtonId;
@@ -789,8 +785,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         break; 
                     }
         
-                    // ... (resto do switch case para ações da IA, como na versão anterior)
-                    // O código do switch case permanece o mesmo
+                    // ... (switch case para ações da IA, como na versão anterior)
                     try {
                         switch (detectedAction.action) {
                             case 'CREATE_FINANCIAL_TRANSACTION': {
@@ -1676,7 +1671,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 onboardingStage: state.data.onboardingStage,
                 hasPaidAccess: state.hasPaidAccess,
                 activeFinancialAccountId: state.activeFinancialAccountId,
-                tempData: JSON.parse(JSON.stringify(state.data)) // Para logar uma cópia e evitar problemas de referência
+                tempData: JSON.parse(JSON.stringify(state.data)) 
             });
             conversationState.set(senderPhone, state); 
         }
