@@ -141,7 +141,7 @@ async function getAllCreditCards(financialAccountId, queryParams = {}) {
 
     if (includeSummary) {
         resultCards = await Promise.all(resultCards.map(async (cardJson) => {
-            const limitDetails = await getAvailableCreditLimit(financialAccountId, cardJson.id); // Usa a função correta
+            const limitDetails = await getAvailableCreditLimit(financialAccountId, cardJson.id);
             return { ...cardJson, availableLimit: limitDetails.availableLimit };
         }));
     }
@@ -307,42 +307,51 @@ async function getAvailableCreditLimit(financialAccountId, creditCardId) {
         const totalLimit = parseFloat(card.limit);
         let totalDebtOnCard = 0;
 
-        // Soma todas as transações de SAÍDA (compras, parcelas) associadas a este cartão
-        // que ainda não foram "compensadas" por um pagamento de fatura que as inclua.
-        // Esta é uma simplificação. O correto seria:
-        // Limite Total - (Soma de todas as compras à vista não pagas na fatura atual + Soma do VALOR TOTAL de compras parceladas ativas)
-        // Ou, de forma mais simples: Limite Total - Saldo Devedor Atual no Cartão.
-
-        // Vamos calcular o saldo devedor:
-        // 1. Soma de todas as transações de 'Saída' no cartão.
-        const totalSpending = await FinancialTransaction.sum('value', {
+        // 1. Soma de todas as transações de 'Saída' (compras à vista e valor TOTAL de compras parceladas)
+        //    que ainda não foram quitadas por um pagamento de fatura.
+        //    Para compras parceladas, o VALOR TOTAL compromete o limite no momento da compra.
+        
+        // Soma das compras à vista (não parceladas) e valor TOTAL das compras parceladas "mãe"
+        const spendings = await FinancialTransaction.findAll({
             where: {
                 creditCardId: card.id,
                 financialAccountId,
-                type: 'Saída'
+                type: 'Saída',
+                // Para parceladas, pegamos a transação "mãe" que deve ter o originalPurchaseTotalValue
+                // Para não parceladas, pegamos o valor direto
+                [Op.or]: [
+                    { isParcel: false }, // Compras à vista
+                    { 
+                        isParcel: true, 
+                        originalAccountId: { [Op.eq]: col('id') } // Transação "mãe" de um parcelamento
+                    } 
+                ]
             },
             transaction: t
-        }) || 0;
+        });
 
-        // 2. Soma de todas as transações de 'Entrada' NO CARTÃO (ex: estornos, créditos manuais).
-        // Não inclui pagamentos de fatura, pois estes são transações na conta principal, não no cartão.
+        spendings.forEach(tx => {
+            if (tx.isParcel) {
+                // Usa originalPurchaseTotalValue se disponível, senão o valor da transação "mãe" (que deveria ser o total)
+                totalDebtOnCard += parseFloat(tx.originalPurchaseTotalValue || tx.value);
+            } else {
+                totalDebtOnCard += parseFloat(tx.value);
+            }
+        });
+
+        // 2. Soma de todas as transações de 'Entrada' NO CARTÃO (ex: estornos, créditos manuais)
         const totalCreditsOnCard = await FinancialTransaction.sum('value', {
             where: {
                 creditCardId: card.id,
                 financialAccountId,
                 type: 'Entrada'
-                // Adicionar uma forma de identificar se essa entrada é um estorno/crédito vs. pagamento de fatura
-                // Se tiver um campo `isInvoicePayment` no FinancialTransaction, seria `isInvoicePayment: false`
             },
             transaction: t
         }) || 0;
-        
-        // 3. Soma de todos os pagamentos de fatura já realizados para este cartão.
-        // Buscamos transações na conta principal que sejam "Pagamento Fatura [NomeDoCartao]"
-        // ou que tenham uma categoria específica de "Pagamento de Fatura de Cartão" e alguma referência ao cartão.
-        // Esta parte é mais complexa se não houver uma ligação direta clara.
-        // Por simplicidade, vamos assumir que o `netUsedAmount` reflete o que ainda não foi pago.
-        // A lógica anterior para `netUsedAmount` na fatura aberta pode ser uma aproximação:
+
+        totalDebtOnCard -= parseFloat(totalCreditsOnCard);
+
+        // 3. Cálculo do valor da fatura aberta atual (apenas para informação, não afeta o limite total disponível se já consideramos toda a dívida)
         const today = new Date();
         let currentBillingYear = today.getUTCFullYear();
         let currentBillingMonth = today.getUTCMonth();
@@ -359,104 +368,39 @@ async function getAvailableCreditLimit(financialAccountId, creditCardId) {
             where: {
                 creditCardId: card.id,
                 financialAccountId,
-                transactionDate: {
+                transactionDate: { // Data da transação individual (parcela ou compra à vista)
                     [Op.gte]: faturaAbertaStartDate.toISOString().split('T')[0],
                     [Op.lte]: faturaAbertaEndDate.toISOString().split('T')[0],
                 },
+                // [Op.or]: [ // Inclui saídas e entradas na fatura aberta
+                //     { type: 'Saída' },
+                //     { type: 'Entrada' } 
+                // ]
+                // Apenas saídas para o "valor usado na fatura aberta"
+                 type: 'Saída'
             },
             attributes: ['value', 'type'],
             transaction: t
         });
+
         let netUsedInOpenInvoice = 0;
         transacoesFaturaAberta.forEach(tx => {
-            if (tx.type === 'Saída') netUsedInOpenInvoice += parseFloat(tx.value);
-            else if (tx.type === 'Entrada') netUsedInOpenInvoice -= parseFloat(tx.value);
+            // if (tx.type === 'Saída') netUsedInOpenInvoice += parseFloat(tx.value);
+            // else if (tx.type === 'Entrada') netUsedInOpenInvoice -= parseFloat(tx.value);
+            netUsedInOpenInvoice += parseFloat(tx.value); // Somamos apenas as saídas que compõem a fatura
         });
 
-        // Para o limite disponível, o que importa é o *valor total pendente* das compras parceladas,
-        // não apenas a parcela do mês.
-        const allParcelledPurchasesOnCard = await FinancialTransaction.findAll({
-            where: {
-                creditCardId: card.id,
-                financialAccountId,
-                type: 'Saída',
-                isParcel: true,
-                originalAccountId: { [Op.eq]: col('id') } // Pega a transação "mãe" da compra parcelada
-            },
-            attributes: ['id', 'value', 'description', 'numberOfParcels', 'transactionDate'], // value aqui é o da parcela individual, precisamos do total
-            transaction: t
-        });
-
-        let totalCommittedFromParcelledPurchases = 0;
-        for (const purchase of allParcelledPurchasesOnCard) {
-            // A 'value' na transação mãe é o valor da primeira parcela.
-            // O `totalValue` da compra original deveria estar no `originalAccount` ou ser recalculado.
-            // Se `purchase.value` é o da parcela e `purchase.numberOfParcels` é o total,
-            // o valor total da compra é `purchase.value * purchase.numberOfParcels` (aproximadamente, se `value` é o da parcela).
-            // No entanto, a forma correta é que a transação que representa o grupo parcelado tenha o `totalValue` correto.
-            // Vamos assumir que o `financialService.createParcelledAccount` salva o `totalValue` corretamente na transação "mãe".
-            // Se não, precisaríamos buscar todas as parcelas e somar.
-
-            // Correção: Buscar o total da compra parcelada (deveria estar no 'originalAccount' ou ser um campo específico)
-            // Se a transação "mãe" (originalAccountId = id) guarda o valor total da compra no campo 'value':
-            // (Esta premissa pode estar errada dependendo da sua estrutura de dados para `createParcelledAccount`)
-            // Assumindo que `financialService.createParcelledAccount` cria uma transação "mãe"
-            // cujo `value` é o VALOR TOTAL e `isParcel=true`, e as parcelas individuais referenciam `originalAccountId`.
-            // Se não, a lógica abaixo está incorreta.
-
-            // Correção 2: O limite é afetado pelo valor total da compra parcelada no momento da compra.
-            // As parcelas individuais são apenas como o valor é pago ao longo do tempo.
-            // Portanto, `totalSpending` já deveria incluir o valor total de novas compras parceladas.
-            // O `netUsedInOpenInvoice` já considera as parcelas que caem na fatura aberta.
-
-            // O cálculo de `netUsedAmount` já deve incluir implicitamente as parcelas futuras
-            // se considerarmos todas as transações de saída no cartão.
-            // O que falta é distinguir entre o que está na fatura aberta e o que é futuro.
-        }
-
-        // O `netUsedInOpenInvoice` calculado acima é o valor que será cobrado na próxima fatura.
-        // O limite disponível é o limite total menos tudo que já foi gasto e ainda não pago.
-        // Para uma aproximação mais simples, podemos pegar todas as saídas do cartão
-        // e subtrair as entradas (estornos, etc).
-
-        const allSpendings = await FinancialTransaction.sum('value', {
-            where: { creditCardId: card.id, financialAccountId, type: 'Saída' },
-            transaction: t
-        }) || 0;
-        const allCredits = await FinancialTransaction.sum('value', { // Estornos, créditos diretos
-            where: { creditCardId: card.id, financialAccountId, type: 'Entrada' },
-            transaction: t
-        }) || 0;
-
-        // totalDebtOnCard representa o saldo devedor atual no cartão, ANTES de considerar pagamentos de fatura.
-        totalDebtOnCard = allSpendings - allCredits;
-
-        // Agora, precisamos subtrair os pagamentos de fatura já feitos que quitaram parte dessa dívida.
-        // Esta é a parte mais complexa sem um modelo claro de como os pagamentos de fatura são vinculados
-        // à quitação das transações originais do cartão.
-
-        // Uma abordagem mais direta para o limite disponível:
-        // Limite Total - (Soma de todas as compras parceladas pelo seu valor total que ainda têm parcelas pendentes +
-        //                Soma de todas as compras à vista que ainda não foram pagas via fatura)
-        // Isso se torna complexo rapidamente.
-
-        // Simplificação para o limite disponível AGORA:
-        // Limite Total - Saldo Devedor Atual (que é `totalSpending - totalCreditsOnCard`)
-        // O `netUsedInOpenInvoice` é o que está na fatura atual.
-        // O restante `(totalSpending - totalCreditsOnCard) - netUsedInOpenInvoice` é o que está pendente para faturas futuras.
-
-        const currentDebt = allSpendings - allCredits;
-        const availableLimitFinal = totalLimit - currentDebt;
+        // O availableLimit é o limite total menos a dívida total pendente no cartão.
+        const availableLimitFinal = totalLimit - totalDebtOnCard;
 
         await t.commit();
 
         return {
             cardName: card.name,
             totalLimit: totalLimit,
-            netUsedAmount: parseFloat(netUsedInOpenInvoice.toFixed(2)), // Valor líquido que virá na fatura aberta
-            // O `currentDebt` inclui o `netUsedInOpenInvoice` mais parcelas futuras de compras já feitas.
-            totalDebtOnCard: parseFloat(currentDebt.toFixed(2)), // Dívida total atual no cartão
-            availableLimit: parseFloat(availableLimitFinal.toFixed(2)),
+            netUsedAmount: parseFloat(netUsedInOpenInvoice.toFixed(2)), // O que virá na fatura aberta
+            totalDebtOnCard: parseFloat(totalDebtOnCard.toFixed(2)), // Dívida total no cartão (impacta o limite)
+            availableLimit: parseFloat(availableLimitFinal.toFixed(2)), // Limite realmente disponível
             closingDay: card.closingDay,
             paymentDay: card.paymentDay,
             currentInvoiceCycle: {
@@ -492,11 +436,10 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
 
       const today = new Date();
       let currentBillingYear = today.getUTCFullYear();
-      let currentBillingMonth = today.getUTCMonth(); // 0-11 (Janeiro é 0)
+      let currentBillingMonth = today.getUTCMonth();
 
       let invoiceStartDate, invoiceEndDate, invoiceDescriptionPeriod;
       let referenceYear, referenceMonthZeroBased;
-
 
       if (periodOptions.type === 'especifico') {
           if (!periodOptions.month || !periodOptions.year || isNaN(parseInt(periodOptions.month)) || isNaN(parseInt(periodOptions.year))) {
@@ -504,7 +447,7 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
               const error = new Error("Mês e ano são obrigatórios e devem ser números para fatura de período específico.");
               error.statusCode = 400; error.status = 'fail'; throw error;
           }
-          referenceMonthZeroBased = parseInt(periodOptions.month, 10) - 1; // Ajusta para base 0
+          referenceMonthZeroBased = parseInt(periodOptions.month, 10) - 1;
           referenceYear = parseInt(periodOptions.year, 10);
 
           invoiceEndDate = new Date(Date.UTC(referenceYear, referenceMonthZeroBased, card.closingDay));
@@ -547,9 +490,6 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
           where: {
               financialAccountId,
               creditCardId,
-              // Apenas Saídas são consideradas para o valor da fatura a pagar
-              // Entradas no cartão (estornos) já são consideradas no cálculo do limite disponível.
-              // Se precisar mostrar estornos na fatura, precisaria buscá-los também.
               type: 'Saída',
               transactionDate: {
                   [Op.gte]: invoiceStartDate.toISOString().split('T')[0],
@@ -559,7 +499,11 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
           order: [['transactionDate', 'ASC'], ['createdAt', 'ASC']],
           include: [
               {model: FinancialCategory, as: 'category', attributes: ['name']},
-              {model: FinancialTransaction, as: 'originalAccount', attributes:['description', 'value', 'numberOfParcels']} // Para parcelas
+              {
+                model: FinancialTransaction, 
+                as: 'originalAccount', 
+                attributes:['id','description', 'originalPurchaseTotalValue', 'totalParcels'] // Inclui totalParcels da transação mãe
+              }
           ],
           transaction: t
       });
@@ -575,20 +519,11 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
       }
       paymentDueDate.setUTCDate(card.paymentDay);
 
-      // Pega o limite disponível atual para mostrar como "saldo estimado pós-fatura"
-      // Esta chamada já é transacional por si só se t não for passado.
-      // Para consistência, se t está ativo, deveria usá-lo.
-      // No entanto, getAvailableCreditLimit commita sua própria transação.
-      // É melhor chamar fora ou garantir que a lógica de transação seja compatível.
-      // Por simplicidade, vamos chamar fora da transação t principal desta função.
-      await t.commit(); // Commita a transação atual antes de chamar getAvailableCreditLimit
+      await t.commit(); // Commita a transação 't' antes de chamar getAvailableCreditLimit
 
+      // Pega o limite disponível já calculado pela função refatorada
       const limitDetails = await getAvailableCreditLimit(financialAccountId, creditCardId);
-      // O Saldo Estimado Pós-Fatura = Limite Disponível Atual (que já considera tudo)
-      // Não precisa subtrair totalAmount novamente, pois limitDetails.availableLimit já reflete isso.
-      const availableLimitAfterThisInvoice = limitDetails.availableLimit;
-
-
+      
       return {
           cardName: card.name,
           financialAccountName: financialAccount.accountName,
@@ -601,7 +536,9 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
           totalAmount: parseFloat(totalAmount.toFixed(2)),
           transactions: transactions.map(tx => tx.toJSON()),
           cardTotalLimit: parseFloat(card.limit),
-          availableLimitAfterInvoice: parseFloat(availableLimitAfterThisInvoice.toFixed(2)) // Adicionado
+          // O 'availableLimitAfterInvoice' agora é o limite que SOBRA após considerar TODA a dívida no cartão,
+          // não apenas o valor desta fatura específica.
+          availableLimitAfterInvoice: limitDetails.availableLimit 
       };
 
   } catch (error) {
@@ -645,17 +582,7 @@ async function getAvailableInvoicePeriods(financialAccountId, creditCardId) {
                 const year = parseInt(yearStr, 10);
                 const monthOneBased = parseInt(monthStr, 10);
                 const monthZeroBased = monthOneBased - 1;
-
-                // Fatura que fecha no mês das transações (ou próximo, se gasto > dia fechamento)
-                let closingMonthRef = monthZeroBased;
-                let closingYearRef = year;
-
-                // Simples: Mês da fatura é o mês do fechamento que engloba os gastos.
-                // Se gastei em Maio e fecha dia 20, fatura de Maio.
-                // Se gastei em Maio dia 25 e fecha dia 20, fatura de Junho.
-                // Vamos listar os meses de fechamento relevantes
                 
-                // Opção 1: Fatura que fecha no mês da transação (se o dia de fechamento for posterior ao dia médio das transações desse mês)
                 let closingDateOpt1 = new Date(Date.UTC(year, monthZeroBased, card.closingDay));
                 let label1 = closingDateOpt1.toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
                 if (!addedLabels.has(label1)) {
@@ -667,7 +594,6 @@ async function getAvailableInvoicePeriods(financialAccountId, creditCardId) {
                     addedLabels.add(label1);
                 }
 
-                // Opção 2: Fatura que fecha no mês seguinte ao da transação
                 let closingDateOpt2 = new Date(Date.UTC(year, monthZeroBased + 1, card.closingDay));
                 let label2 = closingDateOpt2.toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
                  if (!addedLabels.has(label2)) {
@@ -689,7 +615,7 @@ async function getAvailableInvoicePeriods(financialAccountId, creditCardId) {
                                });
 
         logger.info(`Encontrados ${uniquePeriods.length} períodos de fatura distintos para cartão ID ${creditCardId}.`);
-        return uniquePeriods.slice(0, 12); // Limita a 12 períodos para não sobrecarregar
+        return uniquePeriods.slice(0, 12);
 
     } catch (error) {
         logger.error(`Erro ao obter períodos de fatura para cartão ID ${creditCardId}: ${error.message}`, { error });
@@ -697,7 +623,6 @@ async function getAvailableInvoicePeriods(financialAccountId, creditCardId) {
         throw error;
     }
 }
-
 
 async function payCreditCardInvoice(financialAccountId, creditCardId, paymentAmount, paymentDate, originatingAccountDescription = null, financialCategoryId = null) {
     const t = await sequelize.transaction();
