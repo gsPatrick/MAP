@@ -1259,6 +1259,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     }
             }
             
+            // Garantir que aiMessageIntro seja string ANTES de usar métodos de string
             let aiMessageIntro = aiResponse.overall_summary_suggestion || 
                                 (aiResponse.reply_to_user_suggestion && (!aiResponse.detected_actions || aiResponse.detected_actions.length === 0 || aiResponse.detected_actions.every(a => (a.action || a.action_type)?.startsWith("GENERAL_"))) 
                                     ? aiResponse.reply_to_user_suggestion 
@@ -1327,7 +1328,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     }
 
                     try {
-                        switch (actionName) { // Usando actionName aqui
+                        switch (actionName) { 
                             case 'CREATE_FINANCIAL_TRANSACTION': {
                                 const categoryId = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type);
                                 const cardId = params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null;
@@ -1395,10 +1396,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 const catIdParcel = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type);
                                 const cardIdParcel = params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null;
                                 if (params.creditCardName && !cardIdParcel) {
-                                    // Se for a única ação, a mensagem de erro será o aiMessageIntro
                                     const errorMsg = `Hum, ${clientNameToUse}, não encontrei um cartão chamado "${params.creditCardName}" para registrar essa compra parcelada. 😕 Você pode cadastrar o cartão primeiro ou tentar com outro nome.`;
                                     if (aiResponse.detected_actions.length === 1) { aiMessageIntro = errorMsg; currentActionFormattedData = ""; platformLinkFooter = ""; }
-                                    else { multipleActionBodiesList.push(errorMsg); } // Adiciona ao corpo de múltiplas ações
+                                    else { multipleActionBodiesList.push(errorMsg); }
                                     break;
                                 }
                                 const parcelData = { description: params.description, type: params.type, totalValue: parseFloat(params.totalValue), numberOfParcels: parseInt(params.numberOfParcels), initialDueDate: params.initialDueDate, financialCategoryId: catIdParcel, creditCardId: cardIdParcel, notes: params.notes, transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0], };
@@ -1443,21 +1443,37 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 const filterParamsList = { dateStart: params.dateStart, dateEnd: params.dateEnd, type: params.type, financialCategoryId: params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId, params.type) : null, creditCardId: params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null, isPayableOrReceivable: params.isPayableOrReceivable, isPaidOrReceived: params.isPaidOrReceived, search: params.searchTerm || params.description, limit: params.limit || 7, page: params.page || 1, sortBy: params.sortBy || 'transactionDate', sortOrder: params.sortOrder || 'DESC' };
                                 const { transactions, totalItems } = await financialService.getAllTransactions(state.activeFinancialAccountId, filterParamsList);
                                 
-                                if (aiResponse.detected_actions.length === 1) { // Ação única
+                                if (aiResponse.detected_actions.length === 1) { 
                                     aiMessageIntro = aiResponse.overall_summary_suggestion || (totalItems === 0 ? `Nenhuma transação encontrada para os filtros que você pediu, ${clientNameToUse}. 👍` : `📜 Encontrei ${totalItems} transações. As ${transactions.length > 1 ? transactions.length + " " : ""}mais recentes são:`);
-                                } else if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && !aiResponse.overall_summary_suggestion) { // Múltiplas ações, esta é a primeira
+                                } else if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && !aiResponse.overall_summary_suggestion) { 
                                     aiMessageIntro = totalItems === 0 ? `Nenhuma transação encontrada para os filtros, ${clientNameToUse}.` : `Sobre as transações:`;
-                                } // Se já tem intro de outra ação, não sobrescreve
+                                } 
 
                                 if (totalItems === 0 && aiResponse.detected_actions.length === 1) {
                                     currentActionFormattedData = "Tente outros filtros ou adicione novas transações!";
                                 } else if (totalItems > 0) {
-                                    let listText = aiResponse.detected_actions.length > 1 ? "Transações Listadas:\n" : "🎯 Detalhamento das Transações:\n"; 
-                                    for (const t of transactions) { /* ... formatação da lista como antes ... */ }
+                                    let listText = aiResponse.detected_actions.length > 1 && multipleActionBodiesList.length > 0 ? "Transações Listadas:\n" : "🎯 Detalhamento das Transações:\n"; 
+                                    for (const t of transactions) {
+                                        const catName = t.category ? t.category.name : 'Sem Categoria';
+                                        let emoji = t.type === 'Entrada' ? '🟢' : (t.creditCardId ? '💳' : '🔴');
+                                        if (t.isParcel && t.originalAccount) emoji = '📦';
+                                        const date = formatDate(t.transactionDate);
+                                        let descriptionText = t.description;
+                                        if (t.isParcel && t.parcelNumber && t.totalParcels && t.originalAccount) {
+                                            const originalDesc = t.originalAccount.description.replace(/ - Parcela \d+\/\d+$/, '').trim();
+                                             if (!descriptionText.toLowerCase().includes(`parcela ${t.parcelNumber}/${t.totalParcels}`)) {
+                                                descriptionText = `${originalDesc} - Pcl ${t.parcelNumber}/${t.totalParcels}`;
+                                             }
+                                        }
+                                        listText += `\n${emoji} ${descriptionText} - ${formatCurrency(t.value)}\n    (Cat: ${catName}, Data: ${date}, ID: ${t.id})`;
+                                        if (t.isPayableOrReceivable && !t.creditCardId) {
+                                            listText += t.isPaidOrReceived ? " (Liquidada ✅)" : ` (Vence ${formatDate(t.dueDate)} 🗓️)`;
+                                        }
+                                    }
                                     currentActionFormattedData = listText.trim();
                                     if (totalItems > transactions.length) platformLinkFooter = formatPlatformLink(`E mais ${totalItems - transactions.length} transações. Peça para ver mais ou veja tudo na plataforma!`);
                                 } else {
-                                    currentActionFormattedData = ""; // Não adiciona corpo se for múltipla ação e não encontrar nada.
+                                    currentActionFormattedData = "";
                                 }
                                 break;
                             }
@@ -1492,13 +1508,21 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 if (aiResponse.detected_actions.length === 1 && aiResponse.overall_summary_suggestion) defaultIntro = aiResponse.overall_summary_suggestion;
                                 else if (aiResponse.reply_to_user_suggestion) defaultIntro = aiResponse.reply_to_user_suggestion;
                                 
-                                if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && aiMessageIntro !== aiResponse.overall_summary_suggestion && aiMessageIntro !== aiResponse.reply_to_user_suggestion) {
+                                // Apenas define aiMessageIntro se ainda for o fallback genérico e não uma introdução de ação anterior
+                                if (multipleActionBodiesList.length === 0 && 
+                                    (typeof aiMessageIntro !== 'string' || aiMessageIntro === `Ok, ${clientNameToUse}!` || !aiMessageIntro.includes(clientNameToUse)) && 
+                                    aiMessageIntro !== aiResponse.overall_summary_suggestion && 
+                                    aiMessageIntro !== aiResponse.reply_to_user_suggestion) {
                                      aiMessageIntro = defaultIntro;
                                 } else if (aiResponse.detected_actions.length > 1 && aiResponse.overall_summary_suggestion && aiMessageIntro !== aiResponse.overall_summary_suggestion) {
-                                    // Mantém o intro específico se já definido
+                                    // Mantém o intro específico se já definido para a primeira ação de múltiplas
                                 } else if (aiResponse.overall_summary_suggestion) {
-                                    aiMessageIntro = aiResponse.overall_summary_suggestion;
+                                    // Se não há intro específico e overall_summary existe, usa ele.
+                                    if (multipleActionBodiesList.length === 0 || (typeof aiMessageIntro === 'string' && aiMessageIntro === `Ok, ${clientNameToUse}!`)) {
+                                       aiMessageIntro = aiResponse.overall_summary_suggestion;
+                                    }
                                 }
+
 
                                 currentActionFormattedData = `Ainda estou aprendendo a processar "${actionName.toLowerCase().replace(/_/g," ")}" completamente. 😅 Minha equipe está trabalhando nisso!`;
                                 logger.warn(`[WHATSAPP SERVICE] Ação da IA não implementada no switch de formatação: ${actionName}`);
@@ -1510,7 +1534,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                          let errorDataPart = `Detalhe do erro: ${e.message.length < 80 ? e.message : 'Erro interno, desculpe!'}\n\nPode tentar de novo ou com outros termos?`;
                          
                          if (aiResponse.detected_actions.length === 1) {
-                            if (!(aiMessageIntro && aiMessageIntro.toLowerCase().includes("ops")) && !(aiMessageIntro && aiMessageIntro.toLowerCase().includes("problema"))) {
+                            if (!(aiMessageIntro && typeof aiMessageIntro === 'string' && aiMessageIntro.toLowerCase().includes("ops")) && !(aiMessageIntro && typeof aiMessageIntro === 'string' && aiMessageIntro.toLowerCase().includes("problema"))) {
                                 aiMessageIntro = errorIntroPart;
                             }
                             currentActionFormattedData = errorDataPart;
@@ -1574,8 +1598,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                      (finalMessageToSend && finalMessageToSend.includes('https://app.mapnocontrole.com.br')) ||
                                      (finalMessageToSend && finalMessageToSend.includes('https://mapnocontrole.com.br/planos')) ||
                                      (aiResponse.detected_actions && aiResponse.detected_actions.some(da => {
-                                        const actionName = da.action || da.action_type;
-                                        return actionName?.startsWith("GENERAL_") && actionName !== 'GENERAL_QUESTION_OR_HELP' && actionName !== 'ACTION_CONFIRMATION_YES' && actionName !== 'ACTION_CONFIRMATION_NO';
+                                        const actionNameCheck = da.action || da.action_type;
+                                        return actionNameCheck?.startsWith("GENERAL_") && actionNameCheck !== 'GENERAL_QUESTION_OR_HELP' && actionNameCheck !== 'ACTION_CONFIRMATION_YES' && actionNameCheck !== 'ACTION_CONFIRMATION_NO';
                                      }));
 
             if (platformLinkFooter && platformLinkFooter.trim() !== "" && !noLinkConditions ) {
@@ -1597,20 +1621,20 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             if (finalMessageToSend) {
                 const performedConcreteAction = (aiResponse.detected_actions && aiResponse.detected_actions.length > 0 &&
                                            aiResponse.detected_actions.some(a => {
-                                               const actionName = a.action || a.action_type;
-                                               return !(actionName?.startsWith("GENERAL_") || actionName?.startsWith("LIST_") || actionName?.startsWith("GET_") || actionName?.startsWith("SWITCH_") || actionName?.startsWith("ACTION_CONFIRMATION_"));
+                                               const actionNameCheck = a.action || a.action_type;
+                                               return !(actionNameCheck?.startsWith("GENERAL_") || actionNameCheck?.startsWith("LIST_") || actionNameCheck?.startsWith("GET_") || actionNameCheck?.startsWith("SWITCH_") || actionNameCheck?.startsWith("ACTION_CONFIRMATION_"));
                                            })) &&
                                            (!aiResponse.clarifications_needed || aiResponse.clarifications_needed.length === 0);
 
                 const singleConcreteNonEditAction = performedConcreteAction && aiResponse.detected_actions.filter(a => {
-                    const actionName = a.action || a.action_type;
-                    return !(actionName?.startsWith("GENERAL_") || 
-                             actionName?.startsWith("LIST_") || 
-                             actionName?.startsWith("GET_") || 
-                             actionName?.startsWith("SWITCH_") || 
-                             actionName?.startsWith("ACTION_CONFIRMATION_") ||
-                             actionName?.startsWith("UPDATE_") ||
-                             actionName === "RECREATE_PARCELLED_ACCOUNT");
+                    const actionNameCheck = a.action || a.action_type;
+                    return !(actionNameCheck?.startsWith("GENERAL_") || 
+                             actionNameCheck?.startsWith("LIST_") || 
+                             actionNameCheck?.startsWith("GET_") || 
+                             actionNameCheck?.startsWith("SWITCH_") || 
+                             actionNameCheck?.startsWith("ACTION_CONFIRMATION_") ||
+                             actionNameCheck?.startsWith("UPDATE_") ||
+                             actionNameCheck === "RECREATE_PARCELLED_ACCOUNT");
                 }).length === 1;
 
                 if (resourceForButtonsContext && singleConcreteNonEditAction) {
