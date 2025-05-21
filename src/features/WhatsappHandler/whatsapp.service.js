@@ -17,58 +17,334 @@ const conversationState = new Map();
 const MAX_HISTORY_FOR_AI = 8;
 const MAX_STATE_HISTORY = 20;
 
-// --- Helper Functions (mantidas como antes) ---
-async function findFinancialCategoryIdByName(name, financialAccountId, transactionType = null) { /* ... */ }
-async function findCreditCardIdByName(name, financialAccountId) { /* ... */ }
-async function findProductIdByNameOrCode(nameOrCode, financialAccountId) { /* ... */ }
+// --- Helper Functions ---
+async function findFinancialCategoryIdByName(name, financialAccountId, transactionType = null) {
+    if (!name || typeof name !== 'string' || name.trim() === '') return null;
+    logger.debug(`[WHATSAPP SERVICE] Buscando categoria financeira por nome: "${name}" para conta ${financialAccountId}, tipo ${transactionType}`);
+    let foundCategory = await systemService.findFinancialCategoryByNameAndType(name, transactionType, financialAccountId);
+    if (foundCategory) return foundCategory.id;
+    foundCategory = await systemService.findFinancialCategoryByName(name, financialAccountId);
+    if (foundCategory) {
+        logger.info(`[WHATSAPP SERVICE] Categoria por nome "${name}" (tipo ${transactionType || 'qualquer'}) não encontrada exatamente. Usando correspondência por nome: "${foundCategory.name}" (ID: ${foundCategory.id})`);
+        return foundCategory.id;
+    }
+    logger.warn(`[WHATSAPP SERVICE] Categoria financeira com nome "${name}" não encontrada.`);
+    return null;
+}
 
-// --- Funções de Formatação de Resumo (mantidas como antes) ---
-function formatFinancialTransactionSummary(transaction, clientName, forMulti = false, forEdit = false) { /* ... */ }
-function formatAppointmentSummary(appointment, clientName, forMulti = false, forEdit = false) { /* ... */ }
-function formatRecurringRuleSummary(rule, clientName, forMulti = false, forEdit = false) { /* ... */ }
-function formatProductSummary(product, clientName, forMulti = false, forEdit = false) { /* ... */ }
-function formatCreditCardSummary(card, clientName, forMulti = false, forEdit = false) { /* ... */ }
-function formatCreditCardInvoiceSummary(invoiceDetails, clientName, listTransactions = true) { /* ... */ }
-function formatAvailableLimitSummary(limitInfo, clientName) { /* ... */ }
-function formatParcelledAccountSummary(params, parcelResult, clientName, forEdit = false) { /* ... */ }
+async function findCreditCardIdByName(name, financialAccountId) {
+    if (!name || typeof name !== 'string' || name.trim() === '') return null;
+    try {
+        const card = await creditCardService.findCreditCardByName(financialAccountId, name);
+        return card.id;
+    } catch (e) {
+        logger.warn(`[WHATSAPP SERVICE] Cartão de crédito com nome "${name}" não encontrado para a conta ${financialAccountId} via creditCardService: ${e.message}`);
+        return null;
+    }
+}
 
+async function findProductIdByNameOrCode(nameOrCode, financialAccountId) {
+    if (!nameOrCode || typeof nameOrCode !== 'string' || nameOrCode.trim() === '') return null;
+    const { products } = await productService.getAllProducts(financialAccountId, { search: nameOrCode, isActive: true, limit: 5 });
+    if (products && products.length > 0) {
+        const exactMatch = products.find(p => p.name.toLowerCase() === nameOrCode.toLowerCase() || (p.code && p.code.toLowerCase() === nameOrCode.toLowerCase()));
+        if (exactMatch) return exactMatch.id;
+        logger.info(`[WHATSAPP SERVICE] Produto por nome/código "${nameOrCode}" não encontrado exatamente. Usando o primeiro da busca: "${products[0].name}" (ID: ${products[0].id})`);
+        return products[0].id;
+    }
+    logger.warn(`[WHATSAPP SERVICE] Produto com nome/código "${nameOrCode}" não encontrado para a conta ${financialAccountId}.`);
+    return null;
+}
+
+// --- Funções de Formatação de Resumo ---
+function formatFinancialTransactionSummary(transaction, clientName, forMulti = false, forEdit = false) {
+    const dateFormatted = transaction.transactionDate
+        ? new Date(transaction.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' })
+        : 'Data não informada';
+
+    let statusText = "";
+    let statusEmoji = "";
+    if (transaction.isPayableOrReceivable) {
+        const dueDateFormatted = transaction.dueDate ? new Date(transaction.dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' }) : 'N/A';
+        if (transaction.isPaidOrReceived) {
+            statusText = transaction.type === 'Entrada' ? "Recebido!" : "Pago!";
+            statusEmoji = "✅";
+        } else {
+            statusText = ` ${transaction.type === 'Entrada' ? 'A receber' : 'A pagar'} em ${dueDateFormatted}`;
+            statusEmoji = "🗓️";
+        }
+    } else {
+        statusText = transaction.type === 'Entrada' ? "Recebido!" : "Pago!";
+        statusEmoji = "✅";
+    }
+
+    let categoryEmoji = transaction.type === 'Entrada' ? '📥' : '💸';
+    if (transaction.category && transaction.category.name) {
+        const catNameLower = transaction.category.name.toLowerCase();
+        if (catNameLower.includes('lazer') || catNameLower.includes('jogo') || catNameLower.includes('entretenimento') || catNameLower.includes('game')) categoryEmoji = '🎮';
+        else if (catNameLower.includes('alimentação') || catNameLower.includes('restaurante') || catNameLower.includes('ifood') || catNameLower.includes('mercado') || catNameLower.includes('comida')) categoryEmoji = '🍔';
+        else if (catNameLower.includes('salário') || catNameLower.includes('recebimento') || catNameLower.includes('presente') || catNameLower.includes('renda')) categoryEmoji = '💰';
+        else if (catNameLower.includes('transporte') || catNameLower.includes('uber') || catNameLower.includes('gasolina') || catNameLower.includes('carro')) categoryEmoji = '🚗';
+        else if (catNameLower.includes('saúde') || catNameLower.includes('farmácia') || catNameLower.includes('médico') || catNameLower.includes('saude')) categoryEmoji = '🩺';
+        else if (catNameLower.includes('casa') || catNameLower.includes('aluguel') || catNameLower.includes('moradia') || catNameLower.includes('luz') || catNameLower.includes('água') || catNameLower.includes('agua')) categoryEmoji = '🏡';
+        else if (catNameLower.includes('educação') || catNameLower.includes('curso') || catNameLower.includes('estudo')) categoryEmoji = '📚';
+        else if (catNameLower.includes('pet') || catNameLower.includes('animal')) categoryEmoji = '🐾';
+        else if (catNameLower.includes('investimento')) categoryEmoji = '📈';
+        else if (catNameLower.includes('doação') || catNameLower.includes('dívida') || catNameLower.includes('divida')) categoryEmoji = '👐';
+        else if (catNameLower.includes('outros')) categoryEmoji = '📎';
+    }
+    if (transaction.creditCard && transaction.creditCard.name) categoryEmoji = '💳';
+
+    let summary = "";
+    if (forEdit) summary += "✅ Transação Editada:\n\n";
+
+    summary += `${categoryEmoji} Descrição: ${transaction.description}\n`;
+    summary += `💰 Valor: R$ ${parseFloat(transaction.value).toFixed(2)}\n`;
+    if (transaction.category && transaction.category.name) {
+        summary += `🏷️ Categoria: ${transaction.category.name}\n`;
+    }
+    if (transaction.creditCard && transaction.creditCard.name) {
+        summary += `💳 Cartão: ${transaction.creditCard.name}${transaction.creditCard.lastFourDigits ? ` (**** ${transaction.creditCard.lastFourDigits})` : ''}\n`;
+    }
+    summary += `📅 Data: ${dateFormatted}\n`;
+    summary += `\n${statusEmoji} Status: ${statusText}`;
+    if (transaction.notes) summary += `\n📝 Obs: ${transaction.notes}`;
+    return summary;
+}
+
+function formatAppointmentSummary(appointment, clientName, forMulti = false, forEdit = false) {
+    const displayTimeZone = process.env.TZ || 'America/Sao_Paulo';
+    const eventDateTime = new Date(appointment.eventDateTime);
+
+    const eventDateFormatted = eventDateTime.toLocaleDateString('pt-BR', {
+        day: '2-digit', month: '2-digit', year: 'numeric', timeZone: displayTimeZone
+    });
+    const eventTimeFormatted = eventDateTime.toLocaleTimeString('pt-BR', {
+        hour: '2-digit', minute: '2-digit', timeZone: displayTimeZone
+    });
+
+    let summary = "";
+    if (forEdit) summary += "✅ Compromisso Atualizado:\n\n";
+
+    let titleEmoji = "📝";
+    const titleLower = appointment.title?.toLowerCase() || "";
+    if(titleLower.includes("pagar") || titleLower.includes("dívida") || titleLower.includes("divida") || (appointment.associatedValue && appointment.associatedTransactionType === 'Saída')) titleEmoji = "💸";
+    else if(titleLower.includes("receber") || (appointment.associatedValue && appointment.associatedTransactionType === 'Entrada')) titleEmoji = "💰";
+    else if(titleLower.includes("reunião") || titleLower.includes("reuniao")) titleEmoji = "🤝";
+    else if(titleLower.includes("médico") || titleLower.includes("dentista") || titleLower.includes("medico")) titleEmoji = "🩺";
+    else if(titleLower.includes("aniversário") || titleLower.includes("aniversario") || titleLower.includes("festa")) titleEmoji = "🎉";
+    else if(titleLower.includes("viagem")) titleEmoji = "✈️";
+    else if(titleLower.includes("estudar") || titleLower.includes("aula") || titleLower.includes("curso")) titleEmoji = "📚";
+
+    summary += `${titleEmoji} Descrição: ${appointment.title}\n`;
+    summary += `📆 Data: ${eventDateFormatted}\n`;
+    summary += `🕑 Horário: ${eventTimeFormatted}\n`;
+
+    if (appointment.durationMinutes) {
+        const endTime = new Date(eventDateTime.getTime() + appointment.durationMinutes * 60000);
+        const endTimeFormatted = endTime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: displayTimeZone });
+        summary += `⏳ Duração: ${appointment.durationMinutes} min (até ${endTimeFormatted})\n`;
+    }
+    if (appointment.location) summary += `📍 Local: ${appointment.location}\n`;
+
+    if (appointment.associatedValue && appointment.associatedTransactionType) {
+        summary += `💲 Valor Associado: R$ ${parseFloat(appointment.associatedValue).toFixed(2)} (${appointment.associatedTransactionType})\n`;
+    }
+
+    summary += `🚦 Status: ${appointment.status}`;
+    if(appointment.reminderEnabled && appointment.reminderLeadTimeMinutes) {
+        summary += `\n🔔 Lembrete: Sim (${appointment.reminderLeadTimeMinutes} min antes)`;
+    } else if (appointment.reminderEnabled && !appointment.reminderLeadTimeMinutes) {
+        summary += `\n🔔 Lembrete: Sim (Padrão)`;
+    }
+    if (appointment.notes) summary += `\n💬 Notas: ${appointment.notes}`;
+    return summary;
+}
+
+function formatRecurringRuleSummary(rule, clientName, forMulti = false, forEdit = false) {
+    const startDateFormatted = rule.startDate ? new Date(rule.startDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'}) : 'N/I';
+    const endDateFormatted = rule.endDate ? new Date(rule.endDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'}) : 'Sem data final';
+    const nextDateFormatted = rule.nextDueDate ? new Date(rule.nextDueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone:'UTC'}) : 'N/A (Verifique se está ativa)';
+
+    let categoryEmoji = rule.type === 'Entrada' ? '💰' : '💸';
+     if (rule.category && rule.category.name) {
+        const catNameLower = rule.category.name.toLowerCase();
+        if (catNameLower.includes('assinatura') || catNameLower.includes('streaming') || catNameLower.includes('netflix')) categoryEmoji = '🎬';
+        else if (catNameLower.includes('aluguel') || catNameLower.includes('condomínio') || catNameLower.includes('condominio')) categoryEmoji = '🏡';
+        else if (catNameLower.includes('salário') || catNameLower.includes('salario')) categoryEmoji = '💼';
+        else if (catNameLower.includes('internet') || catNameLower.includes('telefone') || catNameLower.includes('celular')) categoryEmoji = '📱';
+    }
+
+    let summary = "";
+    if (forEdit) summary += "✅ Recorrência Atualizada:\n\n";
+
+    summary += `${categoryEmoji} Descrição: ${rule.description}\n`;
+    summary += `💰 Valor: R$ ${parseFloat(rule.value).toFixed(2)} (${rule.type})\n`;
+    if (rule.category && rule.category.name) {
+        summary += `🏷️ Categoria: ${rule.category.name}\n`;
+    }
+    summary += `📅 Início: ${startDateFormatted}\n`;
+    if(rule.endDate) summary += `🏁 Fim: ${endDateFormatted}\n`;
+    summary += `🔁 Frequência: ${rule.frequency} (a cada ${rule.interval})\n`;
+    if (rule.dayOfMonth) summary += `🗓️ Dia do Mês: ${rule.dayOfMonth}\n`;
+    if (rule.dayOfWeek !== null && rule.dayOfWeek !== undefined) summary += `🗓️ Dia da Semana: ${['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'][rule.dayOfWeek]}\n`;
+    summary += `➡️ Próximo Vencimento: ${nextDateFormatted}\n`;
+    summary += `🤖 Ação Automática: ${rule.autoCreateTransaction ? 'Sim (Cria Transação Pendente)' : 'Não (Apenas Lembrete)'}\n`;
+    summary += `🚦 Status da Regra: ${rule.isActive ? 'Ativa ✔️' : 'Inativa ❌'}`;
+    if (rule.notes) summary += `\n📝 Obs: ${rule.notes}`;
+    return summary;
+}
+
+function formatProductSummary(product, clientName, forMulti = false, forEdit = false) {
+    let summary = "";
+    if (forEdit) summary += "✅ Produto Atualizado:\n\n";
+
+    summary += `🏷️ Nome: ${product.name}\n`;
+    if (product.code) summary += `🔢 Código: ${product.code}\n`;
+    summary += `💲 Preço Venda: R$ ${parseFloat(product.salePrice).toFixed(2)}\n`;
+    if (product.costPrice) summary += `📉 Preço Custo: R$ ${parseFloat(product.costPrice).toFixed(2)}\n`;
+    summary += `📊 Estoque Atual: ${product.quantity} ${product.unit || 'UN'}\n`;
+    if (product.minimumStock && product.minimumStock > 0) {
+        summary += `🔔 Estoque Mínimo: ${product.minimumStock} ${product.unit || 'UN'}`;
+        if (product.quantity <= product.minimumStock) summary += " ⚠️ Atenção! Estoque baixo!";
+        summary += "\n";
+    }
+    summary += `🚦 Status: ${product.isActive ? 'Ativo ✔️' : 'Inativo ❌'}`;
+    if (product.description) summary += `\n📜 Descrição: ${product.description}`;
+    return summary;
+}
+
+function formatCreditCardSummary(card, clientName, forMulti = false, forEdit = false) {
+    let summary = "";
+    if (forEdit) summary += "✅ Cartão Atualizado:\n\n";
+
+    summary += `✨ Nome: ${card.name}\n`;
+    if(card.lastFourDigits) summary += `🔢 Final: **** ${card.lastFourDigits}\n`;
+    if(card.flag) summary += `🚩 Bandeira: ${card.flag}\n`;
+    summary += `💰 Limite: R$ ${parseFloat(card.limit).toFixed(2)}\n`;
+    summary += `🗓️ Dia Fechamento: ${card.closingDay}\n`;
+    summary += `💸 Dia Pagamento: ${card.paymentDay}\n`;
+    summary += `⭐ Padrão: ${card.isDefault ? 'Sim ✔️' : 'Não ❌'}\n`;
+    summary += `🚦 Status: ${card.isActive ? 'Ativo ✔️' : 'Inativo ❌'}`;
+    return summary;
+}
+
+function formatCreditCardInvoiceSummary(invoiceDetails, clientName, listTransactions = true) {
+    let summary = "";
+    const invoiceMonthYear = invoiceDetails.invoiceReferenceMonthYear;
+    let profileName = "Pessoal";
+    if (invoiceDetails.financialAccountType === 'PJ') profileName = "Empresarial (PJ)";
+    else if (invoiceDetails.financialAccountType === 'MEI') profileName = "MEI";
+
+    summary += `🧾 Fatura do Cartão ${invoiceDetails.cardName} – ${invoiceMonthYear}\n`;
+    summary += `👤 Perfil: ${invoiceDetails.financialAccountName} [${profileName}]\n`;
+    summary += `📆 Período da fatura: ${new Date(invoiceDetails.invoiceCycleStartDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {day: '2-digit', month:'2-digit', timeZone:'UTC'})} a ${new Date(invoiceDetails.invoiceCycleEndDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {day: '2-digit', month:'2-digit', timeZone:'UTC'})}\n`;
+    summary += `💳 Vencimento: ${new Date(invoiceDetails.paymentDueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' })}\n`;
+    summary += `💰 Valor Total: R$ ${invoiceDetails.totalAmount.toFixed(2)}\n`;
+
+    if (listTransactions && invoiceDetails.transactions && invoiceDetails.transactions.length > 0) {
+        summary += "\n📋 Lançamentos Detalhados:\n";
+        const maxTxToList = 10;
+        invoiceDetails.transactions.slice(0, maxTxToList).forEach(tx => {
+            const txDate = new Date(tx.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
+            let txDescription = tx.description;
+
+            if (tx.isParcel && tx.parcelNumber && tx.totalParcels && tx.originalAccount) {
+                const originalDesc = tx.originalAccount.description.replace(/ - Parcela \d+\/\d+$/, '').trim();
+                if (!txDescription.toLowerCase().includes(`parcela ${tx.parcelNumber}/${tx.totalParcels}`)) {
+                     txDescription = `${originalDesc} – Parcela ${tx.parcelNumber}/${tx.totalParcels}`;
+                }
+            }
+            summary += `\n🗓️ ${txDate} – ${txDescription} – R$ ${parseFloat(tx.value).toFixed(2)}`;
+            if (tx.category && tx.category.name) summary += ` [${tx.category.name}]`;
+        });
+        if (invoiceDetails.transactions.length > maxTxToList) {
+            summary += `\n\n... e mais ${invoiceDetails.transactions.length - maxTxToList} lançamentos. Peça para ver todos se quiser! 😉`;
+        }
+    } else if (listTransactions && (!invoiceDetails.transactions || invoiceDetails.transactions.length === 0)) {
+        summary += "\n🎉 Uhuul! Nenhum lançamento nesta fatura até o momento. Que tranquilidade!";
+    }
+    return summary;
+}
+
+function formatAvailableLimitSummary(limitInfo, clientName) {
+    let summary = "";
+    summary += `💳 Cartão: *${limitInfo.cardName}*\n`;
+    summary += `💰 Limite Total: R$ ${limitInfo.totalLimit.toFixed(2)}\n`;
+    summary += `📈 Usado na Fatura Aberta: R$ ${limitInfo.usedAmount.toFixed(2)}\n`;
+    if (limitInfo.paymentsMadeForOpenInvoice > 0) {
+        summary += `💸 Pagamentos Já Feitos (Fatura Aberta): R$ ${limitInfo.paymentsMadeForOpenInvoice.toFixed(2)}\n`;
+        summary += `📊 Saldo Devedor Atual (Fatura Aberta): R$ ${limitInfo.netUsedAmount.toFixed(2)}\n`;
+    }
+    summary += `✨ *Limite Disponível para Novas Compras: R$ ${limitInfo.availableLimit.toFixed(2)}*\n\n`;
+    summary += `🗓️ Próximo Fechamento: ${new Date(limitInfo.currentInvoiceCycle.end + 'T00:00:00Z').toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit', timeZone:'UTC'})}`;
+    return summary;
+}
+
+function formatParcelledAccountSummary(params, parcelResult, clientName, forEdit = false) {
+    let summary = "";
+    let actionText = "registrada";
+    if (forEdit) {
+        actionText = "atualizada";
+    }
+    
+    summary += `Sua compra de ${params.newDescription || params.description} no valor de R$ ${parseFloat(params.newTotalValue || params.totalValue).toFixed(2)} em ${params.newNumberOfParcels || params.numberOfParcels}x `;
+    if (params.newCreditCardName || params.creditCardName) {
+        summary += `no cartão ${params.newCreditCardName || params.creditCardName} `;
+    }
+    summary += `foi ${actionText} com sucesso! 🥳`;
+
+    if (parcelResult.parcels && parcelResult.parcels.length > 0) {
+        const firstParcel = parcelResult.parcels[0];
+        if ((params.newCreditCardName || params.creditCardName) && firstParcel.transactionDate) {
+            const firstParcelDate = new Date(firstParcel.transactionDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
+            summary += `\nA primeira parcela (R$ ${parseFloat(firstParcel.value).toFixed(2)}) deve aparecer na fatura do seu cartão ${params.newCreditCardName || params.creditCardName} por volta de ${firstParcelDate}.`;
+        } else if (!(params.newCreditCardName || params.creditCardName) && firstParcel.dueDate) {
+            summary += `\nA primeira parcela vence em ${new Date(firstParcel.dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' })}.`;
+        }
+    }
+    return summary;
+}
 
 // --- Initialize State ---
-function initializeState(client, defaultAccount = null, clientFinancialAccounts = []) {
-    const clientName = client ? (client.name || "pessoa incrível") : "pessoa incrível";
+async function initializeOrUpdateState(client, existingState = null) {
+    const clientName = client.name && client.name.trim() !== "" && client.name.trim().toLowerCase() !== "unknown" && client.name.trim().toLowerCase() !== "null"
+        ? client.name.split(" ")[0]
+        : (client.name || "pessoa incrível"); // Fallback para pushName se client.name for nulo/vazio
 
     let hasPaidAccess = false;
-    let clientAccessLevel = client ? (client.accessLevel || 'gratuito') : 'gratuito';
-    let clientAccessExpiresAt = client ? client.accessExpiresAt : null;
+    let clientAccessLevel = client.accessLevel || 'gratuito';
+    let clientAccessExpiresAt = client.accessExpiresAt;
     let accessLevelTextForUser = "Nenhum plano ativo";
-    let onboardingStage = 'awaiting_plan_confirmation';
+    let onboardingStage = existingState?.data?.onboardingStage || 'awaiting_plan_confirmation'; // Mantém stage se já existe
 
-    if (client) {
-        if (client.accessLevel && client.accessLevel !== 'gratuito') {
-            if (client.accessLevel.startsWith('vitalicio_')) {
+    if (client.accessLevel && client.accessLevel !== 'gratuito') {
+        if (client.accessLevel.startsWith('vitalicio_')) {
+            hasPaidAccess = true;
+            accessLevelTextForUser = client.accessLevel.replace('vitalicio_', 'Vitalício ').replace('_', ' ');
+        } else if (client.accessExpiresAt) {
+            const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
+            const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+            if (expiryDate >= today) {
                 hasPaidAccess = true;
-                accessLevelTextForUser = client.accessLevel.replace('vitalicio_', 'Vitalício ').replace('_', ' ');
-            } else if (client.accessExpiresAt) {
-                const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
-                const today = new Date(); today.setUTCHours(0, 0, 0, 0);
-                if (expiryDate >= today) {
-                    hasPaidAccess = true;
-                    accessLevelTextForUser = `${client.accessLevel.replace(/_/g, ' ')} (expira em ${expiryDate.toLocaleDateString('pt-BR', { timeZone: 'UTC' })})`;
-                } else {
-                    accessLevelTextForUser = `Plano ${client.accessLevel.replace(/_/g, ' ')} expirado`;
-                    clientAccessLevel = 'gratuito';
-                }
+                accessLevelTextForUser = `${client.accessLevel.replace(/_/g, ' ')} (expira em ${expiryDate.toLocaleDateString('pt-BR', { timeZone: 'UTC' })})`;
             } else {
-                logger.warn(`[WHATSAPP SERVICE - InitializeState] Cliente ${client.id} com accessLevel ${client.accessLevel} mas sem accessExpiresAt. Considerando como sem plano pago.`);
+                accessLevelTextForUser = `Plano ${client.accessLevel.replace(/_/g, ' ')} expirado`;
                 clientAccessLevel = 'gratuito';
             }
+        } else {
+            logger.warn(`[WHATSAPP SERVICE - Initialize/UpdateState] Cliente ${client.id} com accessLevel ${client.accessLevel} mas sem accessExpiresAt. Considerando como sem plano pago.`);
+            clientAccessLevel = 'gratuito';
         }
     }
     
-    if (hasPaidAccess) {
+    // Se o plano foi ativado (hasPaidAccess se tornou true) e o onboarding ainda estava em 'awaiting_plan_confirmation'
+    // ou se é um estado completamente novo para um cliente com plano, define o próximo estágio.
+    if (hasPaidAccess && (!existingState || existingState.data.onboardingStage === 'awaiting_plan_confirmation')) {
         if (!client.email || !client.passwordHash) {
             onboardingStage = 'setting_up_credentials_email';
         } else {
+            const clientFinancialAccounts = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
             const hasPf = clientFinancialAccounts.some(acc => acc.accountType === 'PF');
             if (!hasPf) {
                  onboardingStage = 'setting_up_pf_account_name';
@@ -81,30 +357,62 @@ function initializeState(client, defaultAccount = null, clientFinancialAccounts 
                  }
             }
         }
+    } else if (!hasPaidAccess) { // Garante que se não tem plano, volta para o início do onboarding de plano
+        onboardingStage = 'awaiting_plan_confirmation';
+    }
+    // Se já existe um estado e o onboardingStage é diferente de awaiting_plan_confirmation, mantém o stage atual
+    // a menos que o plano tenha mudado e precise reavaliar.
+
+    const defaultAccount = (onboardingStage === 'onboarding_complete' && hasPaidAccess)
+        ? (await clientService.getActiveOrDefaultFinancialAccount(client.id))
+        : null;
+
+    if (existingState) {
+        existingState.clientName = clientName;
+        existingState.currentAccessLevel = clientAccessLevel;
+        existingState.accessExpiresAt = clientAccessExpiresAt;
+        existingState.hasPaidAccess = hasPaidAccess;
+        existingState.accessLevelTextForUser = accessLevelTextForUser;
+        existingState.data.onboardingStage = onboardingStage; // Atualiza o stage
+        // Mantém activeFinancialAccountId se o onboarding está completo e uma conta estava ativa
+        if (onboardingStage !== 'onboarding_complete' || !defaultAccount) {
+            existingState.activeFinancialAccountId = null;
+            existingState.activeFinancialAccountName = null;
+            existingState.activeFinancialAccountType = null;
+        } else if (defaultAccount && !existingState.activeFinancialAccountId) { // Se onboarding completo e nenhuma conta ativa no estado, pega default
+            existingState.activeFinancialAccountId = defaultAccount.id;
+            existingState.activeFinancialAccountName = defaultAccount.accountName;
+            existingState.activeFinancialAccountType = defaultAccount.accountType;
+        }
+        logger.debug(`[WHATSAPP SERVICE - UpdateState] Estado atualizado para cliente ${client.id}: `, {
+            onboardingStage: existingState.data.onboardingStage,
+            currentAction: existingState.currentAction, // Mantém currentAction se já estava em um sub-fluxo
+            hasPaidAccess: existingState.hasPaidAccess,
+        });
+        return existingState;
     }
 
+    // Cria novo estado
     const newState = {
         currentAction: null, 
         data: { onboardingStage }, 
-        activeFinancialAccountId: defaultAccount && hasPaidAccess && onboardingStage === 'onboarding_complete' ? defaultAccount.id : null,
-        activeFinancialAccountName: defaultAccount && hasPaidAccess && onboardingStage === 'onboarding_complete' ? defaultAccount.accountName : null,
-        activeFinancialAccountType: defaultAccount && hasPaidAccess && onboardingStage === 'onboarding_complete' ? defaultAccount.accountType : null,
+        activeFinancialAccountId: defaultAccount ? defaultAccount.id : null,
+        activeFinancialAccountName: defaultAccount ? defaultAccount.accountName : null,
+        activeFinancialAccountType: defaultAccount ? defaultAccount.accountType : null,
         clientName: clientName,
         messageHistory: [],
         pendingConfirmation: null,
         editingResource: null,
         lastAiResponse: null,
-        
         currentAccessLevel: clientAccessLevel, 
         accessExpiresAt: clientAccessExpiresAt,
         hasPaidAccess: hasPaidAccess,
         accessLevelTextForUser: accessLevelTextForUser,
     };
     
-    logger.debug(`[WHATSAPP SERVICE - InitializeState] Estado inicial para cliente ${client ? client.id : 'novo'}: `, {
+    logger.debug(`[WHATSAPP SERVICE - InitializeState] Novo estado criado para cliente ${client.id}: `, {
         onboardingStage: newState.data.onboardingStage,
         hasPaidAccess: newState.hasPaidAccess,
-        currentAccessLevel: newState.currentAccessLevel,
     });
     return newState;
 }
@@ -117,88 +425,23 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
     try {
         let client = await clientService.findClientByPhone(senderPhone);
-        let isNewClientForSession = !conversationState.has(senderPhone); // Se não tem estado, é como se fosse nova sessão para o state
-        let clientFinancialAccounts = [];
+        let isNewUserForSessionLogic = !conversationState.has(senderPhone); // Considera nova sessão se não há estado em memória
 
         if (!client) {
             logger.info(`[WHATSAPP SERVICE] Cliente com telefone ${senderPhone} não encontrado no banco. Criando novo...`);
             client = await clientService.createClient({ phone: senderPhone, name: pushName });
             logger.info(`[WHATSAPP SERVICE] Novo Cliente criado: ID ${client.id}, Telefone: ${client.phone}, Nome: ${client.name}`);
-            // clientFinancialAccounts ainda estará vazio aqui
+            state = await initializeOrUpdateState(client, null); // Passa null para defaultAccount e clientFinancialAccounts
+            isNewUserForSessionLogic = true; // Definitivamente nova sessão para a lógica
         } else {
-            clientFinancialAccounts = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
+            const existingState = conversationState.get(senderPhone);
+            const clientFinancialAccounts = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
+            const defaultAccount = await clientService.getActiveOrDefaultFinancialAccount(client.id);
+            state = await initializeOrUpdateState(client, defaultAccount, clientFinancialAccounts, existingState);
+            if (!existingState) isNewUserForSessionLogic = true;
         }
         
-        state = conversationState.get(senderPhone) || initializeState(client, await clientService.getActiveOrDefaultFinancialAccount(client.id), clientFinancialAccounts);
-        
-        const clientNameToUse = client.name && client.name.trim() !== "" && client.name.trim().toLowerCase() !== "unknown" && client.name.trim().toLowerCase() !== "null"
-            ? client.name.split(" ")[0]
-            : (pushName || "pessoa incrível");
-        state.clientName = clientNameToUse; // Atualiza sempre o nome no estado
-
-        // RE-SINCRONIZAÇÃO CRUCIAL DO ESTADO DO PLANO E ONBOARDING STAGE
-        let previousHasPaidAccess = state.hasPaidAccess;
-        let currentHasPaidAccess = false;
-        let currentAccessLevelTextForUser = "Nenhum plano ativo";
-        let currentClientAccessLevel = client.accessLevel || 'gratuito';
-
-        if (client.accessLevel && client.accessLevel !== 'gratuito') {
-            if (client.accessLevel.startsWith('vitalicio_')) {
-                currentHasPaidAccess = true;
-                currentAccessLevelTextForUser = client.accessLevel.replace('vitalicio_', 'Vitalício ').replace('_', ' ');
-            } else if (client.accessExpiresAt) {
-                const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
-                const today = new Date(); today.setUTCHours(0, 0, 0, 0);
-                if (expiryDate >= today) {
-                    currentHasPaidAccess = true;
-                    currentAccessLevelTextForUser = `${client.accessLevel.replace(/_/g, ' ')} (expira em ${expiryDate.toLocaleDateString('pt-BR', { timeZone: 'UTC' })})`;
-                } else {
-                    currentAccessLevelTextForUser = `Plano ${client.accessLevel.replace(/_/g, ' ')} expirado`;
-                    currentClientAccessLevel = 'gratuito';
-                }
-            } else {
-                currentClientAccessLevel = 'gratuito';
-            }
-        }
-        state.hasPaidAccess = currentHasPaidAccess;
-        state.currentAccessLevel = currentClientAccessLevel;
-        state.accessExpiresAt = client.accessExpiresAt;
-        state.accessLevelTextForUser = currentAccessLevelTextForUser;
-
-        // SE O PLANO FOI ATIVADO DESDE A ÚLTIMA INTERAÇÃO, REAVALIA onboardingStage
-        if (state.hasPaidAccess && !previousHasPaidAccess && state.data.onboardingStage === 'awaiting_plan_confirmation') {
-             logger.info(`[WHATSAPP SERVICE] Cliente ${client.id} adquiriu plano. Reavaliando onboarding stage a partir de 'awaiting_plan_confirmation'.`);
-             if (!client.email || !client.passwordHash) {
-                state.data.onboardingStage = 'setting_up_credentials_email';
-                state.currentAction = null; // Limpa qualquer sub-ação anterior
-             } else {
-                const hasPf = clientFinancialAccounts.some(acc => acc.accountType === 'PF');
-                if (!hasPf) {
-                    state.data.onboardingStage = 'setting_up_pf_account_name';
-                    state.currentAction = null;
-                } else {
-                    const hasPjMei = clientFinancialAccounts.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
-                    if (state.currentAccessLevel.startsWith('avancado') && !hasPjMei) {
-                        state.data.onboardingStage = 'confirming_pj_mei_setup';
-                        state.currentAction = null;
-                    } else {
-                        state.data.onboardingStage = 'onboarding_complete';
-                        state.currentAction = null;
-                        // Se onboarding está completo e não tem conta ativa, mas tem contas, seleciona a default
-                        if (!state.activeFinancialAccountId && clientFinancialAccounts.length > 0) {
-                            const defaultAcc = clientFinancialAccounts.find(a => a.isDefault) || clientFinancialAccounts[0];
-                            if (defaultAcc) {
-                                state.activeFinancialAccountId = defaultAcc.id;
-                                state.activeFinancialAccountName = defaultAcc.accountName;
-                                state.activeFinancialAccountType = defaultAcc.accountType;
-                            }
-                        }
-                    }
-                }
-             }
-             isNewClientForSession = true; // Trata como se fosse uma nova sessão para o fluxo de onboarding
-        }
-
+        const clientNameToUse = state.clientName;
 
         if (!(rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string')) {
             state.messageHistory.push({ role: 'user', content: messageText });
@@ -210,35 +453,35 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         let onboardingReply = "";
         const lowerMessageText = messageText.toLowerCase().trim();
         const siteUrl = process.env.PLAN_SITE_URL || "https://mapnocontrole.com.br/planos";
+        let clientFinancialAccountsForOnboarding = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
 
-        // ---- FLUXO DE ONBOARDING COM state.data.onboardingStage ----
-        logger.debug(`[WHATSAPP ONBOARDING] Iniciando checagem de onboarding. Stage: ${state.data.onboardingStage}, currentAction: ${state.currentAction}, isNewClientForSession: ${isNewClientForSession}`);
+        logger.debug(`[WHATSAPP ONBOARDING ENTRY] Cliente: ${client.id}, Stage: ${state.data.onboardingStage}, currentAction: ${state.currentAction}, isNewUserForSessionLogic: ${isNewUserForSessionLogic}, hasPaidAccess: ${state.hasPaidAccess}, needsCredSetup: ${!client.email || !client.passwordHash}, #PF: ${clientFinancialAccountsForOnboarding.filter(a=>a.accountType==='PF').length}`);
 
         if (state.data.onboardingStage === 'awaiting_plan_confirmation') {
-            // Se o usuário mandar "sim" ou algo do tipo E ele ainda não viu a info do plano
-            if (state.currentAction !== 'showing_plans_info_after_no_plan' && (lowerMessageText === 'sim' || lowerMessageText === 's' || lowerMessageText.includes('quero') || lowerMessageText.includes('saber mais'))) {
-                onboardingReply = `Que legal que você quer saber mais, ${clientNameToUse}! 🎉\n\n` +
-                              `Temos dois tipos de planos incríveis para você decolar suas finanças:\n\n` +
-                              `🚀 *Plano Básico (Mensal ou Anual):* Perfeito para organizar suas finanças pessoais (PF) com todas as ferramentas que você precisa! \n\n` +
-                              `🌟 *Plano Avançado (Mensal ou Anual):* Turbine sua gestão! Além de todas as funcionalidades do Pessoal, você ainda gerencia as finanças da sua empresa (PJ) ou MEI, incluindo controle de estoque! \n\n` +
-                              `Para ver os valores e todos os detalhes de cada um, e garantir o seu, é só acessar: ${siteUrl}\n\n` +
-                              `Depois de escolher e assinar, me manda um "oi" por aqui que eu já libero tudo pra você! Mal posso esperar! 😉`;
-                state.currentAction = 'showing_plans_info_after_no_plan';
-            } else if (state.currentAction !== 'showing_plans_info_after_no_plan') { // Se não é "sim" e não acabou de mostrar os planos
-                onboardingReply = `Olá ${clientNameToUse}! Tudo pronto para simplificar suas finanças? 🚀\n\n` +
-                              `Para usar o ${aiModelService.ASSISTANT_NAME} e ter suas contas na palma da mão, você precisa de um dos nossos planos. ` +
-                              `Temos opções mensais e anuais, tanto para suas finanças pessoais quanto para sua empresa!\n\n` +
-                              `Quer saber mais detalhes sobre eles por aqui? Só dizer *"sim"*! 😊\n\n` +
-                              `Ou, se preferir, pode ir direto para nossa página de planos e já garantir o seu: ${siteUrl}\n\n` +
-                              `Assim que seu plano estiver ativo, é só me dar um "oi" para começarmos a mágica! ✨`;
-                state.currentAction = 'awaiting_plan_interest_generic';
+            if (isNewUserForSessionLogic || state.currentAction !== 'showing_plans_info_after_no_plan') {
+                if (lowerMessageText === 'sim' || lowerMessageText === 's' || lowerMessageText.includes('quero') || lowerMessageText.includes('saber mais')) {
+                    onboardingReply = `Que legal que você quer saber mais, ${clientNameToUse}! 🎉\n\n` +
+                                  `Temos dois tipos de planos incríveis para você decolar suas finanças:\n\n` +
+                                  `🚀 *Plano Básico (Mensal ou Anual):* Perfeito para organizar suas finanças pessoais (PF) com todas as ferramentas que você precisa! \n\n` +
+                                  `🌟 *Plano Avançado (Mensal ou Anual):* Turbine sua gestão! Além de todas as funcionalidades do Pessoal, você ainda gerencia as finanças da sua empresa (PJ) ou MEI, incluindo controle de estoque! \n\n` +
+                                  `Para ver os valores e todos os detalhes de cada um, e garantir o seu, é só acessar: ${siteUrl}\n\n` +
+                                  `Depois de escolher e assinar, me manda um "oi" por aqui que eu já libero tudo pra você! Mal posso esperar! 😉`;
+                    state.currentAction = 'showing_plans_info_after_no_plan';
+                } else {
+                    onboardingReply = `Olá ${clientNameToUse}! Tudo pronto para simplificar suas finanças? 🚀\n\n` +
+                                  `Para usar o ${aiModelService.ASSISTANT_NAME} e ter suas contas na palma da mão, você precisa de um dos nossos planos. ` +
+                                  `Temos opções mensais e anuais, tanto para suas finanças pessoais quanto para sua empresa!\n\n` +
+                                  `Quer saber mais detalhes sobre eles por aqui? Só dizer *"sim"*! 😊\n\n` +
+                                  `Ou, se preferir, pode ir direto para nossa página de planos e já garantir o seu: ${siteUrl}\n\n` +
+                                  `Assim que seu plano estiver ativo, é só me dar um "oi" para começarmos a mágica! ✨`;
+                    state.currentAction = 'awaiting_plan_interest_generic';
+                }
             }
-            // Se currentAction é 'showing_plans_info_after_no_plan', ele já recebeu a info, aguarda "oi" ou outra msg.
         } else if (state.data.onboardingStage === 'setting_up_credentials_email') {
-            if (isNewClientForSession || state.currentAction !== 'awaiting_input_email_for_credentials') {
+            if (state.currentAction !== 'awaiting_input_email_for_credentials') { // Só envia a msg de boas vindas + pedido de email uma vez
                  onboardingReply = `E aí, ${clientNameToUse}! Boas-vindas ao seu plano ${state.accessLevelTextForUser}! 🎉\n\nPara que você também possa acessar nosso aplicativo web e ver tudo detalhado, vamos configurar seu acesso rapidinho. Qual o seu melhor e-mail para usarmos? 📧`;
                  state.currentAction = 'awaiting_input_email_for_credentials';
-            } else { // Usuário enviou algo, esperamos que seja o e-mail
+            } else { 
                 const emailInput = messageText.trim();
                 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
                 if (emailRegex.test(emailInput)) {
@@ -248,11 +491,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     state.currentAction = 'awaiting_input_password_for_credentials';
                 } else {
                     onboardingReply = `Opa, ${clientNameToUse}! Esse e-mail não me pareceu muito certo... 🤔 Poderia tentar de novo, por favor? Algo como "seu_nome@exemplo.com".`;
-                    // Mantém currentAction e onboardingStage
                 }
             }
         } else if (state.data.onboardingStage === 'setting_up_credentials_password') {
-            // state.currentAction já deve ser 'awaiting_input_password_for_credentials'
             const passwordInput = messageText.trim();
             if (passwordInput.length >= 6) {
                 state.data.tempPassword = passwordInput;
@@ -263,7 +504,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 onboardingReply = `Para sua segurança, ${clientNameToUse}, a senha precisa ter pelo menos 6 caracteres. 😉 Pode me dizer uma senha um pouquinho maior?`;
             }
         } else if (state.data.onboardingStage === 'setting_up_credentials_name') {
-            // state.currentAction já deve ser 'awaiting_input_name_for_credentials'
             const nameInput = messageText.trim();
             if (nameInput.length >= 3 && nameInput.includes(" ")) { 
                 try {
@@ -271,18 +511,17 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     client = await clientService.findClientByPhone(senderPhone); 
                     state.clientName = client.name.split(" ")[0];
                     logger.info(`[WHATSAPP ONBOARDING] Credenciais definidas para ${senderPhone}.`);
-                    delete state.data.tempEmail; delete state.data.tempPassword; // Limpa dados temporários
+                    delete state.data.tempEmail; delete state.data.tempPassword;
                     state.currentAction = null;
                     
-                    clientFinancialAccounts = await clientService.getClientFinancialAccounts(client.id, { isActive: true }); // Atualiza lista de contas
-                    const hasPf = clientFinancialAccounts.some(acc => acc.accountType === 'PF');
+                    clientFinancialAccountsForOnboarding = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
+                    const hasPf = clientFinancialAccountsForOnboarding.some(acc => acc.accountType === 'PF');
                     if (!hasPf) {
                         state.data.onboardingStage = 'setting_up_pf_account_name';
                         onboardingReply = `Uhuul, ${clientNameToUse}! Tudo certo com seu acesso e credenciais! 🎉\n\nAgora, vamos criar sua primeira conta financeira para seus gastos pessoais (PF). Qual nome você gostaria de dar pra ela? Algo como "Minhas Contas" ou "Pessoal do(a) ${clientNameToUse}" seria legal! 📝`;
                         state.currentAction = 'awaiting_input_pf_name';
                     } else {
-                        // Se já tem PF, verifica PJ/MEI
-                        const hasPjMei = clientFinancialAccounts.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
+                        const hasPjMei = clientFinancialAccountsForOnboarding.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
                         if (state.currentAccessLevel.startsWith('avancado') && !hasPjMei) {
                             state.data.onboardingStage = 'confirming_pj_mei_setup';
                              onboardingReply = `Uhuul, ${clientNameToUse}! Tudo certo com seu acesso e credenciais! 🎉\n\nComo você tem o plano ${state.accessLevelTextForUser.split(' (')[0]}, que tal configurarmos também uma conta para sua empresa (PJ) ou MEI? (Responda "sim" ou "não") ✨`;
@@ -296,7 +535,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     logger.error(`[WHATSAPP ONBOARDING] Erro ao definir credenciais para ${senderPhone}: ${e.message}`);
                     if (e.message && e.message.toLowerCase().includes('email já está em uso')) {
                          onboardingReply = `Puxa, ${clientNameToUse}, parece que o e-mail "${state.data.tempEmail}" já está sendo usado por outra pessoa. 😬 Você teria outro e-mail para cadastrarmos?`;
-                         state.data.onboardingStage = 'setting_up_credentials_email'; // Volta para pedir email
+                         state.data.onboardingStage = 'setting_up_credentials_email';
                          state.currentAction = 'awaiting_input_email_for_credentials';
                          delete state.data.tempEmail; delete state.data.tempPassword; 
                     } else {
@@ -307,7 +546,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 onboardingReply = `Para um toque mais pessoal, ${clientNameToUse}, poderia me dizer seu nome completo? ✨ Assim fica mais bacana no seu perfil!`;
             }
         } else if (state.data.onboardingStage === 'setting_up_pf_account_name') {
-            // state.currentAction já deve ser 'awaiting_input_pf_name'
             const pfAccountName = messageText.trim();
             if (pfAccountName.length >= 3 && pfAccountName.length <= 50) {
                 try {
@@ -319,9 +557,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     state.activeFinancialAccountType = newPfAccount.accountType;
                     logger.info(`[WHATSAPP ONBOARDING] Conta PF "${pfAccountName}" criada para ${senderPhone}.`);
                     state.currentAction = null;
-                    clientFinancialAccounts = await clientService.getClientFinancialAccounts(client.id, { isActive: true }); // Atualiza
+                    clientFinancialAccountsForOnboarding = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
 
-                    const hasPjMei = clientFinancialAccounts.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
+                    const hasPjMei = clientFinancialAccountsForOnboarding.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
                     if (state.currentAccessLevel.startsWith('avancado') && !hasPjMei) {
                         state.data.onboardingStage = 'confirming_pj_mei_setup';
                         onboardingReply = `Conta Pessoal "${pfAccountName}" criada com sucesso, ${clientNameToUse}! 🏦 Ela já está selecionada!\n\nComo você tem o plano ${state.accessLevelTextForUser.split(' (')[0]}, que tal configurarmos também uma conta para sua empresa (PJ) ou MEI? (Responda "sim" ou "não") ✨`;
@@ -338,18 +576,38 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 onboardingReply = `Esse nome parece um pouquinho curto ou um cadinho longo demais, ${clientNameToUse}. Para sua conta Pessoal, que tal um nome entre 3 e 50 letras? Assim fica perfeito! ✍️`;
             }
         } else if (state.data.onboardingStage === 'confirming_pj_mei_setup') {
-            // state.currentAction já deve ser 'awaiting_pj_mei_confirm'
-            if (lowerMessageText === 'sim' || lowerMessageText === 's' || lowerMessageText.includes('quero')) {
-                onboardingReply = `Excelente, ${clientNameToUse}! 👍 Essa sua nova conta será para uma *Empresa (PJ)* ou para seu *Microempreendedor Individual (MEI)*? Me diga "PJ" ou "MEI" para eu saber.`;
-                state.data.onboardingStage = 'awaiting_pj_mei_type';
-                state.currentAction = 'awaiting_input_pj_mei_type';
-            } else {
+            // A mensagem "sim MEI" deve ser tratada aqui
+            const userResponseLower = lowerMessageText;
+            let wantsPjMei = false;
+            let pjMeiType = null;
+
+            if (userResponseLower.includes("sim")) {
+                wantsPjMei = true;
+                if (userResponseLower.includes("pj")) pjMeiType = "PJ";
+                else if (userResponseLower.includes("mei")) pjMeiType = "MEI";
+            } else if (userResponseLower === "pj" || userResponseLower === "mei") { // Se só disse o tipo
+                wantsPjMei = true;
+                pjMeiType = userResponseLower.toUpperCase();
+            }
+
+
+            if (wantsPjMei) {
+                if (pjMeiType) { // Se o tipo foi especificado junto com o "sim"
+                    state.data.tempPjMeiType = pjMeiType;
+                    onboardingReply = `Show! Conta do tipo ${pjMeiType} então. E qual nome incrível vamos dar para essa sua potência empresarial? 🏢 (Ex: "Tech Solutions LTDA", "Consultoria ${clientNameToUse} MEI")`;
+                    state.data.onboardingStage = 'creating_pj_mei_account_name';
+                    state.currentAction = 'awaiting_input_pj_mei_name';
+                } else { // Se disse apenas "sim", "quero", etc.
+                    onboardingReply = `Excelente, ${clientNameToUse}! 👍 Essa sua nova conta será para uma *Empresa (PJ)* ou para seu *Microempreendedor Individual (MEI)*? Me diga "PJ" ou "MEI" para eu saber.`;
+                    state.data.onboardingStage = 'awaiting_pj_mei_type';
+                    state.currentAction = 'awaiting_input_pj_mei_type';
+                }
+            } else { // Usuário disse não ou algo que não indica "sim"
                 onboardingReply = `Tranquilo, ${clientNameToUse}! Sem pressa. Se mais pra frente você quiser adicionar sua conta empresarial, é só me avisar! 😉\n\nSua conta "${state.activeFinancialAccountName || 'Pessoal'}" está prontinha para uso com seu plano ${state.accessLevelTextForUser.split(' (')[0]}! O que você gostaria de fazer primeiro? Estou a postos! 🚀`;
                 state.data.onboardingStage = 'onboarding_complete';
                 state.currentAction = null;
             }
         } else if (state.data.onboardingStage === 'awaiting_pj_mei_type') {
-            // state.currentAction já deve ser 'awaiting_input_pj_mei_type'
             const typeInput = messageText.trim().toUpperCase();
             if (typeInput === 'PJ' || typeInput === 'MEI') {
                 state.data.tempPjMeiType = typeInput;
@@ -360,7 +618,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 onboardingReply = `Por favor, ${clientNameToUse}, me diga se é "PJ" ou "MEI" para sua conta empresarial. Assim a gente configura tudo certinho! 😊`;
             }
         } else if (state.data.onboardingStage === 'creating_pj_mei_account_name') {
-            // state.currentAction já deve ser 'awaiting_input_pj_mei_name'
             const companyName = messageText.trim();
             const companyType = state.data.tempPjMeiType;
             if (companyName.length >= 3 && companyName.length <= 50) {
@@ -381,28 +638,25 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             }
         }
 
-        // Se uma mensagem de onboarding foi definida, envia e possivelmente retorna
+
         if (onboardingReply) {
             state.messageHistory.push({ role: 'assistant', content: onboardingReply });
             await sendWhatsappMessage(senderPhone, onboardingReply);
             conversationState.set(senderPhone, state);
-            // Retorna se ainda estivermos em uma etapa que aguarda input do usuário para continuar o onboarding.
             if (state.data.onboardingStage !== 'onboarding_complete' && 
                 (state.currentAction && (state.currentAction.startsWith('awaiting_input_') || state.currentAction.startsWith('awaiting_pj_mei_confirm') || state.currentAction.startsWith('awaiting_plan_interest')))) {
                 return;
             }
         }
         
-        // Se o onboardingStage é 'onboarding_complete' OU se não havia onboardingReply (fluxo normal da IA)
         if (state.data.onboardingStage === 'onboarding_complete' || !onboardingReply) {
             if (state.data.onboardingStage === 'onboarding_complete' && state.currentAction && state.currentAction.startsWith('awaiting_input_')) {
-                 // Se o onboarding foi concluído, mas uma ação de input anterior não foi limpa, limpa agora.
                 state.currentAction = null;
             }
             
-            // SELEÇÃO DE CONTA ATIVA, se o onboarding está completo e ainda não tem conta ativa no estado.
             const currentClientAccountsAfterOnboarding = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
             if (state.data.onboardingStage === 'onboarding_complete' && !state.activeFinancialAccountId && currentClientAccountsAfterOnboarding.length > 0) {
+                // ... (lógica de seleção de conta, mantida como antes)
                 if (currentClientAccountsAfterOnboarding.length === 1) {
                     const acc = currentClientAccountsAfterOnboarding[0];
                     state.activeFinancialAccountId = acc.id;
@@ -411,13 +665,13 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     const selectMsg = `Tudo pronto, ${clientNameToUse}! 🎉 Sua conta "${acc.accountName}" (${acc.accountType}) já está selecionada com seu plano ${state.accessLevelTextForUser}. Como posso te ajudar a organizar suas finanças hoje? 🚀`;
                     state.messageHistory.push({ role: 'assistant', content: selectMsg });
                     state.currentAction = null; 
-                    if(state.data) state.data.accountsToList = null;
+                    if(state.data) state.data.accountsToList = null; // Limpa lista de seleção
                     await sendWhatsappMessage(senderPhone, selectMsg);
                 } else if (state.currentAction !== 'selecting_account_flow_active') { 
-                    state.currentAction = 'selecting_account_flow_active';
+                    state.currentAction = 'selecting_account_flow_active'; 
                     state.data.accountsToList = currentClientAccountsAfterOnboarding.map(a => ({id: a.id, name: a.accountName, type: a.accountType}));
                     let accountOptionsText = `Que bom te ver, ${clientNameToUse}! 👋 Seu plano ${state.accessLevelTextForUser} está ativo! Você tem estas contas configuradas:\n`;
-                    state.data.accountsToList.forEach((acc, index) => { accountOptionsText += `\n${index + 1}. *${acc.name}* (${acc.accountType})`; });
+                    state.data.accountsToList.forEach((acc, index) => { accountOptionsText += `\n${index + 1}. *${acc.name}* (${acc.type})`; });
                     accountOptionsText += `\n\nEm qual delas vamos trabalhar hoje? É só me dizer o *nome* ou o *número* da conta. Estou no aguardo! 😉`;
                     state.messageHistory.push({ role: 'assistant', content: accountOptionsText });
                     await sendWhatsappMessage(senderPhone, accountOptionsText);
@@ -457,7 +711,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 conversationState.set(senderPhone, state);
                 if (state.currentAction === 'selecting_account_flow_active' || !state.activeFinancialAccountId) return;
             } else if (state.data.onboardingStage === 'onboarding_complete' && !state.activeFinancialAccountId && currentClientAccountsAfterOnboarding.length === 0) {
-                const noAccountsMsg = `Olá ${clientNameToUse}! Seu plano ${state.accessLevelTextForUser} está tinindo, mas não encontrei nenhuma conta financeira. Vamos criar sua conta Pessoal? Só dizer "criar conta pessoal"! 😉`;
+                const noAccountsMsg = `Olá ${clientNameToUse}! Seu plano ${state.accessLevelTextForUser} está tinindo, mas não encontrei nenhuma conta financeira. Vamos criar sua conta Pessoal agora? Diga "criar conta pessoal"! 😉`;
                 state.messageHistory.push({ role: 'assistant', content: noAccountsMsg });
                 state.data.onboardingStage = 'setting_up_pf_account_name';
                 state.currentAction = 'awaiting_input_pf_name';
@@ -466,12 +720,11 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 return;
             }
 
+
             // ---- PROCESSAMENTO COM IA (SE ONBOARDING COMPLETO E CONTA SELECIONADA) ----
-            // ... (o restante do código de tratamento de botões, chamada da IA, execução de ações, etc.)
-            // O código a partir daqui é o mesmo da versão anterior, pois assume que o onboarding e a seleção de conta já ocorreram.
             if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
-                // ... (código de tratamento de botões, mantido como antes)
-                const buttonId = rawPayload.selectedButtonId;
+                // ... (código de tratamento de botões)
+                 const buttonId = rawPayload.selectedButtonId;
                 logger.info(`[WHATSAPP SERVICE] Botão clicado por ${senderPhone} (${clientNameToUse}): ID '${buttonId}', Texto: '${messageText}'`);
                 let buttonClickHandledByServiceLogic = true;
                 let replyForButtonClick = "";
@@ -583,13 +836,14 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 }
             }
         
+            // Tratamento de currentAction para fluxos não-onboarding (confirmações, edições, etc.)
             if (state.currentAction && state.data.onboardingStage === 'onboarding_complete') {
                  let stateHandledInPreProcessing = false;
                 let replyForPreProcessing = "";
         
                 if (state.currentAction === 'awaiting_confirmation' && state.pendingConfirmation) {
-                     const lowerMsg = messageText.toLowerCase().trim();
-                     if (lowerMsg === 'sim' || lowerMsg === 's' || lowerMsg.includes('correto') || lowerMsg.includes('ok') || lowerMsg.includes('pode')) {
+                     const lowerMsgForConfirm = messageText.toLowerCase().trim(); // Usa uma var local para não confundir
+                     if (lowerMsgForConfirm === 'sim' || lowerMsgForConfirm === 's' || lowerMsgForConfirm.includes('correto') || lowerMsgForConfirm.includes('ok') || lowerMsgForConfirm.includes('pode')) {
                         if (state.pendingConfirmation.action === 'RECREATE_PARCELLED_ACCOUNT' && state.pendingConfirmation.parameters) {
                             try {
                                 const { financialAccountId, originalAccountIdToDelete, newParcelData } = state.pendingConfirmation.parameters;
@@ -616,7 +870,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                             stateHandledInPreProcessing = true;
                         }
-                    } else if (lowerMsg === 'não' || lowerMsg === 'n' || lowerMsg.includes('incorreto') || lowerMsg.includes('cancela')) {
+                    } else if (lowerMsgForConfirm === 'não' || lowerMsgForConfirm === 'n' || lowerMsgForConfirm.includes('incorreto') || lowerMsgForConfirm.includes('cancela')) {
                         replyForPreProcessing = `Ok, ${clientNameToUse}, cancelado! Sem problemas. O que gostaria de fazer então? 😊`;
                         state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                         stateHandledInPreProcessing = true;
@@ -639,7 +893,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 else if (state.currentAction === 'awaiting_explicit_account_type_from_ai') {
                     const typeInput = messageText.trim().toUpperCase();
                     if (typeInput === 'PF' || typeInput === 'PJ' || typeInput === 'MEI') {
-                        state.data.accountTypeToCreate = typeInput;
+                        state.data.accountTypeToCreate = typeInput; // Armazena o tipo no state.data
                         replyForPreProcessing = `Ótimo, ${clientNameToUse}! E qual nome você gostaria de dar para esta nova conta ${typeInput}? 🏷️`;
                         state.currentAction = 'awaiting_explicit_account_name_from_ai';
                     } else {
@@ -648,10 +902,10 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     stateHandledInPreProcessing = true;
                 } else if (state.currentAction === 'awaiting_explicit_account_name_from_ai') {
                     const newAccName = messageText.trim();
-                    const typeToCreate = state.data.accountTypeToCreate;
+                    const typeToCreate = state.data.accountTypeToCreate; // Pega o tipo armazenado
                     if (newAccName.length >= 3 && newAccName.length <= 50) {
                         try {
-                            const currentClientAccountsForCreate = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
+                            const currentClientAccountsForCreate = await clientService.getClientFinancialAccounts(client.id, { isActive: true }); 
                             const existingPjMei = currentClientAccountsForCreate.find(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
                             if ((typeToCreate === 'PJ' || typeToCreate === 'MEI') && existingPjMei) {
                                 replyForPreProcessing = `Opa, ${clientNameToUse}! Você já tem uma conta empresarial (${existingPjMei.accountType}) chamada "${existingPjMei.accountName}". Só podemos ter uma conta PJ ou MEI por vez. 😉`;
@@ -671,7 +925,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     } else {
                          replyForPreProcessing = `Esse nome parece um pouco curto ou longo demais, ${clientNameToUse}. Para sua conta ${typeToCreate}, que tal um nome entre 3 e 50 letras? ✍️`;
                     }
-                    state.currentAction = null; delete state.data.accountTypeToCreate;
+                    state.currentAction = null; delete state.data.accountTypeToCreate; // Limpa o tipo armazenado
                     stateHandledInPreProcessing = true;
                 }
         
@@ -680,7 +934,11 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     state.messageHistory.push({ role: 'assistant', content: replyForPreProcessing });
                     await sendWhatsappMessage(senderPhone, replyForPreProcessing);
                     conversationState.set(senderPhone, state); 
-                    if (state.currentAction === null && !state.pendingConfirmation && !state.currentAction?.startsWith('awaiting_explicit_')) return;
+                    // Se a ação foi resolvida e não é mais um 'awaiting_explicit', retorna
+                    if (state.currentAction === null && !state.pendingConfirmation && 
+                        !(state.currentAction?.startsWith('awaiting_explicit_'))) {
+                            return;
+                    }
                 }
             }
         
@@ -691,7 +949,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                  const clientAccountsForAI = await clientService.getClientFinancialAccounts(client.id, { isActive: true });
                  if (clientAccountsForAI.length > 0) {
                      noActiveAccountForAIMsg += `Você tem ${clientAccountsForAI.length} conta(s). Qual gostaria de usar?`;
-                     state.currentAction = 'selecting_account_flow_active'; // Força seleção
+                     state.currentAction = 'selecting_account_flow_active'; 
                      state.data.accountsToList = clientAccountsForAI.map(a => ({id: a.id, name: a.accountName, type: a.accountType}));
                  } else {
                      noActiveAccountForAIMsg += `Vamos configurar sua conta Pessoal agora? Diga "criar conta pessoal". 😊`;
@@ -711,7 +969,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 currentFinancialAccountName: state.activeFinancialAccountName,
                 clientName: clientNameToUse,
                 conversationHistory: state.messageHistory.slice(-MAX_HISTORY_FOR_AI * 2),
-                currentStateData: state.data, // Envia o .data que contém onboardingStage
+                currentStateData: state.data, 
                 editingResource: state.editingResource,
                 currentAccessLevel: state.currentAccessLevel, 
                 hasPaidAccess: state.hasPaidAccess, 
@@ -1315,7 +1573,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                         currentActionFormatted = `Você só tem a conta "${state.activeFinancialAccountName}" configurada por enquanto, ${clientNameToUse}. Se quiser criar outra, me diga "criar conta"! 😉`;
                                     } else if (allClientAccountsForSwitch.length === 0) {
                                          currentActionFormatted = `Puxa, ${clientNameToUse}, parece que ainda não temos nenhuma conta financeira configurada para você. Vamos criar sua primeira conta pessoal? Só dizer "criar conta pessoal". 😊`;
-                                         state.data.onboardingStage = 'setting_up_pf_account_name';
+                                         state.data.onboardingStage = 'setting_up_pf_account_name'; // Volta para o onboarding de PF
                                          state.currentAction = 'awaiting_input_pf_name';
                                     } else {
                                         let accList = `Você tem estas contas, ${clientNameToUse}:\n`;
@@ -1374,12 +1632,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                         state.activeFinancialAccountName = newFA.accountName;
                                         state.activeFinancialAccountType = newFA.accountType;
                                         state.currentAction = null; 
-                                        // Mantém o onboardingStage como 'onboarding_complete' se já estava
                                         if (state.data.onboardingStage !== 'onboarding_complete') {
-                                            // Se a criação de conta foi o último passo do onboarding (improvável chegar aqui nesse caso)
                                             state.data.onboardingStage = 'onboarding_complete';
                                         }
-                                        // Limpa dados temporários de criação de conta, se houver
                                         if (state.data.accountTypeToCreate) delete state.data.accountTypeToCreate;
                                     } catch(e) {
                                         currentActionFormatted = `Ops, não consegui criar a conta "${newAccName}" (${typeToCreate}). ${e.message.substring(0,70)}. Tente um nome diferente.`;
@@ -1673,7 +1928,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 currentAction: state.currentAction, 
                 onboardingStage: state.data.onboardingStage,
                 hasPaidAccess: state.hasPaidAccess,
-                activeFinancialAccountId: state.activeFinancialAccountId 
+                activeFinancialAccountId: state.activeFinancialAccountId,
+                tempData: state.data // Para ver dados temporários como tempEmail, etc.
             });
             conversationState.set(senderPhone, state); 
         }
