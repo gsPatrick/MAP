@@ -26,7 +26,7 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
     type: DataTypes.ENUM('Entrada', 'Saída'),
     allowNull: false,
   },
-  value: {
+  value: { // Para compras à vista, este é o valor total. Para parcelas, este é o valor da parcela individual.
     type: DataTypes.DECIMAL(12, 2),
     allowNull: false,
     validate: {
@@ -44,65 +44,65 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
     onUpdate: 'CASCADE',
     onDelete: 'SET NULL', 
   },
-  transactionDate: {
+  transactionDate: { // Data da transação (compra à vista, data da parcela no cartão, data da compra original para contas a pagar)
     type: DataTypes.DATEONLY,
     allowNull: false,
     defaultValue: DataTypes.NOW,
   },
-  isPayableOrReceivable: {
+  isPayableOrReceivable: { // Indica se é uma conta a pagar/receber (não se aplica a gastos diretos no cartão)
     type: DataTypes.BOOLEAN,
     defaultValue: false,
     allowNull: false,
   },
-  dueDate: {
+  dueDate: { // Data de vencimento para contas a pagar/receber
     type: DataTypes.DATEONLY,
     allowNull: true,
   },
-  isPaidOrReceived: {
+  isPaidOrReceived: { // Status de liquidação para contas a pagar/receber
     type: DataTypes.BOOLEAN,
-    defaultValue: false,
+    defaultValue: false, // Para isPayableOrReceivable=true, começa como não pago/recebido
     allowNull: false,
   },
-  paymentDate: {
+  paymentDate: { // Data em que a conta foi efetivamente paga/recebida
       type: DataTypes.DATEONLY,
       allowNull: true,
   },
-  isParcel: {
+  isParcel: { // Indica se esta transação é parte de um parcelamento
     type: DataTypes.BOOLEAN,
     defaultValue: false,
     allowNull: false,
   },
-  parcelNumber: {
+  parcelNumber: { // Número da parcela atual (ex: 1, 2, 3...)
     type: DataTypes.INTEGER,
     allowNull: true,
     validate: { min: 1 },
   },
-  totalParcels: {
+  totalParcels: { // Número total de parcelas da compra original
     type: DataTypes.INTEGER,
     allowNull: true,
     validate: { min: 1 },
   },
-  originalAccountId: { 
+  originalAccountId: { // ID da transação "mãe" que representa a compra parcelada original
     type: DataTypes.INTEGER,
     allowNull: true,
     references: {
-      model: 'financial_transactions',
+      model: 'financial_transactions', // Auto-referência
       key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'SET NULL', 
+    onDelete: 'SET NULL', // Se a transação mãe for deletada, as parcelas filhas perdem a referência (ou CASCADE se preferir deletá-las juntas)
+    comment: 'ID da transação original se esta for uma parcela (aponta para a primeira parcela do grupo)',
   },
-  // NOVO CAMPO PARA ARMAZENAR O VALOR TOTAL DA COMPRA PARCELADA
-  originalPurchaseTotalValue: {
+  originalPurchaseTotalValue: { // Valor total da compra original, quando isParcel = true
     type: DataTypes.DECIMAL(12, 2),
-    allowNull: true,
-    comment: 'Valor total da compra original, se esta transação for uma parcela.',
+    allowNull: true, // Será preenchido para transações de parcelamento
+    comment: 'Valor total da compra original, se esta transação for uma parcela ou a "mãe" de um parcelamento.',
   },
-  paymentMethod: {
+  paymentMethod: { // Método de pagamento (ex: "Cartão de Crédito XPTO", "Débito", "Pix")
     type: DataTypes.STRING,
     allowNull: true,
   },
-  creditCardId: {
+  creditCardId: { // Se a transação foi feita com um cartão de crédito específico
     type: DataTypes.INTEGER,
     allowNull: true,
     references: {
@@ -110,13 +110,13 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
       key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'SET NULL', 
+    onDelete: 'SET NULL', // Se o cartão for deletado, a transação perde a referência, mas não é deletada
   },
   notes: {
     type: DataTypes.TEXT,
     allowNull: true,
   },
-  recurringTransactionRuleId: {
+  recurringTransactionRuleId: { // Se esta transação foi gerada por uma regra de recorrência
     type: DataTypes.INTEGER,
     allowNull: true,
     references: {
@@ -126,7 +126,19 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
     onUpdate: 'CASCADE',
     onDelete: 'SET NULL', 
     comment: 'ID da regra de recorrência que originou esta transação (se aplicável)',
-  }
+  },
+  // Campo para vincular pagamentos de fatura ao cartão pago (MELHORIA SUGERIDA)
+  // paidForCreditCardId: {
+  //   type: DataTypes.INTEGER,
+  //   allowNull: true,
+  //   references: {
+  //     model: 'credit_cards',
+  //     key: 'id',
+  //   },
+  //   onUpdate: 'CASCADE',
+  //   onDelete: 'SET NULL',
+  //   comment: 'Se esta transação for um pagamento de fatura, indica o ID do cartão que foi pago.',
+  // }
 }, {
   tableName: 'financial_transactions',
   timestamps: true,
@@ -138,9 +150,46 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
     { fields: ['financialCategoryId'] },
     { fields: ['creditCardId'] },
     { fields: ['originalAccountId'] },
-    { fields: ['recurringTransactionRuleId'] }, 
+    { fields: ['recurringTransactionRuleId'] },
+    // { fields: ['paidForCreditCardId'] }, // Se adicionar o campo sugerido
   ],
   hooks: {
+    beforeValidate: (transaction, options) => {
+        // Se é uma parcela e originalAccountId não está definido, mas parcelNumber é 1 (ou >1),
+        // e se é uma compra parcelada (tem totalParcels > 1),
+        // então originalAccountId deveria ser ela mesma se for a "mãe".
+        // Esta lógica é melhor tratada no service durante a criação.
+        if (transaction.isParcel && transaction.parcelNumber && transaction.totalParcels && !transaction.originalAccountId) {
+            if (transaction.parcelNumber === 1) {
+                // Se for a primeira parcela de um novo grupo, o service deve lidar com a atribuição do ID após a criação.
+                // Não setar aqui, pois o ID ainda não existe no beforeCreate.
+            }
+        }
+
+        // Garante que se isParcel for false, os campos de parcela sejam nulos
+        if (!transaction.isParcel) {
+            transaction.parcelNumber = null;
+            transaction.totalParcels = null;
+            transaction.originalAccountId = null;
+            transaction.originalPurchaseTotalValue = null; 
+        }
+
+        // Se é uma transação de cartão, não deve ser marcada como payable/receivable com dueDate
+        if (transaction.creditCardId) {
+            transaction.isPayableOrReceivable = false;
+            transaction.dueDate = null;
+            // Transações de cartão são "pagas" na origem (lançadas na fatura),
+            // o pagamento real é o da fatura.
+            transaction.isPaidOrReceived = true; 
+            transaction.paymentDate = transaction.transactionDate;
+        } else if (transaction.isPayableOrReceivable === false) {
+            // Se não é de cartão e não é a pagar/receber (à vista), então é paga/recebida na data da transação
+            transaction.isPaidOrReceived = true;
+            transaction.paymentDate = transaction.transactionDate;
+            transaction.dueDate = null;
+        }
+
+    },
     beforeUpdate: (transaction, options) => {
       if (transaction.changed('isPaidOrReceived') && transaction.isPaidOrReceived && !transaction.paymentDate) {
         const today = new Date();
@@ -158,14 +207,17 @@ FinancialTransaction.associate = (models) => {
   FinancialTransaction.belongsTo(models.FinancialCategory, { foreignKey: 'financialCategoryId', as: 'category' });
   FinancialTransaction.belongsTo(models.CreditCard, { foreignKey: 'creditCardId', as: 'creditCard' });
   
+  // Para uma transação que é a "mãe" de um parcelamento (ex: originalAccountId === id)
   FinancialTransaction.hasMany(models.FinancialTransaction, {
-    as: 'parcels', // Uma transação original (isParcel=true, parcelNumber=1, originalAccountId=id) pode ter várias parcelas
-    foreignKey: 'originalAccountId',
+    as: 'parcels', 
+    foreignKey: 'originalAccountId', // As parcelas filhas terão este FK apontando para a mãe
     useJunctionTable: false,
-    // constraints: false // Pode ser necessário se houver problemas com a auto-referência circular
+    // onDelete: 'CASCADE' // Se a mãe for deletada, todas as parcelas filhas também são. CUIDADO.
+                       // SET NULL já está no campo originalAccountId, o que é mais seguro.
   });
+  // Para uma transação que é uma parcela "filha"
   FinancialTransaction.belongsTo(models.FinancialTransaction, {
-    as: 'originalAccount', // Uma parcela (parcelNumber > 1 OU parcelNumber=1 com originalAccountId != id) pertence a uma transação original
+    as: 'originalAccount', 
     foreignKey: 'originalAccountId',
     targetKey: 'id'
   });
@@ -174,6 +226,12 @@ FinancialTransaction.associate = (models) => {
     foreignKey: 'recurringTransactionRuleId',
     as: 'recurringRuleOrigin', 
   });
+
+  // Se adicionar o campo paidForCreditCardId:
+  // FinancialTransaction.belongsTo(models.CreditCard, {
+  //   foreignKey: 'paidForCreditCardId',
+  //   as: 'paidInvoiceForCard'
+  // });
 };
 
 module.exports = FinancialTransaction;
