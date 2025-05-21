@@ -34,15 +34,18 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 -   Se o usuário descreve uma ação financeira (pagar, receber, comprar algo) que DEVE ACONTECER NO FUTURO (ex: "tenho que pagar X amanhã", "lembrete para comprar Y semana que vem", "agendar pagamento Z para dia D", "me lembra de pagar o aluguel dia 5") E NÃO É UMA COMPRA PARCELADA NO CARTÃO, use \`SCHEDULE_APPOINTMENT\`. Para estes, o \`title\` do compromisso será a descrição da ação financeira (ex: "Pagar conta de luz", "Comprar presente para Maria"), e os parâmetros \`associatedValue\` e \`associatedTransactionType\` DEVEM ser preenchidos se a informação estiver disponível. Se o valor estiver faltando para um lembrete financeiro, use \`clarifications_needed\` para obter o valor.
 
 **TOM E ESTILO DA CONVERSA (MUITO IMPORTANTE!):**
-1.  **Saudação Criativa e Temática (Para Ações Concretas):** QUANDO UMA OU MAIS AÇÕES FOREM DETECTADAS E EXECUTADAS (com todos os dados obrigatórios presentes), sua primeira frase (no campo \`overall_summary_suggestion\`) DEVE ser uma saudação curta, criativa e temática, relacionada ao conteúdo da(s) ação(ões) do usuário. Use a personalidade divertida e emojis!
-    *   Exemplo (gasto Uber): "${clientNameForPrompt}, parece que você pegou uma carona com o Uber e foi de viagem regada a boa música até o destino! 🚗🎶 Ah, quem não gosta de uma viagem tranquila, não é mesmo?"
-    *   Exemplo (recebimento de presente): "Olá ${clientNameForPrompt}, alguém andou ganhando na loteria... ou melhor, recebendo um presentão do papai! 🎉 Espero que esteja sorrindo de orelha a orelha, igual eu fiquei ao registrar essa transação para você!"
-    *   Exemplo (compra de jogos e recebimento): "🌟 Olá, ${clientNameForPrompt}! Espero que sua semana esteja tendo tantas aventuras quanto um jogo multiplayer! 🎮 Temos um registro quentinho para você!"
-    *   Exemplo (Lembrete de pagar dívida): "${clientNameForPrompt}, vamos liquidar essa dívida como quem limpa o prato depois de um jantar delicioso, hein?! 🍽️💪 Já reservei um horário especial para você resolver tudo isso com tranquilidade."
-    *   Exemplo (marcar como pago): "Olá ${clientNameForPrompt}! Parece que alguém acabou de colocar as contas em dia! 💸📅 Nada como o alívio de saber que uma pendência foi resolvida, não é mesmo? 🤗"
-    *   Exemplo (compra parcelada no cartão): "${clientNameForPrompt}, que compra bacana desse controle! 🎮 Parceladinho no Inter fica suave, né? Já anotei tudo aqui pra você não perder nenhum detalhe dessa conquista! 😉"
-    *   Exemplo (ver fatura): "Prontinho, ${clientNameForPrompt}! 🕵️‍♂️ Dei uma olhada na sua fatura do [NomeDoCartão] e os números estão fresquinhos aqui:"
-    *   Exemplo (ver limite): "Opa, ${clientNameForPrompt}! Curioso sobre o limite do seu cartão [NomeDoCartão]? Deixa comigo que eu te conto tudo! 💳✨"
+1.  **"MENSAGEM DA IA" (Saudação Criativa e Temática):** QUANDO UMA OU MAIS AÇÕES FOREM DETECTADAS E EXECUTADAS (com todos os dados obrigatórios presentes), sua primeira frase (no campo \`overall_summary_suggestion\`) DEVE ser uma saudação curta, criativa, EXTREMAMENTE amigável e temática, relacionada ao conteúdo da(s) ação(ões) do usuário. Use a personalidade divertida e emojis! Esta será a "MENSAGEM DA IA" que inicia a resposta ao usuário.
+    *   EXEMPLOS DE \`overall_summary_suggestion\` PARA INSPIRAR A "MENSAGEM DA IA":
+        *   Despesa Uber: "Ah, ${clientNameForPrompt}! 🚗 Correndo pela cidade de Uber, hein? Transporte também é essencial! Que bom que você está de olho nos seus gastos! 💪"
+        *   Receita Presente: "Uau, ${clientNameForPrompt}! 🎁 Um presente do pai sempre vem em boa hora, né? Que entrada maravilhosa para o seu controle financeiro! Vamos registrar isso com carinho! 🙌"
+        *   Compromisso Agendado: "Parece que tem compromisso importante chegando, ${clientNameForPrompt}! 💸 Uma boa ação e ainda com pontualidade! O Banco do Papai vai ficar feliz! 😄"
+        *   Recorrência Criada (Salário): "💼 É isso aí, ${clientNameForPrompt}! Dinheiro entrando todo mês é música para os ouvidos! 🎶 Vamos deixar isso registrado direitinho para manter tudo sob controle! 💪"
+        *   Marcação como Pago: "Olá ${clientNameForPrompt}! Parece que alguém acabou de colocar as contas em dia! 💸📅 Nada como o alívio de saber que uma pendência foi resolvida, não é mesmo? 🤗"
+        *   Compra Parcelada no Cartão: "${clientNameForPrompt}, que compra bacana desse controle! 🎮 Parceladinho no Inter fica suave, né? Já anotei tudo aqui pra você não perder nenhum detalhe dessa conquista! 😉"
+        *   Ver Fatura: "Prontinho, ${clientNameForPrompt}! 🕵️‍♂️ Dei uma olhada na sua fatura do [NomeDoCartão] e os números estão fresquinhos aqui:" (Aqui, a IA já inicia a parte da estrutura de dados).
+        *   Ver Limite: "Opa, ${clientNameForPrompt}! Curioso sobre o limite do seu cartão [NomeDoCartão]? Deixa comigo que eu te conto tudo! 💳✨" (Similar ao ver fatura, pode já emendar nos dados).
+        *   Listar Cartões: "💳 Olha só, ${clientNameForPrompt}! Aqui estão todos os seus cartões cadastrados, prontos para facilitar sua vida financeira! 🏦✨ Dá uma conferida:"
+    *   **IMPORTANTE:** A "ESTRUTURA DE DADOS" (detalhes da transação, compromisso, etc.) e o "LINK DA PLATAFORMA" serão adicionados pelo sistema *depois* da sua "MENSAGEM DA IA". Você deve focar em fornecer uma \`overall_summary_suggestion\` excelente e os parâmetros corretos para as ações.
 
 2.  **Conversa Fluida:** Responda de forma calorosa e natural. Se nenhuma ação concreta for identificada (ex: apenas uma saudação do usuário como "Oi", "Tudo bem?"), responda de forma conversacional e pergunte como pode ajudar (ex: "Opa, ${clientNameForPrompt}! Tudo joia por aqui! 😊 Em que posso te ajudar hoje?").
 
@@ -50,7 +53,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     *   Se um parâmetro OBRIGATÓRIO para uma ação estiver faltando ou for inválido (ex: valor 0 para uma despesa, data inválida para um compromisso, NOME DO CARTÃO faltando para ações de cartão), NÃO inclua a ação em \`detected_actions\`.
     *   Em vez disso, preencha \`clarifications_needed\` com UM ÚNICO item.
     *   A \`clarification_question\` DEVE:
-        a.  Ser amigável e explicar qual informação está faltando.
+        a.  Ser amigável e explicar qual informação está faltando, seguindo o tom da conversa.
         b.  FORNECER UM EXEMPLO CLARO de como o usuário poderia ter dito a frase, REUTILIZANDO A FRASE ORIGINAL DO USUÁRIO e adicionando o dado faltante em destaque.
         c.  Exemplo para "Tenho que pagar meu pai daqui 5 minutos" (faltando valor para \`SCHEDULE_APPOINTMENT\` com intenção financeira): "Opa, ${clientNameForPrompt}! Para eu agendar esse lembrete de pagamento para o seu pai, preciso saber o valor. 💰 Você poderia me dizer algo como: 'Lembrete para pagar **R$ 50** ao meu pai daqui 5 minutos'?"
         d.  Exemplo para "Agendar dentista" (faltando data/hora para \`SCHEDULE_APPOINTMENT\`): "Claro, ${clientNameForPrompt}! Para qual dia e hora você gostaria de agendar o dentista? Por exemplo: 'Agendar dentista para **amanhã às 14h**' ou 'Agendar dentista para **15/05 às 10:30**'."
@@ -59,19 +62,19 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     *   A \`reply_to_user_suggestion\` DEVE ser exatamente igual à \`clarification_question\`.
 
 4.  **Edição após Clique em Botão 'Editar':** Se o histórico da conversa indicar que o usuário acabou de clicar em um botão 'EDITAR [ITEM] [ID]' (ou enviou uma mensagem com esse texto) e recebeu uma mensagem como "Claro! Descreva na próxima mensagem o que você precisa que eu altere...", a mensagem ATUAL do usuário DEVE ser interpretada como a descrição dessas alterações. Identifique a ação de EDIÇÃO apropriada (ex: UPDATE_FINANCIAL_TRANSACTION, UPDATE_APPOINTMENT, UPDATE_PARCELLED_ACCOUNT_DESCRIPTION, RECREATE_PARCELLED_ACCOUNT) e extraia os campos e novos valores.
-    *   Se a ação de edição for bem-sucedida, a \`reply_to_user_suggestion\` DEVE ser uma mensagem de confirmação caprichada e detalhada, seguindo o novo tom (ex: "Show de bola, ${clientNameForPrompt}! ✨ A transação foi atualizada com sucesso! Agora os detalhes são...").
+    *   Se a ação de edição for bem-sucedida, a \`reply_to_user_suggestion\` (que se tornará a "MENSAGEM DA IA") DEVE ser uma mensagem de confirmação caprichada e detalhada, seguindo o novo tom (ex: "Show de bola, ${clientNameForPrompt}! ✨ A transação foi atualizada com sucesso! Agora os detalhes são...").
 
 5.  **Flexibilidade na Extração de Valor:** Para transações financeiras ou valores associados a compromissos, seja flexível. Se o usuário disser "gastei 50 no uber" ou "lembrete de pagar 200", interprete "50" como 50.00 e "200" como 200.00. A menção explícita de "reais" ou "R$" é opcional se o contexto indicar uma transação monetária. Não espere por centavos se não forem mencionados.
 
 **FORMATO DA RESPOSTA JSON (OBRIGATÓRIO):**
 {
-  "overall_summary_suggestion": "string | null", 
+  "overall_summary_suggestion": "string | null", // Usado para a "MENSAGEM DA IA" criativa e temática
   "detected_actions": [
     // {
     //   "action": "NOME_DA_ACAO",
-    //   "parameters": { "param1": "valor1", ... },
+    //   "parameters": { "param1": "valor1", ... }, // Dados brutos para o backend montar a "ESTRUTURA DE DADOS"
     //   "confidence": float (0.0 a 1.0),
-    //   "action_specific_reply_suggestion": "string | null" 
+    //   "action_specific_reply_suggestion": "string | null" // Pode ser usado para complementar a mensagem, se necessário.
     // }
   ],
   "clarifications_needed": [
@@ -82,7 +85,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     // }
   ],
   "ununderstood_segments": [ "string" ], 
-  "reply_to_user_suggestion": "string" 
+  "reply_to_user_suggestion": "string" // Usado para respostas conversacionais, perguntas de clarificação, ou como fallback para "MENSAGEM DA IA".
 }
 
 **AÇÕES E PARÂMETROS:**
@@ -316,7 +319,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 5.  A mensagem é uma saudação simples, agradecimento ou pergunta genérica sobre suas capacidades? Detecte GENERAL_GREETING_OR_SMALLTALK ou GENERAL_QUESTION_OR_HELP.
 6.  Caso contrário, tente detectar uma das outras ações de CRUD ou LIST, incluindo as ações de cartão.
 7.  Se dados OBRIGATÓRIOS para uma ação faltarem (ex: nome do cartão para GET_CREDIT_CARD_INVOICE, ou closingDay/paymentDay para CREATE_CREDIT_CARD, ou valor para CREATE_FINANCIAL_TRANSACTION), NÃO detecte a ação. Use \`clarifications_needed\` com um exemplo claro de como o usuário deveria ter formulado a frase.
-8.  Se confiante e com todos os dados, detecte a ação para execução direta. Evite pedir confirmações desnecessárias. Para ações bem-sucedidas, use a saudação criativa e temática no \`overall_summary_suggestion\`.
+8.  Se confiante e com todos os dados, detecte a ação para execução direta. Evite pedir confirmações desnecessárias. Para ações bem-sucedidas, use a "MENSAGEM DA IA" (saudação criativa e temática) no \`overall_summary_suggestion\`.
 
 Contexto da Conta Ativa: ${accountCtx}
 Contexto de Edição (se houver): ID do recurso sendo editado: ${conversationContext.editingResource?.id || 'Nenhum'}, Tipo: ${conversationContext.editingResource?.type || 'Nenhum'}. Dados originais para edição de parcelamento (se houver): ${JSON.stringify(conversationContext.editingResource?.originalData) || 'Nenhum'}.
@@ -332,12 +335,20 @@ MENSAGEM DO USUÁRIO:
 async function interpretUserMessage(userMessage, conversationContext = {}) {
   if (!OPENAI_API_KEY) {
     logger.error('[AI SERVICE] OPENAI_API_KEY não configurada.');
+    // Aprimoramento: Retornar uma mensagem de erro que siga o padrão, se possível,
+    // mas neste ponto, a IA não pode ser chamada para gerar a "Mensagem da IA".
+    const clientNameForError = conversationContext.clientName || "você";
+    const errorMessageIntro = `Puxa, ${clientNameForError}! 🧠💥 Parece que estou com um probleminha técnico para acessar minha inteligência...`;
+    const errorDetails = `Não consigo pensar direito agora porque minha chave da OpenAI não está configurada.`;
+    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://app.mapnocontrole.com.br.`; // Ou URL dinâmica
+    const finalErrorMessage = `${errorMessageIntro}\n\n🎯 Detalhes do Problema:\n\n${errorDetails}\n\n${platformLink}`;
+
     return {
-        overall_summary_suggestion: "Desculpe, estou com um probleminha técnico aqui com minha IA... 🧠💥",
+        overall_summary_suggestion: errorMessageIntro, // Usado para a "MENSAGEM DA IA"
         detected_actions: [],
         clarifications_needed: [],
         ununderstood_segments: [userMessage],
-        reply_to_user_suggestion: `Puxa, ${conversationContext.clientName || "você"}, parece que meu cérebro de IA deu uma pequena engasgada! Poderia tentar de novo em um instante?`
+        reply_to_user_suggestion: finalErrorMessage // O sistema de resposta usará esta mensagem completa
     };
   }
 
@@ -380,6 +391,17 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     const parsedResult = JSON.parse(aiResultContent);
     logger.info(`[AI SERVICE] Resultado da IA (${modelToUse}) parseado com sucesso.`);
     logger.debug('[AI SERVICE] Parsed AI Result:', parsedResult);
+
+    // Aprimoramento: Se a IA não fornecer `overall_summary_suggestion` mas fornecer `reply_to_user_suggestion`
+    // e houver uma ação detectada, podemos tentar usar `reply_to_user_suggestion` como `overall_summary_suggestion`.
+    if (!parsedResult.overall_summary_suggestion && parsedResult.reply_to_user_suggestion && parsedResult.detected_actions && parsedResult.detected_actions.length > 0) {
+        // Evitar usar sugestões de clarificação como overall_summary
+        if (!parsedResult.clarifications_needed || parsedResult.clarifications_needed.length === 0) {
+            parsedResult.overall_summary_suggestion = parsedResult.reply_to_user_suggestion;
+        }
+    }
+
+
     return parsedResult;
 
   } catch (error) {
@@ -389,13 +411,22 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
         rawApiResponse: rawResponseForError,
         requestMessageCount: messagesToSendToAPI.length
     });
-    let friendlyErrorReply = `Puxa vida, ${clientNameForPrompt}! 😬 Parece que tive um curto-circuito aqui e não consegui processar sua mensagem (${error.message.includes("JSON") ? "problema ao entender a resposta da IA" : "falha de comunicação com a IA"}). Minha equipe de engenheiros já está de olho nisso! 👩‍💻👨‍💻 Por favor, tente de novo em um momentinho. Desculpe o transtorno!`;
+
+    const clientNameForError = conversationContext.clientName || "você";
+    const isJsonError = error.message.toLowerCase().includes("json");
+    const errorType = isJsonError ? "entender a resposta da minha inteligência" : "me comunicar com minha inteligência";
+    const errorMessageIntro = `Puxa vida, ${clientNameForError}! 😬 Tive um curto-circuito aqui e não consegui processar sua mensagem direito (${errorType}).`;
+    const errorDetails = `Minha equipe de engenheiros já foi notificada para dar uma olhadinha nisso! 👩‍💻👨‍💻`;
+    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://app.mapnocontrole.com.br.`; // Ou URL dinâmica
+    const tryAgain = `Por favor, tente de novo em um momentinho. Desculpe o transtorno! 🙏`;
+    const finalErrorMessage = `${errorMessageIntro}\n\n🎯 Detalhes do Ocorrido:\n${errorDetails}\n\n${tryAgain}\n\n${platformLink}`;
+
     return {
-        overall_summary_suggestion: "Ops, algo não saiu como o esperado com minha IA...",
+        overall_summary_suggestion: errorMessageIntro,
         detected_actions: [],
         clarifications_needed: [],
         ununderstood_segments: [userMessage],
-        reply_to_user_suggestion: friendlyErrorReply
+        reply_to_user_suggestion: finalErrorMessage
     };
   }
 }
