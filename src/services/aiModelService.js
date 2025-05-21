@@ -68,10 +68,26 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 **FORMATO DA RESPOSTA JSON (OBRIGATÓRIO):**
 {
   "overall_summary_suggestion": "string | null",
-  "detected_actions": [ /* ... */ ],
-  "clarifications_needed": [ /* ... */ ],
-  "ununderstood_segments": [ "string" ], 
-  "reply_to_user_suggestion": "string" 
+  "detected_actions": [
+    {
+      "action": "NOME_DA_ACAO_DETECTADA",
+      "parameters": { 
+        "parametro1": "valor1",
+        "parametro2": "valor2"
+      },
+      "action_specific_reply_suggestion": "Sugestão de resposta específica para esta ação (opcional)"
+    }
+  ],
+  "clarifications_needed": [
+    {
+      "clarification_question": "Pergunta clara para o usuário.",
+      "original_intent_action_suggestion": "NOME_DA_ACAO_ORIGINAL (se aplicável)",
+      "missing_parameter_key": "chave_do_parametro_faltante (se aplicável)",
+      "parameters_so_far": {}
+    }
+  ],
+  "ununderstood_segments": [ "Parte da mensagem do usuário que não foi entendida" ], 
+  "reply_to_user_suggestion": "string (Resposta geral para o usuário)" 
 }
 
 **AÇÕES E PARÂMETROS:**
@@ -387,6 +403,8 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     logger.info(`[AI SERVICE] Resultado da IA (${modelToUse}) parseado com sucesso.`);
     logger.debug('[AI SERVICE] Parsed AI Result:', parsedResult);
 
+    // Garante que overall_summary_suggestion seja preenchido se reply_to_user_suggestion tiver um bom conteúdo
+    // e não houver necessidade de clarificação, e houver ações detectadas.
     if (!parsedResult.overall_summary_suggestion && parsedResult.reply_to_user_suggestion && parsedResult.detected_actions && parsedResult.detected_actions.length > 0) {
         if (!parsedResult.clarifications_needed || parsedResult.clarifications_needed.length === 0) {
             parsedResult.overall_summary_suggestion = parsedResult.reply_to_user_suggestion;
