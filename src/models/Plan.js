@@ -8,10 +8,10 @@ const Plan = sequelize.define('Plan', {
     autoIncrement: true,
     primaryKey: true,
   },
-  name: {
+  name: { // Ex: "Básico Mensal", "Avançado Anual"
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true, // Ex: 'Mensal Padrão', 'Anual Premium'
+    unique: true,
     comment: 'Nome identificador do plano',
   },
   description: {
@@ -31,24 +31,28 @@ const Plan = sequelize.define('Plan', {
     defaultValue: 'BRL',
     comment: 'Moeda do preço (ex: BRL, USD)',
   },
-  durationDays: { // Duração em dias. Ex: 30 para mensal, 365 para anual.
+  durationDays: {
     type: DataTypes.INTEGER,
     allowNull: false,
     validate: { min: 1 },
     comment: 'Duração do plano em dias (ex: 30 para mensal, 365 para anual)',
   },
-  isActive: { // Se o plano está atualmente disponível para novas assinaturas
+  // NOVO CAMPO OPCIONAL para diferenciar o "nível" do plano
+  tier: {
+    type: DataTypes.ENUM('basico', 'avancado', 'gratuito', 'vitalicio'), // Ou apenas 'basico', 'avancado'
+    allowNull: false,
+    defaultValue: 'basico', // Ou um valor que faça sentido
+    comment: 'Nível de funcionalidade do plano (basico, avancado)',
+  },
+  // O campo `accessLevel` no `Client` seria uma combinação de `tier` e `durationDays`
+  // Ex: tier='avancado', durationDays=30 -> client.accessLevel = 'avancado_mensal'
+  isActive: {
     type: DataTypes.BOOLEAN,
     defaultValue: true,
     allowNull: false,
     comment: 'Indica se o plano está ativo para novas assinaturas',
   },
-  // externalId: { // Para ID do plano na plataforma de pagamento (Hotmart, Stripe, etc.)
-  //   type: DataTypes.STRING,
-  //   allowNull: true,
-  //   unique: true,
-  //   comment: 'ID do plano na plataforma de pagamento externa'
-  // }
+  // externalId: { ... }
 }, {
   tableName: 'plans',
   timestamps: true,

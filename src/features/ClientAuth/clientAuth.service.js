@@ -1,19 +1,10 @@
 // src/features/ClientAuth/clientAuth.service.js
-const { Client, Subscription, Plan, FinancialAccount, sequelize } = require('../../database'); // Adicionado FinancialAccount e sequelize
+const { Client, Subscription, Plan, FinancialAccount, sequelize } = require('../../database');
 const logger = require('../../utils/logger');
 const { generateToken } = require('../../utils/authUtils');
 const { Op } = require('sequelize');
-const subscriptionService = require('../Subscription/subscription.service'); // Para verificar assinatura no login
+const subscriptionService = require('../Subscription/subscription.service');
 
-/**
- * Permite um Client definir ou atualizar sua senha e email,
- * geralmente após um primeiro contato via WhatsApp ou para acesso ao dashboard.
- * @param {string} phone - Número de telefone do Client.
- * @param {string} password - Nova senha.
- * @param {string} [name] - Nome a ser definido/atualizado (opcional).
- * @param {string} [email] - Email a ser definido/atualizado (opcional, mas recomendado para login).
- * @returns {Promise<object>} Client atualizado (sem hash de senha).
- */
 async function setClientCredentials(phone, password, name = null, email = null) {
   const t = await sequelize.transaction();
   try {
@@ -32,33 +23,19 @@ async function setClientCredentials(phone, password, name = null, email = null) 
     let client = await Client.findOne({ where: { phone: normalizedPhone }, transaction: t });
 
     if (!client) {
-      // Se o cliente não existe, podemos optar por criá-lo aqui ou retornar erro.
-      // Para o fluxo de "definir senha para um contato do WhatsApp", ele já deveria existir.
-      // Se for um "registro" web puro, poderíamos criar.
-      // Por ora, vamos assumir que o client foi pré-criado pelo WhatsApp ou outro meio.
-      // Se quiser permitir criação aqui:
-      // if (!name || !email) { // Nome e email seriam obrigatórios para criar um novo client web
-      //   await t.rollback();
-      //   const error = new Error('Nome e email são necessários para registrar um novo cliente via web.');
-      //   error.statusCode = 400; error.status = 'fail'; throw error;
-      // }
-      // client = await Client.create({ phone: normalizedPhone, name, email, passwordHash: password, status: 'Aguardando Pagamento' }, { transaction: t });
-      // logger.info(`Novo Cliente ${normalizedPhone} criado via setClientCredentials.`);
-      // O hook faria o hash da senha.
       await t.rollback();
       const error = new Error('Cliente não encontrado com este número de telefone. O registro inicial deve ocorrer via WhatsApp ou outro canal designado.');
       error.statusCode = 404; error.status = 'fail'; throw error;
     }
 
-    const updateData = { passwordHash: password }; // Hook do modelo Client fará o hash
+    const updateData = { passwordHash: password }; 
 
     if (email) {
       const lowerEmail = email.toLowerCase();
-      // Verificar se o email já está em uso por outro cliente
       const existingEmailClient = await Client.findOne({
         where: {
           email: lowerEmail,
-          id: { [Op.ne]: client.id } // Exclui o próprio cliente da verificação
+          id: { [Op.ne]: client.id } 
         },
         transaction: t
       });
@@ -67,32 +44,28 @@ async function setClientCredentials(phone, password, name = null, email = null) 
         const error = new Error('Este endereço de email já está em uso por outro cliente.');
         error.statusCode = 409; error.status = 'fail'; throw error;
       }
-      updateData.email = lowerEmail; // Hook do modelo Client também faz toLowerCase, mas bom garantir
+      updateData.email = lowerEmail;
     }
 
-    if (name && name !== client.name) {
+    if (name && name.trim() !== "" && name !== client.name) { // Verifica se o nome é diferente e não vazio
         updateData.name = name;
     }
 
     await client.update(updateData, { transaction: t });
     await t.commit();
-    // O defaultScope do Client já remove o passwordHash
+    
     logger.info(`Credenciais (senha e/ou email/nome) atualizadas para o Cliente ${client.phone}.`);
-    return client.reload().then(c => c.toJSON()); // Recarrega para pegar dados atualizados pelo defaultScope
+    // Recarregar o cliente para garantir que todos os hooks (se houver) e o defaultScope sejam aplicados.
+    const reloadedClient = await Client.findByPk(client.id);
+    return reloadedClient.toJSON(); 
   } catch (error) {
-    await t.rollback(); // Garante rollback em qualquer erro não tratado explicitamente acima
+    await t.rollback(); 
     logger.error(`Erro ao definir credenciais para cliente ${phone}: ${error.message}`, { error });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
 }
 
-/**
- * Realiza o login de um Client (para acesso ao dashboard web).
- * @param {string} identifier - Email ou telefone do Client.
- * @param {string} password - Senha do Client.
- * @returns {Promise<object>} Objeto com client, token, e financialAccounts.
- */
 async function loginClient(identifier, password) {
   try {
     if (!identifier || !password) {
@@ -100,13 +73,12 @@ async function loginClient(identifier, password) {
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
 
-    const normalizedIdentifier = identifier.replace(/\D/g, ''); // Remove não dígitos se for telefone
+    const normalizedIdentifier = identifier.replace(/\D/g, '');
     const isEmail = identifier.includes('@');
     const whereCondition = isEmail
       ? { email: identifier.toLowerCase() }
       : { phone: normalizedIdentifier };
 
-    // Usar o escopo 'withPassword' para buscar o hash
     const client = await Client.scope('withPassword').findOne({ where: whereCondition });
 
     if (!client) {
@@ -115,25 +87,34 @@ async function loginClient(identifier, password) {
     }
     if (!client.passwordHash) {
         const error = new Error('Este cliente ainda não configurou uma senha para acesso web. Utilize a opção "Esqueci minha senha" ou "Configurar acesso".');
-        error.statusCode = 403; error.status = 'fail'; throw error; // Forbidden
+        error.statusCode = 403; error.status = 'fail'; throw error;
     }
     if (client.status === 'Bloqueado' || client.status === 'Inativo') {
         const error = new Error(`Acesso negado. Status do cliente: ${client.status}. Entre em contato com o suporte.`);
         error.statusCode = 403; error.status = 'fail'; throw error;
     }
 
-    // Verificar assinatura ativa ANTES de validar a senha para economizar processamento de hash
-    const activeSubscription = await subscriptionService.getActiveSubscription(client.id);
-    if (!activeSubscription && client.status !== 'Aguardando Pagamento') { // Permite login se status for Aguardando Pagamento, para que ele possa ver o status da assinatura
-        // Se não tem assinatura e não está aguardando pagamento, bloqueia.
-        // Se status é 'Aguardando Pagamento', o frontend pode mostrar uma mensagem específica.
-        logger.warn(`[AUTH CLIENT] Cliente ${client.id} (${client.phone || client.email}) tentou logar sem assinatura ativa.`);
-        const error = new Error('Nenhuma assinatura ativa encontrada. Acesse nosso site para adquirir um plano e liberar seu acesso.');
-        error.statusCode = 403; // Forbidden
-        error.status = 'fail_subscription'; // Para o frontend identificar
-        throw error;
+    // VERIFICAR PLANO ATIVO (baseado no client.accessLevel e client.accessExpiresAt)
+    let hasActivePaidAccess = false;
+    if (client.accessLevel && client.accessLevel !== 'gratuito') {
+        if (client.accessLevel.startsWith('vitalicio_')) {
+            hasActivePaidAccess = true;
+        } else if (client.accessExpiresAt) {
+            const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
+            const today = new Date(); today.setUTCHours(0,0,0,0);
+            if (expiryDate >= today) {
+                hasActivePaidAccess = true;
+            }
+        }
     }
 
+    if (!hasActivePaidAccess && client.status !== 'Aguardando Pagamento') {
+        logger.warn(`[AUTH CLIENT] Cliente ${client.id} (${client.phone || client.email}) tentou logar sem plano ativo/válido (accessLevel: ${client.accessLevel}, expiresAt: ${client.accessExpiresAt}).`);
+        const error = new Error('Nenhum plano ativo encontrado. Acesse nosso site para adquirir um plano e liberar seu acesso.');
+        error.statusCode = 403;
+        error.status = 'fail_subscription';
+        throw error;
+    }
 
     const isPasswordMatch = await client.isValidPassword(password);
     if (!isPasswordMatch) {
@@ -141,19 +122,15 @@ async function loginClient(identifier, password) {
       error.statusCode = 401; error.status = 'fail'; throw error;
     }
 
-    // Gerar token JWT para o Client
     const tokenPayload = {
         id: client.id,
         phone: client.phone,
         email: client.email,
-        // type: 'client' // 'type' é adicionado pela função generateToken em authUtils
     };
-    const token = generateToken(tokenPayload, 'client'); // Passa o tipo 'client'
+    const token = generateToken(tokenPayload, 'client');
 
-    const clientResponse = client.toJSON();
-    // delete clientResponse.passwordHash; // Garantido pelo defaultScope
+    const clientResponse = client.toJSON(); // Já aplica defaultScope
 
-    // Buscar contas financeiras do cliente para retornar no login
     const financialAccounts = await FinancialAccount.findAll({
         where: { clientId: client.id, isActive: true },
         attributes: ['id', 'accountName', 'accountType', 'isDefault'],
@@ -162,10 +139,11 @@ async function loginClient(identifier, password) {
 
     logger.info(`Login bem-sucedido para o Cliente: ${client.phone || client.email}`);
     return {
-        client: clientResponse,
+        client: clientResponse, // accessLevel e accessExpiresAt já estão no clientResponse
         token,
         financialAccounts: financialAccounts.map(acc => acc.toJSON()),
-        subscription: activeSubscription // Retorna os dados da assinatura ativa
+        // O subscriptionService.getActiveSubscription poderia ser usado aqui se quiséssemos detalhes do plano da tabela Subscription,
+        // mas para a verificação de acesso, os campos do Client são suficientes se bem gerenciados.
     };
 
   } catch (error) {
@@ -175,19 +153,12 @@ async function loginClient(identifier, password) {
   }
 }
 
-/**
- * Obtém os dados do cliente logado (usado por /auth/client/me).
- * @param {number} clientId - ID do cliente.
- * @returns {Promise<object|null>} Dados do cliente, suas contas e assinatura.
- */
 async function getClientProfile(clientId) {
     try {
-        // O defaultScope já exclui passwordHash
-        const client = await Client.findByPk(clientId);
+        const client = await Client.findByPk(clientId); // defaultScope já remove passwordHash
         if (!client) {
             return null;
         }
-
         const clientResponse = client.toJSON();
 
         const financialAccounts = await FinancialAccount.findAll({
@@ -195,13 +166,14 @@ async function getClientProfile(clientId) {
             attributes: ['id', 'accountName', 'accountType', 'isDefault'],
             order: [['isDefault', 'DESC'], ['accountName', 'ASC']]
         });
-
-        const activeSubscription = await subscriptionService.getActiveSubscription(client.id);
+        
+        // Para o perfil, é bom retornar o estado da assinatura da tabela Subscription também, se houver
+        const activeDbSubscription = await subscriptionService.getActiveSubscription(client.id);
 
         return {
-            client: clientResponse,
+            client: clientResponse, // Contém accessLevel e accessExpiresAt do próprio cliente
             financialAccounts: financialAccounts.map(acc => acc.toJSON()),
-            subscription: activeSubscription
+            subscription: activeDbSubscription // Detalhes da assinatura ativa do banco, se houver
         };
 
     } catch (error) {
@@ -210,9 +182,8 @@ async function getClientProfile(clientId) {
     }
 }
 
-
 module.exports = {
-  setClientCredentials, // Renomeado de setClientPasswordAndEmail para maior clareza
+  setClientCredentials,
   loginClient,
-  getClientProfile, // Para a rota /me
+  getClientProfile,
 };

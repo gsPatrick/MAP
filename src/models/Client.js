@@ -53,22 +53,29 @@ const Client = sequelize.define('Client', {
   },
   status: {
     type: DataTypes.ENUM('Ativo', 'Inativo', 'Bloqueado', 'Aguardando Pagamento', 'Pagamento Falhou'),
-    defaultValue: 'Ativo',
+    defaultValue: 'Ativo', // MUDANÇA: Pode ser 'Aguardando Pagamento' se a lógica de assinatura for por fora
     allowNull: false,
     comment: 'Status do cliente no sistema',
   },
-  // NOVO CAMPO PARA O "PLANO" COMO ROLE
   accessLevel: {
-    type: DataTypes.ENUM('gratuito', 'mensal', 'anual', 'vitalicio'), // Defina seus "planos" fixos aqui
+    // NOVO ENUM PARA OS PLANOS ESPECÍFICOS
+    type: DataTypes.ENUM(
+        'gratuito',
+        'basico_mensal',
+        'basico_anual',
+        'avancado_mensal',
+        'avancado_anual',
+        'vitalicio_basico', // Se houver vitalício básico
+        'vitalicio_avancado' // Se houver vitalício avançado
+    ),
     allowNull: false,
-    defaultValue: 'gratuito', // Ou o que fizer sentido como padrão
-    comment: 'Nível de acesso/plano do cliente (gratuito, mensal, anual, vitalicio)',
+    defaultValue: 'gratuito',
+    comment: 'Nível de acesso/plano do cliente',
   },
-  // OPCIONAL: Se ainda precisar de uma data de expiração para os planos pagos
   accessExpiresAt: {
       type: DataTypes.DATEONLY,
       allowNull: true,
-      comment: 'Data em que o nível de acesso pago expira (para mensal, anual)',
+      comment: 'Data em que o nível de acesso pago expira (para planos temporários)',
   }
 }, {
   tableName: 'clients',
@@ -91,14 +98,20 @@ const Client = sequelize.define('Client', {
         client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
       }
       // Lógica para definir accessExpiresAt ao criar um cliente com plano pago
-      if (client.accessLevel && client.accessLevel !== 'gratuito' && client.accessLevel !== 'vitalicio' && !client.accessExpiresAt) {
+      // Esta lógica será MOVIDA para o subscription.service ou para onde a assinatura é realmente criada.
+      // O client.accessLevel será definido pela assinatura.
+      // Manteremos um fallback simples aqui, mas o ideal é que a assinatura dite isso.
+      if (client.accessLevel && !client.accessExpiresAt) {
         const now = new Date();
-        if (client.accessLevel === 'mensal') {
+        if (client.accessLevel.includes('_mensal')) {
           now.setMonth(now.getMonth() + 1);
-        } else if (client.accessLevel === 'anual') {
+          client.accessExpiresAt = now.toISOString().split('T')[0];
+        } else if (client.accessLevel.includes('_anual')) {
           now.setFullYear(now.getFullYear() + 1);
+          client.accessExpiresAt = now.toISOString().split('T')[0];
+        } else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
+            client.accessExpiresAt = null;
         }
-        client.accessExpiresAt = now.toISOString().split('T')[0];
       }
     },
     beforeUpdate: async (client) => {
@@ -108,17 +121,19 @@ const Client = sequelize.define('Client', {
       if (client.changed('passwordHash') && client.passwordHash && client.passwordHash.length < 60) {
         client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
       }
-      // Lógica para atualizar accessExpiresAt se o accessLevel mudar para um plano pago
-      if (client.changed('accessLevel') && client.accessLevel !== 'gratuito' && client.accessLevel !== 'vitalicio') {
+      // Lógica para atualizar accessExpiresAt se o accessLevel mudar
+      // Esta lógica será MOVIDA para o subscription.service ou para onde a assinatura é realmente atualizada.
+      if (client.changed('accessLevel')) {
         const now = new Date();
-        if (client.accessLevel === 'mensal') {
+        if (client.accessLevel.includes('_mensal')) {
           now.setMonth(now.getMonth() + 1);
-        } else if (client.accessLevel === 'anual') {
+          client.accessExpiresAt = now.toISOString().split('T')[0];
+        } else if (client.accessLevel.includes('_anual')) {
           now.setFullYear(now.getFullYear() + 1);
+          client.accessExpiresAt = now.toISOString().split('T')[0];
+        } else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
+          client.accessExpiresAt = null; 
         }
-        client.accessExpiresAt = now.toISOString().split('T')[0];
-      } else if (client.changed('accessLevel') && (client.accessLevel === 'gratuito' || client.accessLevel === 'vitalicio')) {
-        client.accessExpiresAt = null; // Remove data de expiração para gratuito/vitalício
       }
     }
   },
@@ -130,13 +145,11 @@ const Client = sequelize.define('Client', {
   ]
 });
 
-// Método de instância para verificar a senha
 Client.prototype.isValidPassword = async function(password) {
   if (!this.passwordHash) return false;
   return bcrypt.compare(password, this.passwordHash);
 };
 
-// Associações
 Client.associate = (models) => {
   Client.hasMany(models.FinancialAccount, {
     foreignKey: 'clientId',
@@ -148,12 +161,12 @@ Client.associate = (models) => {
     as: 'interactionLogs',
     onDelete: 'CASCADE',
   });
-  // REMOVER A ASSOCIAÇÃO COM SUBSCRIPTION SE VOCÊ REMOVER O MODELO SUBSCRIPTION
-  // Client.hasMany(models.Subscription, {
-  //   foreignKey: 'clientId',
-  //   as: 'subscriptions',
-  //   onDelete: 'CASCADE',
-  // });
+  // A associação com Subscription ainda é relevante, pois é ela quem DEVERIA definir o accessLevel do Client
+  Client.hasMany(models.Subscription, { // Mantém esta, pois Subscription deve controlar o accessLevel
+    foreignKey: 'clientId',
+    as: 'subscriptions',
+    onDelete: 'CASCADE',
+  });
 };
 
 module.exports = Client;
