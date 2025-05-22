@@ -752,6 +752,116 @@ async function recreateParcelledAccount(financialAccountId, originalAccountIdToD
     }
 }
 
+async function getMonthlyTrend(financialAccountId, numberOfMonths = 6) {
+    try {
+      await validateAndGetFinancialAccount(financialAccountId);
+      const results = [];
+      const endDate = new Date(); // Mês atual
+  
+      for (let i = 0; i < numberOfMonths; i++) {
+        const targetMonth = new Date(endDate.getFullYear(), endDate.getMonth() - i, 1);
+        const monthStart = new Date(targetMonth.getFullYear(), targetMonth.getMonth(), 1);
+        const monthEnd = new Date(targetMonth.getFullYear(), targetMonth.getMonth() + 1, 0); // Último dia do mês
+  
+        const monthLabel = targetMonth.toLocaleString('pt-BR', { month: 'short', year: '2-digit' });
+  
+        // Receitas do mês
+        const income = await FinancialTransaction.sum('value', {
+          where: {
+            financialAccountId,
+            type: 'Entrada',
+            transactionDate: {
+              [Op.gte]: monthStart.toISOString().split('T')[0],
+              [Op.lte]: monthEnd.toISOString().split('T')[0],
+            },
+            // Considerar apenas transações efetivadas (não pendentes de recebimento)
+            // e não incluir pagamentos de fatura de cartão como "entrada" direta na conta (a menos que seja o fluxo desejado)
+            [Op.or]: [
+              { isPayableOrReceivable: false }, // Transações diretas
+              { isPayableOrReceivable: true, isPaidOrReceived: true } // Contas a receber que foram recebidas
+            ],
+            creditCardId: null, // Receitas geralmente não estão em cartão de crédito (a menos que seja um estorno)
+          },
+        }) || 0;
+        results.push({ month: monthLabel, type: 'Receitas', value: parseFloat(income.toFixed(2)) });
+  
+        // Despesas do mês
+        const expenses = await FinancialTransaction.sum('value', {
+          where: {
+            financialAccountId,
+            type: 'Saída',
+            transactionDate: {
+              [Op.gte]: monthStart.toISOString().split('T')[0],
+              [Op.lte]: monthEnd.toISOString().split('T')[0],
+            },
+            // Considerar apenas transações efetivadas ou gastos no cartão
+             [Op.or]: [
+              { isPayableOrReceivable: false }, // Transações diretas (dinheiro, pix, débito)
+              { isPayableOrReceivable: true, isPaidOrReceived: true }, // Contas a pagar que foram pagas
+              { creditCardId: { [Op.ne]: null } } // Compras no cartão de crédito (já são "efetivadas" no cartão)
+            ]
+          },
+        }) || 0;
+        results.push({ month: monthLabel, type: 'Despesas', value: parseFloat(expenses.toFixed(2)) });
+      }
+      
+      logger.info(`Tendência mensal gerada para FinancialAccount ID ${financialAccountId} para os últimos ${numberOfMonths} meses.`);
+      return results.reverse(); // Reverte para ter o mês mais antigo primeiro
+    } catch (error) {
+      logger.error(`Erro ao gerar tendência mensal para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error });
+      if (!error.statusCode) error.statusCode = 500;
+      throw error;
+    }
+  }
+  
+  async function getExpenseCategorySummary(financialAccountId, dateStart, dateEnd) {
+    try {
+      await validateAndGetFinancialAccount(financialAccountId);
+  
+      const whereConditions = {
+        financialAccountId,
+        type: 'Saída', // Apenas despesas
+        // Considerar apenas transações efetivadas ou gastos no cartão
+        [Op.or]: [
+          { isPayableOrReceivable: false }, // Transações diretas (dinheiro, pix, débito)
+          { isPayableOrReceivable: true, isPaidOrReceived: true }, // Contas a pagar que foram pagas
+          { creditCardId: { [Op.ne]: null } } // Compras no cartão de crédito (já são "efetivadas" no cartão)
+        ]
+      };
+  
+      if (dateStart) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.gte]: dateStart };
+      if (dateEnd) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.lte]: dateEnd };
+      
+      const expensesByCategory = await FinancialTransaction.findAll({
+        attributes: [
+          // Renomeia 'category.name' para 'type' para corresponder ao formato esperado pelo gráfico Pie
+          [sequelize.col('category.name'), 'type'], 
+          [sequelize.fn('SUM', sequelize.col('FinancialTransaction.value')), 'value'] // Garante que value é da tabela FinancialTransaction
+        ],
+        where: whereConditions,
+        include: [{
+          model: FinancialCategory,
+          as: 'category',
+          attributes: [] // Não precisa dos atributos da categoria aqui, só o nome agrupado
+        }],
+        group: [sequelize.col('category.name')], // Agrupa pelo nome da categoria
+        order: [[sequelize.fn('SUM', sequelize.col('FinancialTransaction.value')), 'DESC']], // Ordena por valor
+        raw: true, // Retorna objetos simples
+      });
+  
+      logger.info(`Resumo de categorias de despesa gerado para FinancialAccount ID ${financialAccountId}.`);
+      // O resultado já vem no formato { type: 'Nome Categoria', value: SUM_VALUE } devido ao raw:true e attributes
+      return expensesByCategory.map(item => ({
+          type: item.type || 'Sem Categoria', // Nome da categoria
+          value: parseFloat(parseFloat(item.value).toFixed(2)) // Valor total
+      }));
+    } catch (error) {
+      logger.error(`Erro ao gerar resumo de categorias de despesa para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error });
+      if (!error.statusCode) error.statusCode = 500;
+      throw error;
+    }
+  }
+
 
 module.exports = {
   createTransaction,
@@ -766,4 +876,7 @@ module.exports = {
   deleteParcelledAccountGroup,
   updateParcelledAccountDescription,
   recreateParcelledAccount,
+  getMonthlyTrend,
+  getExpenseCategorySummary
+
 };

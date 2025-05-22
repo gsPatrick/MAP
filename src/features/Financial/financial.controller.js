@@ -110,6 +110,39 @@ async function getFinancialSummary(req, res, next) {
   }
 }
 
+async function getMonthlyTrend(req, res, next) {
+  try {
+    const financialAccountId = getFinancialAccountIdFromRequest(req);
+    const numberOfMonths = req.query.months ? parseInt(req.query.months, 10) : 6;
+    if (isNaN(numberOfMonths) || numberOfMonths <= 0) {
+        const error = new Error("Parâmetro 'months' deve ser um número positivo.");
+        error.statusCode = 400; error.status = 'fail'; throw error;
+    }
+    const trendData = await financialService.getMonthlyTrend(financialAccountId, numberOfMonths);
+    res.status(200).json({ status: 'success', data: trendData });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getExpenseCategorySummary(req, res, next) {
+  try {
+    const financialAccountId = getFinancialAccountIdFromRequest(req);
+    const { dateStart, dateEnd } = req.query; // Espera YYYY-MM-DD
+    
+    // Validação básica de datas (pode ser mais robusta com bibliotecas como Joi)
+    if ((dateStart && !/^\d{4}-\d{2}-\d{2}$/.test(dateStart)) || (dateEnd && !/^\d{4}-\d{2}-\d{2}$/.test(dateEnd))) {
+        const error = new Error("Formato de data inválido. Use YYYY-MM-DD.");
+        error.statusCode = 400; error.status = 'fail'; throw error;
+    }
+
+    const summaryData = await financialService.getExpenseCategorySummary(financialAccountId, dateStart, dateEnd);
+    res.status(200).json({ status: 'success', data: summaryData });
+  } catch (error) {
+    next(error);
+  }
+}
+
 // TODO: Adicionar controllers para RecurringTransactionRule e CreditCard
 
 module.exports = {
@@ -121,5 +154,7 @@ module.exports = {
   markAsPaidOrReceived,
   deleteTransaction,
   getFinancialSummary,
+  getMonthlyTrend,
+  getExpenseCategorySummary,
   // ... controllers para RecurringTransactionRule e CreditCard
 };
