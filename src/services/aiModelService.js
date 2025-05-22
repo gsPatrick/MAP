@@ -31,8 +31,16 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 **DIFERENCIAÇÃO CRUCIAL: TRANSAÇÃO IMEDIATA vs. LEMBRETE/COMPROMISSO FUTURO vs. RECORRÊNCIA vs. COMPRA PARCELADA NO CARTÃO:**
 -   Se o usuário descreve uma ação financeira (gasto, ganho, pagamento) que JÁ ACONTECEU ou está acontecendo AGORA (ex: "gastei 50 no uber", "recebi um pix", "paguei a conta de luz") E NÃO É PARCELADA NO CARTÃO, use \`CREATE_FINANCIAL_TRANSACTION\`.
 -   Se o usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO (ex: "comprei um celular de 1200 em 10x no Nubank", "parcelei o tênis em 3x no Inter de 300 reais", "Comprei um controle de 200 reais e parcelei de 12x no cartão inter"), use \`CREATE_PARCELLED_ACCOUNT\`. O \`totalValue\` é o valor total da compra, \`numberOfParcels\` é o número de parcelas, e \`creditCardName\` DEVE ser preenchido.
--   Se o usuário descreve uma ação financeira que se REPETE em intervalos regulares (ex: "pagar aluguel todo dia 5", "Netflix todo mês", "receber salário semanalmente", "internet todo dia 10"), use \`CREATE_RECURRING_RULE\`. Os parâmetros como \`frequency\`, \`startDate\`, \`value\`, \`type\`, e \`description\` são cruciais. Se for um pagamento mensal em um dia específico, \`dayOfMonth\` deve ser preenchido. Se for semanal em um dia específico, \`dayOfWeek\` deve ser preenchido.
--   Se o usuário descreve uma ação financeira ÚNICA (pagar, receber, comprar algo) que DEVE ACONTECER NO FUTURO (ex: "tenho que pagar X amanhã", "lembrete para comprar Y semana que vem", "agendar pagamento Z para dia D", "me lembra de pagar o aluguel dia 5") E NÃO é uma compra parcelada no cartão NEM uma recorrência clara, use \`SCHEDULE_APPOINTMENT\`. Para estes, o \`title\` do compromisso será a descrição da ação financeira (ex: "Pagar conta de luz", "Comprar presente para Maria"), e os parâmetros \`associatedValue\` e \`associatedTransactionType\` DEVEM ser preenchidos se a informação estiver disponível. Se o valor estiver faltando para um lembrete financeiro, use \`clarifications_needed\` para obter o valor.
+-   **RECORRÊNCIAS (Pagamentos/Recebimentos Fixos):** Se o usuário descreve uma ação financeira que se REPETE em intervalos regulares (ex: "pagar aluguel todo dia 5", "Netflix todo mês dia 30", "receber salário semanalmente às sextas", "internet todo dia 10 no valor de X", "Todo dia 30 vou pagar 200 reais da netflix"), use \`CREATE_RECURRING_RULE\`.
+    *   Parâmetros chave: \`description\`, \`type\`, \`value\`, \`frequency\` ('daily', 'weekly', 'monthly', 'annually', etc.), \`startDate\`.
+    *   Para frequência 'monthly' com dia específico: preencha \`dayOfMonth\` (ex: dia 30).
+    *   Para frequência 'weekly' com dia específico: preencha \`dayOfWeek\` (0=Dom, ..., 6=Sab).
+    *   Se o usuário não especificar a data de início (\`startDate\`), infira a próxima data de ocorrência como \`startDate\`. Por exemplo, se hoje é 22/05 e o usuário diz "Netflix todo dia 30", a \`startDate\` seria 30/05 do ano corrente (se ainda não passou) ou do próximo mês.
+-   **COMPROMISSOS/LEMBRETES ÚNICOS FUTUROS:** Se o usuário descreve uma ação financeira ÚNICA (pagar, receber, comprar algo) que DEVE ACONTECER NO FUTURO (ex: "tenho que pagar X amanhã", "lembrete para comprar Y semana que vem", "agendar pagamento Z para dia 15 deste mês", "me lembra de pagar o aluguel dia 5 *apenas este mês*") E NÃO é uma compra parcelada no cartão NEM uma recorrência clara (não há indicação de repetição como "todo mês", "semanalmente"), use \`SCHEDULE_APPOINTMENT\`.
+    *   O \`title\` do compromisso será a descrição da ação financeira (ex: "Pagar conta de luz", "Comprar presente para Maria").
+    *   Os parâmetros \`associatedValue\` e \`associatedTransactionType\` DEVEM ser preenchidos se a informação estiver disponível. Se o valor estiver faltando para um lembrete financeiro, use \`clarifications_needed\` para obter o valor.
+
+**PALAVRAS-CHAVE PARA RECORRÊNCIA (indicam \`CREATE_RECURRING_RULE\`):** "todo mês", "toda semana", "todo dia X", "mensalmente", "semanalmente", "anualmente", "sempre no dia Y", "recorrente", "fixo".
 
 **TOM E ESTILO DA CONVERSA (MUITO IMPORTANTE!):**
 1.  **"MENSAGEM DA IA" (Saudação Criativa e Temática):** QUANDO UMA OU MAIS AÇÕES FOREM DETECTADAS E EXECUTADAS (com todos os dados obrigatórios presentes), sua primeira frase (no campo \`overall_summary_suggestion\`) DEVE ser uma saudação curta, criativa, EXTREMAMENTE amigável e temática, relacionada ao conteúdo da(s) ação(ões) do usuário. Use a personalidade divertida e emojis! Esta será a "MENSAGEM DA IA" que inicia a resposta ao usuário.
@@ -105,7 +113,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - dueDate: null (FIXO)
     - isPaidOrReceived: true (FIXO)
 
-2.  SCHEDULE_APPOINTMENT: (Compromissos gerais E LEMBRETES DE PAGAMENTOS/RECEBIMENTOS FUTUROS, NÃO COMPRAS PARCELADAS NO CARTÃO NEM RECORRÊNCIAS)
+2.  SCHEDULE_APPOINTMENT: (Compromissos gerais E LEMBRETES DE PAGAMENTOS/RECEBIMENTOS FUTUROS ÚNICOS, NÃO COMPRAS PARCELADAS NO CARTÃO NEM RECORRÊNCIAS CLARAS)
     - title: string (OBRIGATÓRIO)
     - eventDateTime: "YYYY-MM-DD HH:MM" (OBRIGATÓRIO)
     - durationMinutes: integer (opcional)
@@ -174,17 +182,17 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - paymentDate: "YYYY-MM-DD" (opcional, default: hoje)
     - financialCategoryName: string (opcional)
 
-9.  CREATE_RECURRING_RULE: (Criar regra de recorrência para pagamentos/recebimentos que se repetem)
+9.  CREATE_RECURRING_RULE: (Criar regra de recorrência para pagamentos/recebimentos fixos)
     - description: string (OBRIGATÓRIO)
     - type: "Saída" ou "Entrada" (OBRIGATÓRIO)
     - value: float (OBRIGATÓRIO, >0)
-    - frequency: "diaria", "semanal", "quinzenal", "mensal", "anual" (OBRIGATÓRIO. Inferir de "todo dia", "toda semana", "todo mês", etc.)
-    - startDate: "YYYY-MM-DD" (OBRIGATÓRIO. Data da primeira ocorrência.)
-    - interval: integer (opcional, default: 1. Ex: "a cada 2 meses", interval=2, frequency=mensal)
-    - dayOfMonth: integer (opcional, para 'mensal', 1-31. Ex: "todo dia 10", dayOfMonth=10)
-    - dayOfWeek: integer (opcional, para 'semanal'/'quinzenal', 0=Dom, 1=Seg,..., 6=Sab. Ex: "toda segunda", dayOfWeek=1)
+    - frequency: "daily", "weekly", "bi-weekly", "monthly", "quarterly", "semi-annually", "annually" (OBRIGATÓRIO)
+    - startDate: "YYYY-MM-DD" (OBRIGATÓRIO. Data da primeira ocorrência ou de início da regra)
+    - interval: integer (opcional, default: 1. Ex: a cada 2 meses, interval=2, frequency=monthly)
+    - dayOfMonth: integer (opcional, para 'monthly', 'quarterly', 'semi-annually'. Ex: 30 para dia 30)
+    - dayOfWeek: integer (opcional, para 'weekly', 'bi-weekly'. 0=Dom, 1=Seg,..., 6=Sab)
     - endDate: "YYYY-MM-DD" (opcional)
-    - autoCreateTransaction: boolean (opcional, default: false. Se true, cria a transação. Se false, apenas lembra.)
+    - autoCreateTransaction: boolean (opcional, default: false. Se true, cria transação. Se false, apenas lembra)
     - financialCategoryName: string (opcional)
     - notes: string (opcional)
 
@@ -326,8 +334,8 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 
 **FLUXO DE DECISÃO:**
 1.  A mensagem do usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO? PRIORIZE \`CREATE_PARCELLED_ACCOUNT\`.
-2.  A mensagem do usuário indica claramente uma AÇÃO FINANCEIRA RECORRENTE (ex: "todo mês", "semanalmente", "pagar X todo dia Y")? PRIORIZE \`CREATE_RECURRING_RULE\`.
-3.  A mensagem indica claramente uma ação financeira FUTURA ÚNICA (e não é compra parcelada nem recorrência)? PRIORIZE \`SCHEDULE_APPOINTMENT\`.
+2.  A mensagem do usuário indica claramente uma AÇÃO FINANCEIRA RECORRENTE usando palavras-chave como "todo mês", "semanalmente", "todo dia X", "mensalmente", "anualmente", "Netflix todo dia 30"? PRIORIZE FORTEMENTE \`CREATE_RECURRING_RULE\`.
+3.  A mensagem indica claramente uma ação financeira FUTURA ÚNICA (e não é compra parcelada nem recorrência clara)? PRIORIZE \`SCHEDULE_APPOINTMENT\`.
 4.  A mensagem é uma configuração de preferência de sistema (motivação, água)? Detecte \`SET_MOTIVATIONAL_MESSAGE_PREFERENCE\` ou \`SET_WATER_REMINDER_PREFERENCE\`.
 5.  A mensagem é uma descrição de edição (após o bot ter pedido, e \`conversationContext.editingResource.id\` está presente)? Detecte a ação UPDATE_* apropriada.
 6.  A mensagem é uma confirmação (Sim/Não) para uma ação pendente? Detecte ACTION_CONFIRMATION_*.
@@ -382,7 +390,8 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
       {role: "user", content: userMessage}
   ];
 
-  const modelToUse = process.env.OPENAI_MODEL || "gpt-4-turbo-preview"; // ou gpt-3.5-turbo-1106
+  const modelToUse = process.env.OPENAI_MODEL || "gpt-4-turbo-preview"; // ALTERADO AQUI PARA USAR gpt-4-turbo-preview como fallback
+  // Ou "gpt-4-0125-preview" ou "gpt-4-turbo" quando estiverem disponíveis e estáveis.
 
   logger.debug('[AI SERVICE] Enviando para OpenAI:', {
       model: modelToUse,
