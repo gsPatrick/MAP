@@ -1520,7 +1520,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     associatedValue: params.associatedValue ? parseFloat(params.associatedValue) : null,
                                     associatedTransactionType: params.associatedTransactionType // "Entrada" ou "Saída"
                                 };
-                                const newAppt = await appointmentService.scheduleAppointment(state.activeFinancialAccountId, appointmentData); // CORREÇÃO APLICADA AQUI
+                                const newAppt = await appointmentService.scheduleAppointment(state.activeFinancialAccountId, appointmentData);
                                 const reloadedAppt = await appointmentService.getAppointmentById(state.activeFinancialAccountId, newAppt.id);
 
                                 if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Seu compromisso foi agendado, ${clientNameToUse}!`;
@@ -2132,11 +2132,11 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             }
                             case 'SET_MOTIVATIONAL_MESSAGE_PREFERENCE': {
                                 if (params.enable === undefined || (params.enable && !params.time)) throw new Error("Preciso saber se quer ativar/desativar e, se ativar, o horário (HH:MM).");
-                                await clientService.updateClientPreferences(client.id, {
+                                await systemService.updateSystemPreferences({ // CORREÇÃO AQUI
                                     enableMotivationMessage: params.enable,
                                     motivationMessageTime: params.enable ? params.time : null
                                 });
-                                const updatedPrefsMotiv = await clientService.getClientPreferences(client.id);
+                                const updatedPrefsMotiv = await systemService.getSystemPreferences(); // CORREÇÃO AQUI
                                 if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Preferências de mensagem motivacional atualizadas, ${clientNameToUse}!`;
                                 else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre as mensagens motivacionais, ${clientNameToUse}:`;
                                 currentActionFormattedData = formatMotivationalMessagePreferenceDataStructure(updatedPrefsMotiv);
@@ -2149,15 +2149,15 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 if (params.enable && params.frequencyType === 'custom' && !params.customIntervalMinutes) {
                                     throw new Error("Para frequência personalizada de lembrete de água, preciso do intervalo em minutos.");
                                 }
-                                await clientService.updateClientPreferences(client.id, {
+                                await systemService.updateSystemPreferences({ // CORREÇÃO AQUI
                                     enableWaterReminder: params.enable,
-                                    waterReminderFrequencyType: params.enable ? params.frequencyType : null,
+                                    waterReminderFrequencyType: params.enable ? params.frequencyType : 'disabled',
                                     waterReminderCustomIntervalMinutes: params.enable && params.frequencyType === 'custom' ? parseInt(params.customIntervalMinutes) : null,
                                     waterReminderStartTime: params.enable ? params.startTime : null,
                                     waterReminderEndTime: params.enable ? params.endTime : null,
                                     dailyGoalMl: params.enable && params.dailyGoalMl ? parseInt(params.dailyGoalMl) : null
                                 });
-                                const updatedPrefsWater = await clientService.getClientPreferences(client.id);
+                                const updatedPrefsWater = await systemService.getSystemPreferences(); // CORREÇÃO AQUI
                                 if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Preferências de lembrete de água atualizadas, ${clientNameToUse}!`;
                                 else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre os lembretes de água, ${clientNameToUse}:`;
                                 currentActionFormattedData = formatWaterReminderPreferenceDataStructure(updatedPrefsWater);
