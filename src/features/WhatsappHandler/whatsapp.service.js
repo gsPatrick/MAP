@@ -742,7 +742,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
         // ---- FLUXO DE ONBOARDING ----
         // Processa o estágio atual de onboarding. Se uma resposta for gerada (onboardingReply),
         // ela será enviada e, se o onboarding não estiver completo e uma ação estiver pendente,
-        // o fluxo retorna para aguardar a próxima mensagem do usuário.
+        // o fluxo retorna para aguardar a próxima mensagem do usuário para essa ação de onboarding.
 
         if (state.data.onboardingStage === 'awaiting_plan_confirmation') {
             // Sempre envia mensagem de boas-vindas/plano se está neste estágio
@@ -1520,7 +1520,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     associatedValue: params.associatedValue ? parseFloat(params.associatedValue) : null,
                                     associatedTransactionType: params.associatedTransactionType // "Entrada" ou "Saída"
                                 };
-                                const newAppt = await appointmentService.createAppointment(state.activeFinancialAccountId, appointmentData);
+                                const newAppt = await appointmentService.scheduleAppointment(state.activeFinancialAccountId, appointmentData); // CORREÇÃO APLICADA AQUI
                                 const reloadedAppt = await appointmentService.getAppointmentById(state.activeFinancialAccountId, newAppt.id);
 
                                 if (aiResponse.detected_actions.length === 1) aiMessageIntro = aiResponse.overall_summary_suggestion || `Seu compromisso foi agendado, ${clientNameToUse}!`;
