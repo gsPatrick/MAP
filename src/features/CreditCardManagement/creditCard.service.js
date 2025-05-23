@@ -1,21 +1,11 @@
-// src/features/Financial/financial.service.js
-const {
-  FinancialTransaction,
-  FinancialCategory,
-  FinancialAccount,
-  CreditCard,
-  // RecurringTransactionRule, // Não usado diretamente aqui, mas pode ser relevante em outros contextos
-  Client, // Adicionado para validação de conta
-  sequelize
-} = require('../../database');
+// src/features/CreditCardManagement/creditCard.service.js
+const { CreditCard, FinancialAccount, FinancialTransaction, FinancialCategory, sequelize } = require('../../database');
 const { Op, fn, col, literal } = require('sequelize');
 const logger = require('../../utils/logger');
-const { calculateNextDueDate } = require('../../utils/dateUtils');
-const creditCardService = require('../CreditCardManagement/creditCard.service');
-const systemService = require('../System/system.service'); // <<< IMPORTAR systemService
+const { formatDate, formatCurrency, formatTime } = require('../../utils/formatters');
 
-async function validateAndGetFinancialAccount(financialAccountId, transaction = null, include = []) {
-  const account = await FinancialAccount.findByPk(financialAccountId, { transaction, include });
+async function validateOwningFinancialAccount(financialAccountId, transaction = null) {
+  const account = await FinancialAccount.findByPk(financialAccountId, { transaction });
   if (!account) {
     const error = new Error(`Conta Financeira com ID ${financialAccountId} não encontrada.`);
     error.statusCode = 404; error.status = 'fail'; throw error;
@@ -27,817 +17,724 @@ async function validateAndGetFinancialAccount(financialAccountId, transaction = 
   return account;
 }
 
-async function createTransaction(financialAccountId, transactionData, options = {}) {
-  const t = options.transaction || await sequelize.transaction();
-  try {
-    await validateAndGetFinancialAccount(financialAccountId, t);
+async function findCreditCardByName(financialAccountId, cardName, transaction = null) {
+    if (!cardName || typeof cardName !== 'string' || cardName.trim() === '') {
+        logger.warn(`[SERVICE] Tentativa de buscar cartão com nome inválido/vazio para conta ${financialAccountId}.`);
+        return null;
+    }
+    let card = await CreditCard.findOne({
+        where: { name: { [Op.iLike]: cardName }, financialAccountId, isActive: true },
+        transaction
+    });
+    if (!card) {
+        card = await CreditCard.findOne({
+            where: { name: { [Op.iLike]: `${cardName}%` }, financialAccountId, isActive: true },
+            transaction
+        });
+    }
+    if (!card) {
+        const cards = await CreditCard.findAll({ where: { financialAccountId, isActive: true }, transaction });
+        card = cards.find(c => c.name.toLowerCase().includes(cardName.toLowerCase()));
+    }
+    if (card) {
+        logger.info(`[SERVICE] Cartão encontrado para "${cardName}" na conta ${financialAccountId}: "${card.name}" (ID: ${card.id})`);
+    } else {
+        logger.warn(`[SERVICE] Cartão de crédito ativo com nome parecido com "${cardName}" não encontrado na conta ${financialAccountId}.`);
+    }
+    return card;
+}
 
-    const requiredFields = ['description', 'type', 'value', 'transactionDate'];
+async function createCreditCard(financialAccountId, cardData) {
+  const t = await sequelize.transaction();
+  try {
+    await validateOwningFinancialAccount(financialAccountId, t);
+
+    const requiredFields = ['name', 'limit', 'closingDay', 'paymentDay'];
     for (const field of requiredFields) {
-        if (transactionData[field] === undefined || transactionData[field] === null || String(transactionData[field]).trim() === '') {
-            const error = new Error(`Campo obrigatório "${field}" não fornecido para a transação.`);
-            error.statusCode = 400; error.status = 'fail'; throw error;
-        }
+      // Verifica se o campo existe e não é apenas uma string vazia após trim
+      if (cardData[field] === undefined || cardData[field] === null || (typeof cardData[field] === 'string' && cardData[field].trim() === '')) {
+        const error = new Error(`Campo obrigatório "${field}" não fornecido ou inválido para o cartão de crédito.`);
+        error.statusCode = 400; error.status = 'fail'; throw error;
+      }
+    }
+    // Validações numéricas
+    if (isNaN(parseFloat(cardData.limit)) || parseFloat(cardData.limit) < 0) {
+        const error = new Error('O limite do cartão deve ser um número zero ou positivo.');
+        error.statusCode = 400; error.status = 'fail'; throw error;
+    }
+    if (isNaN(parseInt(cardData.closingDay)) || parseInt(cardData.closingDay) < 1 || parseInt(cardData.closingDay) > 28) {
+        const error = new Error('O dia de fechamento deve ser um número entre 1 e 28.');
+        error.statusCode = 400; error.status = 'fail'; throw error;
+    }
+    if (isNaN(parseInt(cardData.paymentDay)) || parseInt(cardData.paymentDay) < 1 || parseInt(cardData.paymentDay) > 28) {
+        const error = new Error('O dia de pagamento deve ser um número entre 1 e 28.');
+        error.statusCode = 400; error.status = 'fail'; throw error;
+    }
+    if (cardData.lastFourDigits && (String(cardData.lastFourDigits).length !== 4 || isNaN(parseInt(cardData.lastFourDigits)))) {
+        const error = new Error('Os últimos quatro dígitos, se fornecidos, devem ser 4 números.');
+        error.statusCode = 400; error.status = 'fail'; throw error;
+    }
+
+
+    const existingCardName = await CreditCard.findOne({
+        where: { name: cardData.name, financialAccountId }, transaction: t
+    });
+    if(existingCardName){
+        const error = new Error(`Já existe um cartão com o nome "${cardData.name}" nesta conta financeira.`);
+        error.statusCode = 409; error.status = 'fail'; throw error;
+    }
+
+    // Normaliza booleanos para isDefault e isActive
+    let isDefaultBoolean = false;
+    if (cardData.hasOwnProperty('isDefault')) {
+        isDefaultBoolean = String(cardData.isDefault).toLowerCase() === 'true' || cardData.isDefault === true;
+    }
+
+    let isActiveBoolean = true;
+    if (cardData.hasOwnProperty('isActive')) {
+        isActiveBoolean = String(cardData.isActive).toLowerCase() === 'true' || cardData.isActive === true;
     }
     
-    // <<< MODIFICAÇÃO PARA CATEGORIA POR NOME >>>
-    let categoryIdToUse = null;
-    if (transactionData.financialCategoryName) { // Espera financialCategoryName
-        const category = await systemService.findFinancialCategoryByNameAndType(transactionData.financialCategoryName, transactionData.type, financialAccountId);
-        if (category) {
-            categoryIdToUse = category.id;
-        } else {
-            logger.warn(`[FIN SERVICE - createTransaction] Categoria "${transactionData.financialCategoryName}" não encontrada. Tentando "Outras" ou sem categoria.`);
-            const otherCategory = await systemService.findFinancialCategoryByNameAndType("Outras", transactionData.type, financialAccountId) || await systemService.findFinancialCategoryByNameAndType("Outros", transactionData.type, financialAccountId);
-            if(otherCategory) categoryIdToUse = otherCategory.id;
-        }
-    } else if (transactionData.financialCategoryId) { // Mantém compatibilidade se ID for enviado
-        if (!(await FinancialCategory.findByPk(transactionData.financialCategoryId, { transaction: t }))) {
-            const error = new Error(`Categoria financeira com ID ${transactionData.financialCategoryId} não encontrada.`);
-            error.statusCode = 404; error.status = 'fail'; throw error;
-        }
-        categoryIdToUse = transactionData.financialCategoryId;
-    }
-    // <<< FIM DA MODIFICAÇÃO DE CATEGORIA >>>
+    const dataToCreate = {
+        ...cardData,
+        financialAccountId,
+        limit: parseFloat(cardData.limit),
+        closingDay: parseInt(cardData.closingDay),
+        paymentDay: parseInt(cardData.paymentDay),
+        lastFourDigits: cardData.lastFourDigits ? String(cardData.lastFourDigits) : null,
+        isDefault: isDefaultBoolean, // Usar o booleano normalizado
+        isActive: isActiveBoolean,   // Usar o booleano normalizado
+        dominantColor: cardData.dominantColor || null,
+        flagIconUrl: cardData.flagIconUrl || null,
+    };
 
 
-    if (transactionData.creditCardId && transactionData.type === 'Saída') {
-        const card = await CreditCard.findOne({ where: { id: transactionData.creditCardId, financialAccountId }, transaction: t });
-        if (!card) {
-            const error = new Error(`Cartão de Crédito ID ${transactionData.creditCardId} não encontrado ou não pertence à conta financeira ID ${financialAccountId}.`);
-            error.statusCode = 404; error.status = 'fail'; throw error;
+    if (dataToCreate.isDefault) {
+      await CreditCard.update(
+        { isDefault: false },
+        { where: { financialAccountId, isDefault: true }, transaction: t }
+      );
+    } else {
+      const defaultCount = await CreditCard.count({ where: { financialAccountId, isDefault: true }, transaction: t });
+      if (defaultCount === 0) {
+        // Se não houver outros cartões default e este estiver ativo, torna-o default.
+        // Se este estiver sendo criado como inativo, ele não se torna default.
+        if (dataToCreate.isActive) {
+            dataToCreate.isDefault = true;
         }
-        if(!card.isActive){
-            const error = new Error(`Cartão de Crédito ID ${transactionData.creditCardId} ("${card.name}") está inativo.`);
-            error.statusCode = 400; error.status = 'fail'; throw error;
-        }
-        // Validação de limite para compra à vista no cartão
-        const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, transactionData.creditCardId); // Não passar 't' aqui
-        if (parseFloat(transactionData.value) > limitInfo.availableLimit) {
-            const error = new Error(`Limite insuficiente no cartão "${card.name}". Disponível: R$ ${limitInfo.availableLimit.toFixed(2)}, Tentativa: R$ ${parseFloat(transactionData.value).toFixed(2)}.`);
-            error.statusCode = 409;
-            error.status = 'fail'; throw error;
-        }
+      }
     }
 
-    if (transactionData.isPayableOrReceivable && !transactionData.dueDate) {
-      logger.warn(`Registrando conta a pagar/receber para financialAccountId ${financialAccountId} sem data de vencimento.`);
-    }
+    const newCard = await CreditCard.create(dataToCreate, { transaction: t });
+    await t.commit();
+    logger.info(`Cartão de Crédito "${newCard.name}" (ID: ${newCard.id}) criado para FA ID ${financialAccountId}. Default: ${newCard.isDefault}, Ativo: ${newCard.isActive}`);
+    return newCard.toJSON();
 
-    const newTransaction = await FinancialTransaction.create(
-      { ...transactionData, financialAccountId, financialCategoryId: categoryIdToUse }, // Usa categoryIdToUse
-      { transaction: t }
-    );
-
-    if (!options.transaction) await t.commit();
-    logger.info(`Transação ID ${newTransaction.id} ("${newTransaction.description}") criada para FinancialAccount ID ${financialAccountId}.`);
-    return newTransaction.toJSON();
   } catch (error) {
-    if (!options.transaction && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
-    logger.error(`Erro ao criar transação para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error, transactionData });
+    if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
+    logger.error(`Erro ao criar cartão de crédito para FA ID ${financialAccountId}: ${error.message}`, { error, cardData });
+    if (error.name === 'SequelizeValidationError' && error.errors) {
+        const validationErrors = error.errors.map(e => `${e.path}: ${e.message}`).join(', ');
+        const valError = new Error(`Erro de validação: ${validationErrors}`);
+        valError.statusCode = 400; valError.status = 'fail';
+        throw valError;
+    }
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
 }
 
-async function createParcelledAccount(financialAccountId, accountData, options = {}) {
-    // accountData aqui deve ter financialCategoryName em vez de financialCategoryId (ou ambos para flexibilidade)
-    const { description, type, totalValue, initialDueDate, numberOfParcels = 1, transactionDate, financialCategoryName, ...commonData } = accountData;
-
-
-    if (!description || !type || totalValue === undefined || !initialDueDate || numberOfParcels < 1) {
-      const error = new Error('Descrição, tipo, valor total, data de vencimento inicial da primeira parcela e número de parcelas (mínimo 1) são obrigatórios.');
-      error.statusCode = 400; error.status = 'fail'; throw error;
-    }
-    const parsedTotalValue = parseFloat(totalValue);
-    if (parsedTotalValue <= 0) {
-        const error = new Error('O valor total da conta parcelada deve ser maior que zero.');
-        error.statusCode = 400; error.status = 'fail'; throw error;
-    }
-    const numParcelsInt = parseInt(numberOfParcels, 10);
-    if (numParcelsInt < 1) {
-        const error = new Error('O número de parcelas deve ser pelo menos 1.');
-        error.statusCode = 400; error.status = 'fail'; throw error;
-    }
-
-    const t = options.transaction || await sequelize.transaction();
-    try {
-      await validateAndGetFinancialAccount(financialAccountId, t);
-
-      // <<< MODIFICAÇÃO PARA CATEGORIA POR NOME >>>
-      let categoryIdToUseParcel = null;
-      if (financialCategoryName) {
-          const category = await systemService.findFinancialCategoryByNameAndType(financialCategoryName, type, financialAccountId);
-          if (category) {
-              categoryIdToUseParcel = category.id;
-          } else {
-              logger.warn(`[FIN SERVICE - createParcelledAccount] Categoria "${financialCategoryName}" não encontrada. Tentando "Outras" ou sem categoria.`);
-              const otherCategory = await systemService.findFinancialCategoryByNameAndType("Outras", type, financialAccountId) || await systemService.findFinancialCategoryByNameAndType("Outros", type, financialAccountId);
-              if(otherCategory) categoryIdToUseParcel = otherCategory.id;
-          }
-      } else if (commonData.financialCategoryId) { // Mantém compatibilidade se ID for enviado em commonData
-          if (!(await FinancialCategory.findByPk(commonData.financialCategoryId, { transaction: t }))) {
-              const error = new Error(`Categoria financeira com ID ${commonData.financialCategoryId} não encontrada.`);
-              error.statusCode = 404; error.status = 'fail'; throw error;
-          }
-          categoryIdToUseParcel = commonData.financialCategoryId;
-      }
-      // <<< FIM DA MODIFICAÇÃO DE CATEGORIA >>>
-
-
-      if (commonData.creditCardId && type === 'Saída') {
-          const card = await CreditCard.findOne({ where: { id: commonData.creditCardId, financialAccountId }, transaction: t });
-          if (!card) {
-              const error = new Error(`Cartão de Crédito ID ${commonData.creditCardId} não encontrado ou não pertence à conta financeira ${financialAccountId}.`);
-              error.statusCode = 404; error.status = 'fail'; throw error;
-          }
-           if(!card.isActive){
-              const error = new Error(`Cartão de Crédito ID ${commonData.creditCardId} ("${card.name}") está inativo.`);
-              error.statusCode = 400; error.status = 'fail'; throw error;
-          }
-          const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, commonData.creditCardId); // Não passar 't'
-          if (parsedTotalValue > limitInfo.availableLimit) {
-              const error = new Error(`Limite insuficiente no cartão "${card.name}" para a compra parcelada. Disponível: R$ ${limitInfo.availableLimit.toFixed(2)}, Valor total da compra: R$ ${parsedTotalValue.toFixed(2)}.`);
-              error.statusCode = 409;
-              error.status = 'fail'; throw error;
-          }
-      }
-
-      const parcelValue = parseFloat((parsedTotalValue / numParcelsInt).toFixed(2));
-      let accumulatedValue = 0;
-      const createdParcelsModels = [];
-      let firstParcelModel = null;
-
-      const originalPurchaseDate = transactionDate || initialDueDate || new Date().toISOString().split('T')[0];
-
-      for (let i = 1; i <= numParcelsInt; i++) {
-        const currentParcelValue = (i === numParcelsInt) ? parseFloat((parsedTotalValue - accumulatedValue).toFixed(2)) : parcelValue;
-        accumulatedValue += currentParcelValue;
-
-        const parcelEffectiveDateObj = new Date(new Date(initialDueDate).toISOString().slice(0,10) + 'T00:00:00.000Z');
-        parcelEffectiveDateObj.setUTCMonth(parcelEffectiveDateObj.getUTCMonth() + (i - 1));
-        const parcelEffectiveDateString = `${parcelEffectiveDateObj.getUTCFullYear()}-${String(parcelEffectiveDateObj.getUTCMonth() + 1).padStart(2, '0')}-${String(parcelEffectiveDateObj.getUTCDate()).padStart(2, '0')}`;
-
-        const parcelDescription = numParcelsInt > 1 ? `${description} - Parcela ${i}/${numParcelsInt}` : description;
-
-        const parcelDataForDb = {
-          ...commonData,
-          financialAccountId,
-          description: parcelDescription,
-          type,
-          value: currentParcelValue,
-          transactionDate: commonData.creditCardId ? parcelEffectiveDateString : originalPurchaseDate,
-          isPayableOrReceivable: commonData.creditCardId ? false : true,
-          isPaidOrReceived: commonData.creditCardId ? true : false,
-          dueDate: commonData.creditCardId ? null : parcelEffectiveDateString,
-          isParcel: numParcelsInt > 1,
-          parcelNumber: numParcelsInt > 1 ? i : null,
-          totalParcels: numParcelsInt > 1 ? numParcelsInt : null,
-          originalAccountId: null,
-          originalPurchaseTotalValue: (i === 1 || numParcelsInt === 1) ? parsedTotalValue : null,
-          financialCategoryId: categoryIdToUseParcel // Usa o ID da categoria encontrado
-        };
-
-        const createdParcel = await FinancialTransaction.create(parcelDataForDb, { transaction: t });
-        createdParcelsModels.push(createdParcel);
-
-        if (i === 1) {
-          firstParcelModel = createdParcel;
-          if (numParcelsInt === 1 && !firstParcelModel.originalPurchaseTotalValue) {
-              await firstParcelModel.update({ originalPurchaseTotalValue: parsedTotalValue }, { transaction: t });
-          }
-        }
-      }
-
-      if (firstParcelModel) {
-          for (let parcelModel of createdParcelsModels) {
-              await parcelModel.update({ 
-                  originalAccountId: firstParcelModel.id,
-                  originalPurchaseTotalValue: parsedTotalValue 
-                }, { transaction: t });
-          }
-      }
-      
-      if (!options.transaction) await t.commit();
-      logger.info(`Conta parcelada "${description}" criada com ${numParcelsInt} parcelas para FA ID ${financialAccountId}.`);
-
-      const finalParcels = [];
-      for(const pModel of createdParcelsModels){
-          finalParcels.push(await pModel.reload({
-              transaction: null, // Fora da transação 't' se ela já foi commitada
-              include: [
-                  {model: FinancialTransaction, as: 'originalAccount', attributes:['id', 'description', 'originalPurchaseTotalValue']},
-                  {model: FinancialCategory, as: 'category'},
-                  {model: CreditCard, as: 'creditCard'}
-              ]
-            }).then(p => p.toJSON())
-          );
-      }
-
-      return {
-          message: numParcelsInt > 1 ? `Conta parcelada criada com ${numParcelsInt} parcelas.` : "Transação criada.",
-          parcels: finalParcels
-      };
-
-    } catch (error) {
-      if (!options.transaction && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
-      logger.error(`Erro ao criar conta parcelada para FA ID ${financialAccountId}: ${error.message}`, { error, accountData });
-      if (!error.statusCode) error.statusCode = 500;
-      throw error;
-    }
-}
-
-
-async function getAllTransactions(financialAccountId, queryParams = {}, period = null) {
+async function getAllCreditCards(financialAccountId, queryParams = {}) {
   try {
-    await validateAndGetFinancialAccount(financialAccountId);
-    const {
-      page = 1, limit = 10, type, /* financialCategoryId, */ financialCategoryName, creditCardId, // Alterado para financialCategoryName
-      dateStart: queryDateStart, dateEnd: queryDateEnd,
-      isPayableOrReceivable, isPaidOrReceived, dueBefore, dueAfter,
-      search, sortBy = 'transactionDate', sortOrder = 'DESC'
-    } = queryParams;
-
-    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    await validateOwningFinancialAccount(financialAccountId);
+    const { isActive, sortBy = 'name', sortOrder = 'ASC', includeSummary = false } = queryParams;
     const whereConditions = { financialAccountId };
 
-    if (type) whereConditions.type = type;
-    
-    // <<< MODIFICAÇÃO PARA CATEGORIA POR NOME >>>
-    if (financialCategoryName) {
-        const category = await systemService.findFinancialCategoryByNameAndType(financialCategoryName, type, financialAccountId);
-        if (category) {
-            whereConditions.financialCategoryId = category.id;
-        } else {
-            // Se a categoria não for encontrada pelo nome, retorna lista vazia ou não aplica filtro de categoria.
-            // Para retornar vazio se categoria não existe:
-            // whereConditions.financialCategoryId = -1; // ID заведомо inexistente
-            logger.warn(`[FIN SERVICE - getAllTransactions] Categoria "${financialCategoryName}" não encontrada, não será usada no filtro.`);
-        }
-    }
-    // <<< FIM DA MODIFICAÇÃO DE CATEGORIA >>>
-
-    if (creditCardId) whereConditions.creditCardId = creditCardId;
-
-    let finalDateStart = queryDateStart;
-    let finalDateEnd = queryDateEnd;
-
-    if (period) {
-        const now = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
-        const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-
-        if (period === "hoje") {
-            finalDateStart = today.toISOString().split('T')[0];
-            finalDateEnd = today.toISOString().split('T')[0];
-        } else if (period === "ontem") {
-            const yesterday = new Date(today);
-            yesterday.setUTCDate(today.getUTCDate() - 1);
-            finalDateStart = yesterday.toISOString().split('T')[0];
-            finalDateEnd = yesterday.toISOString().split('T')[0];
-        } else if (period === "este_mes") {
-            finalDateStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)).toISOString().split('T')[0];
-            const lastDayOfMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0));
-            finalDateEnd = lastDayOfMonth.toISOString().split('T')[0];
-        } else if (period === "mes_passado") {
-            const firstDayLastMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1));
-            finalDateStart = firstDayLastMonth.toISOString().split('T')[0];
-            const lastDayLastMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0));
-            finalDateEnd = lastDayLastMonth.toISOString().split('T')[0];
-        }
-    }
-    
-    if (finalDateStart) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.gte]: finalDateStart };
-    if (finalDateEnd) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.lte]: finalDateEnd };
-
-
-    if (isPayableOrReceivable !== undefined) {
-        whereConditions.isPayableOrReceivable = (String(isPayableOrReceivable).toLowerCase() === 'true' || isPayableOrReceivable === true);
-        if (isPaidOrReceived !== undefined && whereConditions.isPayableOrReceivable) {
-            whereConditions.isPaidOrReceived = (String(isPaidOrReceived).toLowerCase() === 'true' || isPaidOrReceived === true);
-        }
-        if (dueBefore) whereConditions.dueDate = { ...whereConditions.dueDate, [Op.lte]: dueBefore };
-        if (dueAfter) whereConditions.dueDate = { ...whereConditions.dueDate, [Op.gte]: dueAfter };
+    if (isActive !== undefined) {
+      whereConditions.isActive = (String(isActive).toLowerCase() === 'true' || isActive === true);
     }
 
-    if (search) {
-      whereConditions[Op.or] = [
-          { description: { [Op.iLike]: `%${search}%` } },
-          { notes: { [Op.iLike]: `%${search}%` } }
-      ];
-    }
-
+    const validSortBy = ['name', 'limit', 'closingDay', 'paymentDay', 'createdAt', 'updatedAt', 'isDefault'];
     const validSortOrders = ['ASC', 'DESC'];
-    const order = [[sortBy, validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC']];
+    let sortField = validSortBy.includes(sortBy) ? sortBy : 'name';
+    let sortDirection = validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'ASC';
 
-    const { count, rows } = await FinancialTransaction.findAndCountAll({
+    const order = [];
+    // Prioriza o cartão default no topo se a ordenação principal não for por isDefault,
+    // ou se for por isDefault e a direção for DESC.
+    if (sortField !== 'isDefault' || (sortField === 'isDefault' && sortDirection === 'DESC')) {
+        order.push(['isDefault', 'DESC']);
+    } else if (sortField === 'isDefault' && sortDirection === 'ASC') {
+        order.push(['isDefault', 'ASC']); // Explicitamente false antes de true
+    }
+
+    // Adiciona a ordenação principal, se não for por isDefault ou se for isDefault com direção já coberta
+    if (sortField !== 'isDefault') {
+      order.push([sortField, sortDirection]);
+    }
+    order.push(['name', 'ASC']); // Desempate final por nome
+
+    const cards = await CreditCard.findAll({
       where: whereConditions,
-      include: [
-        { model: FinancialCategory, as: 'category', attributes: ['id', 'name'] },
-        { model: CreditCard, as: 'creditCard', attributes: ['id', 'name', 'lastFourDigits'] },
-        { model: FinancialTransaction, as: 'originalAccount', attributes: ['id', 'description', 'originalPurchaseTotalValue'] }
-      ],
-      limit: parseInt(limit, 10),
-      offset: offset,
       order: order,
-      distinct: true,
     });
 
-    logger.info(`Listadas ${rows.length} transações para FA ID ${financialAccountId} (Total: ${count}).`);
-    return {
-      totalItems: count,
-      totalPages: Math.ceil(count / parseInt(limit, 10)),
-      currentPage: parseInt(page, 10),
-      transactions: rows.map(t => t.toJSON()),
-    };
+    let resultCards = cards.map(c => c.toJSON());
+
+    if (String(includeSummary).toLowerCase() === 'true' || includeSummary === true) {
+        resultCards = await Promise.all(resultCards.map(async (cardJson) => {
+            if (!cardJson.isActive) { // Não busca resumo para cartões inativos
+                return { ...cardJson, availableLimit: null };
+            }
+            try {
+                const limitDetails = await getAvailableCreditLimit(financialAccountId, cardJson.id);
+                return { ...cardJson, availableLimit: limitDetails.availableLimit };
+            } catch (summaryError) {
+                logger.warn(`[SERVICE] Falha ao obter resumo de limite para cartão ID ${cardJson.id} durante listagem: ${summaryError.message}`);
+                return { ...cardJson, availableLimit: null };
+            }
+        }));
+    }
+
+    logger.info(`Listados ${resultCards.length} cartões de crédito para FA ID ${financialAccountId}.`);
+    return { cards: resultCards, totalItems: resultCards.length };
   } catch (error) {
-    logger.error(`Erro ao listar transações para FA ID ${financialAccountId}: ${error.message}`, { error });
+    logger.error(`Erro ao listar cartões de crédito para FA ID ${financialAccountId}: ${error.message}`, { error });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
 }
 
-async function getTransactionById(financialAccountId, transactionId) {
+async function getCreditCardById(financialAccountId, cardId) {
   try {
-    await validateAndGetFinancialAccount(financialAccountId);
-    const transaction = await FinancialTransaction.findOne({
-      where: { id: transactionId, financialAccountId },
-      include: [
-        { model: FinancialCategory, as: 'category' },
-        { model: CreditCard, as: 'creditCard' },
-        {
-          model: FinancialTransaction,
-          as: 'parcels', // Parcelas filhas desta transação (se ela for a "mãe")
-          required: false,
-          include: [{model: FinancialCategory, as: 'category'}, {model: CreditCard, as: 'creditCard'}]
-        },
-        {
-            model: FinancialTransaction,
-            as: 'originalAccount', // Transação "mãe" desta parcela (se esta for uma "filha")
-            required: false,
-            attributes: ['id', 'description', 'originalPurchaseTotalValue', 'totalParcels']
-        }
-      ]
+    await validateOwningFinancialAccount(financialAccountId);
+    const card = await CreditCard.findOne({
+      where: { id: cardId, financialAccountId },
     });
 
-    if (!transaction) {
-      const error = new Error(`Transação ID ${transactionId} não encontrada ou não pertence à conta financeira ID ${financialAccountId}.`);
+    if (!card) {
+      const error = new Error(`Cartão de crédito ID ${cardId} não encontrado ou não pertence à conta financeira ID ${financialAccountId}.`);
       error.statusCode = 404; error.status = 'fail'; throw error;
     }
-    return transaction.toJSON();
+    return card.toJSON();
   } catch (error) {
-    logger.error(`Erro ao buscar transação ID ${transactionId} para FA ID ${financialAccountId}: ${error.message}`, { error });
+    logger.error(`Erro ao buscar cartão ID ${cardId} para FA ID ${financialAccountId}: ${error.message}`, { error });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
 }
 
-async function updateTransaction(financialAccountId, transactionId, updateData) {
+async function updateCreditCard(financialAccountId, cardId, updateData) {
   const t = await sequelize.transaction();
   try {
-    await validateAndGetFinancialAccount(financialAccountId, t);
-    const transaction = await FinancialTransaction.findOne({
-      where: { id: transactionId, financialAccountId },
+    await validateOwningFinancialAccount(financialAccountId, t);
+    const card = await CreditCard.findOne({
+      where: { id: cardId, financialAccountId },
       transaction: t
     });
-    if (!transaction) {
-        await t.rollback();
-        const e = new Error('Transação não encontrada.'); e.statusCode = 404; e.status = 'fail'; throw e;
-    }
-
-    if (transaction.isParcel && transaction.originalAccountId && transaction.originalAccountId !== transaction.id) {
+    if (!card) {
       await t.rollback();
-      const e = new Error('Parcelas individuais de uma compra parcelada não podem ser editadas diretamente. Edite a compra original ou exclua e recrie o grupo de parcelas.');
-      e.statusCode = 400; e.status = 'fail'; throw e;
-    }
-    if (transaction.isParcel && transaction.originalAccountId === transaction.id && (updateData.value || updateData.totalParcels || updateData.initialDueDate || updateData.originalPurchaseTotalValue) ) {
-      await t.rollback();
-      const e = new Error('Para alterar valor, número de parcelas ou datas de uma compra parcelada, utilize a função de "refazer compra parcelada" (API específica) ou edite cada parcela individualmente se permitido.');
-      e.statusCode = 400; e.status = 'fail'; throw e;
+      const error = new Error(`Cartão de crédito ID ${cardId} não encontrado para atualização.`);
+      error.statusCode = 404; error.status = 'fail'; throw error;
     }
 
-    // <<< MODIFICAÇÃO PARA CATEGORIA POR NOME >>>
-    let categoryIdToUpdate = transaction.financialCategoryId; // Mantém a original se não houver alteração
-    if (updateData.financialCategoryName) {
-        const category = await systemService.findFinancialCategoryByNameAndType(updateData.financialCategoryName, updateData.type || transaction.type, financialAccountId);
-        if (category) {
-            categoryIdToUpdate = category.id;
-        } else {
-            logger.warn(`[FIN SERVICE - updateTransaction] Categoria "${updateData.financialCategoryName}" não encontrada. Mantendo categoria original ou removendo se não houver.`);
-            // Se desejar remover a categoria se o nome novo não for encontrado: categoryIdToUpdate = null;
-        }
-    } else if (updateData.hasOwnProperty('financialCategoryId')) { // Se o ID foi passado diretamente
-        if (updateData.financialCategoryId === null) { // Permitir remover categoria
-            categoryIdToUpdate = null;
-        } else if (!(await FinancialCategory.findByPk(updateData.financialCategoryId, { transaction: t }))) {
-            await t.rollback();
-            const e = new Error(`Categoria financeira ID ${updateData.financialCategoryId} para atualização não encontrada.`); e.statusCode = 404; e.status = 'fail'; throw e;
-        } else {
-            categoryIdToUpdate = updateData.financialCategoryId;
-        }
-    }
-    updateData.financialCategoryId = categoryIdToUpdate; // Atualiza o updateData com o ID
-    delete updateData.financialCategoryName; // Remove o nome do objeto de atualização
-    // <<< FIM DA MODIFICAÇÃO DE CATEGORIA >>>
-
-
-    const changingCardOrValue = (updateData.hasOwnProperty('creditCardId') && updateData.creditCardId !== transaction.creditCardId) ||
-                              (updateData.hasOwnProperty('value') && parseFloat(updateData.value) !== parseFloat(transaction.value));
-    const targetCreditCardId = updateData.hasOwnProperty('creditCardId') ? updateData.creditCardId : transaction.creditCardId;
-    const targetValue = updateData.hasOwnProperty('value') ? parseFloat(updateData.value) : parseFloat(transaction.value);
-    const targetType = updateData.hasOwnProperty('type') ? updateData.type : transaction.type;
-
-
-    if (targetCreditCardId && targetType === 'Saída' && changingCardOrValue) {
-        const card = await CreditCard.findOne({ where: { id: targetCreditCardId, financialAccountId }, transaction: t });
-        if (!card) {
-            await t.rollback();
-            const e = new Error(`Cartão de crédito ID ${targetCreditCardId} não encontrado ou não pertence à conta.`); e.statusCode = 404; e.status = 'fail'; throw e;
-        }
-        if (!card.isActive && targetCreditCardId !== null){ // Permite remover cartão (creditCardId = null)
-             await t.rollback();
-            const error = new Error(`Cartão de Crédito ID ${targetCreditCardId} ("${card.name}") está inativo.`);
-            error.statusCode = 400; error.status = 'fail'; throw error;
-        }
-
-        const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, targetCreditCardId); // Não passar 't'
-        let availableAfterOldTx = limitInfo.availableLimit;
-        if (transaction.creditCardId === targetCreditCardId && transaction.type === 'Saída') {
-            if (transaction.isParcel && transaction.originalAccountId === transaction.id && transaction.originalPurchaseTotalValue) {
-                availableAfterOldTx += parseFloat(transaction.originalPurchaseTotalValue);
-            } else { 
-                availableAfterOldTx += parseFloat(transaction.value);
-            }
-        }
-        
-        if (targetCreditCardId !== null && targetValue > availableAfterOldTx) {
-            await t.rollback();
-            const error = new Error(`Atualização resultaria em limite insuficiente no cartão "${card.name}". Disponível (considerando ajuste): R$ ${availableAfterOldTx.toFixed(2)}, Novo valor: R$ ${targetValue.toFixed(2)}.`);
-            error.statusCode = 409; error.status = 'fail'; throw error;
-        }
-    }
-
-    delete updateData.financialAccountId; // Não permitir mover entre contas
-
-    await transaction.update(updateData, { transaction: t });
-    const updatedTransaction = await transaction.reload({
-        transaction: t,
-        include: [
-            { model: FinancialCategory, as: 'category' },
-            { model: CreditCard, as: 'creditCard' }
-        ]
-    });
-
-    await t.commit();
-    logger.info(`Transação ID ${transactionId} atualizada para FA ID ${financialAccountId}.`);
-    return updatedTransaction.toJSON();
-  } catch (error) {
-        if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
-        logger.error(`Erro ao atualizar transação ID ${transactionId}: ${error.message}`, {error, updateData});
-        if(!error.statusCode) error.statusCode = 500;
-        throw error;
-   }
-}
-
-async function markAsPaidOrReceived(financialAccountId, transactionId, paymentDate = null) {
-    const t = await sequelize.transaction();
-    try {
-        await validateAndGetFinancialAccount(financialAccountId, t);
-        const transaction = await FinancialTransaction.findOne({where: {id: transactionId, financialAccountId}, transaction: t});
-        if(!transaction){
-            await t.rollback();
-            const e = new Error('Transação não encontrada.'); e.statusCode = 404; e.status = 'fail'; throw e;
-        }
-        if (!transaction.isPayableOrReceivable) {
-            await t.rollback();
-            const error = new Error('Esta transação não é uma conta a pagar/receber e não pode ser marcada como liquidada desta forma.');
-            error.statusCode = 400; error.status = 'fail'; throw error;
-        }
-        const updateData = {
-            isPaidOrReceived: true,
-            paymentDate: paymentDate || new Date().toISOString().split('T')[0]
-        };
-        await transaction.update(updateData, {transaction: t});
-        await t.commit();
-        const reloadedTx = await transaction.reload({include: [{model: FinancialCategory, as: 'category'}, {model: CreditCard, as: 'creditCard'}]});
-        return reloadedTx.toJSON();
-    } catch(error) {
-        if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
-        logger.error(`Erro ao marcar transação ${transactionId} como paga/recebida: ${error.message}`, {error});
-        if(!error.statusCode) error.statusCode = 500;
-        throw error;
-    }
-}
-
-async function markTransactionAsPaidOrReceived(financialAccountId, description, value = null, paymentDate = null, financialCategoryName = null) {
-    const t = await sequelize.transaction();
-    try {
-        await validateAndGetFinancialAccount(financialAccountId, t);
-        const whereConditions = {
-            financialAccountId,
-            description: { [Op.iLike]: `%${description}%` },
-            isPayableOrReceivable: true,
-            isPaidOrReceived: false
-        };
-        if (value) {
-            whereConditions.value = parseFloat(value);
-        }
-        // <<< MODIFICAÇÃO PARA CATEGORIA POR NOME >>>
-        if (financialCategoryName) {
-            const category = await systemService.findFinancialCategoryByNameAndType(financialCategoryName, null, financialAccountId); // Tipo pode ser inferido ou null
-            if (category) {
-                whereConditions.financialCategoryId = category.id;
-            } else {
-                logger.warn(`[FIN SERVICE - markTxAsPaid] Categoria "${financialCategoryName}" não encontrada. Filtro de categoria não será aplicado.`);
-            }
-        }
-        // <<< FIM DA MODIFICAÇÃO DE CATEGORIA >>>
-
-        const transactions = await FinancialTransaction.findAll({ where: whereConditions, order: [['dueDate', 'ASC']], transaction: t });
-
-        if (transactions.length === 0) {
-            await t.rollback();
-            const e = new Error(`Nenhuma transação pendente encontrada com descrição similar a "${description}" e valor ${value ? formatCurrency(value) : 'qualquer'}.`);
-            e.statusCode = 404; e.status = 'fail'; throw e;
-        }
-        if (transactions.length > 1) {
-            logger.warn(`Múltiplas transações pendentes encontradas para "${description}". Marcando a mais próxima do vencimento.`);
-        }
-        const transactionToMark = transactions[0];
-
-        const updateData = {
-            isPaidOrReceived: true,
-            paymentDate: paymentDate || new Date().toISOString().split('T')[0]
-        };
-        await transactionToMark.update(updateData, { transaction: t });
-        await t.commit();
-        const reloadedMarkedTx = await transactionToMark.reload({ include: [{model: FinancialCategory, as: 'category'}, {model: CreditCard, as: 'creditCard'}] });
-        return reloadedMarkedTx.toJSON();
-    } catch (error) {
-        if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
-        logger.error(`Erro ao marcar transação por descrição "${description}" como paga/recebida: ${error.message}`, { error });
-        if (!error.statusCode) error.statusCode = 500;
-        throw error;
-    }
-}
-
-
-async function deleteTransaction(financialAccountId, transactionId) {
-  const t = await sequelize.transaction();
-  try {
-    await validateAndGetFinancialAccount(financialAccountId, t);
-    const transaction = await FinancialTransaction.findOne({
-      where: { id: transactionId, financialAccountId },
-      transaction: t
-    });
-    if (!transaction) {
-        await t.rollback();
-        const e = new Error('Transação não encontrada.'); e.statusCode = 404; e.status = 'fail'; throw e;
-    }
-
-    if (transaction.isParcel && transaction.originalAccountId === transaction.id) {
-        const childParcelsCount = await FinancialTransaction.count({
-            where: { originalAccountId: transaction.id, id: { [Op.ne]: transaction.id } },
-            transaction: t
+    if (updateData.name && updateData.name !== card.name) {
+        const existingCardName = await CreditCard.findOne({
+            where: { name: updateData.name, financialAccountId, id: {[Op.ne]: cardId} }, transaction: t
         });
-        if (childParcelsCount > 0) {
+        if(existingCardName){
             await t.rollback();
-            const error = new Error(`Esta é a transação principal de um parcelamento com ${childParcelsCount} outras parcelas. Para excluí-la, use a opção de excluir o grupo de parcelas (se disponível) ou remova as parcelas dependentes primeiro.`);
+            const error = new Error(`Já existe outro cartão com o nome "${updateData.name}" nesta conta financeira.`);
             error.statusCode = 409; error.status = 'fail'; throw error;
         }
     }
+    
+    // Normaliza e trata booleanos para isDefault e isActive
+    if (updateData.hasOwnProperty('isDefault')) {
+        const wantsToBeDefault = String(updateData.isDefault).toLowerCase() === 'true' || updateData.isDefault === true;
+        if (wantsToBeDefault && !card.isDefault) {
+            await CreditCard.update(
+                { isDefault: false },
+                { where: { financialAccountId, isDefault: true, id: { [Op.ne]: cardId } }, transaction: t }
+            );
+             updateData.isDefault = true; // Garante que o update final use o booleano
+        } else if (!wantsToBeDefault && card.isDefault) {
+            const otherActiveCard = await CreditCard.findOne({
+                where: { financialAccountId, isActive: true, id: { [Op.ne]: cardId } },
+                order: [['createdAt', 'ASC']],
+                transaction: t,
+            });
+            if (otherActiveCard) {
+                await otherActiveCard.update({ isDefault: true }, { transaction: t });
+                updateData.isDefault = false; // Permite desmarcar
+            } else if (updateData.hasOwnProperty('isActive') ? (String(updateData.isActive).toLowerCase() === 'true' || updateData.isActive === true) : card.isActive) {
+                updateData.isDefault = true;
+                logger.warn(`Cartão ID ${cardId} é o único ativo, não pode ser desmarcado como default a menos que seja inativado.`);
+            } else {
+                updateData.isDefault = false; // Pode desmarcar se estiver sendo inativado e não há outros
+            }
+        } else {
+             updateData.isDefault = wantsToBeDefault; // Mantém o valor se não houver mudança de estado default
+        }
+    }
+    if (updateData.hasOwnProperty('isActive')) {
+        updateData.isActive = String(updateData.isActive).toLowerCase() === 'true' || updateData.isActive === true;
+        // Se está inativando o cartão default, precisa promover outro
+        if (!updateData.isActive && card.isDefault) {
+             const otherActiveCardToPromote = await CreditCard.findOne({
+                where: { financialAccountId, isActive: true, id: { [Op.ne]: cardId } }, // Procura OUTRO que JÁ ESTEJA ativo
+                order: [['createdAt', 'ASC']],
+                transaction: t,
+            });
+            if (otherActiveCardToPromote) {
+                await otherActiveCardToPromote.update({ isDefault: true }, { transaction: t });
+            } else {
+                // Se não há outro cartão ativo para ser default, e este está sendo inativado,
+                // tecnicamente não haverá cartão default ativo. A UI deve lidar com isso.
+                // Ou impedir a inativação se for o único.
+                logger.warn(`Cartão default ID ${cardId} inativado. Nenhum outro cartão ativo para ser promovido a default.`);
+            }
+            updateData.isDefault = false; // Um cartão inativo não pode ser default
+        }
+    }
 
-    await transaction.destroy({ transaction: t });
+
+    delete updateData.financialAccountId;
+
+    await card.update(updateData, { transaction: t });
     await t.commit();
-    logger.info(`Transação ID ${transactionId} excluída da FA ID ${financialAccountId}.`);
+    logger.info(`Cartão de Crédito ID ${cardId} ("${card.name}") atualizado para FA ID ${financialAccountId}.`);
+    return card.reload().then(c => c.toJSON());
+  } catch (error) {
+    if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
+    logger.error(`Erro ao atualizar cartão ID ${cardId}: ${error.message}`, { error, updateData });
+    if (error.name === 'SequelizeValidationError' && error.errors) {
+        const validationErrors = error.errors.map(e => `${e.path}: ${e.message}`).join(', ');
+        const valError = new Error(`Erro de validação: ${validationErrors}`);
+        valError.statusCode = 400; valError.status = 'fail';
+        throw valError;
+    }
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
+}
+
+async function deleteCreditCard(financialAccountId, cardId) {
+  const t = await sequelize.transaction();
+  try {
+    await validateOwningFinancialAccount(financialAccountId, t);
+    const card = await CreditCard.findOne({
+      where: { id: cardId, financialAccountId },
+      transaction: t
+    });
+    if (!card) {
+      await t.rollback();
+      const error = new Error(`Cartão de crédito ID ${cardId} não encontrado.`);
+      error.statusCode = 404; error.status = 'fail'; throw error;
+    }
+
+    const transactionsCount = await FinancialTransaction.count({ where: { creditCardId: cardId }, transaction: t });
+    if (transactionsCount > 0) {
+      await t.rollback();
+      const error = new Error(`Não é possível excluir o cartão "${card.name}" pois está associado a ${transactionsCount} transações. Considere marcá-lo como inativo.`);
+      error.statusCode = 409; error.status = 'fail'; throw error;
+    }
+
+    if (card.isDefault) {
+      const otherCard = await CreditCard.findOne({
+        where: { financialAccountId, isActive: true, id: { [Op.ne]: cardId } }, // Procura outro ATIVO
+        order: [['createdAt', 'ASC']],
+        transaction: t,
+      });
+      if (otherCard) {
+        await otherCard.update({ isDefault: true }, { transaction: t });
+        logger.info(`Cartão ID ${otherCard.id} promovido a default para Conta ID ${financialAccountId}.`);
+      } else {
+          logger.info(`Cartão default ID ${cardId} excluído. Nenhum outro cartão ativo para ser promovido a default na conta ${financialAccountId}.`);
+      }
+    }
+
+    await card.destroy({ transaction: t });
+    await t.commit();
+    logger.info(`Cartão ID ${cardId} ("${card.name}") excluído da FA ID ${financialAccountId}.`);
     return true;
   } catch (error) {
-        if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
-        logger.error(`Erro ao excluir transação ID ${transactionId}: ${error.message}`, {error});
-        if(!error.statusCode) error.statusCode = 500;
-        throw error;
-    }
+    if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
+    logger.error(`Erro ao excluir cartão ID ${cardId}: ${error.message}`, { error });
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
 }
 
-async function getFinancialSummary(financialAccountId, filters = {}) {
-  try {
-    const account = await validateAndGetFinancialAccount(financialAccountId, null, [{model:Client, as: 'ownerClient'}]);
-    const { dateStart, dateEnd, financialCategoryName, type } = filters; // Alterado para financialCategoryName
-    const whereBase = { financialAccountId };
-
-    // <<< MODIFICAÇÃO PARA CATEGORIA POR NOME >>>
-    if (financialCategoryName) {
-        const category = await systemService.findFinancialCategoryByNameAndType(financialCategoryName, type, financialAccountId);
-        if (category) {
-            whereBase.financialCategoryId = category.id;
-        } else {
-            logger.warn(`[FIN SERVICE - getSummary] Categoria "${financialCategoryName}" não encontrada para o resumo. Filtro de categoria não será aplicado.`);
-        }
-    }
-    // <<< FIM DA MODIFICAÇÃO DE CATEGORIA >>>
-    if (type) whereBase.type = type;
-
-    let whereTransactionDate = {};
-    if (dateStart) whereTransactionDate[Op.gte] = dateStart;
-    if (dateEnd) whereTransactionDate[Op.lte] = dateEnd;
-    if(Object.keys(whereTransactionDate).length > 0) whereBase.transactionDate = whereTransactionDate;
-
-    const whereEffective = {
-        ...whereBase,
-        [Op.or]: [
-            { isPayableOrReceivable: false, creditCardId: null },
-            { isPayableOrReceivable: true, isPaidOrReceived: true, creditCardId: null }
-        ]
-    };
-    const whereCardPayments = { // Pagamentos de fatura de cartão de crédito
-        ...whereBase, // Respeita filtros de data e categoria se aplicados ao resumo geral
-        type: 'Saída',
-        description: { [Op.iLike]: '%Pagamento Fatura%' }, // Heurística para identificar pagamento de fatura
-        creditCardId: null // Pagamento de fatura não tem creditCardId
-    };
-
-
-    const totalEntradasCaixa = await FinancialTransaction.sum('value', { where: { ...whereEffective, type: 'Entrada' } }) || 0;
-    // Saídas de caixa incluem saídas diretas E pagamentos de fatura
-    const totalSaidasDiretasCaixa = await FinancialTransaction.sum('value', { where: { ...whereEffective, type: 'Saída' } }) || 0;
-    const totalPagamentosFatura = await FinancialTransaction.sum('value', { where: whereCardPayments }) || 0;
-    const totalSaidasCaixa = totalSaidasDiretasCaixa + totalPagamentosFatura;
-
-
-    const saldoEfetivado = parseFloat((totalEntradasCaixa - totalSaidasCaixa).toFixed(2));
-
-    const whereReceivables = { financialAccountId, type: 'Entrada', isPayableOrReceivable: true, isPaidOrReceived: false, creditCardId: null };
-    if (whereBase.financialCategoryId) whereReceivables.financialCategoryId = whereBase.financialCategoryId; // Adiciona filtro de categoria se presente
-    if (dateEnd) whereReceivables.dueDate = { ...whereReceivables.dueDate, [Op.lte]: dateEnd }; // Considera dueDate para pendentes
-    const totalAReceberPendente = await FinancialTransaction.sum('value', { where: whereReceivables }) || 0;
-
-    const wherePayables = { financialAccountId, type: 'Saída', isPayableOrReceivable: true, isPaidOrReceived: false, creditCardId: null };
-    if (whereBase.financialCategoryId) wherePayables.financialCategoryId = whereBase.financialCategoryId; // Adiciona filtro de categoria
-    if (dateEnd) wherePayables.dueDate = { ...wherePayables.dueDate, [Op.lte]: dateEnd }; // Considera dueDate
-    const totalAPagarPendente = await FinancialTransaction.sum('value', { where: wherePayables }) || 0;
-
-    const summary = {
-      financialAccountId,
-      accountName: account.accountName,
-      accountType: account.accountType,
-      ownerClientName: account.ownerClient?.name,
-      totalEntradas: parseFloat(totalEntradasCaixa.toFixed(2)),
-      totalSaidas: parseFloat(totalSaidasCaixa.toFixed(2)),
-      saldoEfetivado,
-      totalAReceberPendente: parseFloat(totalAReceberPendente.toFixed(2)),
-      totalAPagarPendente: parseFloat(totalAPagarPendente.toFixed(2)),
-      filtersApplied: { dateStart, dateEnd, financialCategoryName, type }
-    };
-    logger.info(`Resumo financeiro gerado para FA ID ${financialAccountId}.`);
-    return summary;
-  } catch (error) {
-        logger.error(`Erro ao gerar resumo financeiro para FA ID ${financialAccountId}: ${error.message}`, { error });
-        if(!error.statusCode) error.statusCode = 500;
-        throw error;
-    }
-}
-
-async function deleteParcelledAccountGroup(financialAccountId, originalAccountId) {
+async function getAvailableCreditLimit(financialAccountId, creditCardId) {
     const t = await sequelize.transaction();
     try {
-        await validateAndGetFinancialAccount(financialAccountId, t);
+        await validateOwningFinancialAccount(financialAccountId, t);
+        const card = await CreditCard.findByPk(creditCardId, { transaction: t });
 
-        const originalTx = await FinancialTransaction.findOne({
-            where: { id: originalAccountId, financialAccountId, originalAccountId: originalAccountId, isParcel: true },
-            transaction: t
-        });
-
-        if (!originalTx) {
+        if (!card || card.financialAccountId !== financialAccountId) {
             await t.rollback();
-            const e = new Error(`Grupo de parcelamento com ID original ${originalAccountId} não encontrado ou não é uma transação principal de parcelamento para a conta financeira ID ${financialAccountId}.`);
-            e.statusCode = 404; e.status = 'fail'; throw e;
+            const error = new Error(`Cartão ID ${creditCardId} não encontrado ou não pertence à conta ${financialAccountId}.`);
+            error.statusCode = 404; error.status = 'fail'; throw error;
+        }
+        if (!card.isActive) {
+            await t.rollback();
+            const error = new Error(`Cartão "${card.name}" (ID: ${creditCardId}) está inativo.`);
+            error.statusCode = 400; error.status = 'fail'; throw error;
         }
 
-        const numDeleted = await FinancialTransaction.destroy({
+        const totalLimit = parseFloat(card.limit);
+        let totalSpendsImpactingLimit = 0;
+
+        const parcelledPurchasesMothers = await FinancialTransaction.findAll({
+            where: { creditCardId: card.id, financialAccountId, type: 'Saída', isParcel: true, originalAccountId: { [Op.eq]: col('id') } },
+            transaction: t
+        });
+        parcelledPurchasesMothers.forEach(motherTx => {
+            totalSpendsImpactingLimit += parseFloat(motherTx.originalPurchaseTotalValue || motherTx.value);
+        });
+
+        const singlePurchases = await FinancialTransaction.findAll({
+            where: { creditCardId: card.id, financialAccountId, type: 'Saída', isParcel: false },
+            transaction: t
+        });
+        singlePurchases.forEach(tx => { totalSpendsImpactingLimit += parseFloat(tx.value); });
+
+        const directCreditsOnCard = await FinancialTransaction.sum('value', {
+            where: { creditCardId: card.id, financialAccountId, type: 'Entrada'},
+            transaction: t
+        }) || 0;
+        totalSpendsImpactingLimit -= parseFloat(directCreditsOnCard);
+        
+        const invoicePayments = await FinancialTransaction.sum('value', {
+            where: { financialAccountId, type: 'Saída', creditCardId: null, description: { [Op.iLike]: `Pagamento Fatura ${card.name}%` } },
+            transaction: t
+        }) || 0;
+        
+        const currentDebtOnCard = Math.max(0, totalSpendsImpactingLimit - parseFloat(invoicePayments));
+        const availableLimitFinal = totalLimit - currentDebtOnCard;
+
+        const today = new Date();
+        let currentInvoiceYear = today.getUTCFullYear();
+        let currentInvoiceMonthZeroBased = today.getUTCMonth();
+        let invoiceStartDate, invoiceEndDate;
+
+        if (today.getUTCDate() <= card.closingDay) {
+            invoiceEndDate = new Date(Date.UTC(currentInvoiceYear, currentInvoiceMonthZeroBased, card.closingDay));
+            invoiceStartDate = new Date(Date.UTC(currentInvoiceYear, currentInvoiceMonthZeroBased - 1, card.closingDay + 1));
+        } else {
+            invoiceStartDate = new Date(Date.UTC(currentInvoiceYear, currentInvoiceMonthZeroBased, card.closingDay + 1));
+            invoiceEndDate = new Date(Date.UTC(currentInvoiceYear, currentInvoiceMonthZeroBased + 1, card.closingDay));
+        }
+        
+        const openInvoiceSpends = await FinancialTransaction.sum('value',{
             where: {
-                originalAccountId: originalAccountId,
-                financialAccountId: financialAccountId
+                creditCardId: card.id, financialAccountId, type: 'Saída', 
+                transactionDate: { 
+                    [Op.gte]: invoiceStartDate.toISOString().split('T')[0],
+                    [Op.lte]: invoiceEndDate.toISOString().split('T')[0],
+                },
             },
             transaction: t
-        });
-
-        await t.commit();
-        logger.info(`${numDeleted} transações do grupo de parcelamento (originalAccountId: ${originalAccountId}) foram excluídas da FA ID ${financialAccountId}.`);
-        return numDeleted > 0;
-    } catch (error) {
-        if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
-        logger.error(`Erro ao excluir grupo de parcelas ID ${originalAccountId} (FA ID: ${financialAccountId}): ${error.message}`, { error });
-        if (!error.statusCode) error.statusCode = 500;
-        throw error;
-    }
-}
-
-async function updateParcelledAccountDescription(financialAccountId, originalAccountId, newBaseDescription) {
-    const t = await sequelize.transaction();
-    try {
-        await validateAndGetFinancialAccount(financialAccountId, t);
-
-        const parcelsToUpdate = await FinancialTransaction.findAll({
-            where: { originalAccountId, financialAccountId, isParcel: true },
-            transaction: t
-        });
-
-        if (!parcelsToUpdate || parcelsToUpdate.length === 0) {
-            await t.rollback();
-            const e = new Error('Nenhuma parcela encontrada para este grupo (ID original: ${originalAccountId}) para atualizar a descrição.');
-            e.statusCode = 404; e.status = 'fail'; throw e;
-        }
-
-        let updatedCount = 0;
-        for (const parcel of parcelsToUpdate) {
-            let updatedParcelDescription = newBaseDescription;
-            if (parcel.parcelNumber && parcel.totalParcels && parcel.totalParcels > 1) { // Só adiciona sufixo se for realmente parcelado
-                updatedParcelDescription = `${newBaseDescription} - Parcela ${parcel.parcelNumber}/${parcel.totalParcels}`;
-            }
-            await parcel.update({ description: updatedParcelDescription }, { transaction: t });
-            updatedCount++;
-        }
-
-        await t.commit();
-        logger.info(`${updatedCount} parcelas do grupo ID ${originalAccountId} (FA ID: ${financialAccountId}) tiveram a descrição atualizada para base "${newBaseDescription}".`);
-        return updatedCount;
-    } catch (error) {
-        if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
-        logger.error(`Erro ao atualizar descrição do grupo de parcelas ID ${originalAccountId} (FA ID: ${financialAccountId}): ${error.message}`, { error });
-        if (!error.statusCode) error.statusCode = 500;
-        throw error;
-    }
-}
-
-async function recreateParcelledAccount(financialAccountId, originalAccountIdToDelete, newParcelFullData) {
-    const t = await sequelize.transaction();
-    try {
-        await validateAndGetFinancialAccount(financialAccountId, t);
-        logger.info(`Iniciando recriação da compra parcelada para FA ID ${financialAccountId}. Grupo antigo ID: ${originalAccountIdToDelete}`);
-
-        const originalTxToDelete = await FinancialTransaction.findOne({
-            where: { id: originalAccountIdToDelete, financialAccountId, originalAccountId: originalAccountIdToDelete, isParcel: true },
-            transaction: t
-        });
-        if (!originalTxToDelete) {
-            await t.rollback();
-            const err = new Error(`Compra parcelada original com ID ${originalAccountIdToDelete} não encontrada ou inválida para recriação na FA ID ${financialAccountId}.`);
-            err.statusCode = 404; err.status = 'fail'; throw err;
-        }
-
-        // Deleção das parcelas antigas
-        const numDeleted = await FinancialTransaction.destroy({
-            where: { originalAccountId: originalAccountIdToDelete, financialAccountId: financialAccountId },
-            transaction: t
-        });
-        logger.info(`${numDeleted} parcelas antigas do grupo ID ${originalAccountIdToDelete} foram excluídas da FA ID ${financialAccountId}.`);
-
-        // Validação de limite do novo cartão, se aplicável
-        if (newParcelFullData.creditCardId && newParcelFullData.type === 'Saída') {
-            const card = await CreditCard.findOne({ where: { id: newParcelFullData.creditCardId, financialAccountId }, transaction: t });
-            if (!card) {
-                await t.rollback();
-                const error = new Error(`Novo Cartão de Crédito ID ${newParcelFullData.creditCardId} não pertence à conta financeira ${financialAccountId}.`);
-                error.statusCode = 404; error.status = 'fail'; throw error;
-            }
-            if (!card.isActive) {
-                await t.rollback();
-                const error = new Error(`Novo Cartão de Crédito ID ${newParcelFullData.creditCardId} ("${card.name}") está inativo.`);
-                error.statusCode = 400; error.status = 'fail'; throw error;
-            }
-            const limitInfo = await creditCardService.getAvailableCreditLimit(financialAccountId, newParcelFullData.creditCardId); // Não passar 't'
-            if (parseFloat(newParcelFullData.totalValue) > limitInfo.availableLimit) {
-                 await t.rollback();
-                const error = new Error(`Limite insuficiente no novo cartão "${card.name}" para a compra parcelada. Disponível: R$ ${limitInfo.availableLimit.toFixed(2)}, Valor total da compra: R$ ${parseFloat(newParcelFullData.totalValue).toFixed(2)}.`);
-                error.statusCode = 409; error.status = 'fail'; throw error;
-            }
-        }
+        }) || 0;
         
-        // Criação do novo grupo de parcelas
-        // Garante que newParcelFullData tenha financialCategoryName se for o caso, ou financialCategoryId
-        let categoryIdForNewParcelGroup = null;
-        if (newParcelFullData.financialCategoryName) {
-            const category = await systemService.findFinancialCategoryByNameAndType(newParcelFullData.financialCategoryName, newParcelFullData.type, financialAccountId);
-            if (category) categoryIdForNewParcelGroup = category.id;
-            // Se não encontrar, pode deixar nulo ou usar "Outras"
-        } else if (newParcelFullData.financialCategoryId) {
-            categoryIdForNewParcelGroup = newParcelFullData.financialCategoryId;
-        }
-        
-        const dataForCreation = {
-            ...newParcelFullData,
-            financialCategoryId: categoryIdForNewParcelGroup // Usa o ID encontrado/passado
+        await t.commit();
+
+        return {
+            cardId: card.id,
+            cardName: card.name,
+            totalLimit: totalLimit,
+            netUsedInOpenInvoice: parseFloat(parseFloat(openInvoiceSpends).toFixed(2)),
+            totalDebtOnCard: parseFloat(currentDebtOnCard.toFixed(2)),
+            availableLimit: parseFloat(availableLimitFinal.toFixed(2)),
+            closingDay: card.closingDay,
+            paymentDay: card.paymentDay,
+            currentInvoiceCycle: {
+                start: invoiceStartDate.toISOString().split('T')[0],
+                end: invoiceEndDate.toISOString().split('T')[0]
+            }
         };
-        delete dataForCreation.financialCategoryName; // Remove o nome se existia
-
-        const recreatedResult = await createParcelledAccount(financialAccountId, dataForCreation, { transaction: t });
-
-        await t.commit();
-        logger.info(`Compra parcelada (original ID: ${originalAccountIdToDelete}) recriada com sucesso com novos dados para FA ID ${financialAccountId}.`);
-        return recreatedResult;
 
     } catch (error) {
         if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
-        logger.error(`Erro ao recriar compra parcelada (original ID: ${originalAccountIdToDelete}, FA ID: ${financialAccountId}): ${error.message}`, { error, newParcelFullData });
+        logger.error(`Erro ao calc limite disp. cartão ID ${creditCardId} (Conta: ${financialAccountId}): ${error.message}`, { error });
+        if (!error.statusCode) error.statusCode = 500;
+        throw error;
+    }
+}
+
+async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, periodOptions = { type: 'aberta' }) {
+  const t = await sequelize.transaction();
+  try {
+      const financialAccount = await validateOwningFinancialAccount(financialAccountId, t);
+      const card = await CreditCard.findByPk(creditCardId, { transaction: t });
+
+      if (!card || card.financialAccountId !== financialAccountId) {
+          await t.rollback();
+          const error = new Error(`Cartão ID ${creditCardId} não encontrado ou não pertence à conta ${financialAccountId}.`);
+          error.statusCode = 404; error.status = 'fail'; throw error;
+      }
+      if (!card.isActive && periodOptions.type === 'aberta') {
+          await t.rollback();
+          const error = new Error(`Cartão "${card.name}" está inativo. Fatura aberta não aplicável.`);
+          error.statusCode = 400; error.status = 'fail'; throw error;
+      }
+
+      const today = new Date();
+      let invoiceStartDate, invoiceEndDate, invoiceDescriptionPeriod;
+      let referenceYear, referenceMonthZeroBased;
+
+      if (periodOptions.type === 'especifico') {
+          if (!periodOptions.month || !periodOptions.year || isNaN(parseInt(periodOptions.month)) || isNaN(parseInt(periodOptions.year))) {
+              await t.rollback();
+              const error = new Error("Mês (1-12) e ano são obrigatórios para fatura de período específico.");
+              error.statusCode = 400; error.status = 'fail'; throw error;
+          }
+          referenceMonthZeroBased = parseInt(periodOptions.month, 10) - 1;
+          referenceYear = parseInt(periodOptions.year, 10);
+
+          invoiceEndDate = new Date(Date.UTC(referenceYear, referenceMonthZeroBased, card.closingDay));
+          invoiceStartDate = new Date(Date.UTC(referenceYear, referenceMonthZeroBased -1 , card.closingDay + 1));
+          invoiceDescriptionPeriod = `${new Date(Date.UTC(referenceYear, referenceMonthZeroBased)).toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone:'UTC' })}`;
+      } else if (periodOptions.type === 'ultima_fechada') {
+          let targetMonth = today.getUTCMonth();
+          let targetYear = today.getUTCFullYear();
+          if (today.getUTCDate() <= card.closingDay) {
+              targetMonth -= 1;
+              if (targetMonth < 0) { targetMonth = 11; targetYear -=1; }
+          }
+          referenceMonthZeroBased = targetMonth;
+          referenceYear = targetYear;
+
+          invoiceEndDate = new Date(Date.UTC(referenceYear, referenceMonthZeroBased, card.closingDay));
+          invoiceStartDate = new Date(Date.UTC(referenceYear, referenceMonthZeroBased -1 , card.closingDay + 1));
+          invoiceDescriptionPeriod = `Última Fatura Fechada (${formatDate(invoiceStartDate.toISOString().split('T')[0])} - ${formatDate(invoiceEndDate.toISOString().split('T')[0])})`;
+      } else { 
+          let targetMonth = today.getUTCMonth();
+          let targetYear = today.getUTCFullYear();
+          if (today.getUTCDate() > card.closingDay) {
+              targetMonth += 1;
+              if (targetMonth > 11) { targetMonth = 0; targetYear +=1; }
+          }
+          referenceMonthZeroBased = targetMonth;
+          referenceYear = targetYear;
+
+          invoiceEndDate = new Date(Date.UTC(referenceYear, referenceMonthZeroBased, card.closingDay));
+          invoiceStartDate = new Date(Date.UTC(referenceYear, referenceMonthZeroBased -1 , card.closingDay + 1));
+          invoiceDescriptionPeriod = `Fatura Atual/Aberta (Prev. Fechamento: ${formatDate(invoiceEndDate.toISOString().split('T')[0])})`;
+      }
+
+      const transactions = await FinancialTransaction.findAll({
+          where: {
+              financialAccountId, creditCardId, type: 'Saída',
+              transactionDate: { 
+                  [Op.gte]: invoiceStartDate.toISOString().split('T')[0],
+                  [Op.lte]: invoiceEndDate.toISOString().split('T')[0]
+              }
+          },
+          order: [['transactionDate', 'ASC'], ['createdAt', 'ASC']],
+          include: [
+              {model: FinancialCategory, as: 'category', attributes: ['id','name']},
+              {model: FinancialTransaction, as: 'originalAccount', attributes:['id','description', 'originalPurchaseTotalValue', 'totalParcels']}
+          ],
+          transaction: t
+      });
+
+      const totalAmount = transactions.reduce((sum, tx) => sum + parseFloat(tx.value), 0);
+
+      let paymentDueDate = new Date(invoiceEndDate);
+      if (card.paymentDay <= card.closingDay) {
+          paymentDueDate.setUTCMonth(invoiceEndDate.getUTCMonth() + 1);
+      }
+      paymentDueDate.setUTCDate(card.paymentDay);
+
+      await t.commit(); 
+
+      const limitDetails = await getAvailableCreditLimit(financialAccountId, creditCardId);
+      
+      return {
+          cardId: card.id,
+          cardName: card.name,
+          financialAccountId: financialAccountId,
+          financialAccountName: financialAccount.accountName,
+          financialAccountType: financialAccount.accountType,
+          invoicePeriodDescription: invoiceDescriptionPeriod,
+          invoiceReferenceMonthYear: new Date(Date.UTC(invoiceEndDate.getUTCFullYear(), invoiceEndDate.getUTCMonth())).toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' }),
+          invoiceCycleStartDate: invoiceStartDate.toISOString().split('T')[0],
+          invoiceCycleEndDate: invoiceEndDate.toISOString().split('T')[0],
+          paymentDueDate: paymentDueDate.toISOString().split('T')[0],
+          totalAmount: parseFloat(totalAmount.toFixed(2)),
+          transactions: transactions.map(tx => {
+              const jsonTx = tx.toJSON();
+              if (jsonTx.isParcel && jsonTx.originalAccount && jsonTx.originalAccount.totalParcels) {
+                  jsonTx.totalParcels = jsonTx.originalAccount.totalParcels;
+              }
+              return jsonTx;
+          }),
+          cardTotalLimit: parseFloat(card.limit),
+          availableLimitAfterInvoice: limitDetails.availableLimit 
+      };
+
+  } catch (error) {
+      if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
+      logger.error(`Erro ao obter detalhes da fatura para cartão ID ${creditCardId} (Conta: ${financialAccountId}): ${error.message}`, { error, periodOptions });
+      if (!error.statusCode) error.statusCode = 500;
+      throw error;
+  }
+}
+
+async function getAvailableInvoicePeriods(financialAccountId, creditCardId) {
+    try {
+        await validateOwningFinancialAccount(financialAccountId);
+        const card = await CreditCard.findByPk(creditCardId);
+        if (!card || card.financialAccountId !== financialAccountId) {
+            const error = new Error(`Cartão de crédito ID ${creditCardId} inválido ou não pertence à conta ${financialAccountId}.`);
+            error.statusCode = 404; error.status = 'fail'; throw error;
+        }
+
+        let dateExtractFunction;
+        let groupLiteral, orderLiteral;
+        const dialect = sequelize.getDialect();
+
+        if (dialect === 'sqlite') {
+            dateExtractFunction = fn('strftime', '%Y-%m', col('transactionDate'));
+            groupLiteral = literal("strftime('%Y-%m', \"FinancialTransaction\".\"transactionDate\")"); // Especificar tabela para ambiguidade
+            orderLiteral = literal("strftime('%Y-%m', \"FinancialTransaction\".\"transactionDate\")");
+        } else if (dialect === 'postgres') {
+            dateExtractFunction = fn('TO_CHAR', col('transactionDate'), 'YYYY-MM');
+            groupLiteral = literal("TO_CHAR(\"FinancialTransaction\".\"transactionDate\", 'YYYY-MM')");
+            orderLiteral = literal("TO_CHAR(\"FinancialTransaction\".\"transactionDate\", 'YYYY-MM')");
+        } else if (dialect === 'mysql') {
+            dateExtractFunction = fn('DATE_FORMAT', col('transactionDate'), '%Y-%m');
+            groupLiteral = literal("DATE_FORMAT(`FinancialTransaction`.`transactionDate`, '%Y-%m')");
+            orderLiteral = literal("DATE_FORMAT(`FinancialTransaction`.`transactionDate`, '%Y-%m')");
+        } else {
+            logger.error(`[SERVICE] Dialeto SQL não suportado para getAvailableInvoicePeriods: ${dialect}`);
+            throw new Error('Dialeto SQL não suportado para esta operação.');
+        }
+
+        const distinctTransactionYearMonths = await FinancialTransaction.findAll({
+            attributes: [[dateExtractFunction, 'yearMonth']],
+            where: { creditCardId, financialAccountId, type: 'Saída' },
+            group: [groupLiteral],
+            order: [[orderLiteral, 'DESC']],
+            raw: true,
+        });
+       
+        const periodsMap = new Map(); 
+
+        for (const { yearMonth } of distinctTransactionYearMonths) {
+            if (yearMonth && typeof yearMonth === 'string') {
+                const [yearStr, monthStr] = yearMonth.split('-');
+                const year = parseInt(yearStr, 10);
+                const monthZeroBased = parseInt(monthStr, 10) - 1;
+                
+                // Fatura A: fecha no mês da transação (se a transação foi ANTES do closingDay) OU no mês seguinte.
+                // Consideramos o mês de fechamento da fatura.
+                // Se uma transação é de Maio, ela pode cair na fatura que fecha em Maio ou em Junho.
+
+                // Cenário 1: Transações do mês X caem na fatura que fecha no final do mês X.
+                const closingDate1 = new Date(Date.UTC(year, monthZeroBased, card.closingDay));
+                const label1 = closingDate1.toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+                if (!periodsMap.has(label1)) {
+                    periodsMap.set(label1, { month: closingDate1.getUTCMonth() + 1, year: closingDate1.getUTCFullYear(), label: label1 });
+                }
+
+                // Cenário 2: Transações do mês X caem na fatura que fecha no início do mês X+1.
+                const closingDate2 = new Date(Date.UTC(year, monthZeroBased + 1, card.closingDay)); // Mês seguinte
+                const label2 = closingDate2.toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+                 if (!periodsMap.has(label2)) {
+                    periodsMap.set(label2, { month: closingDate2.getUTCMonth() + 1, year: closingDate2.getUTCFullYear(), label: label2 });
+                }
+            }
+        }
+       
+        const uniquePeriodsArray = Array.from(periodsMap.values())
+                               .sort((a, b) => {
+                                   if (b.year !== a.year) return b.year - a.year;
+                                   return b.month - a.month;
+                               });
+                               
+        const today = new Date();
+        let openInvoiceRefMonth = today.getUTCMonth() + 1;
+        let openInvoiceRefYear = today.getUTCFullYear();
+        if (today.getUTCDate() > card.closingDay) {
+            openInvoiceRefMonth += 1;
+            if (openInvoiceRefMonth > 12) {
+                openInvoiceRefMonth = 1;
+                openInvoiceRefYear += 1;
+            }
+        }
+        const openInvoiceLabel = new Date(Date.UTC(openInvoiceRefYear, openInvoiceRefMonth - 1)).toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+        
+        const openInvoiceKey = `${openInvoiceRefYear}-${String(openInvoiceRefMonth).padStart(2,'0')}`;
+        if (!periodsMap.has(openInvoiceLabel)) {
+             uniquePeriodsArray.unshift({ month: openInvoiceRefMonth, year: openInvoiceRefYear, label: `${openInvoiceLabel} (Aberta)`});
+        } else {
+            const existingOpenIdx = uniquePeriodsArray.findIndex(p => p.label === openInvoiceLabel);
+            if (existingOpenIdx > -1 && !uniquePeriodsArray[existingOpenIdx].label.includes("(Aberta)")) {
+                uniquePeriodsArray[existingOpenIdx].label = `${uniquePeriodsArray[existingOpenIdx].label} (Aberta)`;
+            }
+        }
+
+        logger.info(`Encontrados ${uniquePeriodsArray.length} períodos de fatura para cartão ID ${creditCardId}.`);
+        return uniquePeriodsArray.slice(0, 12);
+
+    } catch (error) {
+        logger.error(`Erro ao obter períodos de fatura para cartão ID ${creditCardId} (Conta: ${financialAccountId}): ${error.message}`, { error });
+        if (!error.statusCode) error.statusCode = 500;
+        throw error;
+    }
+}
+
+async function payCreditCardInvoice(financialAccountId, creditCardId, paymentAmount, paymentDate, originatingAccountDescription = null, financialCategoryId = null) {
+    const t = await sequelize.transaction();
+    try {
+        await validateOwningFinancialAccount(financialAccountId, t);
+        const card = await CreditCard.findOne({ where: {id: creditCardId, financialAccountId}, transaction: t });
+
+        if (!card) {
+            await t.rollback();
+            const error = new Error(`Cartão ID ${creditCardId} não encontrado ou não pertence à conta ${financialAccountId}.`);
+            error.statusCode = 404; error.status = 'fail'; throw error;
+        }
+
+        let categoryId = financialCategoryId;
+        if (!categoryId) {
+            const defaultCategory = await FinancialCategory.findOne({
+                where: { name: { [Op.iLike]: 'Pagamento de Fatura' }, type: 'Saída', isActive: true },
+                transaction: t
+            });
+            if (defaultCategory) categoryId = defaultCategory.id;
+            else {
+                const fallbackCategory = await FinancialCategory.findOne({
+                    where: { name: { [Op.iLike]: 'Pagamento de Cartão' }, type: 'Saída', isActive: true },
+                    transaction: t
+                });
+                if (fallbackCategory) categoryId = fallbackCategory.id;
+                else logger.warn(`[SERVICE] Categoria "Pagamento de Fatura" ou "Pag. Cartão" não encontrada para pagamento do cartão ${card.name}.`);
+            }
+        }
+
+        const paymentTransaction = await FinancialTransaction.create({
+            financialAccountId,
+            description: `Pagamento Fatura ${card.name}${originatingAccountDescription ? ` (Origem: ${originatingAccountDescription})` : ''}`,
+            value: Math.abs(paymentAmount), type: 'Saída', transactionDate: paymentDate,
+            financialCategoryId: categoryId, creditCardId: null, 
+            isPayableOrReceivable: false, isPaidOrReceived: true, paymentDate: paymentDate,
+            notes: `Pagamento da fatura do cartão ${card.name} (ID Cartão: ${card.id}).`
+        }, { transaction: t });
+
+        await t.commit();
+        logger.info(`Pagamento de ${formatCurrency(paymentAmount)} para fatura do cartão ID ${creditCardId} (${card.name}) registrado. TX ID: ${paymentTransaction.id}`);
+        const reloadedPaymentTx = await FinancialTransaction.findByPk(paymentTransaction.id, {
+            include: [{model: FinancialCategory, as: 'category', attributes: ['id', 'name']}]
+        });
+        return reloadedPaymentTx.toJSON();
+
+    } catch (error) {
+        if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
+        logger.error(`Erro ao registrar pagamento de fatura para cartão ID ${creditCardId} (Conta: ${financialAccountId}): ${error.message}`, { error });
         if (!error.statusCode) error.statusCode = 500;
         throw error;
     }
@@ -845,16 +742,14 @@ async function recreateParcelledAccount(financialAccountId, originalAccountIdToD
 
 
 module.exports = {
-  createTransaction,
-  createParcelledAccount,
-  getAllTransactions,
-  getTransactionById,
-  updateTransaction,
-  markAsPaidOrReceived,
-  markTransactionAsPaidOrReceived,
-  deleteTransaction,
-  getFinancialSummary,
-  deleteParcelledAccountGroup,
-  updateParcelledAccountDescription,
-  recreateParcelledAccount,
+  createCreditCard,
+  getAllCreditCards,
+  getCreditCardById,
+  updateCreditCard,
+  deleteCreditCard,
+  findCreditCardByName,
+  getAvailableCreditLimit,
+  getCreditCardInvoiceDetails,
+  getAvailableInvoicePeriods,
+  payCreditCardInvoice,
 };
