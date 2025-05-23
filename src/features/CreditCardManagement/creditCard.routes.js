@@ -10,8 +10,17 @@ const router = Router({ mergeParams: true }); // mergeParams para acessar :finan
 
 router.post('/', creditCardController.createCreditCard);
 router.get('/', creditCardController.getAllCreditCards);
+
+// Rotas específicas para um cartão
 router.get('/:cardId', creditCardController.getCreditCardById);
 router.put('/:cardId', creditCardController.updateCreditCard);
 router.delete('/:cardId', creditCardController.deleteCreditCard);
+
+// NOVAS ROTAS PARA FATURA E PERÍODOS
+router.get('/:cardId/invoice', creditCardController.getCreditCardInvoiceDetails);
+router.get('/:cardId/available-periods', creditCardController.getAvailableInvoicePeriods);
+router.get('/:cardId/available-limit', creditCardController.getAvailableCreditLimit); // Rota para limite se não vier na listagem
+router.post('/:cardId/pay-invoice', creditCardController.payCreditCardInvoice); // Rota para pagar fatura
+
 
 module.exports = router;
