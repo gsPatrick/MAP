@@ -31,7 +31,7 @@ async function createFinancialCategory(financialAccountId, categoryData) {
   const { name, type, parentId } = categoryData;
   const t = await sequelize.transaction();
   try {
-    await validateOwningFinancialAccount(financialAccountId, t); // Valida a conta dona
+    await validateOwningFinancialAccount(financialAccountId, t);
 
     if (!name || !type) {
       const error = new Error('Nome e Tipo são obrigatórios para a categoria financeira.');
@@ -47,7 +47,7 @@ async function createFinancialCategory(financialAccountId, categoryData) {
     const existingCategory = await FinancialCategory.findOne({
       where: {
         name: { [Op.iLike]: name },
-        financialAccountId, // Filtra pela conta financeira
+        financialAccountId,
         parentId: finalParentId,
       },
       transaction: t
@@ -64,8 +64,6 @@ async function createFinancialCategory(financialAccountId, categoryData) {
         const error = new Error(`Categoria pai com ID ${finalParentId} não encontrada nesta conta financeira.`);
         error.statusCode = 404; error.status = 'fail'; throw error;
       }
-      // Adicional: Verificar se o tipo da subcategoria é compatível com o tipo da categoria pai, se necessário.
-      // Ex: Se pai é 'Saída', subcategoria não pode ser 'Entrada' (a menos que 'Ambos')
       if (parent.type !== 'Ambos' && type !== 'Ambos' && parent.type !== type) {
           const error = new Error(`O tipo "${type}" da subcategoria não é compatível com o tipo "${parent.type}" da categoria pai "${parent.name}".`);
           error.statusCode = 400; error.status = 'fail'; throw error;
@@ -76,7 +74,7 @@ async function createFinancialCategory(financialAccountId, categoryData) {
         name,
         type,
         parentId: finalParentId,
-        financialAccountId // Associa à conta
+        financialAccountId
     }, { transaction: t });
     
     await t.commit();
@@ -100,7 +98,7 @@ async function getAllFinancialCategories(financialAccountId, queryParams = {}) {
   const { hierarchical = false, onlyTopLevel = false, type } = queryParams;
   try {
     await validateOwningFinancialAccount(financialAccountId); 
-    const whereConditions = { financialAccountId }; // Filtro principal
+    const whereConditions = { financialAccountId };
 
     if (onlyTopLevel) {
       whereConditions.parentId = null;
@@ -113,8 +111,9 @@ async function getAllFinancialCategories(financialAccountId, queryParams = {}) {
       const categories = await FinancialCategory.findAll({
         where: whereConditions,
         order: [
-            sequelize.literal('"parentId" IS NULL DESC'),
-            ['parentId', 'ASC NULLS FIRST'],
+            // CORREÇÃO: Qualificar parentId com o nome da tabela (ou alias padrão 'FinancialCategory')
+            sequelize.literal('"FinancialCategory"."parentId" IS NULL DESC'),
+            [sequelize.col('"FinancialCategory"."parentId"'), 'ASC NULLS FIRST'], // Usar sequelize.col para qualificar
             ['name', 'ASC']
         ],
         include: [{ model: FinancialCategory, as: 'parentCategory', attributes: ['id', 'name'] }]
@@ -122,7 +121,7 @@ async function getAllFinancialCategories(financialAccountId, queryParams = {}) {
       return categories.map(c => c.toJSON());
     } else {
       const allCategoriesForAccount = await FinancialCategory.findAll({
-          where: whereConditions, // Aplica filtro de tipo aqui também para consistência
+          where: whereConditions,
           order: [['name', 'ASC']]
       });
 
@@ -137,11 +136,10 @@ async function getAllFinancialCategories(financialAccountId, queryParams = {}) {
 
       categoriesMap.forEach(category => {
         if (category.parentId && categoriesMap.has(category.parentId)) {
-           // Adiciona apenas se a subcategoria estiver no mapa (passou no filtro type)
            if (categoriesMap.has(category.id)) { 
                 categoriesMap.get(category.parentId).subcategories.push(category);
            }
-        } else if (!category.parentId) { // É uma categoria raiz
+        } else if (!category.parentId) {
           rootCategories.push(category);
         }
       });
@@ -149,7 +147,7 @@ async function getAllFinancialCategories(financialAccountId, queryParams = {}) {
     }
   } catch (error) {
     logger.error(`Erro ao listar categorias financeiras da Conta ID ${financialAccountId}: ${error.message}`, { error, queryParams });
-    if (!error.statusCode) error.statusCode = 500; // Garante statusCode se não tiver
+    if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
 }
@@ -166,7 +164,7 @@ async function getFinancialCategoryById(financialAccountId, categoryId) {
         const category = await FinancialCategory.findOne({
             where: { id: categoryId, financialAccountId },
             include: [
-                { model: FinancialCategory, as: 'subcategories', include: [{model: FinancialCategory, as: 'parentCategory'}] }, // Inclui netas se necessário
+                { model: FinancialCategory, as: 'subcategories', include: [{model: FinancialCategory, as: 'parentCategory'}] },
                 { model: FinancialCategory, as: 'parentCategory', attributes: ['id', 'name'] }
             ]
         });
@@ -211,7 +209,7 @@ async function updateFinancialCategory(financialAccountId, categoryId, updateDat
         where: {
           name: { [Op.iLike]: newName },
           parentId: newParentId,
-          financialAccountId, // << ADICIONADO
+          financialAccountId,
           id: { [Op.ne]: categoryId }
         },
         transaction: t
@@ -224,18 +222,30 @@ async function updateFinancialCategory(financialAccountId, categoryId, updateDat
     }
     
     if (newParentId !== null && newParentId !== undefined) {
-        if (newParentId === categoryId) { /* ... erro ciclo ... */ }
+        if (newParentId === categoryId) { 
+            const error = new Error('Uma categoria não pode ser pai de si mesma.');
+            error.statusCode = 400; error.status = 'fail'; throw error;
+        }
         const parentCandidate = await FinancialCategory.findOne({where: {id: newParentId, financialAccountId}, transaction:t});
         if(!parentCandidate){
             const error = new Error(`Categoria pai ID ${newParentId} não encontrada nesta conta financeira ou inválida.`);
             error.statusCode = 400; error.status = 'fail'; throw error;
         }
-        async function isDescendant(potentialChildId, ancestorIdToFind, transaction) { /* ... */ } // Mesma função de antes
-        if (await isDescendant(newParentId, categoryId, t)) { /* ... erro ciclo ... */ }
+        async function isDescendant(potentialChildId, ancestorIdToFind, transaction) {
+            let current = await FinancialCategory.findByPk(potentialChildId, { attributes: ['parentId'], transaction });
+            while (current && current.parentId !== null) {
+                if (current.parentId === ancestorIdToFind) return true;
+                current = await FinancialCategory.findByPk(current.parentId, { attributes: ['parentId'], transaction });
+            }
+            return false;
+        }
+        if (await isDescendant(newParentId, categoryId, t)) { 
+            const error = new Error('Não é possível mover uma categoria para ser filha de um de seus próprios descendentes (cria um ciclo).');
+            error.statusCode = 400; error.status = 'fail'; throw error;
+        }
     }
 
-
-    const allowedFields = ['name', 'type', 'parentId']; // Removido isActive
+    const allowedFields = ['name', 'type', 'parentId'];
     const filteredUpdateData = {};
     for(const key of allowedFields){
         if(updateData.hasOwnProperty(key)){
@@ -282,7 +292,7 @@ async function updateFinancialCategory(financialAccountId, categoryId, updateDat
 async function deleteFinancialCategory(financialAccountId, categoryId, options = {}) {
   const {
     actionForSubcategories = 'restrict', 
-    actionForTransactions = 'set_null', // Alterado para 'set_null' como default mais seguro
+    actionForTransactions = 'set_null',
     reassignToCategoryId = null
   } = options;
 
@@ -293,41 +303,51 @@ async function deleteFinancialCategory(financialAccountId, categoryId, options =
     const category = await FinancialCategory.findOne({ where: {id: categoryId, financialAccountId}, transaction: t });
     if (!category) {
       if (!options.transaction) await t.rollback();
-      return false;
+      const e = new Error('Categoria financeira não encontrada nesta conta para exclusão.');
+      e.statusCode = 404; e.status = 'fail'; throw e; // Lança erro para ser pego no controller
     }
 
     const transactionsCount = await FinancialTransaction.count({ where: { financialCategoryId: categoryId, financialAccountId }, transaction: t });
     if (transactionsCount > 0) {
-      if (actionForTransactions === 'restrict') { /* ... erro ... */ }
-      else if (actionForTransactions === 'reassign') {
-        if (!reassignToCategoryId) { /* ... erro ... */ }
+      if (actionForTransactions === 'restrict') {
+        const e = new Error(`Categoria "${category.name}" (ID ${categoryId}) tem ${transactionsCount} transações. Ação 'restrict' impede a exclusão.`);
+        e.statusCode = 409; e.status = 'fail'; throw e;
+      } else if (actionForTransactions === 'reassign') {
+        if (!reassignToCategoryId) {
+          const e = new Error('Para reassociar transações, "reassignToCategoryId" é obrigatório.');
+          e.statusCode = 400; e.status = 'fail'; throw e;
+        }
         const targetCategory = await FinancialCategory.findOne({where: {id: reassignToCategoryId, financialAccountId}, transaction: t });
-        if (!targetCategory || targetCategory.id === categoryId) { /* ... erro ... */ }
+        if (!targetCategory || targetCategory.id === categoryId) {
+          const e = new Error(`Categoria de destino para transações (ID: ${reassignToCategoryId}) é inválida ou é a mesma.`);
+          e.statusCode = 400; e.status = 'fail'; throw e;
+        }
         await FinancialTransaction.update(
           { financialCategoryId: reassignToCategoryId },
-          { where: { financialCategoryId: categoryId, financialAccountId }, transaction: t } // Filtra pela conta
+          { where: { financialCategoryId: categoryId, financialAccountId }, transaction: t }
         );
       } else if (actionForTransactions === 'set_null') {
         await FinancialTransaction.update(
           { financialCategoryId: null },
-          { where: { financialCategoryId: categoryId, financialAccountId }, transaction: t } // Filtra pela conta
+          { where: { financialCategoryId: categoryId, financialAccountId }, transaction: t }
         );
       } else if (actionForTransactions === 'delete') {
-        await FinancialTransaction.destroy({ where: { financialCategoryId: categoryId, financialAccountId }, transaction: t }); // Filtra pela conta
+        await FinancialTransaction.destroy({ where: { financialCategoryId: categoryId, financialAccountId }, transaction: t });
       }
     }
 
     const subcategories = await FinancialCategory.findAll({ where: { parentId: categoryId, financialAccountId }, transaction: t });
     if (subcategories.length > 0) {
-      if (actionForSubcategories === 'restrict') { /* ... erro ... */ }
-      else if (actionForSubcategories === 'promote') {
+      if (actionForSubcategories === 'restrict') {
+        const e = new Error(`Categoria "${category.name}" (ID ${categoryId}) tem ${subcategories.length} subcategorias. Ação 'restrict' impede a exclusão.`);
+        e.statusCode = 409; e.status = 'fail'; throw e;
+      } else if (actionForSubcategories === 'promote') {
         await FinancialCategory.update(
-          { parentId: category.parentId }, // Novo pai é o pai da categoria deletada (pode ser null)
-          { where: { parentId: categoryId, financialAccountId }, transaction: t } // Filtra pela conta
+          { parentId: category.parentId },
+          { where: { parentId: categoryId, financialAccountId }, transaction: t }
         );
       } else if (actionForSubcategories === 'delete') {
         for (const sub of subcategories) {
-          // A chamada recursiva precisa do financialAccountId
           await deleteFinancialCategory(financialAccountId, sub.id, { ...options, transaction: t });
         }
       }
@@ -337,7 +357,7 @@ async function deleteFinancialCategory(financialAccountId, categoryId, options =
     if (!options.transaction) await t.commit();
     return true;
   } catch (error) {
-    if (!options.transaction && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback(); // Garante rollback
+    if (!options.transaction && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
     logger.error(`Erro ao deletar categoria financeira ID ${categoryId} da Conta ID ${financialAccountId}: ${error.message}`, { error });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
@@ -357,8 +377,7 @@ async function findFinancialCategoryByNameAndTypeForAccount(name, type, financia
   try {
     const whereConditions = {
       name: { [Op.iLike]: name },
-      financialAccountId, // Filtro pela conta
-      // isActive não existe mais no modelo, então removemos
+      financialAccountId,
     };
     if (type) {
       whereConditions.type = { [Op.or]: [type, 'Ambos'] };
@@ -373,7 +392,7 @@ async function findFinancialCategoryByNameAndTypeForAccount(name, type, financia
     return null;
   } catch (error) {
     logger.error(`Erro ao buscar categoria por nome/tipo para Conta ID ${financialAccountId}: ${error.message}`, { error });
-    return null;
+    return null; // Retorna null para que o serviço que chamou possa tratar
   }
 }
 
@@ -384,5 +403,5 @@ module.exports = {
   getFinancialCategoryById,
   updateFinancialCategory,
   deleteFinancialCategory,
-  findFinancialCategoryByNameAndTypeForAccount, // Renomeado para clareza
+  findFinancialCategoryByNameAndTypeForAccount,
 };
