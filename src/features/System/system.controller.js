@@ -1,82 +1,114 @@
-// src/features/System/system.controller.js
-const systemService = require('./system.service');
+// src/features/FinancialCategory/financialCategory.controller.js
+const financialCategoryService = require('./financialCategory.service');
 const logger = require('../../utils/logger');
 
-async function getSystemPreferences(req, res, next) {
-  try {
-    const preferences = await systemService.getSystemPreferences();
-    res.status(200).json({ status: 'success', data: preferences });
-  } catch (error) {
-    next(error);
-  }
-}
-
-async function updateSystemPreferences(req, res, next) {
-  try {
-    if (Object.keys(req.body).length === 0) {
-        const error = new Error('Nenhum dado fornecido para atualização das preferências.');
-        error.statusCode = 400; error.status = 'fail'; return next(error);
+function getFinancialAccountIdFromRequest(req) {
+    const id = parseInt(req.params.financialAccountId, 10);
+    if (isNaN(id)) {
+        const error = new Error('ID da Conta Financeira inválido na rota para categorias.');
+        error.statusCode = 400; error.status = 'fail'; throw error;
     }
-    const updatedPreferences = await systemService.updateSystemPreferences(req.body);
-    res.status(200).json({ status: 'success', data: updatedPreferences });
-  } catch (error) {
-    next(error);
-  }
+    return id;
 }
 
-// --- Financial Category Controllers - REMOVIDOS DESTE ARQUIVO ---
+async function createFinancialCategoryForAccount(req, res, next) {
+    try {
+        const financialAccountId = getFinancialAccountIdFromRequest(req);
+        const { name, parentId } = req.body; // Removido 'type'
+        if (!name) { // Apenas nome é obrigatório agora
+            const error = new Error('Nome é obrigatório para criar a categoria.');
+            error.statusCode = 400; error.status = 'fail'; return next(error);
+        }
+        // 'type' não é mais enviado para o serviço
+        const category = await financialCategoryService.createFinancialCategory(financialAccountId, { name, parentId });
+        res.status(201).json({ status: 'success', data: category });
+    } catch (error) { next(error); }
+}
 
-// --- Motivational Phrase Controllers ---
-async function createMotivationalPhrase(req, res, next) {
+async function getAllFinancialCategoriesForAccount(req, res, next) {
     try {
-        const phrase = await systemService.createMotivationalPhrase(req.body);
-        res.status(201).json({ status: 'success', data: phrase });
+        const financialAccountId = getFinancialAccountIdFromRequest(req);
+        const { hierarchical, onlyTopLevel /*, type (removido) */ } = req.query;
+        const options = {
+            hierarchical: hierarchical === 'true',
+            onlyTopLevel: onlyTopLevel === 'true',
+            // type removido
+        };
+        const categories = await financialCategoryService.getAllFinancialCategories(financialAccountId, options);
+        res.status(200).json({ status: 'success', data: categories });
     } catch (error) { next(error); }
 }
-async function getAllMotivationalPhrases(req, res, next) {
+
+async function getFinancialCategoryByIdForAccount(req, res, next) {
     try {
-        const phrases = await systemService.getAllMotivationalPhrases(req.query);
-        res.status(200).json({ status: 'success', data: phrases });
-    } catch (error) { next(error); }
-}
-async function updateMotivationalPhrase(req, res, next) {
-    try {
-        const phraseId = parseInt(req.params.id, 10);
-         if (isNaN(phraseId)) { 
-            const error = new Error('ID da frase inválido.');
+        const financialAccountId = getFinancialAccountIdFromRequest(req);
+        const categoryId = parseInt(req.params.categoryId, 10);
+        if (isNaN(categoryId)) {
+            const error = new Error('ID da categoria inválido.');
             error.statusCode = 400; error.status = 'fail'; return next(error);
-         }
-        const phrase = await systemService.updateMotivationalPhrase(phraseId, req.body);
-         if (!phrase) { // O service agora retorna null se não encontrar ou lança erro
-            const error = new Error('Frase não encontrada.');
+        }
+        const category = await financialCategoryService.getFinancialCategoryById(financialAccountId, categoryId);
+        if (!category) {
+            const error = new Error('Categoria financeira não encontrada.');
             error.statusCode = 404; error.status = 'fail'; return next(error);
-         }
-        res.status(200).json({ status: 'success', data: phrase });
+        }
+        res.status(200).json({ status: 'success', data: category });
     } catch (error) { next(error); }
 }
-async function deleteMotivationalPhrase(req, res, next) {
+
+async function updateFinancialCategoryForAccount(req, res, next) {
     try {
-        const phraseId = parseInt(req.params.id, 10);
-         if (isNaN(phraseId)) { 
-            const error = new Error('ID da frase inválido.');
+        const financialAccountId = getFinancialAccountIdFromRequest(req);
+        const categoryId = parseInt(req.params.categoryId, 10);
+        if (isNaN(categoryId)) {
+            const error = new Error('ID da categoria inválido.');
             error.statusCode = 400; error.status = 'fail'; return next(error);
-         }
-        const success = await systemService.deleteMotivationalPhrase(phraseId);
-        if (!success) { 
-            const error = new Error('Frase não encontrada para exclusão.');
-            error.statusCode = 404; error.status = 'fail'; return next(error);
-         }
+        }
+        if (Object.keys(req.body).length === 0) {
+            const error = new Error('Nenhum dado fornecido para atualização.');
+            error.statusCode = 400; error.status = 'fail'; return next(error);
+        }
+        const { name, parentId } = req.body; // Removido 'type'
+        const category = await financialCategoryService.updateFinancialCategory(financialAccountId, categoryId, { name, parentId });
+        if (!category) { // O serviço lança erro 404 se não encontrar
+             const error = new Error('Categoria financeira não encontrada para atualização.');
+             error.statusCode = 404; error.status = 'fail'; return next(error);
+        }
+        res.status(200).json({ status: 'success', data: category });
+    } catch (error) { next(error); }
+}
+
+async function deleteFinancialCategoryForAccount(req, res, next) {
+    try {
+        const financialAccountId = getFinancialAccountIdFromRequest(req);
+        const categoryId = parseInt(req.params.categoryId, 10);
+        if (isNaN(categoryId)) {
+            const error = new Error('ID da categoria inválido.');
+            error.statusCode = 400; error.status = 'fail'; return next(error);
+        }
+        
+        const { 
+            actionForSubcategories = 'restrict',
+            actionForTransactions = 'set_null',  
+            reassignToCategoryId = null 
+        } = req.query;
+
+        const success = await financialCategoryService.deleteFinancialCategory(financialAccountId, categoryId, {
+            actionForSubcategories,
+            actionForTransactions,
+            reassignToCategoryId: reassignToCategoryId ? parseInt(reassignToCategoryId, 10) : null
+        });
+        // O serviço agora lança erro 404 se não encontrar, então não precisa checar 'success' aqui.
         res.status(204).send();
-    } catch (error) { next(error); }
+    } catch (error) { 
+        next(error); 
+    }
 }
-
 
 module.exports = {
-  getSystemPreferences,
-  updateSystemPreferences,
-  // Controllers de FinancialCategory removidos daqui
-  createMotivationalPhrase,
-  getAllMotivationalPhrases,
-  updateMotivationalPhrase,
-  deleteMotivationalPhrase,
+    createFinancialCategoryForAccount,
+    getAllFinancialCategoriesForAccount,
+    getFinancialCategoryByIdForAccount,
+    updateFinancialCategoryForAccount,
+    deleteFinancialCategoryForAccount,
 };

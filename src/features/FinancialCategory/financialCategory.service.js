@@ -3,10 +3,6 @@ const { FinancialCategory, FinancialAccount, FinancialTransaction, sequelize } =
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 
-/**
- * Valida se a FinancialAccount existe e está ativa.
- * (Função auxiliar, pode ser movida para um utils de FinancialAccount se usada em múltiplos services)
- */
 async function validateOwningFinancialAccount(financialAccountId, transaction = null) {
   const account = await FinancialAccount.findByPk(financialAccountId, { transaction });
   if (!account) {
@@ -20,26 +16,15 @@ async function validateOwningFinancialAccount(financialAccountId, transaction = 
   return account;
 }
 
-
-/**
- * Cria uma nova categoria financeira para uma FinancialAccount.
- * @param {number} financialAccountId
- * @param {object} categoryData - { name, type, parentId (opcional) }
- * @returns {Promise<object>}
- */
 async function createFinancialCategory(financialAccountId, categoryData) {
-  const { name, type, parentId } = categoryData;
+  const { name, parentId } = categoryData; // Removido 'type'
   const t = await sequelize.transaction();
   try {
     await validateOwningFinancialAccount(financialAccountId, t);
 
-    if (!name || !type) {
-      const error = new Error('Nome e Tipo são obrigatórios para a categoria financeira.');
+    if (!name) { // Apenas 'name' é obrigatório agora do categoryData
+      const error = new Error('Nome é obrigatório para a categoria financeira.');
       error.statusCode = 400; error.status = 'fail'; throw error;
-    }
-    if (!['Entrada', 'Saída', 'Ambos'].includes(type)) {
-        const error = new Error('Tipo de categoria inválido. Use Entrada, Saída ou Ambos.');
-        error.statusCode = 400; error.status = 'fail'; throw error;
     }
 
     const finalParentId = parentId === undefined || parentId === null || parentId === '' ? null : parseInt(parentId, 10);
@@ -64,15 +49,12 @@ async function createFinancialCategory(financialAccountId, categoryData) {
         const error = new Error(`Categoria pai com ID ${finalParentId} não encontrada nesta conta financeira.`);
         error.statusCode = 404; error.status = 'fail'; throw error;
       }
-      if (parent.type !== 'Ambos' && type !== 'Ambos' && parent.type !== type) {
-          const error = new Error(`O tipo "${type}" da subcategoria não é compatível com o tipo "${parent.type}" da categoria pai "${parent.name}".`);
-          error.statusCode = 400; error.status = 'fail'; throw error;
-      }
+      // Validação de compatibilidade de tipo removida
     }
 
     const category = await FinancialCategory.create({
         name,
-        type,
+        // type removido
         parentId: finalParentId,
         financialAccountId
     }, { transaction: t });
@@ -88,14 +70,8 @@ async function createFinancialCategory(financialAccountId, categoryData) {
   }
 }
 
-/**
- * Lista todas as categorias financeiras de uma FinancialAccount.
- * @param {number} financialAccountId
- * @param {object} queryParams - { hierarchical, onlyTopLevel, type }
- * @returns {Promise<Array<object>>}
- */
 async function getAllFinancialCategories(financialAccountId, queryParams = {}) {
-  const { hierarchical = false, onlyTopLevel = false, type } = queryParams;
+  const { hierarchical = false, onlyTopLevel = false /*, type (removido) */ } = queryParams;
   try {
     await validateOwningFinancialAccount(financialAccountId); 
     const whereConditions = { financialAccountId };
@@ -103,17 +79,14 @@ async function getAllFinancialCategories(financialAccountId, queryParams = {}) {
     if (onlyTopLevel) {
       whereConditions.parentId = null;
     }
-    if (type) {
-        whereConditions.type = { [Op.or]: [type, 'Ambos'] };
-    }
+    // Filtro por 'type' removido
 
     if (!hierarchical) {
       const categories = await FinancialCategory.findAll({
         where: whereConditions,
         order: [
-            // CORREÇÃO: Qualificar parentId com o nome da tabela (ou alias padrão 'FinancialCategory')
             sequelize.literal('"FinancialCategory"."parentId" IS NULL DESC'),
-            [sequelize.col('"FinancialCategory"."parentId"'), 'ASC NULLS FIRST'], // Usar sequelize.col para qualificar
+            [sequelize.col('"FinancialCategory"."parentId"'), 'ASC NULLS FIRST'],
             ['name', 'ASC']
         ],
         include: [{ model: FinancialCategory, as: 'parentCategory', attributes: ['id', 'name'] }]
@@ -152,12 +125,6 @@ async function getAllFinancialCategories(financialAccountId, queryParams = {}) {
   }
 }
 
-/**
- * Busca uma categoria financeira pelo ID, dentro de uma FinancialAccount.
- * @param {number} financialAccountId
- * @param {number} categoryId
- * @returns {Promise<object|null>}
- */
 async function getFinancialCategoryById(financialAccountId, categoryId) {
     try {
         await validateOwningFinancialAccount(financialAccountId);
@@ -180,13 +147,6 @@ async function getFinancialCategoryById(financialAccountId, categoryId) {
     }
 }
 
-/**
- * Atualiza uma categoria financeira de uma FinancialAccount.
- * @param {number} financialAccountId
- * @param {number} categoryId
- * @param {object} updateData - { name, type, parentId }
- * @returns {Promise<object|null>}
- */
 async function updateFinancialCategory(financialAccountId, categoryId, updateData) {
   const t = await sequelize.transaction();
   try {
@@ -245,15 +205,14 @@ async function updateFinancialCategory(financialAccountId, categoryId, updateDat
         }
     }
 
-    const allowedFields = ['name', 'type', 'parentId'];
+    const allowedFields = ['name', 'parentId']; // Removido 'type'
     const filteredUpdateData = {};
     for(const key of allowedFields){
         if(updateData.hasOwnProperty(key)){
             if(key === 'parentId'){
                 filteredUpdateData[key] = (updateData[key] === null || updateData[key] === undefined || updateData[key] === '') ? null : parseInt(updateData[key],10);
-            } else if (key === 'type' && !['Entrada', 'Saída', 'Ambos'].includes(updateData[key])) {
-                logger.warn(`Tipo de categoria inválido fornecido na atualização: ${updateData[key]}. Mantendo o tipo atual.`);
-            }
+            } 
+            // Removida validação de type
             else {
                 filteredUpdateData[key] = updateData[key];
             }
@@ -282,14 +241,9 @@ async function updateFinancialCategory(financialAccountId, categoryId, updateDat
   }
 }
 
-/**
- * Exclui uma categoria financeira de uma FinancialAccount.
- * @param {number} financialAccountId
- * @param {number} categoryId
- * @param {object} options - { actionForSubcategories, actionForTransactions, reassignToCategoryId }
- * @returns {Promise<boolean>}
- */
 async function deleteFinancialCategory(financialAccountId, categoryId, options = {}) {
+  // ... (função deleteFinancialCategory permanece a mesma, pois 'type' não era usado nela diretamente para lógica de deleção)
+  // Apenas certifique-se de que as mensagens de erro ou logs não mencionem mais 'tipo' se não for relevante.
   const {
     actionForSubcategories = 'restrict', 
     actionForTransactions = 'set_null',
@@ -304,7 +258,7 @@ async function deleteFinancialCategory(financialAccountId, categoryId, options =
     if (!category) {
       if (!options.transaction) await t.rollback();
       const e = new Error('Categoria financeira não encontrada nesta conta para exclusão.');
-      e.statusCode = 404; e.status = 'fail'; throw e; // Lança erro para ser pego no controller
+      e.statusCode = 404; e.status = 'fail'; throw e;
     }
 
     const transactionsCount = await FinancialTransaction.count({ where: { financialCategoryId: categoryId, financialAccountId }, transaction: t });
@@ -364,38 +318,27 @@ async function deleteFinancialCategory(financialAccountId, categoryId, options =
   }
 }
 
-
-/**
- * Busca uma categoria financeira pelo nome e tipo DENTRO de uma financialAccount.
- * @param {string} name - Nome da categoria.
- * @param {string|null} type - 'Entrada', 'Saída', ou null.
- * @param {number} financialAccountId - ID da conta financeira.
- * @returns {Promise<object|null>}
- */
-async function findFinancialCategoryByNameAndTypeForAccount(name, type, financialAccountId) {
+async function findFinancialCategoryByNameAndTypeForAccount(name, type, financialAccountId) { // 'type' não é mais usado aqui
   if (!name || typeof name !== 'string' || name.trim() === '' || !financialAccountId) return null;
   try {
     const whereConditions = {
       name: { [Op.iLike]: name },
       financialAccountId,
     };
-    if (type) {
-      whereConditions.type = { [Op.or]: [type, 'Ambos'] };
-    }
+    // Condição de tipo removida
 
     const category = await FinancialCategory.findOne({ where: whereConditions });
     if (category) {
       logger.info(`[FINCAT SERVICE] Categoria encontrada: "${category.name}" para Conta ID ${financialAccountId}.`);
       return category.toJSON();
     }
-    logger.warn(`[FINCAT SERVICE] Categoria "${name}" (Tipo: ${type || 'qualquer'}) não encontrada para Conta ID ${financialAccountId}.`);
+    logger.warn(`[FINCAT SERVICE] Categoria "${name}" não encontrada para Conta ID ${financialAccountId}.`);
     return null;
   } catch (error) {
-    logger.error(`Erro ao buscar categoria por nome/tipo para Conta ID ${financialAccountId}: ${error.message}`, { error });
-    return null; // Retorna null para que o serviço que chamou possa tratar
+    logger.error(`Erro ao buscar categoria por nome para Conta ID ${financialAccountId}: ${error.message}`, { error });
+    return null;
   }
 }
-
 
 module.exports = {
   createFinancialCategory,
@@ -403,5 +346,5 @@ module.exports = {
   getFinancialCategoryById,
   updateFinancialCategory,
   deleteFinancialCategory,
-  findFinancialCategoryByNameAndTypeForAccount,
+  findFinancialCategoryByNameAndTypeForAccount, // O nome da função pode ser simplificado para findFinancialCategoryByNameForAccount
 };
