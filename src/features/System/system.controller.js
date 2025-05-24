@@ -1,5 +1,5 @@
 // src/features/FinancialCategory/financialCategory.controller.js
-const financialCategoryService = require('./financialCategory.service');
+const financialCategoryService = require('../FinancialCategory/financialCategory.service');
 const logger = require('../../utils/logger');
 
 function getFinancialAccountIdFromRequest(req) {
