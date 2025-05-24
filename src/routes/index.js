@@ -17,6 +17,7 @@ const appointmentRoutes = require('../features/Appointment/appointment.routes');
 const systemRoutes = require('../features/System/system.routes');
 const whatsappWebhookRoutes = require('../features/WhatsappHandler/whatsapp.routes');
 const devToolsRoutes = require('../features/DevTools/devTools.routes');
+const financialCategoryRoutes = require('../features/FinancialCategory/financialCategory.routes'); // <<< NOVO IMPORT
 
 const mainApiRouter = Router();
 
@@ -86,6 +87,8 @@ clientFinancialAccountRouter.use('/credit-cards', creditCardRoutes);
 clientFinancialAccountRouter.use('/products', productRoutes); // productRoutes já espera :financialAccountId
 clientFinancialAccountRouter.use('/products/:productId/stock', productStockRouter); // productStockRouter lida com :productId
 clientFinancialAccountRouter.use('/appointments', appointmentRoutes);
+clientFinancialAccountRouter.use('/categories', financialCategoryRoutes); // <<< ADICIONADO AQUI
+
 
 // Monta o router de conta financeira no router principal da API
 mainApiRouter.use('/financial-accounts/:financialAccountId', clientFinancialAccountRouter);
