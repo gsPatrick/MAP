@@ -1,12 +1,12 @@
 // src/features/Stock/stock.service.js
 const { Product, StockMovement, FinancialAccount, sequelize } = require('../../database');
-const { Op } = require('sequelize'); // Importar Op de sequelize diretamente
+const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 
 // ... (validateProductAndOwningAccount e recordStockMovement permanecem como na última versão) ...
 async function validateProductAndOwningAccount(productId, transaction = null) {
   const product = await Product.findByPk(productId, {
-    include: [{ model: FinancialAccount, as: 'financialAccount' }], // 'financialAccount' é o alias em Product.js
+    include: [{ model: FinancialAccount, as: 'financialAccount' }],
     transaction
   });
 
@@ -54,10 +54,6 @@ async function recordStockMovement(productId, movementData) {
       const error = new Error(`Produto com ID ${productId} não encontrado.`);
       error.statusCode = 404; error.status = 'fail'; throw error;
     }
-    // Validação da conta financeira do produto já está implícita ao buscar o produto,
-    // mas podemos revalidar se quisermos ser extra seguros ou se a lógica de productOwningAccount for complexa.
-    // Para simplificar, assumimos que se o produto existe, sua conta financeira foi validada na criação/edição do produto.
-    // No entanto, verificar se a financialAccount do produto está ativa é uma boa prática.
     const financialAccount = await FinancialAccount.findByPk(product.financialAccountId, { transaction: t });
     if (!financialAccount || !financialAccount.isActive) {
         await t.rollback();
@@ -75,7 +71,7 @@ async function recordStockMovement(productId, movementData) {
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
 
-    let newQuantity = parseFloat(product.quantity); // Garante que é float
+    let newQuantity = parseFloat(product.quantity);
     let effectiveTypeForLog = type;
     let movementQuantityForLog = parseFloat(quantity);
 
@@ -84,7 +80,7 @@ async function recordStockMovement(productId, movementData) {
       newQuantity += movementQuantityForLog;
     } else if (type === 'Saída') {
       if (movementQuantityForLog <=0) { await t.rollback(); throw new Error("Quantidade de saída deve ser positiva."); }
-      if (newQuantity < movementQuantityForLog) { // Compara newQuantity que já é o estoque atual
+      if (newQuantity < movementQuantityForLog) {
         await t.rollback();
         const error = new Error(`Estoque insuficiente para ${product.name} (ID: ${productId}). Disponível: ${product.quantity}, Saída: ${movementQuantityForLog}.`);
         error.statusCode = 409; error.status = 'fail'; throw error;
@@ -141,7 +137,7 @@ async function getStockMovements(queryParams = {}) {
     const whereMovement = {};
     const productIncludeOptions = {
         model: Product,
-        as: 'product', // <<< Este é o alias definido em StockMovement.associate
+        as: 'product',
         attributes: ['id', 'name', 'code', 'financialAccountId'],
         required: false, 
     };
@@ -161,9 +157,8 @@ async function getStockMovements(queryParams = {}) {
             const error = new Error(`Conta Financeira ID ${financialAccountId} não encontrada para filtrar movimentações de estoque.`);
             error.statusCode = 404; error.status = 'fail'; throw error;
         }
-        // A condição do financialAccountId vai no 'where' do include do Product
         productIncludeOptions.where = { financialAccountId: parseInt(financialAccountId, 10) };
-        productIncludeOptions.required = true; // Força INNER JOIN se financialAccountId for especificado
+        productIncludeOptions.required = true; 
     }
     
     const validSortFields = ['movementDate', 'quantity', 'type', 'createdAt', 'reason'];
@@ -180,17 +175,18 @@ async function getStockMovements(queryParams = {}) {
 
     const { count, rows } = await StockMovement.findAndCountAll({
       where: whereMovement,
-      include: [productIncludeOptions], // O include com o alias 'product'
+      include: [productIncludeOptions],
       limit: parseInt(limit, 10),
       offset: offset,
       order: order,
-      distinct: true, 
-      subQuery: true, // <<< TENTAR COM ISSO AQUI
+      // distinct: true, // <<< REMOVIDO/COMENTADO
+      // subQuery: true, // <<< REMOVIDO/COMENTADO por enquanto
     });
 
     logger.info(`Listadas ${rows.length} movimentações de estoque de um total de ${count}. Filtros: FA ID: ${financialAccountId || 'N/A'}, Prod ID: ${productId || 'N/A'}`);
     return {
-      totalItems: count,
+      totalItems: count, // Este count pode ser o total de linhas retornadas ANTES do limit/offset se não usar subQuery.
+                         // Se precisar do count total real desconsiderando paginação, pode ser necessário uma query de count separada.
       totalPages: Math.ceil(count / parseInt(limit, 10)),
       currentPage: parseInt(page, 10),
       movements: rows.map(m => m.toJSON()),
