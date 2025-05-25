@@ -150,7 +150,6 @@ async function deleteMotivationalPhrase(phraseId) {
 module.exports = {
   getSystemPreferences,
   updateSystemPreferences,
-  // Funções de FinancialCategory removidas daqui
   createMotivationalPhrase,
   getAllMotivationalPhrases,
   updateMotivationalPhrase,
