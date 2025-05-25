@@ -27,7 +27,7 @@ async function initializeDatabaseAndJobs() {
     // 2. Lógica para desenvolvimento com DB_SYNC
     else if (process.env.NODE_ENV === 'development' && process.env.DB_SYNC === 'true') {
       console.log('Ambiente de DESENVOLVIMENTO com DB_SYNC habilitado. Sincronizando modelos (force:true)...');
-      await sequelize.sync({ force: true }); // Em dev, force:true é comum para resetar
+      await sequelize.sync({ force: false }); // Em dev, force:true é comum para resetar
       console.log('Modelos sincronizados com o banco de dados (force:true para desenvolvimento).');
     }
     // 3. Lógica para produção com DB_SYNC (MUITO PERIGOSO com force:true)
@@ -40,7 +40,7 @@ async function initializeDatabaseAndJobs() {
       console.error('## Se você realmente precisa sincronizar, considere { alter: true } com cautela após backup.     ##');
       console.error('## PROCEDENDO COM force:true CONFORME LÓGICA ORIGINAL PARA ESTA CONDIÇÃO ESPECÍFICA.             ##');
       console.error('###################################################################################################');
-      await sequelize.sync({ force: true }); // Mantendo o force:true do seu código original para esta condição
+      await sequelize.sync({ force: fale }); // Mantendo o force:true do seu código original para esta condição
       console.log('Modelos sincronizados com o banco de dados em PRODUÇÃO (force:true). TODOS OS DADOS FORAM APAGADOS!');
       console.log('É CRUCIALMENTE RECOMENDADO DESABILITAR DB_SYNC EM PRODUÇÃO E USAR MIGRAÇÕES.');
     }

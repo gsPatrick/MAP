@@ -18,6 +18,7 @@ const systemRoutes = require('../features/System/system.routes');
 const whatsappWebhookRoutes = require('../features/WhatsappHandler/whatsapp.routes');
 const devToolsRoutes = require('../features/DevTools/devTools.routes');
 const financialCategoryRoutes = require('../features/FinancialCategory/financialCategory.routes'); // <<< NOVO IMPORT
+const InteractiveChatRoutes = require('../features/InteractiveChat/interactiveChat.routes'); // <<< NOVO IMPORT
 
 const mainApiRouter = Router();
 
@@ -38,7 +39,7 @@ mainApiRouter.use('/users',  userRoutes); // Gerenciamento de Users (admins)
 mainApiRouter.use('/clients',  clientRoutes); // Gerenciamento de Clients por Admins
 mainApiRouter.use('/system',  systemRoutes); // Configs do sistema, categorias globais, planos
 mainApiRouter.use('/dev-tools',  devToolsRoutes); // Ferramentas de desenvolvimento
-
+mainApiRouter.use('/chat', InteractiveChatRoutes); // Rota de chat do site (sem token, mas com autenticação de cliente)
 
 // --- ROTAS PARA CLIENTS LOGADOS (protegidas para Clients com token válido e assinatura ativa) ---
 
