@@ -15,15 +15,17 @@ const FinancialCategory = require('../models/FinancialCategory');
 const ClientInteractionLog = require('../models/ClientInteractionLog');
 const RecurringTransactionRule = require('../models/RecurringTransactionRule');
 const CreditCard = require('../models/CreditCard');
-const Plan = require('../models/Plan');                             // <<< NOVO MODELO
-const Subscription = require('../models/Subscription');             // <<< NOVO MODELO
+const Plan = require('../models/Plan');
+const Subscription = require('../models/Subscription');
+const KanbanTask = require('../models/KanbanTask'); // <<< ADICIONAR IMPORTAÇÃO DO NOVO MODELO
+
 // Adicione aqui o ProductCategory se você o criou
 
 const models = {
   User,                       // Admin users
   Client,                     // Usuários finais (contatos WhatsApp / usuários dashboard)
-  Plan,                       // <<< ADICIONADO AO OBJETO MODELS
-  Subscription,               // <<< ADICIONADO AO OBJETO MODELS
+  Plan,
+  Subscription,
   FinancialAccount,
   FinancialCategory,
   FinancialTransaction,
@@ -36,6 +38,7 @@ const models = {
   ClientInteractionLog,
   RecurringTransactionRule,
   CreditCard,
+  KanbanTask,                 // <<< ADICIONADO AO OBJETO MODELS
 };
 
 // Inicializar associações

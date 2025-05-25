@@ -19,7 +19,7 @@ const whatsappWebhookRoutes = require('../features/WhatsappHandler/whatsapp.rout
 const devToolsRoutes = require('../features/DevTools/devTools.routes');
 const financialCategoryRoutes = require('../features/FinancialCategory/financialCategory.routes'); // <<< NOVO IMPORT
 const InteractiveChatRoutes = require('../features/InteractiveChat/interactiveChat.routes'); // <<< NOVO IMPORT
-
+const kanbanRoutes = require('../features/Kanban/kanban.routes'); // <<< NOVO IMPORT
 const mainApiRouter = Router();
 
 // Rota de Status da API
@@ -89,6 +89,7 @@ clientFinancialAccountRouter.use('/products', productRoutes); // productRoutes j
 clientFinancialAccountRouter.use('/products/:productId/stock', productStockRouter); // productStockRouter lida com :productId
 clientFinancialAccountRouter.use('/appointments', appointmentRoutes);
 clientFinancialAccountRouter.use('/categories', financialCategoryRoutes); // <<< ADICIONADO AQUI
+clientFinancialAccountRouter.use('/kanban-tasks', kanbanRoutes); // Monta as rotas do Kanban
 
 
 // Monta o router de conta financeira no router principal da API
