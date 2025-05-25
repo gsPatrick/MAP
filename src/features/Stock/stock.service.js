@@ -1,11 +1,12 @@
 // src/features/Stock/stock.service.js
 const { Product, StockMovement, FinancialAccount, sequelize } = require('../../database');
-const { Op } = require('sequelize');
+const { Op } = require('sequelize'); // Importar Op de sequelize diretamente
 const logger = require('../../utils/logger');
 
+// ... (validateProductAndOwningAccount e recordStockMovement permanecem como na última versão) ...
 async function validateProductAndOwningAccount(productId, transaction = null) {
   const product = await Product.findByPk(productId, {
-    include: [{ model: FinancialAccount, as: 'financialAccount' }],
+    include: [{ model: FinancialAccount, as: 'financialAccount' }], // 'financialAccount' é o alias em Product.js
     transaction
   });
 
@@ -13,7 +14,7 @@ async function validateProductAndOwningAccount(productId, transaction = null) {
     const error = new Error(`Produto com ID ${productId} não encontrado.`);
     error.statusCode = 404; error.status = 'fail'; throw error;
   }
-  if (!product.financialAccount) {
+  if (!product.financialAccount) { 
     const error = new Error(`Produto ID ${productId} não está associado a nenhuma Conta Financeira.`);
     error.statusCode = 500; error.status = 'error'; throw error;
   }
@@ -35,7 +36,7 @@ async function validateProductAndOwningAccount(productId, transaction = null) {
 async function recordStockMovement(productId, movementData) {
   const { type, quantity, reason, movementDate, relatedTransactionId } = movementData;
 
-  if (!type || quantity === undefined || (type !== 'Ajuste' && quantity <= 0) || (type === 'Ajuste' && quantity === 0) ) {
+  if (!type || quantity === undefined || (type !== 'Ajuste' && parseFloat(quantity) <= 0) || (type === 'Ajuste' && parseFloat(quantity) === 0) ) {
     const error = new Error('Tipo e Quantidade (positiva para Entrada/Saída, diferente de zero para Ajuste) são obrigatórios.');
     error.statusCode = 400; error.status = 'fail'; throw error;
   }
@@ -49,25 +50,24 @@ async function recordStockMovement(productId, movementData) {
     const product = await Product.findByPk(productId, { transaction: t, lock: t.LOCK.UPDATE });
     
     if (!product) {
-      await t.rollback(); // Rollback antes de lançar
+      await t.rollback();
       const error = new Error(`Produto com ID ${productId} não encontrado.`);
       error.statusCode = 404; error.status = 'fail'; throw error;
     }
+    // Validação da conta financeira do produto já está implícita ao buscar o produto,
+    // mas podemos revalidar se quisermos ser extra seguros ou se a lógica de productOwningAccount for complexa.
+    // Para simplificar, assumimos que se o produto existe, sua conta financeira foi validada na criação/edição do produto.
+    // No entanto, verificar se a financialAccount do produto está ativa é uma boa prática.
     const financialAccount = await FinancialAccount.findByPk(product.financialAccountId, { transaction: t });
-    if (!financialAccount) {
-      await t.rollback();
-      const error = new Error(`Conta financeira associada ao produto ID ${productId} não encontrada.`);
-      error.statusCode = 500; error.status = 'error'; throw error;
+    if (!financialAccount || !financialAccount.isActive) {
+        await t.rollback();
+        const error = new Error(`A conta financeira associada ao produto ID ${productId} está inativa ou não foi encontrada.`);
+        error.statusCode = 403; error.status = 'fail'; throw error;
     }
-    if (!financialAccount.isActive) {
-      await t.rollback();
-      const error = new Error(`A conta financeira "${financialAccount.accountName}" está inativa.`);
-      error.statusCode = 403; error.status = 'fail'; throw error;
-    }
-     if (!['PJ', 'MEI'].includes(financialAccount.accountType)) {
-      await t.rollback();
-      const error = new Error(`Produtos só podem ser associados a Contas Financeiras PJ ou MEI. Produto ID ${productId} pertence a uma conta ${financialAccount.accountType}.`);
-      error.statusCode = 400; error.status = 'fail'; throw error;
+    if (!['PJ', 'MEI'].includes(financialAccount.accountType)) {
+        await t.rollback();
+        const error = new Error(`Movimentações de estoque não permitidas para tipo de conta ${financialAccount.accountType}.`);
+        error.statusCode = 400; error.status = 'fail'; throw error;
     }
     if (!product.isActive) {
       await t.rollback();
@@ -75,43 +75,42 @@ async function recordStockMovement(productId, movementData) {
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
 
-    let newQuantity = product.quantity;
+    let newQuantity = parseFloat(product.quantity); // Garante que é float
     let effectiveTypeForLog = type;
-    let movementQuantityForLog = parseFloat(quantity); // Quantidade que veio do request
+    let movementQuantityForLog = parseFloat(quantity);
 
     if (type === 'Entrada') {
       if (movementQuantityForLog <=0) { await t.rollback(); throw new Error("Quantidade de entrada deve ser positiva."); }
       newQuantity += movementQuantityForLog;
     } else if (type === 'Saída') {
       if (movementQuantityForLog <=0) { await t.rollback(); throw new Error("Quantidade de saída deve ser positiva."); }
-      if (product.quantity < movementQuantityForLog) {
+      if (newQuantity < movementQuantityForLog) { // Compara newQuantity que já é o estoque atual
         await t.rollback();
         const error = new Error(`Estoque insuficiente para ${product.name} (ID: ${productId}). Disponível: ${product.quantity}, Saída: ${movementQuantityForLog}.`);
         error.statusCode = 409; error.status = 'fail'; throw error;
       }
       newQuantity -= movementQuantityForLog;
     } else if (type === 'Ajuste') {
-      // movementQuantityForLog pode ser positivo (aumentar) ou negativo (diminuir)
       if (movementQuantityForLog > 0) {
-          effectiveTypeForLog = 'Entrada'; // Ajuste de entrada
+          effectiveTypeForLog = 'Entrada';
       } else if (movementQuantityForLog < 0) {
-          effectiveTypeForLog = 'Saída'; // Ajuste de saída
-          if (product.quantity < Math.abs(movementQuantityForLog)) {
+          effectiveTypeForLog = 'Saída';
+          if (newQuantity < Math.abs(movementQuantityForLog)) {
             await t.rollback();
             const error = new Error(`Ajuste de saída excede estoque para ${product.name}. Disponível: ${product.quantity}, Ajuste: ${movementQuantityForLog}.`);
             error.statusCode = 409; error.status = 'fail'; throw error;
           }
-      } else { // movementQuantityForLog é 0
+      } else {
           await t.rollback();
           throw new Error("Quantidade para ajuste não pode ser zero.");
       }
-      newQuantity += movementQuantityForLog; // Soma direto, pois movementQuantityForLog já tem o sinal
+      newQuantity += movementQuantityForLog;
     }
 
     const stockMovement = await StockMovement.create({
       productId,
-      type: effectiveTypeForLog, // 'Entrada' ou 'Saída'
-      quantity: Math.abs(movementQuantityForLog), // Sempre positivo no log
+      type: effectiveTypeForLog,
+      quantity: Math.abs(movementQuantityForLog),
       reason: reason || (type === 'Ajuste' ? `Ajuste (${movementQuantityForLog > 0 ? '+' : ''}${movementQuantityForLog})` : (effectiveTypeForLog === 'Entrada' ? 'Entrada manual' : 'Saída manual')),
       movementDate: movementDate || new Date(),
       relatedTransactionId,
@@ -120,14 +119,14 @@ async function recordStockMovement(productId, movementData) {
     await product.update({ quantity: newQuantity }, { transaction: t });
 
     await t.commit();
-    logger.info(`Movimentação de estoque (${type} original: ${quantity}) registrada para Produto ID ${productId}. Tipo Log: ${effectiveTypeForLog}, Qtd Log: ${Math.abs(movementQuantityForLog)}. Novo saldo: ${newQuantity}.`);
+    logger.info(`Movimentação (${type} original: ${quantity}) para Produto ID ${productId}. Tipo Log: ${effectiveTypeForLog}, Qtd Log: ${Math.abs(movementQuantityForLog)}. Novo saldo: ${newQuantity}.`);
 
-    if (product.minimumStock && newQuantity <= product.minimumStock && newQuantity < product.quantity) {
+    if (product.minimumStock !== null && product.minimumStock > 0 && newQuantity <= product.minimumStock && newQuantity < parseFloat(product.quantity)) {
         logger.warn(`ALERTA DE ESTOQUE MÍNIMO: Produto ${product.name} (ID: ${productId}) atingiu ${newQuantity} un. (Mín: ${product.minimumStock}).`);
     }
     return stockMovement.toJSON();
   } catch (error) {
-    if (t && !t.finished) await t.rollback(); // Garante rollback se a transação não foi finalizada
+    if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
     logger.error(`Erro ao registrar movimentação de estoque para Produto ID ${productId}: ${error.message}`, { error, movementData });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
@@ -142,32 +141,29 @@ async function getStockMovements(queryParams = {}) {
     const whereMovement = {};
     const productIncludeOptions = {
         model: Product,
-        as: 'product',
+        as: 'product', // <<< Este é o alias definido em StockMovement.associate
         attributes: ['id', 'name', 'code', 'financialAccountId'],
-        required: false, // Inicia como false (LEFT JOIN)
+        required: false, 
     };
 
     if (productId) whereMovement.productId = parseInt(productId, 10);
     if (type) whereMovement.type = type;
     if (dateStart) whereMovement.movementDate = { ...whereMovement.movementDate, [Op.gte]: dateStart };
     if (dateEnd) {
-        // Para incluir o dia todo em dateEnd
         const endOfDay = new Date(dateEnd);
         endOfDay.setUTCHours(23, 59, 59, 999);
         whereMovement.movementDate = { ...whereMovement.movementDate, [Op.lte]: endOfDay };
     }
 
-
     if (financialAccountId) {
         const account = await FinancialAccount.findByPk(parseInt(financialAccountId, 10));
         if (!account) {
-            const error = new Error(`Conta Financeira ID ${financialAccountId} não encontrada.`);
+            const error = new Error(`Conta Financeira ID ${financialAccountId} não encontrada para filtrar movimentações de estoque.`);
             error.statusCode = 404; error.status = 'fail'; throw error;
         }
-        // Se financialAccountId é fornecido, filtramos as movimentações onde o produto associado
-        // pertence a esta conta. Isso requer um INNER JOIN.
+        // A condição do financialAccountId vai no 'where' do include do Product
         productIncludeOptions.where = { financialAccountId: parseInt(financialAccountId, 10) };
-        productIncludeOptions.required = true; 
+        productIncludeOptions.required = true; // Força INNER JOIN se financialAccountId for especificado
     }
     
     const validSortFields = ['movementDate', 'quantity', 'type', 'createdAt', 'reason'];
@@ -184,12 +180,12 @@ async function getStockMovements(queryParams = {}) {
 
     const { count, rows } = await StockMovement.findAndCountAll({
       where: whereMovement,
-      include: [productIncludeOptions],
+      include: [productIncludeOptions], // O include com o alias 'product'
       limit: parseInt(limit, 10),
       offset: offset,
       order: order,
-      distinct: true, // Importante para contagem correta com includes
-      // subQuery: true, // Descomente e teste se a contagem ou paginação estiverem incorretas, especialmente com PostgreSQL
+      distinct: true, 
+      subQuery: true, // <<< TENTAR COM ISSO AQUI
     });
 
     logger.info(`Listadas ${rows.length} movimentações de estoque de um total de ${count}. Filtros: FA ID: ${financialAccountId || 'N/A'}, Prod ID: ${productId || 'N/A'}`);
@@ -208,7 +204,7 @@ async function getStockMovements(queryParams = {}) {
 
 async function getProductStockBalance(productId) {
   try {
-    const product = await validateProductAndOwningAccount(productId); // Já valida e inclui financialAccount
+    const product = await validateProductAndOwningAccount(productId);
     return {
         id: product.id,
         name: product.name,

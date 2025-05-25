@@ -1,5 +1,5 @@
 // src/models/Product.js
-const { DataTypes, Op } = require('sequelize'); // << IMPORTAR Op AQUI
+const { DataTypes, Op } = require('sequelize');
 const sequelize = require('../config/database');
 
 const Product = sequelize.define('Product', {
@@ -62,6 +62,12 @@ const Product = sequelize.define('Product', {
       defaultValue: true,
       allowNull: false,
   }
+  // productCategoryId: { // Se você for adicionar categoria de produto
+  //   type: DataTypes.INTEGER,
+  //   allowNull: true,
+  //   references: { model: 'product_categories', key: 'id' }, // Supondo uma tabela product_categories
+  //   onDelete: 'SET NULL'
+  // }
 }, {
   tableName: 'products',
   timestamps: true,
@@ -69,14 +75,24 @@ const Product = sequelize.define('Product', {
   indexes: [
     { fields: ['financialAccountId'] },
     { unique: true, fields: ['financialAccountId', 'name'] },
-    // Correção aqui: Usar Op.ne
     { unique: true, fields: ['financialAccountId', 'code'], where: { code: { [Op.ne]: null } } }
   ]
 });
 
+// ***** CORREÇÃO IMPORTANTE: GARANTIR QUE A ASSOCIAÇÃO ESTEJA CORRETA *****
 Product.associate = (models) => {
-  Product.belongsTo(models.FinancialAccount, { foreignKey: 'financialAccountId', as: 'financialAccount' });
-  Product.hasMany(models.StockMovement, { foreignKey: 'productId', as: 'stockMovements', onDelete: 'RESTRICT' });
+  Product.belongsTo(models.FinancialAccount, { // O modelo FinancialAccount
+    foreignKey: 'financialAccountId',
+    as: 'financialAccount'
+  });
+  Product.hasMany(models.StockMovement, { // O modelo StockMovement
+    foreignKey: 'productId',
+    as: 'stockMovements', // Este alias é para quando você inclui StockMovements a partir de Product
+    onDelete: 'RESTRICT' // Mantido como RESTRICT para segurança
+  });
+  // if (models.ProductCategory) { // Se você adicionar ProductCategory
+  //   Product.belongsTo(models.ProductCategory, { foreignKey: 'productCategoryId', as: 'category' });
+  // }
 };
 
 module.exports = Product;

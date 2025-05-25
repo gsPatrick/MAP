@@ -16,10 +16,10 @@ const StockMovement = sequelize.define('StockMovement', {
       key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'RESTRICT', // Não permitir deletar produto se houver movimentação
+    onDelete: 'RESTRICT',
     comment: 'ID do produto movimentado',
   },
-  type: { // Entrada ou Saída
+  type: {
     type: DataTypes.ENUM('Entrada', 'Saída'),
     allowNull: false,
     comment: 'Tipo de movimentação: Entrada ou Saída',
@@ -28,7 +28,7 @@ const StockMovement = sequelize.define('StockMovement', {
     type: DataTypes.INTEGER,
     allowNull: false,
     validate: {
-      min: 1, // Movimentação deve ser de pelo menos 1 unidade
+      min: 1,
     },
     comment: 'Quantidade movimentada',
   },
@@ -38,16 +38,16 @@ const StockMovement = sequelize.define('StockMovement', {
     defaultValue: DataTypes.NOW,
     comment: 'Data e hora da movimentação',
   },
-  reason: { // Motivo da movimentação (Venda, Compra, Ajuste, Devolução, etc.)
+  reason: {
     type: DataTypes.STRING,
     allowNull: true,
     comment: 'Motivo da movimentação de estoque',
   },
-  relatedTransactionId: { // Opcional: ID da transação financeira relacionada (ex: Venda)
+  relatedTransactionId: {
     type: DataTypes.INTEGER,
     allowNull: true,
     references: {
-      model: 'financial_transactions',
+      model: 'financial_transactions', // Nome da tabela 'financial_transactions'
       key: 'id',
     },
     onUpdate: 'CASCADE',
@@ -56,14 +56,27 @@ const StockMovement = sequelize.define('StockMovement', {
   }
 }, {
   tableName: 'stock_movements',
-  timestamps: true, // Apenas createdAt, updatedAt pode não ser tão relevante aqui ou usar apenas createdAt
-  updatedAt: false, // Movimentações geralmente são registros imutáveis após criação
+  timestamps: true,
+  updatedAt: false,
   comment: 'Tabela de Movimentações de Estoque (Entradas e Saídas)',
+  indexes: [ // Adicionar índices pode melhorar a performance de queries
+    { fields: ['productId'] },
+    { fields: ['movementDate'] },
+    { fields: ['relatedTransactionId'] },
+  ]
 });
 
-// StockMovement.associate = (models) => {
-//   StockMovement.belongsTo(models.Product, { foreignKey: 'productId', as: 'product' });
-//   StockMovement.belongsTo(models.FinancialTransaction, { foreignKey: 'relatedTransactionId', as: 'financialTransaction' });
-// };
+// ***** CORREÇÃO IMPORTANTE: DESCOMENTAR E DEFINIR ASSOCIAÇÕES *****
+StockMovement.associate = (models) => {
+  StockMovement.belongsTo(models.Product, { // O modelo Product será passado como models.Product
+    foreignKey: 'productId',
+    as: 'product' // Este alias deve corresponder ao usado no 'include'
+  });
+  StockMovement.belongsTo(models.FinancialTransaction, { // O modelo FinancialTransaction
+    foreignKey: 'relatedTransactionId',
+    as: 'financialTransaction', // Alias para a transação financeira relacionada
+    required: false // Torna o join opcional
+  });
+};
 
 module.exports = StockMovement;
