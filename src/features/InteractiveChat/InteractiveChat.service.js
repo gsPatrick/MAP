@@ -1142,4 +1142,4 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
     };
 }
 
-module.exports = { processSiteChatMessage };
+module.exports = { processSiteChatMessage };    
