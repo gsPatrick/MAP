@@ -1,6 +1,6 @@
 // src/models/AppointmentBusinessClient.js
 const { DataTypes } = require('sequelize');
-const sequelize = require('../config/database');
+const sequelize = require('../config/database'); // <--- Importa a instância
 
 // Tabela de junção para o relacionamento Many-to-Many entre Appointment e BusinessClient
 const AppointmentBusinessClient = sequelize.define('AppointmentBusinessClient', {
@@ -25,6 +25,8 @@ const AppointmentBusinessClient = sequelize.define('AppointmentBusinessClient', 
     primaryKey: true, // Parte da chave primária composta
   },
 }, {
+  sequelize, // <--- Passa a instância do sequelize importada
+  modelName: 'AppointmentBusinessClient', // <--- Define explicitamente o nome do modelo
   tableName: 'appointment_business_clients',
   timestamps: true, // createdAt e updatedAt para saber quando a associação foi feita
   comment: 'Tabela de junção para associar BusinessClients a Appointments',

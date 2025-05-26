@@ -1,70 +1,87 @@
-// src/database/index.js
-const { DataTypes } = require('sequelize');
-const sequelize = require('../config/database');
+// src/models/FinancialAccount.js
+const { DataTypes, Op } = require('sequelize');
+// Importa a instância do Sequelize configurada
+const sequelize = require('../config/database'); 
 
-// Importar modelos
-const User = require('../models/User');
-const Client = require('../models/Client');
-const FinancialAccount = require('../models/FinancialAccount');
-const FinancialTransaction = require('../models/FinancialTransaction');
-const CreditCard = require('../models/CreditCard');
-const RecurringTransactionRule = require('../models/RecurringTransactionRule');
-const Product = require('../models/Product');
-const StockMovement = require('../models/StockMovement');
-const Appointment = require('../models/Appointment');
-const ClientInteractionLog = require('../models/ClientInteractionLog');
-const Plan = require('../models/Plan');
-const Subscription = require('../models/Subscription');
-const FinancialCategory = require('../models/FinancialCategory');
-const MotivationalPhrase = require('../models/MotivationalPhrase');
-const UserPreference = require('../models/UserPreference');
-// NOVOS MODELOS
-const BusinessClient = require('../models/BusinessClient');
-const AppointmentBusinessClient = require('../models/AppointmentBusinessClient');
-
-
-const env = process.env.NODE_ENV || 'development';
-const dbConfig = config[env];
-
-const sequelize = new Sequelize(dbConfig.database, dbConfig.username, dbConfig.password, {
-  host: dbConfig.host,
-  dialect: dbConfig.dialect,
-  logging: dbConfig.logging === 'true' ? (msg => logger.debug(msg)) : false,
-  timezone: dbConfig.timezone, // Use a timezone do seu servidor ou 'Z' para UTC
-  dialectOptions: dbConfig.dialectOptions, // Configurações específicas do dialeto
+const FinancialAccount = sequelize.define('FinancialAccount', { // 'sequelize' é passado explicitamente nas opções abaixo
+  id: {
+    type: DataTypes.INTEGER,
+    autoIncrement: true,
+    primaryKey: true,
+  },
+  clientId: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    references: {
+      model: 'clients',
+      key: 'id',
+    },
+    onUpdate: 'CASCADE',
+    onDelete: 'CASCADE',
+  },
+  accountName: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    comment: 'Nome identificador da conta financeira (ex: Pessoal, Empresa X)',
+  },
+  accountType: {
+    type: DataTypes.ENUM('PF', 'PJ', 'MEI'),
+    allowNull: false,
+    comment: 'Tipo de conta financeira: PF, PJ, ou MEI',
+  },
+  documentNumber: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    unique: true,
+    comment: 'CPF (para PF) ou CNPJ (para PJ/MEI) associado a esta conta financeira',
+  },
+  isActive: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true,
+    allowNull: false,
+    comment: 'Indica se a conta financeira está ativa e pode ser usada',
+  },
+  isDefault: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    allowNull: false,
+    comment: 'Indica se esta é a conta padrão para operações do cliente',
+  },
+}, {
+  sequelize, // Passa a instância do sequelize importada
+  modelName: 'FinancialAccount', // Define explicitamente o nome do modelo
+  tableName: 'financial_accounts',
+  timestamps: true,
+  comment: 'Contas/Perfis financeiros distintos de um Cliente (PF, PJ, MEI)',
+  indexes: [
+    { fields: ['clientId'] },
+    { unique: true, fields: ['clientId', 'accountName'] },
+    { unique: true, fields: ['documentNumber'], where: { documentNumber: { [Op.ne]: null } } },
+  ]
 });
 
-const models = {
-  User: User(sequelize, DataTypes),
-  Client: Client(sequelize, DataTypes),
-  FinancialAccount: FinancialAccount(sequelize, DataTypes),
-  FinancialTransaction: FinancialTransaction(sequelize, DataTypes),
-  CreditCard: CreditCard(sequelize, DataTypes),
-  RecurringTransactionRule: RecurringTransactionRule(sequelize, DataTypes),
-  Product: Product(sequelize, DataTypes),
-  StockMovement: StockMovement(sequelize, DataTypes),
-  Appointment: Appointment(sequelize, DataTypes),
-  ClientInteractionLog: ClientInteractionLog(sequelize, DataTypes),
-  Plan: Plan(sequelize, DataTypes),
-  Subscription: Subscription(sequelize, DataTypes),
-  FinancialCategory: FinancialCategory(sequelize, DataTypes),
-  MotivationalPhrase: MotivationalPhrase(sequelize, DataTypes),
-  UserPreference: UserPreference(sequelize, DataTypes),
-  // NOVOS MODELOS
-  BusinessClient: BusinessClient(sequelize, DataTypes),
-  AppointmentBusinessClient: AppointmentBusinessClient(sequelize, DataTypes), // Não precisa passar DataTypes para models de junção simples, mas não faz mal
+FinancialAccount.associate = (models) => {
+  // --- DEBUG: Dentro de FinancialAccount.associate ---
+  console.log("--- DEBUG: Dentro de FinancialAccount.associate ---");
+  console.log("models object keys:", Object.keys(models));
+  console.log("models.BusinessClient exists:", !!models.BusinessClient);
+  console.log("typeof models.BusinessClient:", typeof models.BusinessClient);
+  const SequelizeModel = require('sequelize').Model;
+  console.log("models.BusinessClient instanceof Sequelize.Model:", models.BusinessClient?.prototype instanceof SequelizeModel);
+  console.log("----------------------------------------------------");
+  // --- FIM DEBUG ---
+
+  FinancialAccount.belongsTo(models.Client, { foreignKey: 'clientId', as: 'ownerClient' });
+
+  FinancialAccount.hasMany(models.FinancialTransaction, { foreignKey: 'financialAccountId', as: 'transactions', onDelete: 'CASCADE' });
+  FinancialAccount.hasMany(models.RecurringTransactionRule, { foreignKey: 'financialAccountId', as: 'recurringRules', onDelete: 'CASCADE' });
+  FinancialAccount.hasMany(models.CreditCard, { foreignKey: 'financialAccountId', as: 'creditCards', onDelete: 'CASCADE' });
+  FinancialAccount.hasMany(models.Product, { foreignKey: 'financialAccountId', as: 'products', onDelete: 'CASCADE' });
+  FinancialAccount.hasMany(models.Appointment, { foreignKey: 'financialAccountId', as: 'appointments', onDelete: 'CASCADE' });
+  FinancialAccount.hasMany(models.KanbanColumn, { foreignKey: 'financialAccountId', as: 'kanbanColumns', onDelete: 'CASCADE' });
+  // NOVA ASSOCIAÇÃO: FinancialAccount tem muitos BusinessClients (linha 68 ou próxima)
+  FinancialAccount.hasMany(models.BusinessClient, { foreignKey: 'financialAccountId', as: 'businessClients', onDelete: 'CASCADE' }); // <--- Esta é a linha provável
+
 };
 
-// Associar Modelos
-Object.values(models)
-  .filter(model => typeof model.associate === 'function')
-  .forEach(model => model.associate(models));
-
-// Log de associações (Opcional para debug)
-// logger.debug("Associações configuradas:", Object.keys(models).map(name => ({ model: name, associations: Object.keys(models[name].associations) })));
-
-
-module.exports = {
-  ...models,
-  sequelize,
-};
+module.exports = FinancialAccount;

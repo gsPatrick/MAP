@@ -1,8 +1,9 @@
 // src/models/FinancialAccount.js
 const { DataTypes, Op } = require('sequelize');
-const sequelize = require('../config/database');
+// Importa a instância do Sequelize configurada
+const sequelize = require('../config/database'); 
 
-const FinancialAccount = sequelize.define('FinancialAccount', {
+const FinancialAccount = sequelize.define('FinancialAccount', { // 'sequelize' é passado explicitamente nas opções abaixo
   id: {
     type: DataTypes.INTEGER,
     autoIncrement: true,
@@ -47,6 +48,8 @@ const FinancialAccount = sequelize.define('FinancialAccount', {
     comment: 'Indica se esta é a conta padrão para operações do cliente',
   },
 }, {
+  sequelize, // Passa a instância do sequelize importada
+  modelName: 'FinancialAccount', // Define explicitamente o nome do modelo
   tableName: 'financial_accounts',
   timestamps: true,
   comment: 'Contas/Perfis financeiros distintos de um Cliente (PF, PJ, MEI)',
@@ -58,6 +61,16 @@ const FinancialAccount = sequelize.define('FinancialAccount', {
 });
 
 FinancialAccount.associate = (models) => {
+  // --- DEBUG: Dentro de FinancialAccount.associate ---
+  console.log("--- DEBUG: Dentro de FinancialAccount.associate ---");
+  console.log("models object keys:", Object.keys(models));
+  console.log("models.BusinessClient exists:", !!models.BusinessClient);
+  console.log("typeof models.BusinessClient:", typeof models.BusinessClient);
+  const SequelizeModel = require('sequelize').Model;
+  console.log("models.BusinessClient instanceof Sequelize.Model:", models.BusinessClient?.prototype instanceof SequelizeModel);
+  console.log("----------------------------------------------------");
+  // --- FIM DEBUG ---
+
   FinancialAccount.belongsTo(models.Client, { foreignKey: 'clientId', as: 'ownerClient' });
 
   FinancialAccount.hasMany(models.FinancialTransaction, { foreignKey: 'financialAccountId', as: 'transactions', onDelete: 'CASCADE' });
@@ -66,8 +79,8 @@ FinancialAccount.associate = (models) => {
   FinancialAccount.hasMany(models.Product, { foreignKey: 'financialAccountId', as: 'products', onDelete: 'CASCADE' });
   FinancialAccount.hasMany(models.Appointment, { foreignKey: 'financialAccountId', as: 'appointments', onDelete: 'CASCADE' });
   FinancialAccount.hasMany(models.KanbanColumn, { foreignKey: 'financialAccountId', as: 'kanbanColumns', onDelete: 'CASCADE' });
-  // ASSOCIAÇÃO: FinancialAccount tem muitos BusinessClients
-  FinancialAccount.hasMany(models.BusinessClient, { foreignKey: 'financialAccountId', as: 'businessClients', onDelete: 'CASCADE' });
+  // NOVA ASSOCIAÇÃO: FinancialAccount tem muitos BusinessClients (linha 68 ou próxima)
+  FinancialAccount.hasMany(models.BusinessClient, { foreignKey: 'financialAccountId', as: 'businessClients', onDelete: 'CASCADE' }); // <--- Esta é a linha provável
 
 };
 
