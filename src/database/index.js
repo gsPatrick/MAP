@@ -1,4 +1,5 @@
 // src/database/index.js
+const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
 // Importar modelos
