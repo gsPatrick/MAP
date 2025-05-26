@@ -65,8 +65,10 @@ FinancialAccount.associate = (models) => {
   FinancialAccount.hasMany(models.CreditCard, { foreignKey: 'financialAccountId', as: 'creditCards', onDelete: 'CASCADE' });
   FinancialAccount.hasMany(models.Product, { foreignKey: 'financialAccountId', as: 'products', onDelete: 'CASCADE' });
   FinancialAccount.hasMany(models.Appointment, { foreignKey: 'financialAccountId', as: 'appointments', onDelete: 'CASCADE' });
-  FinancialAccount.hasMany(models.KanbanColumn, { foreignKey: 'financialAccountId', as: 'kanbanColumns', onDelete: 'CASCADE' }); // <<< ADICIONADO AQUI
-  // FinancialAccount.hasMany(models.KanbanTask, { foreignKey: 'financialAccountId', as: 'kanbanTasks', onDelete: 'CASCADE' }); // <<< REMOVIDO DAQUI
+  FinancialAccount.hasMany(models.KanbanColumn, { foreignKey: 'financialAccountId', as: 'kanbanColumns', onDelete: 'CASCADE' });
+  // ASSOCIAÇÃO: FinancialAccount tem muitos BusinessClients
+  FinancialAccount.hasMany(models.BusinessClient, { foreignKey: 'financialAccountId', as: 'businessClients', onDelete: 'CASCADE' });
+
 };
 
 module.exports = FinancialAccount;

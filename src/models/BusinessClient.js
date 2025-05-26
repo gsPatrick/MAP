@@ -84,7 +84,7 @@ Appointment.associate = (models) => {
   // if (models.User) {
   //   Appointment.belongsTo(models.User, { foreignKey: 'userId', as: 'schedulerAdmin' });
   // }
-  // ASSOCIAÇÃO: Many-to-Many com BusinessClient através de AppointmentBusinessClient
+  // NOVA ASSOCIAÇÃO: Many-to-Many com BusinessClient através de AppointmentBusinessClient
   Appointment.belongsToMany(models.BusinessClient, {
     through: models.AppointmentBusinessClient,
     foreignKey: 'appointmentId', // FK neste modelo (Appointment) para a tabela de junção
