@@ -1,7 +1,5 @@
 // src/database/index.js
-const { Sequelize } = require('sequelize');
-const config = require('../config/database');
-const logger = require('../utils/logger');
+const sequelize = require('../config/database');
 
 // Importar modelos
 const User = require('../models/User');
