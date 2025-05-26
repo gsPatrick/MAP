@@ -1,17 +1,32 @@
 // src/features/Kanban/kanban.routes.js
 const { Router } = require('express');
 const kanbanController = require('./kanban.controller');
-// const { authenticateClientToken } = require('../../middlewares/authMiddleware'); // Removido authorizeFinancialAccountOwnership pois a rota pai já faz isso
 
 const router = Router({ mergeParams: true }); // Para herdar :financialAccountId
 
-// A rota pai (/api/financial-accounts/:financialAccountId) já aplicará
-// authenticateClientToken e authorizeFinancialAccountOwnership (se configurado no seu index.js de rotas)
+// --- Rotas para Colunas Kanban ---
+// GET /api/financial-accounts/:financialAccountId/kanban-columns
+router.get('/columns', kanbanController.getAllColumns);
+// POST /api/financial-accounts/:financialAccountId/kanban-columns
+router.post('/columns', kanbanController.createColumn);
+// PUT /api/financial-accounts/:financialAccountId/kanban-columns/order (para reordenar todas as colunas)
+router.put('/columns/order', kanbanController.updateColumnOrder);
+// PUT /api/financial-accounts/:financialAccountId/kanban-columns/:columnId (para editar título, cor)
+router.put('/columns/:columnId', kanbanController.updateColumn);
+// DELETE /api/financial-accounts/:financialAccountId/kanban-columns/:columnId
+router.delete('/columns/:columnId', kanbanController.deleteColumn);
 
-router.get('/', kanbanController.getAllTasks);
-router.post('/', kanbanController.createTask);
-router.put('/:taskId', kanbanController.updateTask); // Para atualizar todos os campos
-router.patch('/:taskId/order-status', kanbanController.updateTaskOrderAndStatus); // Para D&D
-router.delete('/:taskId', kanbanController.deleteTask);
+
+// --- Rotas para Tarefas Kanban ---
+// GET /api/financial-accounts/:financialAccountId/kanban-tasks
+router.get('/tasks', kanbanController.getAllTasks); // Pode aceitar query param ?kanbanColumnId=X
+// POST /api/financial-accounts/:financialAccountId/kanban-tasks
+router.post('/tasks', kanbanController.createTask);
+// PUT /api/financial-accounts/:financialAccountId/kanban-tasks/:taskId (para atualizar campos da tarefa)
+router.put('/tasks/:taskId', kanbanController.updateTask);
+// PATCH /api/financial-accounts/:financialAccountId/kanban-tasks/:taskId/order-column (para D&D de tasks)
+router.patch('/tasks/:taskId/order-column', kanbanController.updateTaskOrderAndColumn);
+// DELETE /api/financial-accounts/:financialAccountId/kanban-tasks/:taskId
+router.delete('/tasks/:taskId', kanbanController.deleteTask);
 
 module.exports = router;
