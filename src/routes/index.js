@@ -89,7 +89,7 @@ clientFinancialAccountRouter.use('/products', productRoutes); // productRoutes j
 clientFinancialAccountRouter.use('/products/:productId/stock', productStockRouter); // productStockRouter lida com :productId
 clientFinancialAccountRouter.use('/appointments', appointmentRoutes);
 clientFinancialAccountRouter.use('/categories', financialCategoryRoutes); // <<< ADICIONADO AQUI
-clientFinancialAccountRouter.use('/kanban-tasks', kanbanRoutes); // Monta as rotas do Kanban
+clientFinancialAccountRouter.use('/kanban', kanbanRoutes); // A rota base para Kanban é /kanban
 
 
 // Monta o router de conta financeira no router principal da API
