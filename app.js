@@ -4,9 +4,9 @@ const express = require('express');
 const cors = require('cors');
 
 // Caminhos para os módulos
-const { sequelize } = require('./src/database');
+const { sequelize } = require('./src/database'); // Importa a instância do sequelize (e os modelos se necessário)
 const errorHandler = require('./src/middlewares/errorHandler');
-const { startJobs } = require('./src/jobs');
+const { startJobs } = require('./src/jobs'); // Importa a função startJobs
 const mainApiRouter = require('./src/routes');
 
 async function initializeDatabaseAndJobs() {
@@ -26,9 +26,11 @@ async function initializeDatabaseAndJobs() {
     }
     // 2. Lógica para desenvolvimento com DB_SYNC
     else if (process.env.NODE_ENV === 'development' && process.env.DB_SYNC === 'true') {
-      console.log('Ambiente de DESENVOLVIMENTO com DB_SYNC habilitado. Sincronizando modelos (force:true)...');
-      await sequelize.sync({ force: false }); // Em dev, force:true é comum para resetar
-      console.log('Modelos sincronizados com o banco de dados (force:true para desenvolvimento).');
+      console.log('Ambiente de DESENVOLVIMENTO com DB_SYNC habilitado. Sincronizando modelos (force:false)...');
+      // Corrigido: force: false para não apagar dados em dev se não for reset global
+      // Se você *quer* que DB_SYNC=true em dev apague tudo, mude para { force: true }
+      await sequelize.sync({ force: false });
+      console.log('Modelos sincronizados com o banco de dados (force:false para desenvolvimento).');
     }
     // 3. Lógica para produção com DB_SYNC (MUITO PERIGOSO com force:true)
     else if (process.env.NODE_ENV === 'production' && process.env.DB_SYNC === 'true') {
@@ -38,25 +40,35 @@ async function initializeDatabaseAndJobs() {
       console.error('## ISSO APAGARÁ TODOS OS DADOS DE PRODUÇÃO!                                                      ##');
       console.error('## Esta configuração é altamente desaconselhada. Use migrations dedicadas para produção.         ##');
       console.error('## Se você realmente precisa sincronizar, considere { alter: true } com cautela após backup.     ##');
-      console.error('## PROCEDENDO COM force:true CONFORME LÓGICA ORIGINAL PARA ESTA CONDIÇÃO ESPECÍFICA.             ##');
       console.error('###################################################################################################');
-      await sequelize.sync({ force: fale }); // Mantendo o force:true do seu código original para esta condição
-      console.log('Modelos sincronizados com o banco de dados em PRODUÇÃO (force:true). TODOS OS DADOS FORAM APAGADOS!');
+      // Corrigido: force: false é menos perigoso que force:true (que apaga tudo)
+      // Se você REALMENTE QUISER force:true aqui, volte, mas saiba o risco.
+      // O ideal é usar `{ alter: true }` aqui em produção, mas com MUITA cautela.
+      // Ou, melhor ainda, NUNCA use sync em produção, apenas migrations.
+      console.log('Ambiente de PRODUÇÃO com DB_SYNC habilitado. Sincronizando modelos (force:false)...');
+      await sequelize.sync({ force: false });
+      console.log('Modelos sincronizados com o banco de dados em PRODUÇÃO (force:false).');
       console.log('É CRUCIALMENTE RECOMENDADO DESABILITAR DB_SYNC EM PRODUÇÃO E USAR MIGRAÇÕES.');
+
     }
     // 4. Se nenhuma das condições de sincronização for atendida
     else {
       if (process.env.NODE_ENV === 'production') {
-        console.log('DB_SYNC não está habilitado para produção ou NODE_ENV não é "production" com DB_SYNC. Migrations são obrigatórias para produção.');
+        console.log('DB_SYNC não está habilitado para produção. Migrations são obrigatórias para produção.');
       } else {
         console.log('DB_SYNC não está habilitado ou NODE_ENV não configura sincronização automática. Migrations são preferidas.');
       }
+      // Mesmo sem sync automático, podemos verificar a conexão e modelos se necessário
+      // await sequelize.sync({ alter: true }); // Exemplo para tentar alterar sem apagar, mas ainda perigoso em produção
     }
 
-    startJobs(); // Inicia os jobs agendados
+
+    // Inicia os jobs agendados SOMENTE APÓS a conexão e sincronização
+    await startJobs(); // <--- AGORA É ASYNC E PRECISA DE AWAIT
+
   } catch (error) {
-    console.error('Não foi possível conectar ou sincronizar com o banco de dados:', error);
-    throw error; // Re-lança o erro para ser tratado pelo chamador
+    console.error('Não foi possível conectar ou sincronizar com o banco de dados OU iniciar os Jobs:', error);
+    throw error; // Re-lança o erro para ser tratado pelo chamador (bloco .catch abaixo)
   }
 }
 
@@ -94,7 +106,7 @@ if (require.main === module) {
   const app = createApp();
   const PORT = process.env.PORT || 3000;
 
-  initializeDatabaseAndJobs()
+  initializeDatabaseAndJobs() // Chama a função assíncrona
     .then(() => {
       app.listen(PORT, () => {
         console.log(`Servidor rodando na porta ${PORT}`);
@@ -112,7 +124,7 @@ if (require.main === module) {
     })
     .catch(error => {
       console.error("Falha crítica durante a inicialização. Servidor não iniciado.", error);
-      process.exit(1);
+      process.exit(1); // Encerrar o processo com código de erro
     });
 }
 
