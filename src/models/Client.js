@@ -53,20 +53,19 @@ const Client = sequelize.define('Client', {
   },
   status: {
     type: DataTypes.ENUM('Ativo', 'Inativo', 'Bloqueado', 'Aguardando Pagamento', 'Pagamento Falhou'),
-    defaultValue: 'Ativo', // MUDANÇA: Pode ser 'Aguardando Pagamento' se a lógica de assinatura for por fora
+    defaultValue: 'Ativo',
     allowNull: false,
     comment: 'Status do cliente no sistema',
   },
   accessLevel: {
-    // NOVO ENUM PARA OS PLANOS ESPECÍFICOS
     type: DataTypes.ENUM(
         'gratuito',
         'basico_mensal',
         'basico_anual',
         'avancado_mensal',
         'avancado_anual',
-        'vitalicio_basico', // Se houver vitalício básico
-        'vitalicio_avancado' // Se houver vitalício avançado
+        'vitalicio_basico',
+        'vitalicio_avancado'
     ),
     allowNull: false,
     defaultValue: 'gratuito',
@@ -97,10 +96,6 @@ const Client = sequelize.define('Client', {
       if (client.passwordHash) {
         client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
       }
-      // Lógica para definir accessExpiresAt ao criar um cliente com plano pago
-      // Esta lógica será MOVIDA para o subscription.service ou para onde a assinatura é realmente criada.
-      // O client.accessLevel será definido pela assinatura.
-      // Manteremos um fallback simples aqui, mas o ideal é que a assinatura dite isso.
       if (client.accessLevel && !client.accessExpiresAt) {
         const now = new Date();
         if (client.accessLevel.includes('_mensal')) {
@@ -121,8 +116,6 @@ const Client = sequelize.define('Client', {
       if (client.changed('passwordHash') && client.passwordHash && client.passwordHash.length < 60) {
         client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
       }
-      // Lógica para atualizar accessExpiresAt se o accessLevel mudar
-      // Esta lógica será MOVIDA para o subscription.service ou para onde a assinatura é realmente atualizada.
       if (client.changed('accessLevel')) {
         const now = new Date();
         if (client.accessLevel.includes('_mensal')) {
@@ -132,7 +125,7 @@ const Client = sequelize.define('Client', {
           now.setFullYear(now.getFullYear() + 1);
           client.accessExpiresAt = now.toISOString().split('T')[0];
         } else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
-          client.accessExpiresAt = null; 
+          client.accessExpiresAt = null;
         }
       }
     }
@@ -161,10 +154,23 @@ Client.associate = (models) => {
     as: 'interactionLogs',
     onDelete: 'CASCADE',
   });
-  // A associação com Subscription ainda é relevante, pois é ela quem DEVERIA definir o accessLevel do Client
-  Client.hasMany(models.Subscription, { // Mantém esta, pois Subscription deve controlar o accessLevel
+  Client.hasMany(models.Subscription, {
     foreignKey: 'clientId',
     as: 'subscriptions',
+    onDelete: 'CASCADE',
+  });
+
+  // Associações para SharedAccess
+  // Um cliente pode SER O DONO de vários compartilhamentos
+  Client.hasMany(models.SharedAccess, {
+    foreignKey: 'ownerClientId',
+    as: 'ownedSharedAccesses', // Acessos que este cliente concedeu
+    onDelete: 'CASCADE',
+  });
+  // Um cliente pode RECEBER acesso de vários compartilhamentos
+  Client.hasMany(models.SharedAccess, {
+    foreignKey: 'sharedWithClientId',
+    as: 'receivedSharedAccesses', // Acessos que este cliente recebeu
     onDelete: 'CASCADE',
   });
 };

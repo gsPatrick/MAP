@@ -1,9 +1,8 @@
 // src/middlewares/authMiddleware.js
 const jwt = require('jsonwebtoken');
-const { User, Client } = require('../database');
+const { User, Client, FinancialAccount, SharedAccess } = require('../database'); // Adicionado SharedAccess e FinancialAccount
 const { JWT_SECRET } = require('../utils/authUtils');
 const logger = require('../utils/logger');
-// const subscriptionService = require('../features/Subscription/subscription.service'); // Podemos remover se a verificação for só no Client
 
 async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -53,54 +52,88 @@ async function authenticateClientToken(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    if (!decoded.type || decoded.type !== 'client') {
-        logger.warn(`[AUTH CLIENT] Tentativa de usar token de tipo '${decoded.type || 'desconhecido'}' em rota de cliente.`);
-        return res.status(403).json({ status: 'fail', message: 'Token inválido para acesso de cliente.' });
-    }
 
-    // Buscamos o cliente COM accessLevel e accessExpiresAt
-    const client = await Client.findByPk(decoded.id, { 
-        attributes: ['id', 'phone', 'email', 'name', 'status', 'accessLevel', 'accessExpiresAt'] 
-    });
+    if (decoded.type === 'client') {
+        const client = await Client.findByPk(decoded.id, {
+            attributes: ['id', 'phone', 'email', 'name', 'status', 'accessLevel', 'accessExpiresAt']
+        });
 
-    if (!client) {
-      logger.warn(`[AUTH CLIENT] Cliente do token (ID: ${decoded.id}) não encontrado.`);
-      return res.status(401).json({ status: 'fail', message: 'Acesso não autorizado. Cliente inválido.' });
-    }
-    if (client.status === 'Bloqueado' || client.status === 'Inativo') {
-      logger.warn(`[AUTH CLIENT] Cliente do token (ID: ${decoded.id}) está ${client.status}.`);
-      return res.status(403).json({ status: 'fail', message: `Acesso proibido. Status do cliente: ${client.status}.` });
-    }
-
-    // VERIFICAR PLANO ATIVO DIRETAMENTE PELOS CAMPOS DO CLIENTE
-    let hasActivePaidAccess = false;
-    if (client.accessLevel && client.accessLevel !== 'gratuito') {
-        if (client.accessLevel.startsWith('vitalicio_')) {
-            hasActivePaidAccess = true;
-        } else if (client.accessExpiresAt) { // Para planos não vitalícios, precisa de data de expiração
-            const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z'); // Trata como UTC
-            const today = new Date();
-            today.setUTCHours(0,0,0,0); // Zera hora para comparar só data
-
-            if (expiryDate >= today) {
+        if (!client) {
+            logger.warn(`[AUTH CLIENT] Cliente do token (ID: ${decoded.id}) não encontrado.`);
+            return res.status(401).json({ status: 'fail', message: 'Acesso não autorizado. Cliente inválido.' });
+        }
+        if (client.status === 'Bloqueado' || client.status === 'Inativo') {
+            logger.warn(`[AUTH CLIENT] Cliente do token (ID: ${decoded.id}) está ${client.status}.`);
+            return res.status(403).json({ status: 'fail', message: `Acesso proibido. Status do cliente: ${client.status}.` });
+        }
+        // Verificação de plano ativo
+        let hasActivePaidAccess = false;
+        if (client.accessLevel && client.accessLevel !== 'gratuito') {
+            if (client.accessLevel.startsWith('vitalicio_')) {
                 hasActivePaidAccess = true;
+            } else if (client.accessExpiresAt) {
+                const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
+                const today = new Date(); today.setUTCHours(0,0,0,0);
+                if (expiryDate >= today) hasActivePaidAccess = true;
             }
         }
-    }
-    
-    if (!hasActivePaidAccess && client.status !== 'Aguardando Pagamento') {
-        logger.warn(`[AUTH CLIENT] Cliente ID ${client.id} (${client.phone}) não possui plano ativo/válido. AccessLevel: ${client.accessLevel}, ExpiresAt: ${client.accessExpiresAt}. Acesso negado à rota protegida.`);
-        return res.status(403).json({
-            status: 'fail_subscription',
-            message: 'Acesso negado. Nenhuma assinatura ativa encontrada ou sua assinatura expirou. Por favor, renove ou adquira um plano.',
+        if (!hasActivePaidAccess && client.status !== 'Aguardando Pagamento') {
+            logger.warn(`[AUTH CLIENT] Cliente ID ${client.id} (${client.phone}) não possui plano ativo/válido. AccessLevel: ${client.accessLevel}, ExpiresAt: ${client.accessExpiresAt}. Acesso negado.`);
+            return res.status(403).json({ status: 'fail_subscription', message: 'Acesso negado. Nenhuma assinatura ativa encontrada ou sua assinatura expirou.' });
+        }
+        req.client = client.toJSON(); // Cliente logado diretamente
+        req.sharedAccessContext = null; // Não é um acesso compartilhado
+
+    } else if (decoded.type === 'client_shared_access') {
+        const sharedWithClient = await Client.findByPk(decoded.id, { // ID do usuário que recebeu o acesso
+            attributes: ['id', 'phone', 'email', 'name', 'status']
         });
+        if (!sharedWithClient || sharedWithClient.status === 'Bloqueado' || sharedWithClient.status === 'Inativo') {
+            logger.warn(`[AUTH CLIENT SHARED] Usuário compartilhado do token (ID: ${decoded.id}) não encontrado ou inativo.`);
+            return res.status(401).json({ status: 'fail', message: 'Acesso compartilhado inválido (usuário).' });
+        }
+
+        // Buscar dados do DONO da conta para verificar o plano
+        const ownerClient = await Client.findByPk(decoded.ownerClientId, {
+            attributes: ['id', 'phone', 'email', 'name', 'status', 'accessLevel', 'accessExpiresAt']
+        });
+        if (!ownerClient || ownerClient.status === 'Bloqueado' || ownerClient.status === 'Inativo') {
+            logger.warn(`[AUTH CLIENT SHARED] Dono da conta (ID: ${decoded.ownerClientId}) do acesso compartilhado não encontrado ou inativo.`);
+            return res.status(403).json({ status: 'fail', message: 'Conta do proprietário indisponível.' });
+        }
+
+        // Verificar plano do DONO
+        let ownerHasActivePaidAccess = false;
+        if (ownerClient.accessLevel && ownerClient.accessLevel !== 'gratuito') {
+            if (ownerClient.accessLevel.startsWith('vitalicio_')) {
+                ownerHasActivePaidAccess = true;
+            } else if (ownerClient.accessExpiresAt) {
+                const expiryDate = new Date(ownerClient.accessExpiresAt + 'T00:00:00Z');
+                const today = new Date(); today.setUTCHours(0,0,0,0);
+                if (expiryDate >= today) ownerHasActivePaidAccess = true;
+            }
+        }
+        if (!ownerHasActivePaidAccess && ownerClient.status !== 'Aguardando Pagamento') {
+            logger.warn(`[AUTH CLIENT SHARED] Dono da conta (ID: ${ownerClient.id}) não possui plano ativo/válido. Acesso compartilhado negado.`);
+            return res.status(403).json({ status: 'fail_subscription', message: 'Acesso negado. A conta do proprietário não possui uma assinatura ativa.' });
+        }
+
+        req.client = sharedWithClient.toJSON(); // O "usuário logado" é quem recebeu o share
+        req.sharedAccessContext = { // Contexto do compartilhamento
+            ownerClientId: ownerClient.id,
+            ownerClientName: ownerClient.name,
+            ownerClientAccessLevel: ownerClient.accessLevel, // Para UI, se necessário
+            canAccessPersonalProfile: decoded.canAccessPersonalProfile,
+            canAccessBusinessProfileId: decoded.canAccessBusinessProfileId
+        };
+    } else {
+        logger.warn(`[AUTH CLIENT] Tipo de token desconhecido ou inválido: '${decoded.type || 'desconhecido'}'`);
+        return res.status(403).json({ status: 'fail', message: 'Tipo de token inválido para esta operação.' });
     }
 
-    req.client = client.toJSON();
-    // req.client.subscription = activeSubscription; // Não precisamos mais popular isso aqui se verificamos pelo client
     next();
   } catch (error) {
-    logger.error('[AUTH CLIENT] Erro na verificação do token de cliente:', { message: error.message });
+    logger.error('[AUTH CLIENT] Erro na verificação do token de cliente/compartilhado:', { message: error.message });
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({ status: 'fail', message: 'Token expirado. Faça login novamente.' });
     }

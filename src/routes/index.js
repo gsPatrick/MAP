@@ -22,6 +22,7 @@ const InteractiveChatRoutes = require('../features/InteractiveChat/interactiveCh
 const kanbanRoutes = require('../features/Kanban/kanban.routes');
 // ROTAS PARA BUSINESS CLIENTS
 const businessClientRoutes = require('../features/BusinessClient/BusinessClient.routes');
+const sharedAccessRoutes = require('../features/SharedAccess/sharedAccess.routes'); // <<< NOVA ROTA
 
 
 const mainApiRouter = Router();
@@ -44,6 +45,7 @@ mainApiRouter.use('/clients',  clientRoutes); // Gerenciamento de Clients por Ad
 mainApiRouter.use('/system',  systemRoutes); // Configs do sistema, categorias globais, planos
 mainApiRouter.use('/dev-tools',  devToolsRoutes); // Ferramentas de desenvolvimento
 mainApiRouter.use('/chat', InteractiveChatRoutes); // Rota de chat do site (sem token, mas com autenticação de cliente)
+mainApiRouter.use('/shared-access', authenticateClientToken, sharedAccessRoutes); // <<< NOVA ROTA
 
 // --- ROTAS PARA CLIENTS LOGADOS (protegidas para Clients com token válido e assinatura ativa) ---
 
@@ -51,36 +53,46 @@ mainApiRouter.use('/chat', InteractiveChatRoutes); // Rota de chat do site (sem 
 // Este middleware já está implementado
 async function authorizeFinancialAccountOwnership(req, res, next) {
     try {
-        // req.client é populado pelo authenticateClientToken
-        const client = req.client; // Cliente autenticado
+        const clientForAuth = req.sharedAccessContext ? { id: req.sharedAccessContext.ownerClientId } : req.client;
         const financialAccountIdFromParams = parseInt(req.params.financialAccountId, 10);
-       
-        if (!client) { // Should not happen if authenticateClientToken runs first, but safety check
-            logger.error('[AUTH OWNERSHIP] Middleware chamado sem req.client.');
+
+        if (!clientForAuth || !clientForAuth.id) {
+            logger.error('[AUTH OWNERSHIP] Middleware chamado sem req.client ou ownerClient válido.');
             return res.status(500).json({ status: 'error', message: 'Erro interno de autenticação.' });
         }
-       
         if (isNaN(financialAccountIdFromParams)) {
             return res.status(400).json({ status: 'fail', message: 'ID da Conta Financeira inválido na rota.' });
         }
 
         const financialAccount = await FinancialAccount.findOne({
-            where: {
-                id: financialAccountIdFromParams,
-                clientId: client.id // Verifica diretamente a posse
-            }
+            where: { id: financialAccountIdFromParams, clientId: clientForAuth.id }
         });
 
         if (!financialAccount) {
-            logger.warn(`[AUTH OWNERSHIP] Cliente ${client.id} tentou acessar FinancialAccount ${financialAccountIdFromParams} que não lhe pertence ou não existe.`);
+            logger.warn(`[AUTH OWNERSHIP] Cliente ${clientForAuth.id} tentou acessar FA ${financialAccountIdFromParams} que não lhe pertence ou não existe.`);
             return res.status(403).json({ status: 'fail', message: 'Acesso negado a esta conta financeira.' });
         }
         if (!financialAccount.isActive) {
-            logger.warn(`[AUTH OWNERSHIP] Cliente ${client.id} tentou acessar FinancialAccount ${financialAccountIdFromParams} INATIVA.`);
+            logger.warn(`[AUTH OWNERSHIP] Cliente ${clientForAuth.id} tentou acessar FA ${financialAccountIdFromParams} INATIVA.`);
             return res.status(403).json({ status: 'fail', message: 'Esta conta financeira está inativa.' });
         }
-
-        req.financialAccount = financialAccount.toJSON(); // Adiciona a conta ao request para uso posterior nos controllers/services
+        
+        // Se for um acesso compartilhado, verificar se este perfil específico está permitido
+        if (req.sharedAccessContext) {
+            const { canAccessPersonalProfile, canAccessBusinessProfileId } = req.sharedAccessContext;
+            let isAllowedForShared = false;
+            if (financialAccount.accountType === 'PF' && canAccessPersonalProfile) {
+                isAllowedForShared = true;
+            } else if ((financialAccount.accountType === 'PJ' || financialAccount.accountType === 'MEI') && canAccessBusinessProfileId === financialAccount.id) {
+                isAllowedForShared = true;
+            }
+            if (!isAllowedForShared) {
+                logger.warn(`[AUTH OWNERSHIP - SHARED] Usuário compartilhado ${req.client.id} tentou acessar FA ${financialAccount.id} (${financialAccount.accountType}) do dono ${clientForAuth.id}, mas não tem permissão para este perfil específico.`);
+                return res.status(403).json({ status: 'fail', message: 'Acesso compartilhado negado para este perfil financeiro específico.' });
+            }
+        }
+        
+        req.financialAccount = financialAccount.toJSON();
         next();
     } catch (error) {
         logger.error('[AUTH OWNERSHIP] Erro ao verificar propriedade da conta financeira:', { message: error.message, error });
@@ -89,10 +101,9 @@ async function authorizeFinancialAccountOwnership(req, res, next) {
 }
 
 
-// Router específico para rotas que dependem de uma :financialAccountId e pertencem a um Client logado
-const clientFinancialAccountRouter = Router({ mergeParams: true }); // mergeParams para herdar :financialAccountId
-clientFinancialAccountRouter.use(authenticateClientToken); // 1. Autentica o Client
-clientFinancialAccountRouter.use(authorizeFinancialAccountOwnership); // 2. Verifica se ele é dono da :financialAccountId e ativa
+const clientFinancialAccountRouter = Router({ mergeParams: true });
+clientFinancialAccountRouter.use(authenticateClientToken);
+clientFinancialAccountRouter.use(authorizeFinancialAccountOwnership);
 
 // Monta as sub-rotas no clientFinancialAccountRouter
 clientFinancialAccountRouter.use('/transactions', financialTransactionRoutes);

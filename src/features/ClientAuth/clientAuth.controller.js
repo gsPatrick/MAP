@@ -2,14 +2,14 @@
 const clientAuthService = require('./clientAuth.service');
 const logger = require('../../utils/logger');
 
-async function setCredentials(req, res, next) { // <<< RENOMEADO
+async function setCredentials(req, res, next) {
   try {
-    const { phone, password, name, email } = req.body; // Adicionado name
+    const { phone, password, name, email } = req.body;
     if (!phone || !password) {
         const error = new Error('Telefone e senha são obrigatórios no corpo da requisição.');
         error.statusCode = 400; error.status = 'fail'; return next(error);
     }
-    const client = await clientAuthService.setClientCredentials(phone, password, name, email); // <<< ATUALIZADO
+    const client = await clientAuthService.setClientCredentials(phone, password, name, email);
     res.status(200).json({ status: 'success', message: 'Credenciais definidas/atualizadas com sucesso.', data: client });
   } catch (error) {
     next(error);
@@ -30,11 +30,11 @@ async function login(req, res, next) {
   }
 }
 
-async function getCurrentClientProfile(req, res, next) { // <<< NOVO CONTROLLER
+async function getCurrentClientProfile(req, res, next) {
     try {
-        // req.client é populado pelo authenticateClientToken e já contém os dados básicos.
-        // O serviço getClientProfile busca informações adicionais como contas e assinatura.
-        const profileData = await clientAuthService.getClientProfile(req.client.id);
+        // req.client é o usuário logado (pode ser o sharedWithClient ou o dono direto)
+        // req.sharedAccessContext contém infos se for um acesso compartilhado
+        const profileData = await clientAuthService.getClientProfile(req.client.id, req.sharedAccessContext);
         if (!profileData) {
             const error = new Error('Perfil do cliente não encontrado.');
             error.statusCode = 404; error.status = 'fail'; return next(error);
@@ -45,29 +45,8 @@ async function getCurrentClientProfile(req, res, next) { // <<< NOVO CONTROLLER
     }
 }
 
-async function updateCurrentClientProfile(req, res, next) { // <<< NOVO CONTROLLER
-    try {
-        const clientId = req.client.id; // Obtido do token autenticado
-        const updateData = req.body;
-
-        if (Object.keys(updateData).length === 0) {
-            const error = new Error('Nenhum dado fornecido para atualização.');
-            error.statusCode = 400; error.status = 'fail';
-            return next(error);
-        }
-        // Validar se os campos no updateData são permitidos (opcional, mas bom para segurança)
-        // Ex: const allowedUpdates = ['name', 'email', 'currentPassword', 'newPassword', 'phone'];
-
-        const result = await clientAuthService.updateClientProfile(clientId, updateData);
-        res.status(200).json({ status: 'success', data: result });
-    } catch (error) {
-        next(error);
-    }
-}
-
 module.exports = {
-  setCredentials, // <<< ATUALIZADO
+  setCredentials,
   login,
-  updateCurrentClientProfile,
-  getCurrentClientProfile, // <<< ADICIONADO
+  getCurrentClientProfile,
 };
