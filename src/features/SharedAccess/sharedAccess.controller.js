@@ -4,20 +4,31 @@ const logger = require('../../utils/logger');
 
 async function grantAccess(req, res, next) {
     try {
-        // O ownerClientId vem do usuário autenticado (req.client.id)
         const ownerClientId = req.client.id;
         const grantData = req.body;
-        // Validação do corpo da requisição (sharedWithEmail/Phone, etc.)
-        if (!(grantData.sharedWithEmail || grantData.sharedWithPhone)) {
-             const error = new Error('Email ou telefone do usuário convidado é obrigatório.');
+
+        // CORREÇÃO: Usar as chaves que o frontend envia para identificar o convidado
+        // e para as credenciais específicas do acesso.
+        if (!(grantData.sharedAccessEmail || grantData.sharedAccessPhone)) {
+             const error = new Error('O "Email de Login para este Acesso" ou o "Telefone WhatsApp para este Acesso" é obrigatório.');
              error.statusCode = 400; error.status = 'fail'; return next(error);
+        }
+        // A senha também é obrigatória ao criar
+        if (!grantData.sharedAccessPassword) {
+            const error = new Error('A "Senha para este Acesso" é obrigatória.');
+            error.statusCode = 400; error.status = 'fail'; return next(error);
         }
         // Validação se canAccessPersonalProfile ou canAccessBusinessProfileId foi fornecido
         if (grantData.canAccessPersonalProfile === undefined && grantData.canAccessBusinessProfileId === undefined) {
+            // Se nenhum foi definido explicitamente, podemos assumir um default ou erro
+            // Para ser mais explícito, vamos exigir que pelo menos um seja definido via frontend (Radio buttons)
             const error = new Error('Pelo menos um tipo de perfil (pessoal ou de negócio) deve ser especificado para o compartilhamento.');
             error.statusCode = 400; error.status = 'fail'; return next(error);
         }
 
+
+        // O service 'grantAccess' já espera 'sharedAccessEmail', 'sharedAccessPhone', 'sharedAccessPassword'
+        // e os usará tanto para o registro SharedAccess quanto para identificar/criar o Client convidado.
         const newSharedAccess = await sharedAccessService.grantAccess(ownerClientId, grantData);
         res.status(201).json({ status: 'success', data: newSharedAccess });
     } catch (error) {
@@ -25,9 +36,9 @@ async function grantAccess(req, res, next) {
     }
 }
 
-async function getMyOwnedShares(req, res, next) { // Para o dono ver quem ele compartilhou
+async function getMyOwnedShares(req, res, next) {
     try {
-        const ownerClientId = req.client.id; // ID do cliente logado (dono)
+        const ownerClientId = req.client.id;
         const result = await sharedAccessService.getSharedAccessesByOwner(ownerClientId, req.query);
         res.status(200).json({ status: 'success', ...result });
     } catch (error) {
@@ -35,9 +46,9 @@ async function getMyOwnedShares(req, res, next) { // Para o dono ver quem ele co
     }
 }
 
-async function getSharesForMe(req, res, next) { // Para o usuário ver quem compartilhou com ele
+async function getSharesForMe(req, res, next) {
     try {
-        const sharedWithClientId = req.client.id; // ID do cliente logado (que recebeu o share)
+        const sharedWithClientId = req.client.id;
         const result = await sharedAccessService.getSharedAccessesForUser(sharedWithClientId, req.query);
         res.status(200).json({ status: 'success', ...result });
     } catch (error) {
