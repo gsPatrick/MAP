@@ -18,7 +18,6 @@ async function validateBusinessClientOwningAccount(financialAccountId, transacti
     const error = new Error(`A Conta Financeira ID ${financialAccountId} ("${account.accountName}") está inativa.`);
     error.statusCode = 403; error.status = 'fail'; throw error;
   }
-  // Clientes de Negócio são para contas PJ ou MEI
   if (!['PJ', 'MEI'].includes(account.accountType)) {
     const error = new Error(`Clientes de Negócio só podem ser associados a Contas Financeiras do tipo PJ ou MEI. Conta ID ${financialAccountId} é ${account.accountType}.`);
     error.statusCode = 400; error.status = 'fail'; throw error;
@@ -36,6 +35,8 @@ async function createBusinessClient(financialAccountId, clientData) {
   const t = await sequelize.transaction();
   try {
     await validateBusinessClientOwningAccount(financialAccountId, t);
+    logger.debug('[SERVICE CREATE BC] clientData recebido:', clientData);
+
 
     if (!clientData.name || typeof clientData.name !== 'string' || clientData.name.trim() === '') {
       const error = new Error('Nome é obrigatório para criar um cliente de negócio.');
@@ -43,50 +44,50 @@ async function createBusinessClient(financialAccountId, clientData) {
     }
     const clientName = clientData.name.trim();
 
-    // Validação de unicidade de nome DENTRO da financialAccount
     const existingByName = await BusinessClient.findOne({ where: { name: { [Op.iLike]: clientName }, financialAccountId }, transaction:t });
     if (existingByName) {
       const error = new Error(`Já existe um cliente com o nome "${clientName}" nesta conta financeira.`);
       error.statusCode = 409; error.status = 'fail'; throw error;
     }
 
-    // Validação de unicidade de telefone/email DENTRO da financialAccount, se fornecidos
-    if (clientData.phone && clientData.phone.trim() !== '') {
+    let phoneToCreate = null;
+    if (clientData.phone && typeof clientData.phone === 'string' && clientData.phone.trim() !== '') {
         const normalizedPhone = clientData.phone.replace(/\D/g, '');
         const existingByPhone = await BusinessClient.findOne({ where: { phone: normalizedPhone, financialAccountId }, transaction: t });
         if (existingByPhone) {
             const error = new Error(`Já existe um cliente com o telefone "${clientData.phone}" nesta conta financeira.`);
             error.statusCode = 409; error.status = 'fail'; throw error;
         }
-        clientData.phone = normalizedPhone; // Normaliza antes de criar
-    } else {
-        clientData.phone = null; // Garante null se vazio ou undefined
+        phoneToCreate = normalizedPhone;
     }
 
-    if (clientData.email && clientData.email.trim() !== '') {
+    let emailToCreate = null;
+    if (clientData.email && typeof clientData.email === 'string' && clientData.email.trim() !== '') {
         const lowerEmail = clientData.email.toLowerCase().trim();
         const existingByEmail = await BusinessClient.findOne({ where: { email: lowerEmail, financialAccountId }, transaction: t });
         if (existingByEmail) {
             const error = new Error(`Já existe um cliente com o email "${clientData.email}" nesta conta financeira.`);
             error.statusCode = 409; error.status = 'fail'; throw error;
         }
-        clientData.email = lowerEmail; // Normaliza antes de criar
-    } else {
-        clientData.email = null; // Garante null se vazio ou undefined
+        emailToCreate = lowerEmail;
     }
     
-    // Tratamento para photoUrl: null se for string vazia
-    const photoUrlToCreate = clientData.hasOwnProperty('photoUrl') && clientData.photoUrl !== '' ? clientData.photoUrl : null;
+    const photoUrlToCreate = (clientData.photoUrl && typeof clientData.photoUrl === 'string' && clientData.photoUrl.trim() !== '')
+                             ? clientData.photoUrl.trim()
+                             : null;
+    logger.debug('[SERVICE CREATE BC] photoUrl a ser criado:', photoUrlToCreate);
 
 
     const newBusinessClient = await BusinessClient.create({
-        ...clientData,
-        name: clientName, // Usa o nome normalizado
+        name: clientName,
+        phone: phoneToCreate,
+        email: emailToCreate,
+        photoUrl: photoUrlToCreate,
+        notes: clientData.notes || null,
+        isActive: clientData.isActive !== undefined ? clientData.isActive : true,
         financialAccountId,
-        photoUrl: photoUrlToCreate, // Usa a URL normalizada
-        phone: clientData.phone, // Usa o telefone normalizado
-        email: clientData.email, // Usa o email normalizado
     }, { transaction: t });
+
     await t.commit();
     logger.info(`Cliente de Negócio "${newBusinessClient.name}" (ID: ${newBusinessClient.id}) criado para FinancialAccount ID ${financialAccountId}.`);
     return newBusinessClient.toJSON();
@@ -100,8 +101,7 @@ async function createBusinessClient(financialAccountId, clientData) {
         throw valError;
     }
      if (error.name === 'SequelizeUniqueConstraintError') {
-        // Já tratado pelas mensagens de erro acima, mas fallback
-        const uniqueError = new Error(`Erro de unicidade nos dados fornecidos.`);
+        const uniqueError = new Error(`Erro de unicidade nos dados fornecidos. Verifique nome, telefone ou email.`);
         uniqueError.statusCode = 409; uniqueError.status = 'fail';
         throw uniqueError;
     }
@@ -122,10 +122,10 @@ async function getAllBusinessClients(financialAccountId, queryParams = {}) {
     const { page = 1, limit = 10, search, isActive, sortBy = 'name', sortOrder = 'ASC' } = queryParams;
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
 
-    const whereConditions = { financialAccountId }; // Filtro principal
+    const whereConditions = { financialAccountId }; 
 
-    if (isActive !== undefined) {
-        whereConditions.isActive = (isActive === 'true' || isActive === true);
+    if (isActive !== undefined && isActive !== null && isActive !== '') {
+        whereConditions.isActive = (String(isActive).toLowerCase() === 'true' || isActive === true);
     }
 
     if (search) {
@@ -143,7 +143,7 @@ async function getAllBusinessClients(financialAccountId, queryParams = {}) {
     let sortDirection = validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'ASC';
 
     const order = [[sortField, sortDirection]];
-    if (sortField !== 'name') order.push(['name', 'ASC']); // Desempate por nome
+    if (sortField !== 'name') order.push(['name', 'ASC']); 
 
     const { count, rows } = await BusinessClient.findAndCountAll({
       where: whereConditions,
@@ -180,7 +180,7 @@ async function getBusinessClientById(financialAccountId, businessClientId) {
     });
 
     if (!client) {
-      logger.warn(`Cliente de Negócio ID ${businessClientId} não encontrado ou não pertence à FinancialAccount ID ${financialAccountId}.`);
+      // O controller tratará o 404 com base no retorno null
       return null;
     }
     return client.toJSON();
@@ -202,18 +202,23 @@ async function updateBusinessClient(financialAccountId, businessClientId, update
   const t = await sequelize.transaction();
   try {
     await validateBusinessClientOwningAccount(financialAccountId, t);
-    const client = await BusinessClient.findOne({
+    const clientInstance = await BusinessClient.findOne({ // Renomeado para clientInstance para evitar conflito com o nome do parâmetro
       where: { id: businessClientId, financialAccountId },
       transaction: t
     });
-    if (!client) {
+    if (!clientInstance) {
       await t.rollback();
       const error = new Error(`Cliente de negócio ID ${businessClientId} não encontrado para atualização.`);
       error.statusCode = 404; error.status = 'fail'; throw error;
     }
+    logger.debug('[SERVICE UPDATE BC] updateData recebido:', updateData);
+    logger.debug('[SERVICE UPDATE BC] Cliente antes da atualização:', clientInstance.toJSON());
 
-    // Validações de unicidade se campos únicos forem alterados
-    if (updateData.name && updateData.name.trim() !== '' && updateData.name.trim() !== client.name) {
+
+    // Prepara os dados para atualização, aplicando normalizações e validações de unicidade
+    const dataForSequelizeUpdate = {};
+
+    if (updateData.name && typeof updateData.name === 'string' && updateData.name.trim() !== '' && updateData.name.trim() !== clientInstance.name) {
         const clientName = updateData.name.trim();
         const existingByName = await BusinessClient.findOne({ where: { name: { [Op.iLike]: clientName }, financialAccountId, id: {[Op.ne]: businessClientId} }, transaction: t });
         if(existingByName){
@@ -221,17 +226,17 @@ async function updateBusinessClient(financialAccountId, businessClientId, update
             const error = new Error(`Já existe outro cliente com o nome "${clientName}" nesta conta financeira.`);
             error.statusCode = 409; error.status = 'fail'; throw error;
         }
-        updateData.name = clientName; // Normaliza nome antes do update
-    } else if (updateData.hasOwnProperty('name') && (updateData.name === null || updateData.name.trim() === '')) { // Permite limpar o nome? O modelo não permite null.
+        dataForSequelizeUpdate.name = clientName;
+    } else if (updateData.hasOwnProperty('name') && (updateData.name === null || (typeof updateData.name === 'string' && updateData.name.trim() === ''))) {
          await t.rollback();
          const error = new Error('Nome não pode ser vazio para um cliente de negócio.');
          error.statusCode = 400; error.status = 'fail'; throw error;
-    } // Se updateData.name não existir, não atualiza o nome
+    }
 
-    if (updateData.phone !== undefined) { // Permite definir para null
-        if (updateData.phone && updateData.phone.trim() !== '') {
+    if (updateData.hasOwnProperty('phone')) { // Se 'phone' está presente em updateData (pode ser null, "", ou um valor)
+        if (updateData.phone && typeof updateData.phone === 'string' && updateData.phone.trim() !== '') {
              const normalizedPhone = updateData.phone.replace(/\D/g, '');
-             if (normalizedPhone !== client.phone) {
+             if (normalizedPhone !== clientInstance.phone) { // Só verifica unicidade se o telefone realmente mudou
                 const existingByPhone = await BusinessClient.findOne({ where: { phone: normalizedPhone, financialAccountId, id: {[Op.ne]: businessClientId} }, transaction: t });
                 if (existingByPhone) {
                      await t.rollback();
@@ -239,15 +244,16 @@ async function updateBusinessClient(financialAccountId, businessClientId, update
                     error.statusCode = 409; error.status = 'fail'; throw error;
                 }
              }
-             updateData.phone = normalizedPhone; // Normaliza
-        } else {
-             updateData.phone = null; // Define para null se fornecido vazio
+             dataForSequelizeUpdate.phone = normalizedPhone;
+        } else { // Se phone é null, undefined ou string vazia
+             dataForSequelizeUpdate.phone = null;
         }
     }
-    if (updateData.email !== undefined) { // Permite definir para null
-        if (updateData.email && updateData.email.trim() !== '') {
+
+    if (updateData.hasOwnProperty('email')) {
+        if (updateData.email && typeof updateData.email === 'string' && updateData.email.trim() !== '') {
             const lowerEmail = updateData.email.toLowerCase().trim();
-            if (lowerEmail !== client.email) {
+            if (lowerEmail !== clientInstance.email) {
                  const existingByEmail = await BusinessClient.findOne({ where: { email: lowerEmail, financialAccountId, id: {[Op.ne]: businessClientId} }, transaction: t });
                 if (existingByEmail) {
                      await t.rollback();
@@ -255,36 +261,50 @@ async function updateBusinessClient(financialAccountId, businessClientId, update
                     error.statusCode = 409; error.status = 'fail'; throw error;
                 }
             }
-            updateData.email = lowerEmail; // Normaliza
+            dataForSequelizeUpdate.email = lowerEmail;
         } else {
-             updateData.email = null; // Define para null se fornecido vazio
+             dataForSequelizeUpdate.email = null;
         }
     }
-     if (updateData.isActive !== undefined) {
-        updateData.isActive = (String(updateData.isActive).toLowerCase() === 'true' || updateData.isActive === true);
-    } // Se updateData.isActive não existir, não atualiza
 
-     if (updateData.hasOwnProperty('photoUrl')) { // Permite definir para null ou string vazia para remover a foto
-        updateData.photoUrl = updateData.photoUrl && updateData.photoUrl.trim() !== '' ? updateData.photoUrl : null;
-     } // Se updateData.photoUrl não existir, não atualiza
-
-    if (updateData.notes === undefined) delete updateData.notes; // Não atualiza notes se não fornecido
-
-    // Remover financialAccountId de updateData
-    delete updateData.financialAccountId;
-
-    // Garante que há algo para atualizar (além do ID)
-    const keysToUpdate = Object.keys(updateData).filter(key => key !== 'id');
-    if (keysToUpdate.length === 0) {
-        await t.commit();
-        return client.toJSON(); // Nada a atualizar
+    if (updateData.hasOwnProperty('isActive')) { // Se isActive foi passado
+        dataForSequelizeUpdate.isActive = (String(updateData.isActive).toLowerCase() === 'true' || updateData.isActive === true);
     }
 
+    if (updateData.hasOwnProperty('photoUrl')) {
+        dataForSequelizeUpdate.photoUrl = (updateData.photoUrl && typeof updateData.photoUrl === 'string' && updateData.photoUrl.trim() !== '')
+                                        ? updateData.photoUrl.trim()
+                                        : null;
+        logger.debug('[SERVICE UPDATE BC] photoUrl a ser atualizado para:', dataForSequelizeUpdate.photoUrl);
+    }
 
-    await client.update(updateData, { transaction: t });
+    // Trata notes: null se string vazia, não atualiza se não fornecido e já for null
+    if (updateData.hasOwnProperty('notes')) {
+        if (updateData.notes === null || (typeof updateData.notes === 'string' && updateData.notes.trim() === '')) {
+            dataForSequelizeUpdate.notes = null;
+        } else if (typeof updateData.notes === 'string') {
+            dataForSequelizeUpdate.notes = updateData.notes.trim();
+        }
+    }
+
+    // financialAccountId não deve ser alterado por este método
+    // delete dataForSequelizeUpdate.financialAccountId; // Desnecessário pois não está em updateData
+
+    const keysToUpdate = Object.keys(dataForSequelizeUpdate);
+    if (keysToUpdate.length === 0) {
+        logger.info(`[SERVICE UPDATE BC] Nenhum campo alterado para BusinessClient ID ${businessClientId}. Nenhuma atualização necessária.`);
+        await t.commit(); // Comita a transação mesmo se nada for alterado, pois não houve erro.
+        return clientInstance.toJSON();
+    }
+    logger.debug('[SERVICE UPDATE BC] dataForSequelizeUpdate final:', dataForSequelizeUpdate);
+
+    await clientInstance.update(dataForSequelizeUpdate, { transaction: t });
     await t.commit();
-    logger.info(`Cliente de Negócio ID ${businessClientId} ("${client.name}") atualizado para FinancialAccount ID ${financialAccountId}.`);
-    return client.reload().then(c => c.toJSON());
+    logger.info(`Cliente de Negócio ID ${businessClientId} ("${clientInstance.name}") atualizado para FinancialAccount ID ${financialAccountId}.`);
+    const reloadedClient = await clientInstance.reload(); // Recarrega para pegar os valores atualizados do DB
+    logger.debug('[SERVICE UPDATE BC] Cliente após reload:', reloadedClient.toJSON());
+    return reloadedClient.toJSON();
+
   } catch (error) {
     if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
     logger.error(`Erro ao atualizar cliente de negócio ID ${businessClientId}: ${error.message}`, { error, updateData });
@@ -295,8 +315,8 @@ async function updateBusinessClient(financialAccountId, businessClientId, update
         throw valError;
     }
      if (error.name === 'SequelizeUniqueConstraintError') {
-        // Já tratado pelas mensagens de erro acima, mas fallback
-        const uniqueError = new Error(`Erro de unicidade nos dados fornecidos.`);
+        // O erro já deve ser mais específico devido às verificações acima
+        const uniqueError = new Error(`Erro de unicidade nos dados fornecidos. Verifique nome, telefone ou email.`);
         uniqueError.statusCode = 409; uniqueError.status = 'fail';
         throw uniqueError;
     }
@@ -321,15 +341,9 @@ async function deleteBusinessClient(financialAccountId, businessClientId) {
     });
     if (!client) {
       await t.rollback();
-      logger.warn(`Cliente de Negócio ID ${businessClientId} não encontrado para exclusão na FinancialAccount ID ${financialAccountId}.`);
+      // Não loga aqui, o controller deve tratar o retorno false como 404
       return false;
     }
-
-    // A exclusão de associações na tabela AppointmentBusinessClient
-    // deve ocorrer automaticamente devido ao onDelete: CASCADE definido na tabela de junção.
-    // Não precisamos verificar ou excluir manualmente compromissos associados AQUI.
-    // Se houvesse alguma outra relação (ex: BusinessClient temMany Vendas),
-    // precisaríamos verificar a política onDelete dessas outras relações.
 
     await client.destroy({ transaction: t });
     await t.commit();
@@ -343,16 +357,23 @@ async function deleteBusinessClient(financialAccountId, businessClientId) {
   }
 }
 
-// Função auxiliar para buscar BusinessClients por nomes/telefones/emails (útil para integração com IA/WhatsApp)
+/**
+ * Busca BusinessClients por identificadores (nome, telefone, email) dentro de uma FinancialAccount.
+ * @param {number} financialAccountId
+ * @param {Array<string>} identifiers - Array de strings (nomes, telefones ou emails).
+ * @param {object} transaction - Transação Sequelize opcional.
+ * @returns {Promise<Array<object>>} Array de modelos BusinessClient.
+ */
 async function findBusinessClientsByIdentifiers(financialAccountId, identifiers, transaction = null) {
     if (!identifiers || identifiers.length === 0) return [];
     
-    const account = await validateBusinessClientOwningAccount(financialAccountId, transaction); // Valida a conta
+    await validateBusinessClientOwningAccount(financialAccountId, transaction); 
     
-    const identifierConditions = identifiers.map(id => {
-        const lowerId = String(id).toLowerCase().trim();
-        const normalizedPhone = String(id).replace(/\D/g, '');
-        const isPossiblePhone = normalizedPhone.length >= 8 && normalizedPhone.length <= 15; // Criterio simples
+    const identifierConditions = identifiers.map(idStr => {
+        const lowerId = String(idStr).toLowerCase().trim();
+        const normalizedPhone = String(idStr).replace(/\D/g, '');
+        // Critério simples para telefone: se contém apenas números e tem comprimento razoável
+        const isPossiblePhone = /^\d+$/.test(normalizedPhone) && normalizedPhone.length >= 8 && normalizedPhone.length <= 15;
         const isPossibleEmail = lowerId.includes('@');
 
         let orConditions = [
@@ -365,15 +386,18 @@ async function findBusinessClientsByIdentifiers(financialAccountId, identifiers,
          if (isPossibleEmail) {
             orConditions.push({ email: lowerId }); // Busca por email exato (normalizado)
         }
+        // Adicionar busca por ID numérico se o identificador for um número
+        if (!isNaN(parseInt(idStr, 10))) {
+            orConditions.push({ id: parseInt(idStr, 10) });
+        }
 
         return { [Op.or]: orConditions };
     });
 
-
     const clients = await BusinessClient.findAll({
         where: {
             financialAccountId,
-            isActive: true, // Busca apenas clientes ativos
+            isActive: true,
             [Op.or]: identifierConditions
         },
         transaction
@@ -382,12 +406,11 @@ async function findBusinessClientsByIdentifiers(financialAccountId, identifiers,
     return clients; // Retorna modelos Sequelize
 }
 
-
 module.exports = {
   createBusinessClient,
   getAllBusinessClients,
   getBusinessClientById,
   updateBusinessClient,
   deleteBusinessClient,
-  findBusinessClientsByIdentifiers, // Exporta a função de busca por identificadores
+  findBusinessClientsByIdentifiers,
 };
