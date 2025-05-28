@@ -16,7 +16,7 @@ const BusinessClient = sequelize.define('BusinessClient', {
       key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'CASCADE', // Se a conta financeira for deletada, seus BusinessClients são deletados
+    onDelete: 'CASCADE',
     comment: 'ID da Conta Financeira (PJ/MEI) à qual este cliente pertence',
   },
   name: {
@@ -28,18 +28,35 @@ const BusinessClient = sequelize.define('BusinessClient', {
     type: DataTypes.STRING(50),
     allowNull: true,
     comment: 'Número de telefone do cliente do negócio (opcional)',
-    validate: {
-      isNumeric: { msg: 'Telefone deve conter apenas números.', args: ['pt-BR'], skipNull: true },
-      len: { msg: 'Telefone deve ter entre 8 e 15 dígitos.', args: [8, 15], skipNull: true }, // Ajuste o range conforme necessário
-    }
+    // A validação isNumeric e len foi movida para o serviço para permitir flexibilidade e normalização
+    // Se quiser manter no modelo, certifique-se que a normalização acontece ANTES da validação.
   },
   email: {
     type: DataTypes.STRING(255),
     allowNull: true,
     comment: 'Email do cliente do negócio (opcional)',
     validate: {
-      isEmail: { msg: 'Formato de email inválido.', skipNull: true },
+      isEmailOrNull(value) {
+        if (value === null || value === '' || value === undefined) return;
+        if (!/^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$/g.test(value)) {
+          throw new Error('Formato de email inválido.');
+        }
+      }
     }
+  },
+  photoUrl: { // <<< CAMPO ADICIONADO AQUI
+    type: DataTypes.STRING(2048), // URL pode ser longa
+    allowNull: true,
+    validate: {
+      isUrlOrNull(value) {
+        if (value === null || value === '' || value === undefined) return;
+        // Regex simples para URL, pode ser aprimorada se necessário
+        if (!/^(https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&\/=]*))$/i.test(value)) {
+          throw new Error('URL da foto inválida. Deve ser uma URL HTTP/HTTPS válida.');
+        }
+      }
+    },
+    comment: 'URL para a foto/logo do cliente de negócio (opcional)',
   },
   notes: {
     type: DataTypes.TEXT,
@@ -53,37 +70,44 @@ const BusinessClient = sequelize.define('BusinessClient', {
     comment: 'Indica se o cliente do negócio está ativo',
   }
 }, {
-  sequelize, // <--- Passa a instância do sequelize importada
-  modelName: 'BusinessClient', // <--- Define explicitamente o nome do modelo
+  sequelize,
+  modelName: 'BusinessClient',
   tableName: 'business_clients',
   timestamps: true,
   comment: 'Clientes de Negócio associados a contas PJ/MEI',
   indexes: [
     { fields: ['financialAccountId'] },
     { fields: ['financialAccountId', 'isActive'] },
-    // Índice único combinado para nome DENTRO da mesma conta financeira
     { unique: true, fields: ['financialAccountId', 'name'], name: 'unique_business_client_name_per_account' },
-    // Índices únicos opcionais para telefone/email DENTRO da mesma conta financeira (ignorando NULLs)
     { unique: true, fields: ['financialAccountId', 'phone'], where: { phone: { [Op.ne]: null } }, name: 'unique_business_client_phone_per_account' },
     { unique: true, fields: ['financialAccountId', 'email'], where: { email: { [Op.ne]: null } }, name: 'unique_business_client_email_per_account' }
   ],
   hooks: {
-    beforeCreate: (client) => {
-      if (client.phone) client.phone = client.phone.replace(/\D/g, '');
-      if (client.email) client.email = client.email.toLowerCase();
+    beforeValidate: (client, options) => { // Adicionado options para consistência
+      if (client.phone && typeof client.phone === 'string') {
+        client.phone = client.phone.replace(/\D/g, '');
+      }
+      if (client.email && typeof client.email === 'string') {
+        client.email = client.email.toLowerCase().trim();
+      }
+      // Garante que photoUrl seja null se for uma string vazia ou apenas espaços
+      if (client.photoUrl && typeof client.photoUrl === 'string' && client.photoUrl.trim() === '') {
+        client.photoUrl = null;
+      }
+      // Garante que notes seja null se for uma string vazia ou apenas espaços
+      if (client.notes && typeof client.notes === 'string' && client.notes.trim() === '') {
+        client.notes = null;
+      }
     },
-    beforeUpdate: (client) => {
-       if (client.changed('phone') && client.phone) client.phone = client.phone.replace(/\D/g, '');
-       if (client.changed('email') && client.email) client.email = client.email.toLowerCase();
-    }
+    // Os hooks beforeCreate e beforeUpdate são redundantes se beforeValidate já faz a normalização.
+    // Removidos para simplificar, já que beforeValidate é chamado em ambos os casos.
   }
 });
 
 BusinessClient.associate = (models) => {
   BusinessClient.belongsTo(models.FinancialAccount, { foreignKey: 'financialAccountId', as: 'financialAccount' });
-  // Relacionamento Many-to-Many com Appointment através da tabela de junção AppointmentBusinessClient
   BusinessClient.belongsToMany(models.Appointment, {
-    through: models.AppointmentBusinessClient,
+    through: models.AppointmentBusinessClient, // Nome do modelo da tabela de junção
     foreignKey: 'businessClientId',
     otherKey: 'appointmentId',
     as: 'appointments'
