@@ -32,15 +32,31 @@ async function login(req, res, next) {
 
 async function getCurrentClientProfile(req, res, next) {
     try {
-        // req.client é o usuário logado (pode ser o sharedWithClient ou o dono direto)
-        // req.sharedAccessContext contém infos se for um acesso compartilhado
-        const profileData = await clientAuthService.getClientProfile(req.client.id, req.sharedAccessContext);
+        logger.debug('[CLIENT AUTH CTRL - /me] Iniciando getCurrentClientProfile.');
+        logger.debug('[CLIENT AUTH CTRL - /me] Conteúdo de req.client ANTES de chamar o serviço:', req.client); // Log do objeto completo
+        logger.debug('[CLIENT AUTH CTRL - /me] req.client.id ANTES de chamar o serviço:', req.client ? req.client.id : 'req.client é undefined');
+        logger.debug('[CLIENT AUTH CTRL - /me] Conteúdo de req.sharedAccessContext ANTES de chamar o serviço:', req.sharedAccessContext);
+
+        if (!req.client || req.client.id === undefined) {
+            logger.error('[CLIENT AUTH CTRL - /me] ERRO CRÍTICO: req.client ou req.client.id está undefined ANTES de chamar clientAuthService.getClientProfile.');
+            const error = new Error('Falha na autenticação ao obter perfil: dados do cliente não encontrados no request após autenticação.');
+            error.statusCode = 500; 
+            error.status = 'error';
+            return next(error); // Importante retornar aqui
+        }
+
+        const profileData = await clientAuthService.getClientProfile(req.client, req.sharedAccessContext);
+
         if (!profileData) {
-            const error = new Error('Perfil do cliente não encontrado.');
+            // O serviço getClientProfile agora deve lançar erro se o clientToFetchId não for encontrado,
+            // então este 'if' pode não ser atingido se o erro já foi lançado lá.
+            logger.warn(`[CLIENT AUTH CTRL - /me] clientAuthService.getClientProfile retornou null/undefined para req.client.id: ${req.client.id}`);
+            const error = new Error('Perfil do cliente não pôde ser carregado ou não encontrado.');
             error.statusCode = 404; error.status = 'fail'; return next(error);
         }
         res.status(200).json({ status: 'success', data: profileData });
     } catch (error) {
+        logger.error(`[CLIENT AUTH CTRL - /me] Exceção capturada em getCurrentClientProfile: ${error.message}`, { stack: error.stack });
         next(error);
     }
 }
