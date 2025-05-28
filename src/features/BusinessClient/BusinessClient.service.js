@@ -3,12 +3,12 @@ const { BusinessClient, FinancialAccount, sequelize } = require('../../database'
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 
-/**
- * Valida se a FinancialAccount existe, está ativa e é do tipo PJ ou MEI.
- * @param {number} financialAccountId
- * @param {object} transaction - Transação Sequelize opcional.
- */
+// ATRIBUTOS PADRÃO PARA SELEÇÃO DE BUSINESSCLIENT
+const BUSINESS_CLIENT_ATTRIBUTES = ['id', 'financialAccountId', 'name', 'phone', 'email', 'photoUrl', 'notes', 'isActive', 'createdAt', 'updatedAt'];
+
+
 async function validateBusinessClientOwningAccount(financialAccountId, transaction = null) {
+  // ... (código existente sem alteração)
   const account = await FinancialAccount.findByPk(financialAccountId, { transaction });
   if (!account) {
     const error = new Error(`Conta Financeira com ID ${financialAccountId} não encontrada.`);
@@ -25,12 +25,6 @@ async function validateBusinessClientOwningAccount(financialAccountId, transacti
   return account;
 }
 
-/**
- * Cria um novo cliente de negócio para uma FinancialAccount PJ/MEI.
- * @param {number} financialAccountId - ID da conta financeira (PJ/MEI).
- * @param {object} clientData - Dados do cliente de negócio.
- * @returns {Promise<object>} O cliente de negócio criado.
- */
 async function createBusinessClient(financialAccountId, clientData) {
   const t = await sequelize.transaction();
   try {
@@ -91,10 +85,10 @@ async function createBusinessClient(financialAccountId, clientData) {
     const newBusinessClientInstance = await BusinessClient.create(dataToCreateInDb, { transaction: t });
     await t.commit();
     
-    // Busca novamente para garantir que todos os campos, incluindo photoUrl, sejam retornados com o defaultScope do modelo.
-    // O defaultScope não deve excluir photoUrl, mas esta é uma forma de garantir.
-    const reloadedClient = await BusinessClient.findByPk(newBusinessClientInstance.id);
-    if (!reloadedClient) { // Segurança, improvável de acontecer
+    const reloadedClient = await BusinessClient.findByPk(newBusinessClientInstance.id, {
+        attributes: BUSINESS_CLIENT_ATTRIBUTES // Garante que todos os campos sejam retornados
+    });
+    if (!reloadedClient) { 
         logger.error(`[SERVICE CREATE BC] Cliente ID ${newBusinessClientInstance.id} não encontrado após criação.`);
         throw new Error('Falha ao recarregar cliente após criação.');
     }
@@ -102,6 +96,7 @@ async function createBusinessClient(financialAccountId, clientData) {
     logger.info(`Cliente de Negócio "${reloadedClient.name}" (ID: ${reloadedClient.id}) criado para FA ID ${financialAccountId}. Foto URL: ${reloadedClient.photoUrl}`);
     return reloadedClient.toJSON();
   } catch (error) {
+    // ... (bloco catch existente) ...
     if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
     logger.error(`Erro ao criar cliente de negócio para FA ID ${financialAccountId}: ${error.message}`, { error, clientData });
     if (error.name === 'SequelizeValidationError' && error.errors) {
@@ -124,6 +119,7 @@ async function createBusinessClient(financialAccountId, clientData) {
 async function getAllBusinessClients(financialAccountId, queryParams = {}) {
   try {
     await validateBusinessClientOwningAccount(financialAccountId);
+    // ... (lógica de filtros e ordenação existente) ...
     const { page = 1, limit = 10, search, isActive, sortBy = 'name', sortOrder = 'ASC' } = queryParams;
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
 
@@ -148,14 +144,11 @@ async function getAllBusinessClients(financialAccountId, queryParams = {}) {
     let sortDirection = validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'ASC';
 
     const order = [[sortField, sortDirection]];
-    if (sortField !== 'name') order.push(['name', 'ASC']); 
-
-    // Garantir que photoUrl seja selecionado
-    const attributesToSelect = ['id', 'financialAccountId', 'name', 'phone', 'email', 'photoUrl', 'notes', 'isActive', 'createdAt', 'updatedAt'];
+    if (sortField !== 'name') order.push(['name', 'ASC']);
 
     const { count, rows } = await BusinessClient.findAndCountAll({
       where: whereConditions,
-      attributes: attributesToSelect, // <<< ADICIONADO PARA GARANTIR
+      attributes: BUSINESS_CLIENT_ATTRIBUTES, // Seleciona explicitamente os atributos
       limit: parseInt(limit, 10),
       offset: offset,
       order: order,
@@ -166,9 +159,10 @@ async function getAllBusinessClients(financialAccountId, queryParams = {}) {
       totalItems: count,
       totalPages: Math.ceil(count / parseInt(limit, 10)),
       currentPage: parseInt(page, 10),
-      businessClients: rows.map(c => c.toJSON()), // toJSON() deve incluir todos os atributos selecionados
+      businessClients: rows.map(c => c.toJSON()),
     };
   } catch (error) {
+    // ... (bloco catch existente) ...
     logger.error(`Erro ao listar clientes de negócio para FA ID ${financialAccountId}: ${error.message}`, { error, queryParams });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
@@ -178,11 +172,9 @@ async function getAllBusinessClients(financialAccountId, queryParams = {}) {
 async function getBusinessClientById(financialAccountId, businessClientId) {
   try {
     await validateBusinessClientOwningAccount(financialAccountId);
-    // Garantir que photoUrl seja selecionado
-    const attributesToSelect = ['id', 'financialAccountId', 'name', 'phone', 'email', 'photoUrl', 'notes', 'isActive', 'createdAt', 'updatedAt'];
     const client = await BusinessClient.findOne({
       where: { id: businessClientId, financialAccountId },
-      attributes: attributesToSelect, // <<< ADICIONADO PARA GARANTIR
+      attributes: BUSINESS_CLIENT_ATTRIBUTES, // Seleciona explicitamente os atributos
     });
 
     if (!client) {
@@ -190,6 +182,7 @@ async function getBusinessClientById(financialAccountId, businessClientId) {
     }
     return client.toJSON();
   } catch (error) {
+    // ... (bloco catch existente) ...
     logger.error(`Erro ao buscar cliente de negócio ID ${businessClientId} para FA ID ${financialAccountId}: ${error.message}`, { error });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
@@ -199,6 +192,7 @@ async function getBusinessClientById(financialAccountId, businessClientId) {
 async function updateBusinessClient(financialAccountId, businessClientId, updateData) {
   const t = await sequelize.transaction();
   try {
+    // ... (lógica de validação e update existente, incluindo a de photoUrl) ...
     await validateBusinessClientOwningAccount(financialAccountId, t);
     const clientInstance = await BusinessClient.findOne({
       where: { id: businessClientId, financialAccountId },
@@ -285,8 +279,9 @@ async function updateBusinessClient(financialAccountId, businessClientId, update
     if (Object.keys(dataToPersist).length === 0) {
         await t.commit(); 
         logger.info(`[SERVICE UPDATE BC] Nenhum campo alterado para Cliente de Negócio ID ${businessClientId}.`);
-        // Busca novamente para garantir que o retorno esteja consistente com o defaultScope
-        const reloadedClientNoChange = await BusinessClient.findByPk(clientInstance.id);
+        const reloadedClientNoChange = await BusinessClient.findByPk(clientInstance.id, {
+            attributes: BUSINESS_CLIENT_ATTRIBUTES // Garante que todos os campos sejam retornados
+        });
         return reloadedClientNoChange.toJSON();
     }
     logger.debug('[SERVICE UPDATE BC] Objeto final para clientInstance.update:', dataToPersist);
@@ -294,9 +289,10 @@ async function updateBusinessClient(financialAccountId, businessClientId, update
     await clientInstance.update(dataToPersist, { transaction: t });
     await t.commit();
     
-    // Recarrega após o commit para pegar os dados atualizados do banco, incluindo hooks e default scopes
-    const reloadedClient = await BusinessClient.findByPk(clientInstance.id);
-    if (!reloadedClient) { // Segurança
+    const reloadedClient = await BusinessClient.findByPk(clientInstance.id, {
+        attributes: BUSINESS_CLIENT_ATTRIBUTES // Garante que todos os campos sejam retornados após o update
+    });
+    if (!reloadedClient) { 
         logger.error(`[SERVICE UPDATE BC] Cliente ID ${businessClientId} não encontrado após atualização.`);
         throw new Error('Falha ao recarregar cliente após atualização.');
     }
@@ -304,6 +300,7 @@ async function updateBusinessClient(financialAccountId, businessClientId, update
     logger.info(`Cliente de Negócio ID ${businessClientId} ("${reloadedClient.name}") atualizado. Foto URL: ${reloadedClient.photoUrl}`);
     return reloadedClient.toJSON();
   } catch (error) {
+    // ... (bloco catch existente) ...
     if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
     logger.error(`Erro ao atualizar cliente de negócio ID ${businessClientId}: ${error.message}`, { error, updateData });
      if (error.name === 'SequelizeValidationError' && error.errors) {
@@ -324,6 +321,7 @@ async function updateBusinessClient(financialAccountId, businessClientId, update
 }
 
 async function deleteBusinessClient(financialAccountId, businessClientId) {
+  // ... (código existente sem alteração) ...
   const t = await sequelize.transaction();
   try {
     await validateBusinessClientOwningAccount(financialAccountId, t);
@@ -349,6 +347,7 @@ async function deleteBusinessClient(financialAccountId, businessClientId) {
 }
 
 async function findBusinessClientsByIdentifiers(financialAccountId, identifiers, transaction = null) {
+    // ... (código existente sem alteração, mas garantindo que 'attributes' seja usado) ...
     if (!identifiers || identifiers.length === 0) return [];
     
     await validateBusinessClientOwningAccount(financialAccountId, transaction); 
@@ -367,12 +366,11 @@ async function findBusinessClientsByIdentifiers(financialAccountId, identifiers,
 
     const clients = await BusinessClient.findAll({
         where: { financialAccountId, isActive: true, [Op.or]: identifierConditions },
-        // Garantir que photoUrl seja selecionado
-        attributes: ['id', 'financialAccountId', 'name', 'phone', 'email', 'photoUrl', 'notes', 'isActive', 'createdAt', 'updatedAt'],
+        attributes: BUSINESS_CLIENT_ATTRIBUTES, // Usa a constante de atributos
         transaction
     });
     logger.info(`Encontrados ${clients.length} BusinessClients para FA ID ${financialAccountId} com identificadores: ${identifiers.join(', ')}.`);
-    return clients.map(c => c.toJSON()); // Retorna JSON para consistência
+    return clients.map(c => c.toJSON());
 }
 
 module.exports = {
