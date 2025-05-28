@@ -5,6 +5,7 @@ const { generateToken } = require('../../utils/authUtils');
 const { Op } = require('sequelize');
 const subscriptionService = require('../Subscription/subscription.service');
 
+// ... (setClientCredentials e loginClient permanecem os mesmos)
 async function setClientCredentials(phone, password, name = null, email = null) {
   const t = await sequelize.transaction();
   try {
@@ -76,7 +77,6 @@ async function loginClient(identifier, password) {
     const isEmailLogin = identifier.includes('@');
     const loginAttemptIdentifier = isEmailLogin ? identifier.toLowerCase() : normalizedIdentifier;
 
-    // Prioridade 1: Tentar login via SharedAccess
     const sharedAccessLoginCondition = isEmailLogin
         ? { sharedAccessEmail: loginAttemptIdentifier }
         : { sharedAccessPhone: loginAttemptIdentifier };
@@ -85,14 +85,13 @@ async function loginClient(identifier, password) {
         where: { ...sharedAccessLoginCondition, status: 'Ativo' },
         include: [
             { model: Client, as: 'ownerClient', attributes: ['id', 'name', 'status', 'accessLevel', 'accessExpiresAt'] },
-            { model: Client, as: 'sharedWithClient', attributes: ['id', 'name', 'email', 'phone', 'status'] } // Inclui phone e email do sharedWith
+            { model: Client, as: 'sharedWithClient', attributes: ['id', 'name', 'email', 'phone', 'status'] }
         ]
     });
 
     if (sharedAccessRecord && sharedAccessRecord.sharedAccessPasswordHash) {
         const isSharedPasswordMatch = await sharedAccessRecord.isValidPassword(password);
         if (isSharedPasswordMatch) {
-            // Validações do sharedWithClient e ownerClient
             if (!sharedAccessRecord.sharedWithClient || sharedAccessRecord.sharedWithClient.status === 'Bloqueado' || sharedAccessRecord.sharedWithClient.status === 'Inativo') {
                 const error = new Error('Usuário convidado associado a este acesso está inválido ou inativo.');
                 error.statusCode = 403; error.status = 'fail'; throw error;
@@ -117,7 +116,6 @@ async function loginClient(identifier, password) {
                 error.statusCode = 403; error.status = 'fail_subscription'; throw error;
             }
 
-            // Login via SharedAccess bem-sucedido
             const tokenPayloadShared = {
                 id: sharedAccessRecord.sharedWithClientId,
                 type: 'client_shared_access',
@@ -157,10 +155,8 @@ async function loginClient(identifier, password) {
                 }
             };
         }
-        // Se a senha do SharedAccess não bateu, continua para tentar login normal do Client
     }
 
-    // Prioridade 2: Tentar login direto na tabela Client
     const client = await Client.scope('withPassword').findOne({
       where: isEmailLogin ? { email: loginAttemptIdentifier } : { phone: loginAttemptIdentifier }
     });
@@ -214,7 +210,7 @@ async function loginClient(identifier, password) {
         client: clientResponse,
         token,
         financialAccounts: financialAccounts.map(acc => acc.toJSON()),
-        sharedAccessContext: null // Não é um acesso compartilhado
+        sharedAccessContext: null
     };
 
   } catch (error) {
@@ -224,39 +220,56 @@ async function loginClient(identifier, password) {
   }
 }
 
-async function getClientProfile(clientId, sharedAccessContext = null) {
+// Modificada para aceitar loggedInClientData (que é o req.client do controller)
+async function getClientProfile(loggedInClientData, sharedAccessContext = null) {
     try {
-        let clientToFetchId = clientId; // Por padrão, busca o perfil do cliente logado
-        let ownerClientData = null; // Para armazenar dados do dono se for acesso compartilhado
+        let clientToFetchIdForAccountsAndSubscription = loggedInClientData.id; // Por padrão, o próprio cliente logado
+        let ownerClientDataForPlan = null; // Para buscar dados do plano do dono, se for acesso compartilhado
+
+        // Este é o objeto client que será retornado na resposta, representando quem está logado.
+        let clientDataForFinalResponse = {
+            id: loggedInClientData.id,
+            name: loggedInClientData.name,
+            email: loggedInClientData.email,
+            phone: loggedInClientData.phone,
+            // status, accessLevel, accessExpiresAt virão do owner se for compartilhado, ou do próprio se não for
+        };
 
         if (sharedAccessContext) {
-            // Se é um acesso compartilhado, o perfil a ser exibido é o do DONO da conta
-            clientToFetchId = sharedAccessContext.ownerClientId;
-            const ownerClientInstance = await Client.findByPk(clientToFetchId);
+            clientToFetchIdForAccountsAndSubscription = sharedAccessContext.ownerClientId;
+            const ownerClientInstance = await Client.findByPk(clientToFetchIdForAccountsAndSubscription);
             if (!ownerClientInstance) {
-                 const error = new Error('Dono da conta compartilhada não encontrado.');
+                 const error = new Error('Dono da conta compartilhada não encontrado ao buscar perfil.');
                  error.statusCode = 404; error.status = 'fail'; throw error;
             }
-            ownerClientData = ownerClientInstance.toJSON();
-            delete ownerClientData.passwordHash;
+            ownerClientDataForPlan = ownerClientInstance.toJSON();
+
+            // Adiciona/sobrescreve informações de plano e acesso com as do DONO
+            clientDataForFinalResponse.effectiveAccessLevel = ownerClientDataForPlan.accessLevel;
+            clientDataForFinalResponse.effectiveAccessExpiresAt = ownerClientDataForPlan.accessExpiresAt;
+            clientDataForFinalResponse.ownerClientIdForContext = ownerClientDataForPlan.id; // Para UI saber que é um contexto de dono
+        } else {
+            // Se não é compartilhado, as informações de acesso são do próprio cliente logado
+            const selfClientInstance = await Client.findByPk(loggedInClientData.id);
+             if (!selfClientInstance) { // Segurança, embora improvável se chegou até aqui
+                 const error = new Error('Cliente logado não encontrado ao buscar próprio perfil.');
+                 error.statusCode = 404; error.status = 'fail'; throw error;
+            }
+            const selfClientData = selfClientInstance.toJSON();
+            clientDataForFinalResponse.status = selfClientData.status;
+            clientDataForFinalResponse.accessLevel = selfClientData.accessLevel;
+            clientDataForFinalResponse.accessExpiresAt = selfClientData.accessExpiresAt;
         }
 
-        // Busca o Client (seja o logado ou o dono da conta compartilhada)
-        const clientForProfile = await Client.findByPk(clientToFetchId);
-        if (!clientForProfile) return null;
-        
-        const clientResponseForProfile = clientForProfile.toJSON();
-        delete clientResponseForProfile.passwordHash;
 
-        // Busca as contas financeiras do clientToFetchId (que é o dono no caso de shared access)
         const allOwnerOrOwnAccounts = await FinancialAccount.findAll({
-            where: { clientId: clientToFetchId, isActive: true },
+            where: { clientId: clientToFetchIdForAccountsAndSubscription, isActive: true },
             attributes: ['id', 'accountName', 'accountType', 'isDefault'],
             order: [['isDefault', 'DESC'], ['accountName', 'ASC']]
         });
 
         let accessibleFinancialAccounts = allOwnerOrOwnAccounts;
-        if (sharedAccessContext) { // Filtra as contas se for acesso compartilhado
+        if (sharedAccessContext) {
             accessibleFinancialAccounts = allOwnerOrOwnAccounts.filter(acc => {
                 if (acc.accountType === 'PF') return sharedAccessContext.canAccessPersonalProfile;
                 if (acc.accountType === 'PJ' || acc.accountType === 'MEI') return sharedAccessContext.canAccessBusinessProfileId === acc.id;
@@ -264,33 +277,19 @@ async function getClientProfile(clientId, sharedAccessContext = null) {
             });
         }
         
-        // Se for acesso compartilhado, o `client` na resposta é o usuário QUE FEZ O LOGIN (sharedWithClient),
-        // mas as informações de plano e contas são do DONO.
-        const finalClientDataForResponse = sharedAccessContext ?
-            { // Usuário que logou (o convidado)
-              id: clientId, // ID do sharedWithClient
-              name: req.client.name, // Nome do sharedWithClient (do token/req)
-              email: req.client.email,
-              phone: req.client.phone,
-              // Informações de plano são do DONO
-              effectiveAccessLevel: ownerClientData.accessLevel,
-              effectiveAccessExpiresAt: ownerClientData.accessExpiresAt,
-              // Outros campos do sharedWithClient podem ser adicionados se necessário
-            }
-            : clientResponseForProfile; // Se não for compartilhado, é o perfil do próprio usuário
-
-
-        const activeDbSubscription = await subscriptionService.getActiveSubscription(clientToFetchId); // Assinatura do DONO
+        const activeDbSubscription = await subscriptionService.getActiveSubscription(clientToFetchIdForAccountsAndSubscription);
 
         return {
-            client: finalClientDataForResponse,
+            client: clientDataForFinalResponse,
             financialAccounts: accessibleFinancialAccounts.map(acc => acc.toJSON()),
             subscription: activeDbSubscription,
             sharedAccessContext: sharedAccessContext
         };
 
     } catch (error) {
-        logger.error(`Erro ao buscar perfil para cliente ID ${clientId} (contexto compartilhado: ${!!sharedAccessContext}): ${error.message}`, { error });
+        const baseClientId = loggedInClientData ? loggedInClientData.id : 'N/A';
+        logger.error(`Erro ao buscar perfil para cliente logado ID ${baseClientId} (contexto compartilhado: ${!!sharedAccessContext}): ${error.message}`, { error });
+        // Não relança o erro diretamente, mas o controller tratará
         throw new Error(`Erro ao buscar perfil do cliente.`);
     }
 }
@@ -300,4 +299,4 @@ module.exports = {
   setClientCredentials,
   loginClient,
   getClientProfile,
-};
+}
