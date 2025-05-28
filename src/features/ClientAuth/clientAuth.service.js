@@ -182,8 +182,111 @@ async function getClientProfile(clientId) {
     }
 }
 
+
+async function updateClientProfile(clientId, updateData) {
+  const t = await sequelize.transaction();
+  try {
+    const client = await Client.scope('withPassword').findByPk(clientId, { transaction: t });
+    if (!client) {
+      await t.rollback();
+      const error = new Error('Cliente não encontrado.');
+      error.statusCode = 404; error.status = 'fail'; throw error;
+    }
+
+    const dataToUpdate = {};
+
+    // Verificar senha atual se for alterar email ou senha
+    if ((updateData.newPassword || (updateData.email && updateData.email !== client.email)) && !updateData.currentPassword) {
+        await t.rollback();
+        const error = new Error('Senha atual é obrigatória para alterar email ou senha.');
+        error.statusCode = 400; error.status = 'fail'; throw error;
+    }
+    
+    if (updateData.currentPassword) {
+        const isCurrentPasswordMatch = await client.isValidPassword(updateData.currentPassword);
+        if (!isCurrentPasswordMatch) {
+            await t.rollback();
+            const error = new Error('Senha atual incorreta.');
+            error.statusCode = 401; error.status = 'fail'; throw error;
+        }
+    }
+
+    // Atualizar nome
+    if (updateData.name && updateData.name !== client.name) {
+      dataToUpdate.name = updateData.name;
+    }
+
+    // Atualizar telefone
+    if (updateData.phone && updateData.phone !== client.phone) {
+        const normalizedPhone = updateData.phone.replace(/\D/g, '');
+        // Verificar unicidade do telefone se ele for alterado
+        const existingPhoneClient = await Client.findOne({
+            where: { phone: normalizedPhone, id: { [Op.ne]: client.id } },
+            transaction: t
+        });
+        if (existingPhoneClient) {
+            await t.rollback();
+            const error = new Error('Este número de telefone já está em uso por outro cliente.');
+            error.statusCode = 409; error.status = 'fail'; throw error;
+        }
+        dataToUpdate.phone = normalizedPhone;
+    }
+
+
+    // Atualizar email (se a senha atual foi validada ou não é necessária para esta alteração)
+    if (updateData.email && updateData.email !== client.email) {
+      const lowerEmail = updateData.email.toLowerCase();
+      const existingEmailClient = await Client.findOne({
+        where: { email: lowerEmail, id: { [Op.ne]: client.id } },
+        transaction: t
+      });
+      if (existingEmailClient) {
+        await t.rollback();
+        const error = new Error('Este endereço de email já está em uso por outro cliente.');
+        error.statusCode = 409; error.status = 'fail'; throw error;
+      }
+      dataToUpdate.email = lowerEmail;
+    }
+
+    // Atualizar senha (se a senha atual foi validada)
+    if (updateData.newPassword) {
+      if (updateData.newPassword.length < 6) {
+        await t.rollback();
+        const error = new Error('A nova senha deve ter pelo menos 6 caracteres.');
+        error.statusCode = 400; error.status = 'fail'; throw error;
+      }
+      // O hook beforeUpdate do modelo Client fará o hash
+      dataToUpdate.passwordHash = updateData.newPassword;
+    }
+    
+    if (Object.keys(dataToUpdate).length === 0) {
+        await t.commit(); // Commit mesmo que nada mude para liberar a transação
+        logger.info(`Nenhuma alteração de perfil para o Cliente ID ${clientId}.`);
+        // Retornar o cliente sem o hash da senha
+        const clientCurrentData = client.toJSON();
+        delete clientCurrentData.passwordHash;
+        return { client: clientCurrentData };
+    }
+
+    await client.update(dataToUpdate, { transaction: t });
+    await t.commit();
+    
+    logger.info(`Perfil do Cliente ID ${clientId} atualizado com sucesso.`);
+    // Recarregar para aplicar defaultScope e retornar
+    const reloadedClient = await Client.findByPk(client.id); 
+    return { client: reloadedClient.toJSON() };
+
+  } catch (error) {
+    if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
+    logger.error(`Erro ao atualizar perfil do Cliente ID ${clientId}: ${error.message}`, { error });
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
+}
+
 module.exports = {
   setClientCredentials,
   loginClient,
+  updateClientProfile,
   getClientProfile,
 };

@@ -45,8 +45,29 @@ async function getCurrentClientProfile(req, res, next) { // <<< NOVO CONTROLLER
     }
 }
 
+async function updateCurrentClientProfile(req, res, next) { // <<< NOVO CONTROLLER
+    try {
+        const clientId = req.client.id; // Obtido do token autenticado
+        const updateData = req.body;
+
+        if (Object.keys(updateData).length === 0) {
+            const error = new Error('Nenhum dado fornecido para atualização.');
+            error.statusCode = 400; error.status = 'fail';
+            return next(error);
+        }
+        // Validar se os campos no updateData são permitidos (opcional, mas bom para segurança)
+        // Ex: const allowedUpdates = ['name', 'email', 'currentPassword', 'newPassword', 'phone'];
+
+        const result = await clientAuthService.updateClientProfile(clientId, updateData);
+        res.status(200).json({ status: 'success', data: result });
+    } catch (error) {
+        next(error);
+    }
+}
+
 module.exports = {
   setCredentials, // <<< ATUALIZADO
   login,
+  updateCurrentClientProfile,
   getCurrentClientProfile, // <<< ADICIONADO
 };
