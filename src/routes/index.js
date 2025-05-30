@@ -23,7 +23,7 @@ const kanbanRoutes = require('../features/Kanban/kanban.routes');
 // ROTAS PARA BUSINESS CLIENTS
 const businessClientRoutes = require('../features/BusinessClient/BusinessClient.routes');
 const sharedAccessRoutes = require('../features/SharedAccess/sharedAccess.routes'); // <<< NOVA ROTA
-
+const hotmartWebhookRoutes = require('../features/WebhookHandler/hotmart.routes');
 
 const mainApiRouter = Router();
 
@@ -35,6 +35,7 @@ mainApiRouter.get('/status', (req, res) => res.status(200).json({
 }));
 
 // --- ROTAS PÚBLICAS OU SEMI-PÚBLICAS ---
+mainApiRouter.use('/webhooks', hotmartWebhookRoutes); // <<< NOVA LINHA (ou /payment-webhooks)
 mainApiRouter.use('/auth', clientAuthRoutes); // Rotas de login e set-credentials para Clients
 mainApiRouter.use('/whatsapp-zapi', whatsappWebhookRoutes); // Webhook da Z-API (sem token de app)
 

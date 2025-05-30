@@ -37,26 +37,32 @@ const Plan = sequelize.define('Plan', {
     validate: { min: 1 },
     comment: 'Duração do plano em dias (ex: 30 para mensal, 365 para anual)',
   },
-  // NOVO CAMPO OPCIONAL para diferenciar o "nível" do plano
   tier: {
-    type: DataTypes.ENUM('basico', 'avancado', 'gratuito', 'vitalicio'), // Ou apenas 'basico', 'avancado'
+    type: DataTypes.ENUM('basico', 'avancado', 'gratuito', 'vitalicio'),
     allowNull: false,
-    defaultValue: 'basico', // Ou um valor que faça sentido
+    defaultValue: 'basico',
     comment: 'Nível de funcionalidade do plano (basico, avancado)',
   },
-  // O campo `accessLevel` no `Client` seria uma combinação de `tier` e `durationDays`
-  // Ex: tier='avancado', durationDays=30 -> client.accessLevel = 'avancado_mensal'
   isActive: {
     type: DataTypes.BOOLEAN,
     defaultValue: true,
     allowNull: false,
     comment: 'Indica se o plano está ativo para novas assinaturas',
   },
-  // externalId: { ... }
+  hotmartProductId: { // <<< NOVO CAMPO
+    type: DataTypes.STRING,
+    allowNull: true,
+    unique: true,
+    comment: 'ID do produto correspondente na Hotmart (se aplicável)',
+  },
+  // externalId: { ... } // Se você tivesse um ID genérico para outros gateways
 }, {
   tableName: 'plans',
   timestamps: true,
   comment: 'Define os diferentes planos de assinatura disponíveis',
+  indexes: [ // <<< ADICIONAR ÍNDICE PARA O NOVO CAMPO
+    { fields: ['hotmartProductId'], unique: true, where: { hotmartProductId: { [require('sequelize').Op.ne]: null } } }
+  ]
 });
 
 Plan.associate = (models) => {
