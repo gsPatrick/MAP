@@ -219,27 +219,28 @@ async function updateAppointment(financialAccountId, appointmentId, updateData) 
     const account = await validateOwningFinancialAccount(financialAccountId, t, true);
     appointment = await Appointment.findOne({
       where: { id: appointmentId, financialAccountId },
-      include: [ // Incluir para passar ao GoogleCalendarService
+      include: [
           { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] },
           { model: BusinessClient, as: 'businessClients', through: { attributes: [] } }
       ],
       transaction: t
     });
     if (!appointment) {
-      await t.rollback();
+      await t.rollback(); // Rollback antes de retornar ou lançar erro
       logger.warn(`Compromisso ID ${appointmentId} não encontrado para atualização na FA ID ${financialAccountId}.`);
-      return null;
+      // Lançar um erro 404 aqui seria mais consistente com outros services
+      const err404 = new Error(`Compromisso ID ${appointmentId} não encontrado.`);
+      err404.statusCode = 404; err404.status = 'fail'; throw err404;
     }
     
-    // A lógica de validação de data passada foi removida para permitir sincronização com Google
-    // if (updateData.eventDateTime && new Date(updateData.eventDateTime) < new Date() && ...)
-
     if (updateData.hasOwnProperty('businessClientIds') && Array.isArray(updateData.businessClientIds)) {
         const businessClientIds = updateData.businessClientIds;
-         if (!['PJ', 'MEI'].includes(account.accountType)) {
-             const error = new Error(`Associação de Clientes de Negócio é permitida apenas para Contas PJ ou MEI.`);
+
+        if (businessClientIds.length > 0 && !['PJ', 'MEI'].includes(account.accountType)) {
+             const error = new Error(`Associação de Clientes de Negócio a compromissos é permitida apenas para Contas Financeiras do tipo PJ ou MEI.`);
              error.statusCode = 400; error.status = 'fail'; throw error;
-         }
+        }
+
         if (businessClientIds.length > 0) {
              const validClients = await BusinessClient.findAll({
                  where: { id: { [Op.in]: businessClientIds }, financialAccountId, isActive: true },
@@ -247,20 +248,19 @@ async function updateAppointment(financialAccountId, appointmentId, updateData) 
              });
              if (validClients.length !== businessClientIds.length) {
                  const missingIds = businessClientIds.filter(id => !validClients.some(client => client.id === id));
-                 const error = new Error(`Um ou mais Clientes de Negócio (IDs: ${missingIds.join(', ')}) não foram encontrados.`);
+                 const error = new Error(`Um ou mais Clientes de Negócio (IDs: ${missingIds.join(', ')}) não foram encontrados ou não pertencem a esta conta.`);
                  error.statusCode = 404; error.status = 'fail'; throw error;
              }
         }
-        // Remove associações antigas e cria novas
         await AppointmentBusinessClient.destroy({ where: { appointmentId: appointment.id }, transaction: t });
         if (businessClientIds.length > 0) {
              const associations = businessClientIds.map(bcId => ({ appointmentId: appointment.id, businessClientId: bcId }));
              await AppointmentBusinessClient.bulkCreate(associations, { transaction: t });
         }
-        delete updateData.businessClientIds; // Remove do updateData principal
+        delete updateData.businessClientIds;
     }
 
-    delete updateData.financialAccountId; // Não permitir mudar a FA de um compromisso
+    delete updateData.financialAccountId;
 
     if (updateData.reminderEnabled === false) {
         updateData.reminderLeadTimeMinutes = null;
@@ -272,9 +272,13 @@ async function updateAppointment(financialAccountId, appointmentId, updateData) 
         updateData.reminderEnabled = true;
     }
 
-    if (Object.keys(updateData).length === 0) {
+    // Verifica se há dados válidos para atualizar além de businessClientIds que já foi tratado
+    const hasOtherUpdates = Object.keys(updateData).length > 0;
+
+    if (!hasOtherUpdates && !(updateData.hasOwnProperty('businessClientIds') && Array.isArray(updateData.businessClientIds))) { // A condição original estava !hasOtherUpdates && !updateData.businessClientIds (o que daria true se businessClientIds fosse um array vazio e não houvesse outros updates)
+                                                                                                                            // A checagem de businessClientIds já foi feita e ele foi deletado de updateData.
+                                                                                                                            // Se Object.keys(updateData) está vazio significa que businessClientIds era a única chave ou não havia nada.
         await t.commit();
-        // Recarregar com associações para consistência, mesmo sem alteração de dados diretos do Appointment
         const reloadedNoChange = await Appointment.findByPk(appointmentId, {
             include: [
                 { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] },
@@ -284,40 +288,40 @@ async function updateAppointment(financialAccountId, appointmentId, updateData) 
         return reloadedNoChange.toJSON();
     }
 
-    await appointment.update(updateData, { transaction: t });
-    await t.commit(); // Commit antes da sincronização
+    if(hasOtherUpdates){ // Só atualiza o appointment se houver outros campos em updateData
+        await appointment.update(updateData, { transaction: t });
+    }
+    await t.commit();
     logger.info(`Compromisso ID ${appointmentId} ("${appointment.title}") atualizado para FA ID ${financialAccountId}.`);
 
-    const updatedAppointmentFull = await appointment.reload({ // Recarrega com associações para a sincronização
+    const updatedAppointmentFull = await appointment.reload({
         include: [
             { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] },
             { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES }
         ]
     });
 
-    // --- Sincronização com Google Calendar ---
     if (account.ownerClient && account.ownerClient.isGoogleCalendarSynced) {
         const googleEvent = await googleCalendarService.updateGoogleEvent(account.ownerClient.id, appointment.googleEventId, updatedAppointmentFull.toJSON());
         if (googleEvent && googleEvent.id) {
-            // Se o googleEventId era nulo e um novo evento foi criado no Google, atualiza o googleEventId local.
-            // O googleEventLastUpdated também é atualizado para refletir a sincronização.
-            await appointment.update({ googleEventId: googleEvent.id, googleEventLastUpdated: new Date(googleEvent.updated) });
+            // Usar o modelo Appointment para atualizar, para garantir hooks e validações se houver
+            const apptInstanceToUpdateGoogleFields = await Appointment.findByPk(appointment.id);
+            if (apptInstanceToUpdateGoogleFields) {
+                await apptInstanceToUpdateGoogleFields.update({ googleEventId: googleEvent.id, googleEventLastUpdated: new Date(googleEvent.updated) });
+            }
             logger.info(`Compromisso ID ${appointmentId} atualizado e sincronizado com Google Calendar Event ID ${googleEvent.id}.`);
         } else if (appointment.googleEventId && !googleEvent) {
              logger.warn(`Falha ao atualizar evento Google para Appointment ID ${appointmentId}. O evento pode ter sido removido do Google.`);
-             // Opcional: limpar googleEventId local se a atualização falhou porque o evento não existe mais lá.
-             // await appointment.update({ googleEventId: null, googleEventLastUpdated: null });
         }
     }
-    // --- Fim Sincronização ---
-
     return updatedAppointmentFull.toJSON();
 
   } catch (error) {
     if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') {
         try { await t.rollback(); } catch (rbError) { logger.error("Erro no rollback após falha em updateAppointment:", rbError); }
     }
-    logger.error(`Erro ao atualizar compromisso ID ${appointmentId}: ${error.message}`, { error, updateData });
+    // Log mais detalhado do erro, incluindo o updateData
+    logger.error(`Erro ao atualizar compromisso ID ${appointmentId}: ${error.message}`, { errorJson: JSON.stringify(error, Object.getOwnPropertyNames(error)), updateDataSent: updateData });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
