@@ -45,7 +45,8 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     *   Se o usuário não especificar a data de início (\`startDate\`), infira a próxima data de ocorrência como \`startDate\`. Por exemplo, se hoje é 22/05 e o usuário diz "Netflix todo dia 30", a \`startDate\` seria 30/05 do ano corrente (se ainda não passou) ou do próximo mês.
 -   **COMPROMISSOS/LEMBRETES ÚNICOS FUTUROS:** Se o usuário descreve uma ação financeira ÚNICA (pagar, receber, comprar algo) que DEVE ACONTECER NO FUTURO (ex: "tenho que pagar X amanhã", "lembrete para comprar Y semana que vem", "agendar pagamento Z para dia 15 deste mês", "me lembra de pagar o aluguel dia 5 *apenas este mês*", "preciso quitar a fatura do cartão dia 10") E NÃO é uma compra parcelada no cartão NEM uma recorrência clara (não há indicação de repetição como "todo mês", "semanalmente"), use \`SCHEDULE_APPOINTMENT\`.
     *   O \`title\` do compromisso será a descrição da ação financeira (ex: "Pagar conta de luz", "Comprar presente para Maria").
-    *   Os parâmetros \`associatedValue\` e \`associatedTransactionType\` DEVEM ser preenchidos se a informação estiver disponível. Se o valor estiver faltando para um lembrete financeiro, use \`clarifications_needed\` para obter o valor.
+    *   Os parâmetros \`associatedValue\` e \`associatedTransactionType\` DEVEM ser preenchidos se a informação estiver disponível. Se o valor estiver faltando para um lembrete financeiro, use \`clarifications_needed\` para obter o valor. Exemplo de pergunta de clarificação: "Legal, ${clientNameForPrompt}! Para eu agendar o lembrete de 'Pagar conta de energia', qual o valor envolvido? Por exemplo, 'lembrete para pagar conta de energia de 150 reais amanhã'."
+    *   Se o tipo (entrada/saída) não estiver claro para um valor associado, peça. Exemplo: "Esse valor para o lembrete de 'Receber do cliente Z' será uma entrada ou uma saída?"
 
 **PALAVRAS-CHAVE PARA RECORRÊNCIA (indicam \`CREATE_RECURRING_RULE\`):** "todo mês", "toda semana", "todo dia X", "mensalmente", "semanalmente", "anualmente", "sempre no dia Y", "recorrente", "fixo", "de tanto em tanto tempo", "periodicamente".
 
@@ -130,8 +131,8 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - durationMinutes: integer (opcional)
     - location: string (opcional)
     - reminderLeadTimeMinutes: integer (opcional, default: 15)
-    - associatedValue: float (OBRIGATÓRIO para lembretes financeiros, se não informado, pedir com \`clarifications_needed\`. Exemplo de pergunta: "Legal, ${clientNameForPrompt}! Para eu agendar o lembrete de '${params.title}', qual o valor envolvido? Por exemplo, 'lembrete para pagar conta de luz de 150 reais amanhã'.")
-    - associatedTransactionType: "Entrada" ou "Saída" (OBRIGATÓRIO para lembretes financeiros, inferir do contexto. Se não claro, pedir. Exemplo: "Esse valor de ${params.associatedValue} para '${params.title}' será uma entrada ou uma saída?")
+    - associatedValue: float (OBRIGATÓRIO para lembretes financeiros, se não informado, pedir com \`clarifications_needed\`. Exemplo de pergunta: "Legal, ${clientNameForPrompt}! Para eu agendar o lembrete de '[TÍTULO DO LEMBRETE]', qual o valor envolvido? Por exemplo, 'lembrete para pagar conta de luz de 150 reais amanhã'.")
+    - associatedTransactionType: "Entrada" ou "Saída" (OBRIGATÓRIO para lembretes financeiros, inferir do contexto. Se não claro, pedir. Exemplo: "Esse valor para '[TÍTULO DO LEMBRETE]' será uma entrada ou uma saída?")
     - notes: string (opcional)
     - businessClientNames: [string] (opcional, APENAS para contas PJ/MEI, nomes de clientes do negócio associados ao compromisso)
 
@@ -142,7 +143,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - numberOfParcels: integer (OBRIGATÓRIO, min 2 se parcelamento real, 1 para compra à vista no cartão via esta ação se a IA assim decidir por alguma razão específica, mas prefira CREATE_FINANCIAL_TRANSACTION para isso)
     - initialDueDate: "YYYY-MM-DD" (OBRIGATÓRIO. Para compras no cartão, DATA DA COMPRA)
     - financialCategoryName: string (opcional)
-    - creditCardName: string (OBRIGATÓRIO se COMPRA PARCELADA NO CARTÃO. Se faltar, perguntar: "Entendi a compra parcelada de ${params.description}, ${clientNameForPrompt}! Só preciso saber em qual cartão você parcelou. Por exemplo, 'parcelei no Nubank'.")
+    - creditCardName: string (OBRIGATÓRIO se COMPRA PARCELADA NO CARTÃO. Se faltar, perguntar: "Entendi a compra parcelada de '[DESCRIÇÃO DA COMPRA]', ${clientNameForPrompt}! Só preciso saber em qual cartão você parcelou. Por exemplo, 'parcelei no Nubank'.")
     - notes: string (opcional)
     - transactionDate: "YYYY-MM-DD" (opcional, default: hoje. DATA DA COMPRA ORIGINAL)
 
@@ -486,7 +487,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     const completion = await openai.chat.completions.create({
       model: modelToUse,
       messages: messagesToSendToAPI,
-      temperature: 0.1, // Mantém baixa para consistência, mas um pouco mais que 0.05 para criatividade na saudação
+      temperature: 0.1, 
       response_format: { type: "json_object" },
     });
 
@@ -497,18 +498,13 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     logger.info(`[AI SERVICE] Resultado da IA (${modelToUse}) parseado com sucesso.`);
     logger.debug('[AI SERVICE] Parsed AI Result:', parsedResult);
 
-    // Garante que overall_summary_suggestion seja preenchido se reply_to_user_suggestion tiver um bom conteúdo
-    // e não houver necessidade de clarificação, e houver ações detectadas.
     if (!parsedResult.overall_summary_suggestion && parsedResult.reply_to_user_suggestion && parsedResult.detected_actions && parsedResult.detected_actions.length > 0) {
         if (!parsedResult.clarifications_needed || parsedResult.clarifications_needed.length === 0) {
-            // Se a reply_to_user_suggestion já tem o nome do cliente e parece uma saudação, usa ela.
-            // Evita que overall_summary_suggestion seja apenas "Ok, [NomeDoCliente]!" se reply_to_user_suggestion for melhor.
             if (parsedResult.reply_to_user_suggestion.includes(clientNameForPrompt) || parsedResult.detected_actions.every(a => (a.action || a.action_type)?.startsWith("GENERAL_"))) {
                  parsedResult.overall_summary_suggestion = parsedResult.reply_to_user_suggestion;
             }
         }
     }
-    // Se overall_summary_suggestion for muito genérico como "Ok, [NomeDoCliente]!" e houver action_specific_reply_suggestion, tenta usar esse.
     if (parsedResult.overall_summary_suggestion && parsedResult.overall_summary_suggestion.startsWith(`Ok, ${clientNameForPrompt}!`)) {
         if (parsedResult.detected_actions && parsedResult.detected_actions.length === 1 && parsedResult.detected_actions[0].action_specific_reply_suggestion) {
             parsedResult.overall_summary_suggestion = parsedResult.detected_actions[0].action_specific_reply_suggestion;
