@@ -75,17 +75,60 @@ const Client = sequelize.define('Client', {
       type: DataTypes.DATEONLY,
       allowNull: true,
       comment: 'Data em que o nível de acesso pago expira (para planos temporários)',
+  },
+  // --- Campos para Integração Google Calendar ---
+  googleAccessToken: {
+    type: DataTypes.STRING(1024), // Armazenará o token criptografado
+    allowNull: true,
+    comment: 'Token de acesso do Google (criptografado)',
+  },
+  googleRefreshToken: {
+    type: DataTypes.STRING(1024), // Armazenará o token de refresh criptografado
+    allowNull: true,
+    comment: 'Token de refresh do Google (criptografado)',
+  },
+  googleTokenExpiryDate: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: 'Data de expiração do token de acesso do Google',
+  },
+  googleCalendarIdPrincipal: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    comment: 'ID do calendário principal do Google do usuário (geralmente "primary")',
+  },
+  isGoogleCalendarSynced: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    allowNull: false,
+    comment: 'Indica se a sincronização com o Google Calendar está ativa para este cliente',
+  },
+  googleCalendarColorIdPF: {
+    type: DataTypes.STRING(2), // IDs de cores do Google são tipicamente números pequenos como strings
+    allowNull: true,
+    defaultValue: '1', // Exemplo: '1' para Azul (verificar documentação do Google para lista de cores)
+    comment: 'ID da cor padrão para eventos de Pessoa Física no Google Calendar',
+  },
+  googleCalendarColorIdPJ: {
+    type: DataTypes.STRING(2),
+    allowNull: true,
+    defaultValue: '2', // Exemplo: '2' para Verde
+    comment: 'ID da cor padrão para eventos de Pessoa Jurídica no Google Calendar',
   }
+  // --- Fim dos Campos Google Calendar ---
 }, {
   tableName: 'clients',
   timestamps: true,
   comment: 'Representa o contato do WhatsApp e usuário do dashboard',
   defaultScope: {
-    attributes: { exclude: ['passwordHash'] },
+    attributes: { exclude: ['passwordHash', 'googleAccessToken', 'googleRefreshToken'] }, // Exclui tokens por padrão
   },
   scopes: {
     withPassword: {
       attributes: { include: ['passwordHash'] },
+    },
+    withGoogleTokens: { // Escopo para buscar o cliente COM os tokens (usado internamente)
+        attributes: { include: ['googleAccessToken', 'googleRefreshToken'] },
     }
   },
   hooks: {
@@ -113,7 +156,7 @@ const Client = sequelize.define('Client', {
       if (client.changed('email') && client.email) {
         client.email = client.email.toLowerCase();
       }
-      if (client.changed('passwordHash') && client.passwordHash && client.passwordHash.length < 60) {
+      if (client.changed('passwordHash') && client.passwordHash && client.passwordHash.length < 60) { // Só hasheia se não for já um hash
         client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
       }
       if (client.changed('accessLevel')) {
@@ -135,6 +178,7 @@ const Client = sequelize.define('Client', {
     { unique: true, fields: ['email'], where: { email: { [Op.ne]: null } } },
     { fields: ['accessLevel'] },
     { fields: ['accessExpiresAt'] },
+    { fields: ['isGoogleCalendarSynced'] }, // Índice para buscar clientes sincronizados
   ]
 });
 
@@ -160,17 +204,14 @@ Client.associate = (models) => {
     onDelete: 'CASCADE',
   });
 
-  // Associações para SharedAccess
-  // Um cliente pode SER O DONO de vários compartilhamentos
   Client.hasMany(models.SharedAccess, {
     foreignKey: 'ownerClientId',
-    as: 'ownedSharedAccesses', // Acessos que este cliente concedeu
+    as: 'ownedSharedAccesses',
     onDelete: 'CASCADE',
   });
-  // Um cliente pode RECEBER acesso de vários compartilhamentos
   Client.hasMany(models.SharedAccess, {
     foreignKey: 'sharedWithClientId',
-    as: 'receivedSharedAccesses', // Acessos que este cliente recebeu
+    as: 'receivedSharedAccesses',
     onDelete: 'CASCADE',
   });
 };

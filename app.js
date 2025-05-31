@@ -2,6 +2,8 @@
 require('dotenv').config(); // Garante que as variáveis de ambiente sejam carregadas primeiro
 const express = require('express');
 const cors = require('cors');
+const punycode = require('punycode/');
+
 
 // Caminhos para os módulos
 const { sequelize } = require('./src/database'); // Importa a instância do sequelize (e os modelos se necessário)
@@ -29,7 +31,7 @@ async function initializeDatabaseAndJobs() {
       console.log('Ambiente de DESENVOLVIMENTO com DB_SYNC habilitado. Sincronizando modelos (force:false)...');
       // Corrigido: force: false para não apagar dados em dev se não for reset global
       // Se você *quer* que DB_SYNC=true em dev apague tudo, mude para { force: true }
-      await sequelize.sync({ force: false });
+      await sequelize.sync({ force: true });
       console.log('Modelos sincronizados com o banco de dados (force:false para desenvolvimento).');
     }
     // 3. Lógica para produção com DB_SYNC (MUITO PERIGOSO com force:true)
@@ -46,7 +48,7 @@ async function initializeDatabaseAndJobs() {
       // O ideal é usar `{ alter: true }` aqui em produção, mas com MUITA cautela.
       // Ou, melhor ainda, NUNCA use sync em produção, apenas migrations.
       console.log('Ambiente de PRODUÇÃO com DB_SYNC habilitado. Sincronizando modelos (force:false)...');
-      await sequelize.sync({ force: false });
+      await sequelize.sync({ force: true });
       console.log('Modelos sincronizados com o banco de dados em PRODUÇÃO (force:false).');
       console.log('É CRUCIALMENTE RECOMENDADO DESABILITAR DB_SYNC EM PRODUÇÃO E USAR MIGRAÇÕES.');
 
@@ -55,6 +57,8 @@ async function initializeDatabaseAndJobs() {
     else {
       if (process.env.NODE_ENV === 'production') {
         console.log('DB_SYNC não está habilitado para produção. Migrations são obrigatórias para produção.');
+              await sequelize.sync({ force: true });
+
       } else {
         console.log('DB_SYNC não está habilitado ou NODE_ENV não configura sincronização automática. Migrations são preferidas.');
       }

@@ -8,15 +8,15 @@ const Appointment = sequelize.define('Appointment', {
     autoIncrement: true,
     primaryKey: true,
   },
-  financialAccountId: { // Contexto do compromisso (pessoal via conta PF, ou profissional via conta PJ/MEI)
+  financialAccountId: {
     type: DataTypes.INTEGER,
     allowNull: false,
     references: {
-      model: 'financial_accounts', // Nome da tabela 'financial_accounts'
+      model: 'financial_accounts',
       key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'CASCADE', // Se a FinancialAccount for deletada, seus compromissos também são
+    onDelete: 'CASCADE',
   },
   title: {
     type: DataTypes.STRING(255),
@@ -27,7 +27,7 @@ const Appointment = sequelize.define('Appointment', {
     allowNull: true,
   },
   eventDateTime: {
-    type: DataTypes.DATE, // Data e Hora com fuso horário
+    type: DataTypes.DATE,
     allowNull: false,
   },
   durationMinutes: {
@@ -62,13 +62,19 @@ const Appointment = sequelize.define('Appointment', {
     type: DataTypes.TEXT,
     allowNull: true,
   },
-  // userId: { // Se um User (admin do sistema) agendou para uma FinancialAccount
-  //   type: DataTypes.INTEGER,
-  //   allowNull: true,
-  //   references: { model: 'users', key: 'id' },
-  //   onUpdate: 'CASCADE',
-  //   onDelete: 'SET NULL',
-  // },
+  // --- Campos para Integração Google Calendar ---
+  googleEventId: {
+    type: DataTypes.STRING(255), // ID do evento no Google Calendar
+    allowNull: true,
+    unique: true, // Garante que um evento do Google não seja mapeado para múltiplos appointments
+    comment: 'ID do evento correspondente no Google Calendar',
+  },
+  googleEventLastUpdated: {
+    type: DataTypes.DATE, // Timestamp da última atualização vinda do Google ou enviada para o Google
+    allowNull: true,
+    comment: 'Timestamp da última sincronização com o Google Calendar para este evento',
+  },
+  // --- Fim dos Campos Google Calendar ---
 }, {
   tableName: 'appointments',
   timestamps: true,
@@ -76,22 +82,18 @@ const Appointment = sequelize.define('Appointment', {
   indexes: [
     { fields: ['financialAccountId'] },
     { fields: ['eventDateTime'] },
+    { fields: ['googleEventId'], unique: true, where: { googleEventId: { [require('sequelize').Op.ne]: null } } }, // Índice único condicional
   ]
 });
 
 Appointment.associate = (models) => {
   Appointment.belongsTo(models.FinancialAccount, { foreignKey: 'financialAccountId', as: 'financialAccount' });
-  // if (models.User) {
-  //   Appointment.belongsTo(models.User, { foreignKey: 'userId', as: 'schedulerAdmin' });
-  // }
-  // NOVA ASSOCIAÇÃO: Many-to-Many com BusinessClient através de AppointmentBusinessClient
   Appointment.belongsToMany(models.BusinessClient, {
     through: models.AppointmentBusinessClient,
-    foreignKey: 'appointmentId', // FK neste modelo (Appointment) para a tabela de junção
-    otherKey: 'businessClientId', // FK no outro modelo (BusinessClient) para a tabela de junção
-    as: 'businessClients' // Alias para acessar os clientes de negócio associados
+    foreignKey: 'appointmentId',
+    otherKey: 'businessClientId',
+    as: 'businessClients'
   });
-
 };
 
 module.exports = Appointment;
