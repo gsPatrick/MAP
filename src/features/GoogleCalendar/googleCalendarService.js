@@ -259,22 +259,24 @@ async function listGoogleEvents(systemClientId, syncToken = null) {
         const requestParams = {
             auth: authClient,
             calendarId: calendarId,
-            singleEvents: true, // Expande eventos recorrentes em instâncias únicas
-            orderBy: 'updated', // Mais recentes atualizados primeiro
-            maxResults: 250, // Limite de eventos por chamada
+            singleEvents: true,
+            maxResults: 250,
         };
 
         if (syncToken) {
             requestParams.syncToken = syncToken;
+            // NÃO DEFINA orderBy QUANDO USAR syncToken
         } else {
-            // Se não houver syncToken, busca eventos dos últimos X dias para uma sincronização inicial
-            // ou se o syncToken expirou. Ajuste o `timeMin` conforme necessário.
             const timeMin = new Date();
-            timeMin.setDate(timeMin.getDate() - 30); // Ex: Últimos 30 dias
+            timeMin.setDate(timeMin.getDate() - 30); // Ajuste conforme necessário para a janela de sync inicial
             requestParams.timeMin = timeMin.toISOString();
-            requestParams.showDeleted = true; // Importante para pegar eventos deletados na primeira sincronização
+            requestParams.showDeleted = true;
+            requestParams.orderBy = 'updated'; // 'orderBy' é permitido quando NÃO se usa syncToken
         }
         logger.info(`[GoogleCalendarService] Listando eventos para Cliente ${systemClientId}, Calendar ${calendarId}, syncToken: ${syncToken ? 'presente' : 'ausente'}`);
+        // Log dos parâmetros para depuração
+        logger.debug(`[GoogleCalendarService] Request params para events.list:`, requestParams);
+
 
         const response = await calendar.events.list(requestParams);
 
@@ -282,23 +284,25 @@ async function listGoogleEvents(systemClientId, syncToken = null) {
         return {
             items: response.data.items || [],
             nextSyncToken: response.data.nextSyncToken,
-            nextPageToken: response.data.nextPageToken, // Para paginação se não usar syncToken
+            nextPageToken: response.data.nextPageToken,
         };
 
     } catch (error) {
         if (error.response && error.response.status === 410 && error.response.data?.error?.errors?.[0]?.reason === 'fullSyncRequired') {
-            // Sync token inválido, precisa de uma sincronização completa.
             logger.warn(`[GoogleCalendarService] SyncToken inválido para Cliente ${systemClientId}. Requer sincronização completa.`);
-            // Limpar o syncToken local para forçar uma listagem completa na próxima vez.
             await Client.update({ googleLastSyncToken: null }, { where: { id: systemClientId }});
-            // Tentar novamente sem syncToken
-            return listGoogleEvents(systemClientId, null);
+            return listGoogleEvents(systemClientId, null); // Tenta novamente sem syncToken
         }
-        logger.error(`[GoogleCalendarService] Erro ao listar eventos Google (Cliente ${systemClientId}): ${error.message}`, { details: error.response?.data });
+        logger.error(`[GoogleCalendarService] Erro ao listar eventos Google (Cliente ${systemClientId}): ${error.message}`, {
+             message: error.message,
+             code: error.response?.data?.error?.code,
+             errors: error.response?.data?.error?.errors,
+             details: error.response?.data
+        });
         if (error.response?.status === 401) {
-           await googleAuthService.disconnectGoogleAccount(systemClientId).catch(e => logger.error(`Falha ao desconectar ${systemClientId}: ${e.message}`));
+           await googleAuthService.disconnectGoogleAccountTokens(systemClientId).catch(e => logger.error(`Falha ao desconectar ${systemClientId}: ${e.message}`));
         }
-        return null;
+        return null; // Retorna null para indicar falha na listagem
     }
 }
 
