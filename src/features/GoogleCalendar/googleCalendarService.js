@@ -1,8 +1,8 @@
 // src/services/googleCalendarService.js
 const { google } = require('googleapis');
-const logger = require('../utils/logger');
-const googleAuthService = require('../features/GoogleAuth/googleAuth.service');
-const { Client, FinancialAccount } = require('../database'); // Adicionado FinancialAccount
+const logger = require('../../utils/logger');
+const googleAuthService = require('../GoogleAuth/googleAuth.service');
+const { Client, FinancialAccount } = require('../../database'); // Adicionado FinancialAccount
 const crypto = require('crypto');
 
 const calendar = google.calendar('v3');

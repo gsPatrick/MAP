@@ -3,7 +3,7 @@ const { google } = require('googleapis');
 const { Client } = require('../../database');
 const logger =require('../../utils/logger');
 const { encrypt, decrypt } = require('../../utils/cryptoUtils');
-const googleCalendarService = require('../../services/googleCalendarService'); // Para chamar watchCalendar
+const googleCalendarService = require('../GoogleCalendar/googleCalendarService'); // Para chamar watchCalendar
 const crypto = require('crypto'); // Para gerar UUID para o channel
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;

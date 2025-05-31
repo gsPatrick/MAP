@@ -3,7 +3,7 @@ const cron = require('node-cron');
 const { Client, sequelize } = require('../database'); // Apenas Client e sequelize
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
-const googleCalendarService = require('../services/googleCalendarService'); // Para watchCalendar e stopWatchingCalendar
+const googleCalendarService = require('../features/GoogleCalendar/googleCalendarService'); // Para watchCalendar e stopWatchingCalendar
 const googleAuthService = require('../features/GoogleAuth/googleAuth.service'); // Para getAuthenticatedClient
 
 // Renova canais que expiram nas próximas X horas (ex: 24 horas = 1 dia)

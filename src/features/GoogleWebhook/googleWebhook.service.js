@@ -1,6 +1,6 @@
 // src/features/GoogleWebhook/googleWebhook.service.js
 const { Client, Appointment, FinancialAccount, sequelize } = require('../../database');
-const googleCalendarService = require('../../services/googleCalendarService');
+const googleCalendarService = require('../GoogleCalendar/googleCalendarService');
 const appointmentService = require('../Appointment/appointment.service');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
