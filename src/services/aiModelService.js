@@ -260,7 +260,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 
 18. CREATE_FINANCIAL_ACCOUNT: (Criar nova conta financeira PARA O CLIENTE LOGADO - NÃO USAR EM CONTEXTO DE SHARED ACCESS PARA CRIAR CONTA PARA O DONO)
     - accountTypeToCreate: "PF", "PJ", "MEI" (OBRIGATÓRIO)
-    - newAccountName: string (OBRIGATÓRIO. Se faltar, perguntar: "Legal, ${clientNameForPrompt}! Qual nome você quer dar para sua nova conta ${params.accountTypeToCreate}? Por exemplo, 'Minhas Finanças Pessoais' ou 'Empresa Xpto'.")
+    - newAccountName: string (OBRIGATÓRIO. Se faltar, perguntar: "Legal, ${clientNameForPrompt}! Qual nome você quer dar para sua nova conta do tipo que mencionou? Por exemplo, 'Minhas Finanças Pessoais' ou 'Empresa Xpto'.")
     - documentNumber: string (opcional, CPF/CNPJ)
 
 19. GENERAL_GREETING_OR_SMALLTALK: (Saudações, conversas curtas)
@@ -517,6 +517,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     const rawResponseForError = error.response?.data || (typeof error.message === 'string' && error.message.includes("{") ? error.message : null) || "Sem resposta bruta disponível";
     logger.error(`[AI SERVICE] Erro ao chamar ou parsear API da OpenAI (${modelToUse}):`, {
         errorMessage: error.message,
+        errorStack: error.stack, // Adicionado para mais detalhes do erro
         rawApiResponse: rawResponseForError,
         requestMessageCount: messagesToSendToAPI.length
     });
