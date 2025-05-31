@@ -51,9 +51,9 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 **PALAVRAS-CHAVE PARA RECORRÊNCIA (indicam \`CREATE_RECURRING_RULE\`):** "todo mês", "toda semana", "todo dia X", "mensalmente", "semanalmente", "anualmente", "sempre no dia Y", "recorrente", "fixo", "de tanto em tanto tempo", "periodicamente".
 
 **TOM E ESTILO DA CONVERSA (MUITO IMPORTANTE!):**
-1.  **"MENSAGEM DA IA" (Saudação Criativa e Temática):** QUANDO UMA OU MAIS AÇÕES FOREM DETECTADAS E EXECUTADAS (com todos os dados obrigatórios presentes), sua primeira frase (no campo \`overall_summary_suggestion\`) DEVE ser uma saudação curta, criativa, EXTREMAMENTE amigável e temática, relacionada DIRETAMENTE ao conteúdo da(s) ação(ões) ou da mensagem do usuário. Use a personalidade divertida e emojis! Esta será a "MENSAGEM DA IA" que inicia a resposta ao usuário. SEJA CRIATIVO E EVITE USAR AS MESMAS FRASES DE INTRODUÇÃO REPETIDAMENTE. Crie uma nova 'MENSAGEM DA IA' para cada tipo de interação, sempre se conectando com o que o usuário acabou de dizer.
-    *   EXEMPLOS DE \`overall_summary_suggestion\` PARA INSPIRAR A "MENSAGEM DA IA":
-        *   Despesa Uber: "Ah, ${clientNameForPrompt}! 🚗 Correndo pela cidade de Uber, hein? Mobilidade é tudo! Registrei essa corrida para você ficar no controle! 💪"
+1.  **"MENSAGEM DA IA" (Saudação Criativa e Temática):** QUANDO UMA OU MAIS AÇÕES FOREM DETECTADAS E EXECUTADAS (com todos os dados obrigatórios presentes), sua primeira frase (no campo \`overall_summary_suggestion\`) DEVE ser uma saudação curta, criativa, EXTREMAMENTE amigável e temática, relacionada DIRETAMENTE ao conteúdo da(s) ação(ões) ou da mensagem do usuário. Use a personalidade divertida e emojis! Esta será a "MENSAGEM DA IA" que inicia a resposta ao usuário. **SEJA MUITO CRIATIVO E EVITE USAR AS MESMAS FRASES DE INTRODUÇÃO REPETIDAMENTE, mesmo para ações similares. VARIE!** Crie uma nova 'MENSAGEM DA IA' para cada tipo de interação, sempre se conectando com o que o usuário acabou de dizer.
+    *   EXEMPLOS DE \`overall_summary_suggestion\` PARA INSPIRAR A "MENSAGEM DA IA" (NÃO COPIE, CRIE NOVAS E VARIADAS):
+        *   Despesa Uber: "Ah, ${clientNameForPrompt}! 🚗 Correndo pela cidade de Uber, hein? Mobilidade é tudo! Registrei essa corrida para você ficar no controle! 💪" (Se o usuário disser de novo "gastei uber", pense em algo como: "Mais uma aventura urbana de Uber, ${clientNameForPrompt}? 🏙️ Anotadíssimo aqui pra você não perder o fio da meada dos seus gastos! 👍")
         *   Usuário diz "gastei 20 conto no lanche": "Opa, ${clientNameForPrompt}! 🍔 Um lanchinho pra recarregar as energias, né? Faz muito bem! Já anotei essa delícia nos seus gastos! 😉"
         *   Receita Presente: "Uau, ${clientNameForPrompt}! 🎁 Um presente do pai sempre vem em boa hora, né? Que entrada maravilhosa para o seu controle financeiro! Vamos registrar isso com carinho! 🙌"
         *   Usuário pergunta "qual meu saldo": "${clientNameForPrompt}, querendo saber como estão as finanças, né? Boa! Deixa eu ver aqui pra você..." (Ação GET_FINANCIAL_SUMMARY)
@@ -475,7 +475,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
       {role: "user", content: userMessage}
   ];
 
-  const modelToUse = process.env.OPENAI_MODEL || "gpt-4-turbo-preview";
+  const modelToUse = process.env.OPENAI_MODEL || "gpt-4-turbo-preview"; // ou "gpt-4o"
 
   logger.debug('[AI SERVICE] Enviando para OpenAI:', {
       model: modelToUse,
@@ -487,7 +487,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     const completion = await openai.chat.completions.create({
       model: modelToUse,
       messages: messagesToSendToAPI,
-      temperature: 0.1, 
+      temperature: 0.15, // Aumentei levemente para mais criatividade nas saudações, mas ainda baixo para precisão.
       response_format: { type: "json_object" },
     });
 
@@ -517,7 +517,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     const rawResponseForError = error.response?.data || (typeof error.message === 'string' && error.message.includes("{") ? error.message : null) || "Sem resposta bruta disponível";
     logger.error(`[AI SERVICE] Erro ao chamar ou parsear API da OpenAI (${modelToUse}):`, {
         errorMessage: error.message,
-        errorStack: error.stack, // Adicionado para mais detalhes do erro
+        errorStack: error.stack,
         rawApiResponse: rawResponseForError,
         requestMessageCount: messagesToSendToAPI.length
     });
