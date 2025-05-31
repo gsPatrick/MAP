@@ -3,8 +3,8 @@ const { google } = require('googleapis');
 const { Client } = require('../../database');
 const logger =require('../../utils/logger');
 const { encrypt, decrypt } = require('../../utils/cryptoUtils');
-const googleCalendarService = require('../GoogleCalendar/googleCalendarService'); // Para chamar watchCalendar
-const crypto = require('crypto'); // Para gerar UUID para o channel
+// REMOVIDA: const googleCalendarService = require('../../services/googleCalendarService');
+const crypto = require('crypto');
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
@@ -35,6 +35,14 @@ function getGoogleAuthUrl(systemClientId) {
   });
 }
 
+/**
+ * Lida com o callback do Google após o usuário autorizar.
+ * Troca o código de autorização por tokens e os armazena no cliente.
+ * NÃO registra mais o watch diretamente aqui.
+ * @param {number} clientId - O ID do cliente do seu sistema (recuperado do 'state').
+ * @param {string} code - O código de autorização retornado pelo Google.
+ * @returns {Promise<Client|null>} O registro do cliente atualizado ou null em caso de erro grave.
+ */
 async function handleGoogleCallback(clientId, code) {
   try {
     const { tokens } = await oauth2Client.getToken(code);
@@ -49,6 +57,10 @@ async function handleGoogleCallback(clientId, code) {
     if (!encryptedAccessToken) {
         throw new Error('Falha ao criptografar o access_token do Google.');
     }
+    if (!encryptedRefreshToken && !clientRecord.googleRefreshToken) { // Verifica se realmente não temos um refresh token
+        logger.warn(`[GoogleAuthService] Nenhum refresh_token recebido ou existente para Cliente ID ${clientId}. Acesso offline pode falhar.`);
+    }
+
 
     await clientRecord.update({
       googleAccessToken: encryptedAccessToken,
@@ -56,48 +68,47 @@ async function handleGoogleCallback(clientId, code) {
       googleTokenExpiryDate: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
       isGoogleCalendarSynced: true,
       googleCalendarIdPrincipal: 'primary',
+      // Limpa os campos do channel aqui, pois um novo watch será registrado pelo controller
+      googleChannelId: null,
+      googleChannelResourceId: null,
+      googleChannelExpiryDate: null,
     });
-    logger.info(`Tokens Google armazenados para Cliente ID ${clientId}.`);
-
-    // --- Registrar o Webhook (watch) ---
-    if (clientRecord.isGoogleCalendarSynced && clientRecord.googleCalendarIdPrincipal) {
-        const watchResponse = await googleCalendarService.watchCalendar(clientId, clientRecord.googleCalendarIdPrincipal);
-        if (watchResponse && watchResponse.id && watchResponse.resourceId) {
-            await clientRecord.update({
-                googleChannelId: watchResponse.id,
-                googleChannelResourceId: watchResponse.resourceId,
-                googleChannelExpiryDate: watchResponse.expiration ? new Date(parseInt(watchResponse.expiration, 10)) : null,
-            });
-            logger.info(`Webhook registrado para Cliente ID ${clientId}, Calendário: ${clientRecord.googleCalendarIdPrincipal}. Channel ID: ${watchResponse.id}`);
-        } else {
-            logger.error(`Falha ao registrar webhook para Cliente ID ${clientId} após autenticação.`);
-            // Considerar reverter isGoogleCalendarSynced ou tentar novamente depois.
-        }
-    }
-    // --- Fim do Registro do Webhook ---
+    logger.info(`Tokens Google armazenados para Cliente ID ${clientId}. Sincronização ATIVADA.`);
+    return clientRecord; // Retorna o clientRecord para o controller usar
 
   } catch (error) {
     logger.error(`[GoogleAuthService] Erro no callback do Google para Cliente ID ${clientId}: ${error.message}`, { error });
     const clientRecord = await Client.findByPk(clientId);
     if (clientRecord && clientRecord.isGoogleCalendarSynced) {
-        await clientRecord.update({ isGoogleCalendarSynced: false, googleAccessToken: null, googleTokenExpiryDate: null })
+        await clientRecord.update({
+            isGoogleCalendarSynced: false,
+            googleAccessToken: null,
+            // Manter o refresh token se o erro foi apenas com o access token aqui não faz muito sentido,
+            // pois o fluxo de obtenção de tokens falhou. Limpar tudo é mais seguro.
+            googleRefreshToken: null,
+            googleTokenExpiryDate: null,
+            googleChannelId: null,
+            googleChannelResourceId: null,
+            googleChannelExpiryDate: null,
+        })
             .catch(updError => logger.error(`Erro ao limpar tokens para ${clientId}: ${updError.message}`));
     }
     throw error;
   }
 }
 
-async function disconnectGoogleAccount(clientId) {
+/**
+ * Apenas revoga os tokens e limpa os campos no BD.
+ * A ação de parar o 'watch' será feita no controller antes de chamar esta função.
+ * @param {number} clientId - ID do cliente do seu sistema.
+ */
+async function disconnectGoogleAccountTokens(clientId) {
   const clientRecord = await Client.scope('withGoogleTokens').findByPk(clientId);
   if (!clientRecord) {
     throw new Error(`Cliente ID ${clientId} não encontrado.`);
   }
 
-  // Parar o canal de notificação se existir
-  if (clientRecord.googleChannelId && clientRecord.googleChannelResourceId) {
-      await googleCalendarService.stopWatchingCalendar(clientId, clientRecord.googleChannelId, clientRecord.googleChannelResourceId)
-          .catch(err => logger.warn(`Falha ao parar watch channel ${clientRecord.googleChannelId} para cliente ${clientId}: ${err.message}`));
-  }
+  // A lógica de stopWatchingCalendar foi movida para o controller
 
   if (clientRecord.googleAccessToken) {
     const accessToken = decrypt(clientRecord.googleAccessToken);
@@ -119,7 +130,7 @@ async function disconnectGoogleAccount(clientId) {
     isGoogleCalendarSynced: false, googleCalendarIdPrincipal: null,
     googleChannelId: null, googleChannelResourceId: null, googleChannelExpiryDate: null, googleLastSyncToken: null,
   });
-  logger.info(`Conta Google desconectada para Cliente ID ${clientId}.`);
+  logger.info(`Tokens Google e dados de sincronização limpos para Cliente ID ${clientId}.`);
 }
 
 async function getAuthenticatedClient(clientId) {
@@ -133,7 +144,9 @@ async function getAuthenticatedClient(clientId) {
 
   if (!accessToken) {
       logger.error(`Falha ao descriptografar access token para Cliente ${clientId}.`);
-      await disconnectGoogleAccount(clientId); return null;
+      // Chamar a função de desconexão de tokens aqui para limpar o estado inválido
+      await disconnectGoogleAccountTokens(clientId).catch(e => logger.error(`Erro ao limpar tokens após falha de descriptografia para cliente ${clientId}: ${e.message}`));
+      return null;
   }
   localOAuth2Client.setCredentials({
     access_token: accessToken, refresh_token: refreshToken,
@@ -143,8 +156,9 @@ async function getAuthenticatedClient(clientId) {
   if (localOAuth2Client.isTokenExpiring()) {
     logger.info(`Token Google para Cliente ${clientId} expirando. Tentando refresh...`);
     if (!refreshToken) {
-      logger.error(`Refresh token ausente para Cliente ${clientId}. Desconectando.`);
-      await disconnectGoogleAccount(clientId); return null;
+      logger.error(`Refresh token ausente para Cliente ${clientId}. Desconectando tokens.`);
+      await disconnectGoogleAccountTokens(clientId).catch(e => logger.error(`Erro ao limpar tokens após falha de refresh (sem RT) para cliente ${clientId}: ${e.message}`));
+      return null;
     }
     try {
       const { credentials } = await localOAuth2Client.refreshAccessToken();
@@ -160,7 +174,8 @@ async function getAuthenticatedClient(clientId) {
     } catch (refreshError) {
       logger.error(`Erro ao atualizar token para Cliente ${clientId}: ${refreshError.message}`, {details: refreshError.response?.data});
       if (refreshError.response && (refreshError.response.data.error === 'invalid_grant' || refreshError.response.data.error === 'unauthorized_client')) {
-        await disconnectGoogleAccount(clientId);
+        logger.warn(`Refresh token inválido para Cliente ID ${clientId}. Desconectando tokens...`);
+        await disconnectGoogleAccountTokens(clientId).catch(e => logger.error(`Erro ao limpar tokens após falha de refresh (invalid_grant) para cliente ${clientId}: ${e.message}`));
       }
       return null;
     }
@@ -183,6 +198,7 @@ async function getSyncStatus(clientId) {
 }
 
 module.exports = {
-  getGoogleAuthUrl, handleGoogleCallback, disconnectGoogleAccount,
+  getGoogleAuthUrl, handleGoogleCallback,
+  disconnectGoogleAccountTokens, // Renomeado para clareza
   getAuthenticatedClient, getSyncStatus,
 };

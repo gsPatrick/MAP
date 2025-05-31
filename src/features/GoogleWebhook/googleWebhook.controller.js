@@ -32,4 +32,4 @@ async function handleNotification(req, res, next) {
 
 module.exports = {
   handleNotification,
-};
+};  
