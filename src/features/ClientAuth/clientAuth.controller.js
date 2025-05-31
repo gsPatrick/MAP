@@ -61,8 +61,36 @@ async function getCurrentClientProfile(req, res, next) {
     }
 }
 
+async function updateCalendarPreferences(req, res, next) {
+  try {
+    const clientId = req.client.id; // Do token autenticado
+    const { googleCalendarColorIdPF, googleCalendarColorIdPJ } = req.body;
+
+    // Validação básica (pode ser mais robusta com Joi ou similar)
+    const validColorIds = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'];
+    if (googleCalendarColorIdPF && !validColorIds.includes(String(googleCalendarColorIdPF))) {
+      return res.status(400).json({ status: 'fail', message: 'ID de cor PF inválido.' });
+    }
+    if (googleCalendarColorIdPJ && !validColorIds.includes(String(googleCalendarColorIdPJ))) {
+      return res.status(400).json({ status: 'fail', message: 'ID de cor PJ inválido.' });
+    }
+
+    const updatedClient = await clientAuthService.updateClientCalendarPreferences(
+      clientId,
+      googleCalendarColorIdPF,
+      googleCalendarColorIdPJ
+    );
+    res.status(200).json({ status: 'success', data: updatedClient });
+  } catch (error) {
+    logger.error('[ClientAuthController] Erro ao atualizar preferências de calendário:', error);
+    next(error);
+  }
+}
+
+
 module.exports = {
   setCredentials,
   login,
   getCurrentClientProfile,
+  updateCalendarPreferences
 };

@@ -295,8 +295,45 @@ async function getClientProfile(loggedInClientData, sharedAccessContext = null) 
 }
 
 
+async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
+  try {
+    const client = await Client.findByPk(clientId);
+    if (!client) {
+      const error = new Error('Cliente não encontrado.');
+      error.statusCode = 404; error.status = 'fail'; throw error;
+    }
+
+    const updateData = {};
+    if (colorIdPF !== undefined) { // Permite string vazia ou null para resetar para default do modelo? Ou só aceita IDs válidos?
+        updateData.googleCalendarColorIdPF = colorIdPF ? String(colorIdPF) : null; // Permite resetar para default se null
+    }
+    if (colorIdPJ !== undefined) {
+        updateData.googleCalendarColorIdPJ = colorIdPJ ? String(colorIdPJ) : null;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+        logger.info(`[ClientAuthService] Nenhuma preferência de cor de calendário para atualizar para Cliente ID ${clientId}.`);
+        return client.toJSON(); // Retorna o cliente sem modificações
+    }
+
+    await client.update(updateData);
+    logger.info(`Preferências de cor de calendário atualizadas para Cliente ID ${clientId}. PF: ${updateData.googleCalendarColorIdPF}, PJ: ${updateData.googleCalendarColorIdPJ}`);
+    
+    // Retorna o cliente atualizado (o defaultScope já exclui tokens)
+    const reloadedClient = await Client.findByPk(clientId);
+    return reloadedClient.toJSON();
+
+  } catch (error) {
+    logger.error(`Erro ao atualizar preferências de cor de calendário para Cliente ID ${clientId}: ${error.message}`, { error });
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
+}
+
+
 module.exports = {
   setClientCredentials,
   loginClient,
   getClientProfile,
+  updateClientCalendarPreferences
 }

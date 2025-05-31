@@ -8,5 +8,7 @@ const router = Router();
 router.post('/client/set-credentials', clientAuthController.setCredentials);
 router.post('/client/login', clientAuthController.login);
 router.get('/client/me', authenticateClientToken, clientAuthController.getCurrentClientProfile);
+router.put('/client/me/calendar-preferences', authenticateClientToken, clientAuthController.updateCalendarPreferences);
+
 
 module.exports = router;
