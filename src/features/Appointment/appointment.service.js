@@ -3,6 +3,7 @@ const { Appointment, FinancialAccount, Client, UserPreference, BusinessClient, A
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 const googleCalendarService = require('../../features/GoogleCalendar/googleCalendarService'); 
+const businessClientService = require('../BusinessClient/BusinessClient.service'); // Verifique este caminho
 
 const BUSINESS_CLIENT_INCLUDE_ATTRIBUTES = ['id', 'name', 'phone', 'email', 'photoUrl', 'notes'];
 
