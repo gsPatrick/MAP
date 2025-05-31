@@ -23,19 +23,19 @@ async function initializeDatabaseAndJobs() {
       console.warn('!! O banco de dados será COMPLETAMENTE APAGADO E RECRIADO (force:true).   !!');
       console.warn('!! ISSO AFETARÁ PRODUÇÃO SE NODE_ENV=production. USE COM EXTREMA CAUTELA! !!');
       console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
-      await sequelize.sync({ force: false });
+      await sequelize.sync({ force: true });
       console.log('Modelos sincronizados com o banco de dados (force:true devido a FORCE_DB_RESET).');
     }
     // 2. Lógica para desenvolvimento com DB_SYNC
-    else if (process.env.NODE_ENV === 'development' && process.env.DB_SYNC === 'false') {
+    else if (process.env.NODE_ENV === 'development' && process.env.DB_SYNC === 'true') {
       console.log('Ambiente de DESENVOLVIMENTO com DB_SYNC habilitado. Sincronizando modelos (force:false)...');
       // Corrigido: force: false para não apagar dados em dev se não for reset global
       // Se você *quer* que DB_SYNC=true em dev apague tudo, mude para { force: true }
-      await sequelize.sync({ force: false });
+      await sequelize.sync({ force: true });
       console.log('Modelos sincronizados com o banco de dados (force:false para desenvolvimento).');
     }
     // 3. Lógica para produção com DB_SYNC (MUITO PERIGOSO com force:true)
-    else if (process.env.NODE_ENV === 'production' && process.env.DB_SYNC === 'false') {
+    else if (process.env.NODE_ENV === 'production' && process.env.DB_SYNC === 'true') {
       console.error('###################################################################################################');
       console.error('## PERIGO EXTREMO: DB_SYNC está habilitado em PRODUÇÃO com a intenção de usar sequelize.sync()!   ##');
       console.error('## SEU CÓDIGO ORIGINAL INDICAVA force:true PARA ESTA CONDIÇÃO.                                   ##');
@@ -48,7 +48,7 @@ async function initializeDatabaseAndJobs() {
       // O ideal é usar `{ alter: true }` aqui em produção, mas com MUITA cautela.
       // Ou, melhor ainda, NUNCA use sync em produção, apenas migrations.
       console.log('Ambiente de PRODUÇÃO com DB_SYNC habilitado. Sincronizando modelos (force:false)...');
-      await sequelize.sync({ force: false });
+      await sequelize.sync({ force: true });
       console.log('Modelos sincronizados com o banco de dados em PRODUÇÃO (force:false).');
       console.log('É CRUCIALMENTE RECOMENDADO DESABILITAR DB_SYNC EM PRODUÇÃO E USAR MIGRAÇÕES.');
 
@@ -57,7 +57,7 @@ async function initializeDatabaseAndJobs() {
     else {
       if (process.env.NODE_ENV === 'production') {
         console.log('DB_SYNC não está habilitado para produção. Migrations são obrigatórias para produção.');
-              await sequelize.sync({ force: false });
+              await sequelize.sync({ force: true });
 
       } else {
         console.log('DB_SYNC não está habilitado ou NODE_ENV não configura sincronização automática. Migrations são preferidas.');

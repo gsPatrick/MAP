@@ -25,6 +25,7 @@ const businessClientRoutes = require('../features/BusinessClient/BusinessClient.
 const sharedAccessRoutes = require('../features/SharedAccess/sharedAccess.routes'); // <<< NOVA ROTA
 const hotmartWebhookRoutes = require('../features/WebhookHandler/hotmart.routes');
 const googleAuthRoutes = require('../features/GoogleAuth/googleAuth.routes'); // <<< NOVA ROTA GOOGLE AUTH
+const googleWebhookRoutes = require('../features/GoogleWebhook/googleWebhook.routes'); // <<< NOVO WEBHOOK
 
 
 
@@ -42,6 +43,7 @@ mainApiRouter.use('/webhooks', hotmartWebhookRoutes); // <<< NOVA LINHA (ou /pay
 mainApiRouter.use('/auth', clientAuthRoutes); // Rotas de login e set-credentials para Clients
 mainApiRouter.use('/whatsapp-zapi', whatsappWebhookRoutes); // Webhook da Z-API (sem token de app)
 mainApiRouter.use('/auth/google', googleAuthRoutes); // <<< ROTAS PARA GOOGLE AUTHENTICATION
+mainApiRouter.use('/webhooks/google-calendar', googleWebhookRoutes); // <<< ROTA PARA WEBHOOK DO GOOGLE
 
 
 

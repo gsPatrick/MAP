@@ -78,12 +78,12 @@ const Client = sequelize.define('Client', {
   },
   // --- Campos para Integração Google Calendar ---
   googleAccessToken: {
-    type: DataTypes.STRING(1024), // Armazenará o token criptografado
+    type: DataTypes.STRING(1024),
     allowNull: true,
     comment: 'Token de acesso do Google (criptografado)',
   },
   googleRefreshToken: {
-    type: DataTypes.STRING(1024), // Armazenará o token de refresh criptografado
+    type: DataTypes.STRING(1024),
     allowNull: true,
     comment: 'Token de refresh do Google (criptografado)',
   },
@@ -104,16 +104,37 @@ const Client = sequelize.define('Client', {
     comment: 'Indica se a sincronização com o Google Calendar está ativa para este cliente',
   },
   googleCalendarColorIdPF: {
-    type: DataTypes.STRING(2), // IDs de cores do Google são tipicamente números pequenos como strings
+    type: DataTypes.STRING(2),
     allowNull: true,
-    defaultValue: '1', // Exemplo: '1' para Azul (verificar documentação do Google para lista de cores)
+    defaultValue: '1',
     comment: 'ID da cor padrão para eventos de Pessoa Física no Google Calendar',
   },
   googleCalendarColorIdPJ: {
     type: DataTypes.STRING(2),
     allowNull: true,
-    defaultValue: '2', // Exemplo: '2' para Verde
+    defaultValue: '2',
     comment: 'ID da cor padrão para eventos de Pessoa Jurídica no Google Calendar',
+  },
+  // --- Campos para Webhook (Push Notifications) do Google Calendar ---
+  googleChannelId: { // ID do canal de notificação retornado pelo Google
+    type: DataTypes.STRING(255),
+    allowNull: true,
+    comment: 'ID do canal de notificação do Google Calendar',
+  },
+  googleChannelResourceId: { // ID do recurso que está sendo observado (geralmente o calendarId)
+    type: DataTypes.STRING(255),
+    allowNull: true,
+    comment: 'ID do recurso (calendário) que está sendo observado pelo Google',
+  },
+  googleChannelExpiryDate: { // Data de expiração do canal de notificação
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: 'Data de expiração do canal de notificação do Google Calendar',
+  },
+  googleLastSyncToken: { // Para sincronização incremental futura (não usado com webhook inicialmente)
+    type: DataTypes.STRING(255),
+    allowNull: true,
+    comment: 'Último syncToken do Google Calendar para este cliente',
   }
   // --- Fim dos Campos Google Calendar ---
 }, {
@@ -121,55 +142,43 @@ const Client = sequelize.define('Client', {
   timestamps: true,
   comment: 'Representa o contato do WhatsApp e usuário do dashboard',
   defaultScope: {
-    attributes: { exclude: ['passwordHash', 'googleAccessToken', 'googleRefreshToken'] }, // Exclui tokens por padrão
+    attributes: { exclude: ['passwordHash', 'googleAccessToken', 'googleRefreshToken'] },
   },
   scopes: {
     withPassword: {
       attributes: { include: ['passwordHash'] },
     },
-    withGoogleTokens: { // Escopo para buscar o cliente COM os tokens (usado internamente)
+    withGoogleTokens: {
         attributes: { include: ['googleAccessToken', 'googleRefreshToken'] },
     }
   },
   hooks: {
     beforeCreate: async (client) => {
-      if (client.email) {
-        client.email = client.email.toLowerCase();
-      }
-      if (client.passwordHash) {
-        client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
-      }
+      if (client.email) client.email = client.email.toLowerCase();
+      if (client.passwordHash) client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
       if (client.accessLevel && !client.accessExpiresAt) {
         const now = new Date();
-        if (client.accessLevel.includes('_mensal')) {
-          now.setMonth(now.getMonth() + 1);
-          client.accessExpiresAt = now.toISOString().split('T')[0];
-        } else if (client.accessLevel.includes('_anual')) {
-          now.setFullYear(now.getFullYear() + 1);
-          client.accessExpiresAt = now.toISOString().split('T')[0];
-        } else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
-            client.accessExpiresAt = null;
+        if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
+        else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
+        else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
+            client.accessExpiresAt = null; return;
         }
+        client.accessExpiresAt = now.toISOString().split('T')[0];
       }
     },
     beforeUpdate: async (client) => {
-      if (client.changed('email') && client.email) {
-        client.email = client.email.toLowerCase();
-      }
-      if (client.changed('passwordHash') && client.passwordHash && client.passwordHash.length < 60) { // Só hasheia se não for já um hash
+      if (client.changed('email') && client.email) client.email = client.email.toLowerCase();
+      if (client.changed('passwordHash') && client.passwordHash && client.passwordHash.length < 60) {
         client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
       }
       if (client.changed('accessLevel')) {
         const now = new Date();
-        if (client.accessLevel.includes('_mensal')) {
-          now.setMonth(now.getMonth() + 1);
-          client.accessExpiresAt = now.toISOString().split('T')[0];
-        } else if (client.accessLevel.includes('_anual')) {
-          now.setFullYear(now.getFullYear() + 1);
-          client.accessExpiresAt = now.toISOString().split('T')[0];
-        } else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
-          client.accessExpiresAt = null;
+        if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
+        else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
+        else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
+             client.accessExpiresAt = null; return;
         }
+        client.accessExpiresAt = now.toISOString().split('T')[0];
       }
     }
   },
@@ -178,7 +187,9 @@ const Client = sequelize.define('Client', {
     { unique: true, fields: ['email'], where: { email: { [Op.ne]: null } } },
     { fields: ['accessLevel'] },
     { fields: ['accessExpiresAt'] },
-    { fields: ['isGoogleCalendarSynced'] }, // Índice para buscar clientes sincronizados
+    { fields: ['isGoogleCalendarSynced'] },
+    { fields: ['googleChannelId'] }, // Para buscar canais para renovação
+    { fields: ['googleChannelExpiryDate'] },
   ]
 });
 
@@ -188,32 +199,11 @@ Client.prototype.isValidPassword = async function(password) {
 };
 
 Client.associate = (models) => {
-  Client.hasMany(models.FinancialAccount, {
-    foreignKey: 'clientId',
-    as: 'financialAccounts',
-    onDelete: 'CASCADE',
-  });
-  Client.hasMany(models.ClientInteractionLog, {
-    foreignKey: 'clientId',
-    as: 'interactionLogs',
-    onDelete: 'CASCADE',
-  });
-  Client.hasMany(models.Subscription, {
-    foreignKey: 'clientId',
-    as: 'subscriptions',
-    onDelete: 'CASCADE',
-  });
-
-  Client.hasMany(models.SharedAccess, {
-    foreignKey: 'ownerClientId',
-    as: 'ownedSharedAccesses',
-    onDelete: 'CASCADE',
-  });
-  Client.hasMany(models.SharedAccess, {
-    foreignKey: 'sharedWithClientId',
-    as: 'receivedSharedAccesses',
-    onDelete: 'CASCADE',
-  });
+  Client.hasMany(models.FinancialAccount, { foreignKey: 'clientId', as: 'financialAccounts', onDelete: 'CASCADE' });
+  Client.hasMany(models.ClientInteractionLog, { foreignKey: 'clientId', as: 'interactionLogs', onDelete: 'CASCADE' });
+  Client.hasMany(models.Subscription, { foreignKey: 'clientId', as: 'subscriptions', onDelete: 'CASCADE' });
+  Client.hasMany(models.SharedAccess, { foreignKey: 'ownerClientId', as: 'ownedSharedAccesses', onDelete: 'CASCADE' });
+  Client.hasMany(models.SharedAccess, { foreignKey: 'sharedWithClientId', as: 'receivedSharedAccesses', onDelete: 'CASCADE' });
 };
 
 module.exports = Client;
