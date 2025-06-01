@@ -17,12 +17,12 @@ async function validateOwningFinancialAccount(financialAccountId, transaction = 
 }
 
 async function createFinancialCategory(financialAccountId, categoryData) {
-  const { name, parentId } = categoryData; // Removido 'type'
+  const { name, parentId } = categoryData; // 'type' removido
   const t = await sequelize.transaction();
   try {
     await validateOwningFinancialAccount(financialAccountId, t);
 
-    if (!name) { // Apenas 'name' é obrigatório agora do categoryData
+    if (!name) {
       const error = new Error('Nome é obrigatório para a categoria financeira.');
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
@@ -49,12 +49,10 @@ async function createFinancialCategory(financialAccountId, categoryData) {
         const error = new Error(`Categoria pai com ID ${finalParentId} não encontrada nesta conta financeira.`);
         error.statusCode = 404; error.status = 'fail'; throw error;
       }
-      // Validação de compatibilidade de tipo removida
     }
 
     const category = await FinancialCategory.create({
         name,
-        // type removido
         parentId: finalParentId,
         financialAccountId
     }, { transaction: t });
@@ -70,8 +68,9 @@ async function createFinancialCategory(financialAccountId, categoryData) {
   }
 }
 
+// Função modificada para getAllFinancialCategories (usada pelo controller)
 async function getAllFinancialCategories(financialAccountId, queryParams = {}) {
-  const { hierarchical = false, onlyTopLevel = false /*, type (removido) */ } = queryParams;
+  const { hierarchical = false, onlyTopLevel = false } = queryParams; // 'type' removido
   try {
     await validateOwningFinancialAccount(financialAccountId); 
     const whereConditions = { financialAccountId };
@@ -79,13 +78,13 @@ async function getAllFinancialCategories(financialAccountId, queryParams = {}) {
     if (onlyTopLevel) {
       whereConditions.parentId = null;
     }
-    // Filtro por 'type' removido
 
     if (!hierarchical) {
+      // Retorna lista simples, potencialmente com informação do pai
       const categories = await FinancialCategory.findAll({
         where: whereConditions,
         order: [
-            sequelize.literal('"FinancialCategory"."parentId" IS NULL DESC'),
+            sequelize.literal('"FinancialCategory"."parentId" IS NULL DESC'), // Categorias raiz primeiro
             [sequelize.col('"FinancialCategory"."parentId"'), 'ASC NULLS FIRST'],
             ['name', 'ASC']
         ],
@@ -93,8 +92,9 @@ async function getAllFinancialCategories(financialAccountId, queryParams = {}) {
       });
       return categories.map(c => c.toJSON());
     } else {
+      // Retorna estrutura hierárquica
       const allCategoriesForAccount = await FinancialCategory.findAll({
-          where: whereConditions,
+          where: { financialAccountId }, // Busca todas para montar a árvore
           order: [['name', 'ASC']]
       });
 
@@ -103,20 +103,21 @@ async function getAllFinancialCategories(financialAccountId, queryParams = {}) {
 
       allCategoriesForAccount.forEach(category => {
         const catJson = category.toJSON();
-        catJson.subcategories = [];
+        catJson.subcategories = []; // Inicializa array de subcategorias
         categoriesMap.set(catJson.id, catJson);
       });
 
       categoriesMap.forEach(category => {
         if (category.parentId && categoriesMap.has(category.parentId)) {
+           // Verifica se o filho existe no map antes de adicionar (segurança, mas deve existir)
            if (categoriesMap.has(category.id)) { 
                 categoriesMap.get(category.parentId).subcategories.push(category);
            }
-        } else if (!category.parentId) {
+        } else if (!category.parentId) { // É uma categoria raiz
           rootCategories.push(category);
         }
       });
-      return rootCategories;
+      return rootCategories; // Retorna apenas as categorias raiz, com subcategorias aninhadas
     }
   } catch (error) {
     logger.error(`Erro ao listar categorias financeiras da Conta ID ${financialAccountId}: ${error.message}`, { error, queryParams });
@@ -125,13 +126,54 @@ async function getAllFinancialCategories(financialAccountId, queryParams = {}) {
   }
 }
 
+// Nova função para o WhatsApp Service (retorna lista achatada com nomes completos)
+async function getAllCategoriesForAccountAI(financialAccountId) {
+  try {
+    await validateOwningFinancialAccount(financialAccountId);
+    const allCategoriesForAccount = await FinancialCategory.findAll({
+        where: { financialAccountId },
+        order: [['name', 'ASC']],
+        // include: [{ model: FinancialCategory, as: 'parentCategory', attributes: ['id', 'name']}] // Opcional, para construir o nome completo
+    });
+
+    // Helper para construir o nome completo da categoria (ex: Despesas > Alimentação > Restaurante)
+    const getFullName = (category, allCatsMap) => {
+        let nameParts = [category.name];
+        let currentParentId = category.parentId;
+        while (currentParentId && allCatsMap.has(currentParentId)) {
+            const parent = allCatsMap.get(currentParentId);
+            nameParts.unshift(parent.name);
+            currentParentId = parent.parentId;
+        }
+        return nameParts.join(' > ');
+    };
+    
+    const allCatsMap = new Map(allCategoriesForAccount.map(cat => [cat.id, cat.toJSON()]));
+    
+    const formattedCategories = allCategoriesForAccount.map(cat => {
+        return {
+            id: cat.id,
+            name: getFullName(cat.toJSON(), allCatsMap) // Usa o nome completo da hierarquia
+        };
+    });
+
+    return formattedCategories;
+
+  } catch (error) {
+    logger.error(`Erro ao listar categorias (para IA) da Conta ID ${financialAccountId}: ${error.message}`, { error });
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
+}
+
+
 async function getFinancialCategoryById(financialAccountId, categoryId) {
     try {
         await validateOwningFinancialAccount(financialAccountId);
         const category = await FinancialCategory.findOne({
             where: { id: categoryId, financialAccountId },
-            include: [
-                { model: FinancialCategory, as: 'subcategories', include: [{model: FinancialCategory, as: 'parentCategory'}] },
+            include: [ // Mantém includes para visualização detalhada se necessário
+                { model: FinancialCategory, as: 'subcategories' }, // Pode precisar de includes recursivos se quiser toda a árvore abaixo
                 { model: FinancialCategory, as: 'parentCategory', attributes: ['id', 'name'] }
             ]
         });
@@ -158,6 +200,7 @@ async function updateFinancialCategory(financialAccountId, categoryId, updateDat
       e.statusCode = 404; e.status = 'fail'; throw e;
     }
 
+    // 'type' foi removido da lógica de atualização
     const newName = updateData.hasOwnProperty('name') ? updateData.name : category.name;
     const newParentId = updateData.hasOwnProperty('parentId')
         ? (updateData.parentId === null || updateData.parentId === undefined || updateData.parentId === '' ? null : parseInt(updateData.parentId,10))
@@ -191,6 +234,7 @@ async function updateFinancialCategory(financialAccountId, categoryId, updateDat
             const error = new Error(`Categoria pai ID ${newParentId} não encontrada nesta conta financeira ou inválida.`);
             error.statusCode = 400; error.status = 'fail'; throw error;
         }
+        // Validação de ciclo
         async function isDescendant(potentialChildId, ancestorIdToFind, transaction) {
             let current = await FinancialCategory.findByPk(potentialChildId, { attributes: ['parentId'], transaction });
             while (current && current.parentId !== null) {
@@ -205,15 +249,13 @@ async function updateFinancialCategory(financialAccountId, categoryId, updateDat
         }
     }
 
-    const allowedFields = ['name', 'parentId']; // Removido 'type'
+    const allowedFields = ['name', 'parentId']; // 'type' removido
     const filteredUpdateData = {};
     for(const key of allowedFields){
         if(updateData.hasOwnProperty(key)){
             if(key === 'parentId'){
                 filteredUpdateData[key] = (updateData[key] === null || updateData[key] === undefined || updateData[key] === '') ? null : parseInt(updateData[key],10);
-            } 
-            // Removida validação de type
-            else {
+            } else {
                 filteredUpdateData[key] = updateData[key];
             }
         }
@@ -242,8 +284,6 @@ async function updateFinancialCategory(financialAccountId, categoryId, updateDat
 }
 
 async function deleteFinancialCategory(financialAccountId, categoryId, options = {}) {
-  // ... (função deleteFinancialCategory permanece a mesma, pois 'type' não era usado nela diretamente para lógica de deleção)
-  // Apenas certifique-se de que as mensagens de erro ou logs não mencionem mais 'tipo' se não for relevante.
   const {
     actionForSubcategories = 'restrict', 
     actionForTransactions = 'set_null',
@@ -297,11 +337,12 @@ async function deleteFinancialCategory(financialAccountId, categoryId, options =
         e.statusCode = 409; e.status = 'fail'; throw e;
       } else if (actionForSubcategories === 'promote') {
         await FinancialCategory.update(
-          { parentId: category.parentId },
+          { parentId: category.parentId }, // Promove para o nível do pai da categoria deletada
           { where: { parentId: categoryId, financialAccountId }, transaction: t }
         );
       } else if (actionForSubcategories === 'delete') {
         for (const sub of subcategories) {
+          // Chamada recursiva para deletar subcategorias e suas transações/subcategorias
           await deleteFinancialCategory(financialAccountId, sub.id, { ...options, transaction: t });
         }
       }
@@ -318,25 +359,52 @@ async function deleteFinancialCategory(financialAccountId, categoryId, options =
   }
 }
 
-async function findFinancialCategoryByNameAndTypeForAccount(name, type, financialAccountId) { // 'type' não é mais usado aqui
+// Renomeada e simplificada (sem 'type')
+async function findFinancialCategoryByNameForAccount(name, financialAccountId) {
   if (!name || typeof name !== 'string' || name.trim() === '' || !financialAccountId) return null;
   try {
     const whereConditions = {
-      name: { [Op.iLike]: name },
+      name: { [Op.iLike]: name.trim() }, // Usa trim() no nome
       financialAccountId,
     };
-    // Condição de tipo removida
 
     const category = await FinancialCategory.findOne({ where: whereConditions });
     if (category) {
       logger.info(`[FINCAT SERVICE] Categoria encontrada: "${category.name}" para Conta ID ${financialAccountId}.`);
       return category.toJSON();
     }
+    
+    // Se não encontrar pelo nome exato (case-insensitive), tenta buscar por partes do nome
+    // para categorias hierárquicas (ex: "Alimentação > Restaurante")
+    const nameParts = name.split('>').map(part => part.trim());
+    if (nameParts.length > 1) {
+        let parentId = null;
+        let foundCategory = null;
+        for (let i = 0; i < nameParts.length; i++) {
+            const partName = nameParts[i];
+            const currentSearchConditions = {
+                name: { [Op.iLike]: partName },
+                financialAccountId,
+                parentId: parentId
+            };
+            foundCategory = await FinancialCategory.findOne({ where: currentSearchConditions });
+            if (!foundCategory) {
+                logger.warn(`[FINCAT SERVICE] Parte da categoria hierárquica "${partName}" não encontrada com pai ID ${parentId} para conta ${financialAccountId}.`);
+                return null; // Se qualquer parte da hierarquia não for encontrada, retorna null
+            }
+            parentId = foundCategory.id; // Para a próxima iteração, busca a subcategoria desta
+            if (i === nameParts.length - 1) { // Última parte, esta é a categoria final
+                logger.info(`[FINCAT SERVICE] Categoria hierárquica encontrada: "${name}" (ID: ${foundCategory.id}) para Conta ID ${financialAccountId}.`);
+                return foundCategory.toJSON();
+            }
+        }
+    }
+
     logger.warn(`[FINCAT SERVICE] Categoria "${name}" não encontrada para Conta ID ${financialAccountId}.`);
     return null;
   } catch (error) {
-    logger.error(`Erro ao buscar categoria por nome para Conta ID ${financialAccountId}: ${error.message}`, { error });
-    return null;
+    logger.error(`Erro ao buscar categoria por nome ("${name}") para Conta ID ${financialAccountId}: ${error.message}`, { error });
+    return null; // Retorna null em caso de erro para não quebrar o fluxo da IA
   }
 }
 
@@ -346,5 +414,6 @@ module.exports = {
   getFinancialCategoryById,
   updateFinancialCategory,
   deleteFinancialCategory,
-  findFinancialCategoryByNameAndTypeForAccount, // O nome da função pode ser simplificado para findFinancialCategoryByNameForAccount
+  findFinancialCategoryByNameForAccount, // Nome atualizado
+  getAllCategoriesForAccountAI, // Nova função exportada
 };

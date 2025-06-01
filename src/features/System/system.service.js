@@ -1,13 +1,12 @@
 // src/features/System/system.service.js
-const { UserPreference, MotivationalPhrase, sequelize } = require('../../database'); // Removido FinancialCategory e FinancialTransaction
+const { UserPreference, MotivationalPhrase, sequelize } = require('../../database'); // FinancialCategory e FinancialTransaction removidos dos imports diretos aqui
 const logger = require('../../utils/logger');
-// const { Op } = require('sequelize'); // Removido se não usado mais aqui
+// const { Op } = require('sequelize'); // Removido se não for mais usado aqui
 
 /**
  * Obtém as preferências/configurações do sistema.
  * Assume que há apenas um registro de UserPreference ou que estamos buscando um específico.
- * Para simplificar, buscaremos o primeiro registro. Em um sistema multi-admin,
- * você buscaria pelo userId ou teria um ID fixo para configurações globais.
+ * Para simplificar, buscaremos o primeiro registro.
  * @returns {Promise<object|null>} As configurações do sistema.
  */
 async function getSystemPreferences() {
@@ -46,7 +45,8 @@ async function updateSystemPreferences(updateData) {
         'monthlyReportDayOfMonth', 'monthlyReportTime',
         'defaultAppointmentReminderLeadTimeMinutes', 'recurringJobSchedule',
         'appointmentReminderJobSchedule', 'alertsJobSchedule', 'motivationalMessageJobSchedule',
-        'waterReminderJobSchedule', 'dueAlertLeadDays', 'fiscalAlertLeadDaysMEI'
+        'waterReminderJobSchedule', 'dueAlertLeadDays', 'fiscalAlertLeadDaysMEI',
+        'googleWatchRenewalJobSchedule' // Adicionado se você tem um schedule para o job de renovação do Google Watch
       ];
       const filteredData = {};
       for (const key of allowedUpdates) {
@@ -62,9 +62,11 @@ async function updateSystemPreferences(updateData) {
     }
     await t.commit();
     logger.info('Preferências do sistema atualizadas com sucesso.');
-    return preferences.reload().then(p => p.toJSON());
+    // Recarrega para garantir que está retornando o objeto mais recente
+    const reloadedPreferences = await UserPreference.findByPk(preferences.id);
+    return reloadedPreferences.toJSON();
   } catch (error) {
-    await t.rollback();
+    if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
     logger.error(`Erro ao atualizar preferências do sistema: ${error.message}`, { error, updateData });
     throw new Error(`Erro ao atualizar preferências do sistema: ${error.message}`);
   }
@@ -146,6 +148,9 @@ async function deleteMotivationalPhrase(phraseId) {
   }
 }
 
+// A função findFinancialCategoryByNameAndType foi removida daqui.
+// A lógica de busca de categorias por nome para uma conta específica
+// agora reside em financialCategory.service.js (findFinancialCategoryByNameForAccount).
 
 module.exports = {
   getSystemPreferences,
@@ -154,4 +159,5 @@ module.exports = {
   getAllMotivationalPhrases,
   updateMotivationalPhrase,
   deleteMotivationalPhrase,
+  // findFinancialCategoryByNameAndType não é mais exportada daqui
 };

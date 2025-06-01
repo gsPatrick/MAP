@@ -1,7 +1,7 @@
 // src/services/aiModelService.js
 const OpenAI = require('openai');
 const logger =require('../utils/logger');
-const axios = require('axios'); // Adicionado para o caso de precisar baixar (embora o whatsappService vá fazer isso)
+const axios = require('axios'); 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -17,13 +17,8 @@ const openai = new OpenAI({
 
 const ASSISTANT_NAME = "MAP no Controle";
 
-/**
- * Transcreve um stream de áudio usando o modelo Whisper da OpenAI.
- * @param {ReadableStream} audioStream - O stream do áudio a ser transcrito.
- * @param {string} inputFilename - O nome do arquivo original (ex: 'audio.ogg'), importante para o Whisper inferir o formato.
- * @returns {Promise<string>} O texto transcrito.
- */
 async function transcribeAudioStream(audioStream, inputFilename) {
+  // ... (código da função transcribeAudioStream permanece o mesmo da resposta anterior)
   if (!OPENAI_API_KEY) {
     logger.error('[AI SERVICE - WHISPER] OPENAI_API_KEY não configurada.');
     throw new Error('Configuração da API da OpenAI ausente para transcrição.');
@@ -39,8 +34,6 @@ async function transcribeAudioStream(audioStream, inputFilename) {
 
   let tempFilePath = null;
   try {
-    // Whisper funciona melhor se receber um arquivo real ou um stream de arquivo.
-    // Salvar o stream em um arquivo temporário é a abordagem mais robusta.
     tempFilePath = path.join(os.tmpdir(), `whisper_${Date.now()}_${path.basename(inputFilename)}`);
     
     logger.info(`[AI SERVICE - WHISPER] Salvando stream de áudio em arquivo temporário: ${tempFilePath}`);
@@ -53,9 +46,9 @@ async function transcribeAudioStream(audioStream, inputFilename) {
         logger.error(`[AI SERVICE - WHISPER] Erro ao salvar áudio temporário do stream: ${err.message}`);
         reject(new Error(`Erro ao escrever stream de áudio em arquivo temporário: ${err.message}`));
       });
-      audioStream.on('error', (err) => { // Capturar erros do stream de origem também
+      audioStream.on('error', (err) => { 
         logger.error(`[AI SERVICE - WHISPER] Erro no stream de áudio de origem: ${err.message}`);
-        writer.end(); // Garante que o writer seja fechado
+        writer.end(); 
         reject(new Error(`Erro no stream de áudio de origem: ${err.message}`));
       });
     });
@@ -63,17 +56,17 @@ async function transcribeAudioStream(audioStream, inputFilename) {
     logger.info(`[AI SERVICE - WHISPER] Áudio salvo temporariamente. Enviando para transcrição Whisper...`);
 
     const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(tempFilePath), // Envia o arquivo salvo
+      file: fs.createReadStream(tempFilePath), 
       model: "whisper-1",
-      language: "pt", // Especificar o idioma (Português)
-      response_format: "text" // Queremos apenas o texto
+      language: "pt", 
+      response_format: "text" 
     });
 
-    const transcribedText = String(transcription); // O resultado de response_format: "text" é diretamente o texto
+    const transcribedText = String(transcription); 
 
     if (transcribedText.trim() === "") {
       logger.warn(`[AI SERVICE - WHISPER] Transcrição do arquivo ${inputFilename} resultou em texto vazio.`);
-      return ""; // Retorna string vazia se a transcrição não produzir nada útil
+      return ""; 
     }
 
     logger.info(`[AI SERVICE - WHISPER] Texto transcrito de ${inputFilename}: "${transcribedText.substring(0, 100)}..."`);
@@ -81,7 +74,7 @@ async function transcribeAudioStream(audioStream, inputFilename) {
 
   } catch (error) {
     let errorMessage = `Falha ao transcrever áudio (${inputFilename})`;
-    if (error.response && error.response.data) { // Erros da API OpenAI
+    if (error.response && error.response.data) { 
         logger.error('[AI SERVICE - WHISPER] Erro da API OpenAI:', error.response.data);
         errorMessage += `: ${JSON.stringify(error.response.data.error?.message || error.response.data)}`;
     } else {
@@ -113,10 +106,23 @@ function buildSystemPrompt(conversationContext) {
     ? `Importante: ${clientNameForPrompt} está acessando esta conta através de um compartilhamento concedido por outra pessoa. Portanto, ${clientNameForPrompt} NÃO PODE realizar ações que modifiquem a estrutura da conta do proprietário (como criar/deletar contas financeiras do dono, alterar dados cadastrais do dono, gerenciar outros compartilhamentos em nome do dono). Foque nas operações permitidas dentro da conta selecionada.`
     : "";
 
+  // Formata a lista de categorias financeiras para inclusão no prompt
+  let availableCategoriesText = "Nenhuma categoria financeira cadastrada para esta conta.";
+  if (conversationContext.availableFinancialCategories && conversationContext.availableFinancialCategories.length > 0) {
+      availableCategoriesText = "As categorias financeiras disponíveis para esta conta são: " +
+          conversationContext.availableFinancialCategories.map(cat => `"${cat.name}" (ID: ${cat.id})`).join(', ') + ".";
+  }
 
   let prompt = `Você é o "${ASSISTANT_NAME}", um assistente financeiro, administrativo e de bem-estar para WhatsApp. Sua personalidade é EXTREMAMENTE amigável, divertida, espirituosa, um pouco brincalhona e muito prestativa. Use emojis contextuais para dar vida às suas respostas, que devem ser de tamanho médio a longo, sempre informativas e completas, mas sem serem prolixas. Hoje é ${today}, agora são ${currentTime}. ${accountCtx} ${sharedAccessInfo}
 
 Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TODAS as ações que o usuário deseja realizar, extrair os parâmetros necessários e, SE TODOS OS DADOS OBRIGATÓRIOS ESTIVEREM PRESENTES E A CONFIANÇA FOR ALTA, executar a ação DIRETAMENTE, sem pedir confirmação desnecessária. Tente entender o usuário mesmo que ele use gírias, abreviações ou frases incompletas; se a intenção for clara e os dados puderem ser inferidos com segurança, prossiga.
+
+**GERENCIAMENTO DE CATEGORIAS FINANCEIRAS (MUITO IMPORTANTE!):**
+*   ${availableCategoriesText}
+*   Quando uma ação (como CREATE_FINANCIAL_TRANSACTION, CREATE_PARCELLED_ACCOUNT, CREATE_RECURRING_RULE, ou suas atualizações) necessitar de uma categoria financeira (\`financialCategoryName\`), você DEVE analisar a descrição fornecida pelo usuário e a lista de categorias disponíveis acima.
+*   Selecione a categoria MAIS APROPRIADA da lista existente. NÃO CRIE NOVAS CATEGORIAS.
+*   Se a descrição do usuário não se encaixar claramente em nenhuma categoria existente, ou se a lista de categorias estiver vazia, o parâmetro \`financialCategoryName\` DEVE ser omitido ou definido como \`null\`. NÃO invente uma categoria nem peça ao usuário para criar uma neste momento. Apenas prossiga sem categoria.
+*   Exemplo: Usuário diz "gastei 50 no Uber". Se houver uma categoria "Transporte" ou "Transporte por App", use-a. Se não, não use nenhuma categoria.
 
 **VALORES PADRÃO E MOEDA:**
 *   Para valores financeiros (como em transações, orçamentos, produtos), se o usuário não especificar uma moeda (ex: "gastei 50 no mercado"), ASSUMA que a moeda é Real Brasileiro (BRL). Você não precisa mencionar a moeda na sua resposta, apenas use o valor numérico.
@@ -199,13 +205,14 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 }
 
 **AÇÕES E PARÂMETROS:**
+(O restante do prompt com a lista de ações permanece o mesmo. Apenas a seção sobre "GERENCIAMENTO DE CATEGORIAS" foi adicionada/alterada no início.)
 
 1.  CREATE_FINANCIAL_TRANSACTION: (Registros financeiros IMEDIATOS/PASSADOS, NÃO PARCELADOS NO CARTÃO)
     - type: "Entrada" ou "Saída" (OBRIGATÓRIO)
     - description: string (OBRIGATÓRIO)
     - value: float (OBRIGATÓRIO, > 0)
     - transactionDate: "YYYY-MM-DD" (opcional, default: hoje)
-    - financialCategoryName: string (opcional)
+    - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS NO CONTEXTO ou OMITIR se não houver correspondência adequada. NUNCA CRIAR NOVA.)
     - creditCardName: string (opcional, se for gasto no cartão À VISTA)
     - notes: string (opcional)
     - isPayableOrReceivable: false (FIXO, a menos que dueDate seja explicitamente fornecido no futuro sem ser uma recorrência)
@@ -229,7 +236,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - totalValue: float (OBRIGATÓRIO, >0)
     - numberOfParcels: integer (OBRIGATÓRIO, min 2 se parcelamento real, 1 para compra à vista no cartão via esta ação se a IA assim decidir por alguma razão específica, mas prefira CREATE_FINANCIAL_TRANSACTION para isso)
     - initialDueDate: "YYYY-MM-DD" (OBRIGATÓRIO. Para compras no cartão, DATA DA COMPRA)
-    - financialCategoryName: string (opcional)
+    - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR.)
     - creditCardName: string (OBRIGATÓRIO se COMPRA PARCELADA NO CARTÃO. Se faltar, perguntar: "Entendi a compra parcelada de '[DESCRIÇÃO DA COMPRA]', ${clientNameForPrompt}! Só preciso saber em qual cartão você parcelou. Por exemplo, 'parcelei no Nubank'.")
     - notes: string (opcional)
     - transactionDate: "YYYY-MM-DD" (opcional, default: hoje. DATA DA COMPRA ORIGINAL)
@@ -239,7 +246,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - description: string (opcional)
     - value: float (opcional, >0)
     - transactionDate: "YYYY-MM-DD" (opcional)
-    - financialCategoryName: string (opcional)
+    - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR. Pode ser \`null\` para remover.)
     - creditCardName: string (opcional, pode ser null para remover)
     - notes: string (opcional)
     - dueDate: "YYYY-MM-DD" (opcional, pode ser null para remover)
@@ -262,14 +269,14 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - period: "hoje", "ontem", "esta_semana", "semana_passada", "este_mes", "mes_passado", "este_ano", "personalizado" (default: "este_mes")
     - dateStart: "YYYY-MM-DD" (se period="personalizado")
     - dateEnd: "YYYY-MM-DD" (se period="personalizado")
-    - financialCategoryName: string (opcional)
+    - financialCategoryName: string (opcional, para filtrar. A IA usará o nome exato da categoria se o usuário especificar.)
     - type: "Entrada", "Saída" (opcional)
 
 7.  LIST_FINANCIAL_TRANSACTIONS: (Listar transações financeiras)
     - period: (mesmos de GET_FINANCIAL_SUMMARY, default: "ultimos_7_dias")
     - dateStart: "YYYY-MM-DD" (opcional)
     - dateEnd: "YYYY-MM-DD" (opcional)
-    - financialCategoryName: string (opcional)
+    - financialCategoryName: string (opcional, para filtrar. A IA usará o nome exato.)
     - creditCardName: string (opcional)
     - type: "Entrada", "Saída" (opcional)
     - isPaidOrReceived: boolean (opcional)
@@ -282,7 +289,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - transactionDescription: string (OBRIGATÓRIO, descrição da transação pendente a ser buscada)
     - transactionValue: float (opcional, para desambiguar se houver múltiplas com mesma descrição)
     - paymentDate: "YYYY-MM-DD" (opcional, default: hoje)
-    - financialCategoryName: string (opcional, para a transação original, se precisar atualizar ou desambiguar)
+    - financialCategoryName: string (opcional, para a transação original, se precisar atualizar ou desambiguar. A IA DEVE SELECIONAR DA LISTA.)
 
 9.  CREATE_RECURRING_RULE: (Criar regra de recorrência para pagamentos/recebimentos fixos)
     - description: string (OBRIGATÓRIO)
@@ -295,7 +302,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - dayOfWeek: integer (opcional, para 'weekly', 'bi-weekly'. 0=Dom, 1=Seg,..., 6=Sab)
     - endDate: "YYYY-MM-DD" (opcional)
     - autoCreateTransaction: boolean (opcional, default: false. Se true, cria transação. Se false, apenas lembra)
-    - financialCategoryName: string (opcional)
+    - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR.)
     - notes: string (opcional)
 
 10. CREATE_PRODUCT (SÓ PARA CONTAS PJ/MEI):
@@ -370,7 +377,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - paymentAmount: float (OBRIGATÓRIO, >0)
     - paymentDate: "YYYY-MM-DD" (opcional, default: hoje)
     - originatingAccountDescription: string (opcional, descrição da conta de onde saiu o dinheiro, ex: "Conta Bradesco")
-    - financialCategoryName: string (opcional, default: "Pagamento de Fatura")
+    - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR. Default "Pagamento de Fatura" se existir, senão omitir.)
 
 26. UPDATE_CREDIT_CARD: (Editar cartão existente)
     - cardIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto de edição)
@@ -395,7 +402,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - dayOfWeek: integer (opcional, 0-6, ou null para remover)
     - endDate: "YYYY-MM-DD" (opcional, pode ser null para remover)
     - autoCreateTransaction: boolean (opcional)
-    - financialCategoryName: string (opcional, pode ser null para remover)
+    - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR. Pode ser \`null\` para remover.)
     - notes: string (opcional)
     - isActive: boolean (opcional)
 
@@ -421,7 +428,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - newTotalValue: float (OBRIGATÓRIO, >0)
     - newNumberOfParcels: integer (OBRIGATÓRIO, min 1)
     - newInitialDueDate: "YYYY-MM-DD" (OBRIGATÓRIO)
-    - newFinancialCategoryName: string (opcional)
+    - newFinancialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR.)
     - newCreditCardName: string (OBRIGATÓRIO se COMPRA PARCELADA NO CARTÃO)
     - newNotes: string (opcional)
     - newTransactionDate: "YYYY-MM-DD" (opcional, default: hoje. DATA DA COMPRA ORIGINAL.)
@@ -546,7 +553,8 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
   }
 
   const clientNameForPrompt = conversationContext.clientName || "pessoa incrível";
-  const systemPromptContent = buildSystemPrompt(conversationContext);
+  // A função buildSystemPrompt já inclui a lista de categorias se estiver em conversationContext
+  const systemPromptContent = buildSystemPrompt(conversationContext); 
 
   const conversationHistoryForAPI = (conversationContext.conversationHistory || [])
       .map(entry => ({ role: entry.role, content: entry.content }));
@@ -558,16 +566,18 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
 
   const messagesToSendToAPI = [
       {role: "system", content: finalSystemPromptContent},
-      ...conversationHistoryForAPI.slice(-4), // Mantém um histórico curto para a API
+      ...conversationHistoryForAPI.slice(-4), 
       {role: "user", content: userMessage}
   ];
 
-  const modelToUse = process.env.OPENAI_MODEL || "gpt-4-turbo-preview"; // ou "gpt-4o"
+  const modelToUse = process.env.OPENAI_MODEL || "gpt-4-turbo-preview"; 
 
   logger.debug('[AI SERVICE] Enviando para OpenAI:', {
       model: modelToUse,
       messageCount: messagesToSendToAPI.length,
       userMessageLength: userMessage.length,
+      // Adicionado para debug: verificar se as categorias estão chegando no contexto da IA
+      // availableCategoriesInContext: conversationContext.availableFinancialCategories ? conversationContext.availableFinancialCategories.map(c=>c.name) : 'Nenhuma'
   });
 
   try {
@@ -631,5 +641,5 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
 module.exports = {
   interpretUserMessage,
   ASSISTANT_NAME,
-  transcribeAudioStream, // <<< ADICIONADO
+  transcribeAudioStream, 
 };

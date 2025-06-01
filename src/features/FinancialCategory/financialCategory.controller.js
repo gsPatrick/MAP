@@ -15,12 +15,12 @@ function getFinancialAccountIdFromRequest(req) {
 async function createFinancialCategoryForAccount(req, res, next) {
     try {
         const financialAccountId = getFinancialAccountIdFromRequest(req);
-        const { name, type, parentId } = req.body;
-        if (!name || !type) {
-            const error = new Error('Nome e Tipo são obrigatórios para criar a categoria.');
+        const { name, parentId } = req.body; // 'type' removido
+        if (!name) { // Apenas 'name' é obrigatório agora
+            const error = new Error('Nome é obrigatório para criar a categoria.');
             error.statusCode = 400; error.status = 'fail'; return next(error);
         }
-        const category = await financialCategoryService.createFinancialCategory(financialAccountId, { name, type, parentId });
+        const category = await financialCategoryService.createFinancialCategory(financialAccountId, { name, parentId });
         res.status(201).json({ status: 'success', data: category });
     } catch (error) { next(error); }
 }
@@ -28,13 +28,12 @@ async function createFinancialCategoryForAccount(req, res, next) {
 async function getAllFinancialCategoriesForAccount(req, res, next) {
     try {
         const financialAccountId = getFinancialAccountIdFromRequest(req);
-        const { hierarchical, onlyTopLevel, type } = req.query;
+        const { hierarchical, onlyTopLevel } = req.query; // 'type' removido dos queryParams
         const options = {
             hierarchical: hierarchical === 'true',
             onlyTopLevel: onlyTopLevel === 'true',
-            type: type // Passa o tipo para o service
+            // 'type' removido
         };
-        // O service não usa mais `isActive` para FinancialCategory, então removemos daqui.
         const categories = await financialCategoryService.getAllFinancialCategories(financialAccountId, options);
         res.status(200).json({ status: 'success', data: categories });
     } catch (error) { next(error); }
@@ -44,9 +43,15 @@ async function getFinancialCategoryByIdForAccount(req, res, next) {
     try {
         const financialAccountId = getFinancialAccountIdFromRequest(req);
         const categoryId = parseInt(req.params.categoryId, 10);
-        if (isNaN(categoryId)) { /* ... erro 400 ... */ }
+        if (isNaN(categoryId)) { 
+            const error = new Error('ID da categoria inválido.');
+            error.statusCode = 400; error.status = 'fail'; return next(error);
+        }
         const category = await financialCategoryService.getFinancialCategoryById(financialAccountId, categoryId);
-        if (!category) { /* ... erro 404 ... */ }
+        if (!category) { 
+            const error = new Error('Categoria não encontrada.');
+            error.statusCode = 404; error.status = 'fail'; return next(error);
+        }
         res.status(200).json({ status: 'success', data: category });
     } catch (error) { next(error); }
 }
@@ -55,11 +60,17 @@ async function updateFinancialCategoryForAccount(req, res, next) {
     try {
         const financialAccountId = getFinancialAccountIdFromRequest(req);
         const categoryId = parseInt(req.params.categoryId, 10);
-        if (isNaN(categoryId)) { /* ... erro 400 ... */ }
-        if (Object.keys(req.body).length === 0) { /* ... erro 400 ... */ }
-        const { name, type, parentId } = req.body; // isActive e isDefault removidos
-        const category = await financialCategoryService.updateFinancialCategory(financialAccountId, categoryId, { name, type, parentId });
-        if (!category) { /* ... erro 404 ... */ }
+        if (isNaN(categoryId)) { 
+            const error = new Error('ID da categoria inválido.');
+            error.statusCode = 400; error.status = 'fail'; return next(error);
+         }
+        if (Object.keys(req.body).length === 0) { 
+            const error = new Error('Nenhum dado fornecido para atualização.');
+            error.statusCode = 400; error.status = 'fail'; return next(error);
+        }
+        const { name, parentId } = req.body; // 'type' removido
+        const category = await financialCategoryService.updateFinancialCategory(financialAccountId, categoryId, { name, parentId });
+        // O service já trata o caso de não encontrar com erro 404.
         res.status(200).json({ status: 'success', data: category });
     } catch (error) { next(error); }
 }
@@ -68,7 +79,10 @@ async function deleteFinancialCategoryForAccount(req, res, next) {
     try {
         const financialAccountId = getFinancialAccountIdFromRequest(req);
         const categoryId = parseInt(req.params.categoryId, 10);
-        if (isNaN(categoryId)) { /* ... erro 400 ... */ }
+        if (isNaN(categoryId)) { 
+            const error = new Error('ID da categoria inválido.');
+            error.statusCode = 400; error.status = 'fail'; return next(error);
+        }
         
         const { 
             actionForSubcategories = 'restrict',
@@ -81,7 +95,7 @@ async function deleteFinancialCategoryForAccount(req, res, next) {
             actionForTransactions,
             reassignToCategoryId: reassignToCategoryId ? parseInt(reassignToCategoryId, 10) : null
         });
-        if (!success) { /* ... erro 404 ... */ }
+        // O service já trata o caso de não encontrar com erro 404.
         res.status(204).send();
     } catch (error) { next(error); }
 }

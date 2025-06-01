@@ -8,52 +8,112 @@ async function handleIncomingMessage(req, res, next) {
     logger.info('[WHATSAPP CONTROLLER] Webhook da Z-API recebido:', { payload });
 
     let senderPhone = null;
-    let messageText = null;
+    let messageText = null; // Para mensagens de texto ou label de botão
     let isFromMe = false;
     let pushName = null;
     let selectedButtonId = null; 
-    let messageType = null;
+    let detectedMessageType = null; // Tipo de mensagem detectado: 'text', 'button_response', 'audio', etc.
     let mediaUrl = null;
     let mimeType = null;
 
-    // Tenta extrair dados de diferentes estruturas de payload da Z-API
-    if (payload.phone) senderPhone = payload.phone;
-    if (payload.chatId) senderPhone = senderPhone || payload.chatId.split('@')[0];
-    if (payload.message?.sender) senderPhone = senderPhone || payload.message.sender.replace('@c.us', '');
-
-    if (payload.fromMe !== undefined) isFromMe = payload.fromMe;
-    else if (payload.message?.fromMe !== undefined) isFromMe = payload.message.fromMe;
-
-    if (payload.chatName) pushName = payload.chatName;
-    else if (payload.senderName) pushName = payload.senderName;
-    else if (payload.message?.notifyName) pushName = payload.message.notifyName;
-    else if (payload.message?.senderName) pushName = payload.message.senderName;
-    if (pushName === "⠀") pushName = null;
-
-    messageType = payload.type || payload.message?.type; // 'ReceivedCallback', 'MessageReceived', ou o tipo dentro de payload.message
-
-    // Estrutura para mensagens de TEXTO normais da Z-API
-    if (payload.text && typeof payload.text.message === 'string') {
-      messageText = payload.text.message;
+    // --- Início da Extração de Dados Comuns ---
+    // Tenta obter o telefone do remetente de vários locais possíveis no payload
+    if (payload.phone) {
+        senderPhone = payload.phone;
+    } else if (payload.sender) { // Comum em callbacks de mensagens enviadas/recebidas
+        senderPhone = payload.sender;
+    } else if (payload.chatId) { // Se for um evento de chat
+        senderPhone = payload.chatId.split('@')[0];
+    } else if (payload.message && payload.message.sender) { // Para algumas estruturas de 'MessageReceived'
+        senderPhone = payload.message.sender.replace('@c.us', '');
+    } else if (payload.author) { // Para alguns tipos de eventos de status ou grupo
+        senderPhone = payload.author.replace('@c.us', '');
     }
-    // Estrutura para cliques em BOTÕES (Button List Response) da Z-API
-    else if (payload.buttonsResponseMessage) {
-        messageText = payload.buttonsResponseMessage.message; // O texto do botão clicado
-        selectedButtonId = payload.buttonsResponseMessage.buttonId; // O ID do botão
-        payload.selectedButtonId = selectedButtonId; // Adiciona para o service usar
+    // Normaliza o número de telefone se obtido (remove DDI repetido se vier assim da Z-API)
+    if (senderPhone && senderPhone.startsWith('5555')) {
+        senderPhone = senderPhone.substring(2);
     }
-    // Estrutura alternativa para mensagens de texto (ex: MessageReceived)
-    else if (payload.message?.body && typeof payload.message.body === 'string') {
-        messageText = payload.message.body;
+
+
+    // Tenta obter 'fromMe'
+    if (payload.fromMe !== undefined) {
+        isFromMe = payload.fromMe;
+    } else if (payload.message && payload.message.fromMe !== undefined) {
+        isFromMe = payload.message.fromMe;
     }
-    // Estrutura para ÁUDIO (PTT ou áudio encaminhado)
-    // A Z-API pode usar 'ptt' ou 'audio' como tipo, e 'mediaUrl' para a URL.
-    else if ((payload.type === 'ptt' || payload.type === 'audio' || payload.message?.type === 'ptt' || payload.message?.type === 'audio') && (payload.mediaUrl || payload.message?.mediaUrl)) {
-        mediaUrl = payload.mediaUrl || payload.message.mediaUrl;
-        mimeType = payload.mimetype || payload.message?.mimetype; // Ex: "audio/ogg; codecs=opus"
-        messageType = 'audio'; // Normaliza para 'audio' para o service
-        logger.info(`[WHATSAPP CONTROLLER] Mensagem de áudio detectada. URL: ${mediaUrl}, MimeType: ${mimeType}`);
+
+    // Tenta obter o nome do remetente (pushName)
+    if (payload.chatName) { // Mais comum em ReceivedCallback
+        pushName = payload.chatName;
+    } else if (payload.senderName && !pushName) { // Fallback
+        pushName = payload.senderName;
+    } else if (payload.message && payload.message.notifyName && !pushName) { // Para MessageReceived
+        pushName = payload.message.notifyName;
+    } else if (payload.message && payload.message.senderName && !pushName) { // Outro fallback
+        pushName = payload.message.senderName;
     }
+    // Remove o caractere invisível que a Z-API às vezes envia
+    if (pushName === "⠀") {
+        pushName = null;
+    }
+    // --- Fim da Extração de Dados Comuns ---
+
+
+    // --- Início da Lógica de Detecção do Tipo de Mensagem ---
+    const mainWebhookType = payload.type; // Ex: "ReceivedCallback", "MessageReceived", "ChatPresence"
+
+    if (mainWebhookType === 'ReceivedCallback') {
+        if (payload.text && typeof payload.text.message === 'string') {
+            messageText = payload.text.message;
+            detectedMessageType = 'text';
+        } else if (payload.buttonsResponseMessage && payload.buttonsResponseMessage.buttonId) {
+            messageText = payload.buttonsResponseMessage.message; // Label do botão
+            selectedButtonId = payload.buttonsResponseMessage.buttonId;
+            payload.selectedButtonId = selectedButtonId; // Passa para o service
+            detectedMessageType = 'button_response';
+        } else if (payload.audio && payload.audio.audioUrl) {
+            mediaUrl = payload.audio.audioUrl;
+            mimeType = payload.audio.mimeType;
+            detectedMessageType = 'audio';
+            logger.info(`[WHATSAPP CONTROLLER] Mensagem de áudio (ReceivedCallback) detectada. URL: ${mediaUrl}, MimeType: ${mimeType}`);
+        } else if (payload.image && payload.image.imageUrl) {
+            // Lógica para imagem (se for implementar futuramente)
+            // mediaUrl = payload.image.imageUrl;
+            // mimeType = payload.image.mimeType;
+            // detectedMessageType = 'image';
+            logger.info(`[WHATSAPP CONTROLLER] Mensagem de imagem (ReceivedCallback) detectada. Ignorando por enquanto.`);
+        } else if (payload.video && payload.video.videoUrl) {
+            // Lógica para vídeo
+            logger.info(`[WHATSAPP CONTROLLER] Mensagem de vídeo (ReceivedCallback) detectada. Ignorando por enquanto.`);
+        } else if (payload.document && payload.document.documentUrl) {
+            // Lógica para documento
+            logger.info(`[WHATSAPP CONTROLLER] Mensagem de documento (ReceivedCallback) detectada. Ignorando por enquanto.`);
+        } else if (payload.sticker && payload.sticker.stickerUrl) {
+             logger.info(`[WHATSAPP CONTROLLER] Mensagem de sticker (ReceivedCallback) detectada. Ignorando.`);
+        } else if (payload.location) {
+             logger.info(`[WHATSAPP CONTROLLER] Mensagem de localização (ReceivedCallback) detectada. Ignorando.`);
+        }
+        // Adicionar mais 'else if' para outros tipos de mídia em 'ReceivedCallback'
+    } 
+    // Estrutura alternativa, comum para mensagens enviadas/recebidas via outras integrações ou cenários
+    else if (mainWebhookType === 'MessageReceived' && payload.message) {
+        const msgObj = payload.message;
+        if (msgObj.body && typeof msgObj.body === 'string') {
+            messageText = msgObj.body;
+            detectedMessageType = 'text';
+        } else if ((msgObj.type === 'ptt' || msgObj.type === 'audio') && msgObj.mediaUrl) {
+            mediaUrl = msgObj.mediaUrl;
+            mimeType = msgObj.mimetype || msgObj.mimeType; // Algumas APIs usam 'mimetype', outras 'mimeType'
+            detectedMessageType = 'audio';
+            logger.info(`[WHATSAPP CONTROLLER] Mensagem de áudio (MessageReceived) detectada. URL: ${mediaUrl}, MimeType: ${mimeType}`);
+        }
+        // Adicionar mais 'else if' para outros tipos de mídia em 'MessageReceived'
+    }
+    // Você pode adicionar mais 'else if (mainWebhookType === ...)' para outros tipos de eventos principais da Z-API
+    else {
+        logger.info(`[WHATSAPP CONTROLLER] Webhook de tipo '${mainWebhookType}' não tratado para extração de conteúdo principal.`);
+    }
+    // --- Fim da Lógica de Detecção do Tipo de Mensagem ---
 
 
     if (isFromMe) {
@@ -66,17 +126,17 @@ async function handleIncomingMessage(req, res, next) {
         return res.status(200).json({ status: 'fail_no_sender', message: 'Sender phone not found in payload.' });
     }
 
-    if (messageType === 'audio' && mediaUrl) {
-        // Chama o serviço para lidar com a mensagem de áudio
+    // Roteia para o serviço apropriado com base no tipo de mensagem detectado
+    if (detectedMessageType === 'audio' && mediaUrl) {
         await whatsappService.processIncomingAudioMessage(senderPhone, mediaUrl, mimeType, pushName, payload);
         res.status(200).json({ status: 'success', message: 'Audio message received and processing initiated.' });
-    } else if (senderPhone && (messageText || selectedButtonId) ) { 
-      // Se foi um clique de botão, messageText será o label do botão.
+    } else if ((detectedMessageType === 'text' && messageText) || (detectedMessageType === 'button_response' && selectedButtonId)) { 
       await whatsappService.processIncomingMessage(senderPhone, messageText, pushName, payload);
       res.status(200).json({ status: 'success', message: 'Message received and processing initiated.' });
     } else {
-      logger.warn('[WHATSAPP CONTROLLER] Payload de webhook não continha telefone E (texto/botão OU mídia de áudio) esperado na estrutura conhecida.', { type: payload.type, senderPhone });
-      res.status(200).json({ status: 'fail_payload_structure', message: 'Payload structure not recognized for actionable message.' });
+      // Se chegou aqui, significa que o payload tinha um remetente, mas o conteúdo não foi reconhecido como acionável
+      logger.warn('[WHATSAPP CONTROLLER] Payload de webhook reconhecido (tem remetente), mas sem conteúdo acionável (texto, botão ou áudio válido).', { mainType: mainWebhookType, detectedType: detectedMessageType, senderPhone });
+      res.status(200).json({ status: 'fail_no_actionable_content', message: 'Payload recognized but no actionable content found.' });
     }
 
   } catch (error) {
