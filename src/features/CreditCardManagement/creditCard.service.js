@@ -687,10 +687,10 @@ async function getAvailableInvoicePeriods(financialAccountId, creditCardId) {
     }
 }
 
-async function payCreditCardInvoice(financialAccountId, creditCardId, paymentAmount, paymentDate, originatingAccountDescription = null, financialCategoryId = null) {
+async function payCreditCardInvoice(financialAccountId, creditCardId, paymentAmount, paymentDate, originatingAccountDescription = null, financialCategoryId = null, actorClientId = null) { // Adicionado actorClientId se necessário para logs futuros
     const t = await sequelize.transaction();
     try {
-        await validateOwningFinancialAccount(financialAccountId, t);
+        const financialAccount = await validateOwningFinancialAccount(financialAccountId, t); // Armazena o resultado
         const card = await CreditCard.findOne({ where: {id: creditCardId, financialAccountId}, transaction: t });
 
         if (!card) {
@@ -699,30 +699,59 @@ async function payCreditCardInvoice(financialAccountId, creditCardId, paymentAmo
             error.statusCode = 404; error.status = 'fail'; throw error;
         }
 
-        let categoryId = financialCategoryId;
-        if (!categoryId) {
+        let categoryId = financialCategoryId; // Usa o ID passado se existir
+        if (!categoryId) { // Se não foi passado um ID, tenta buscar pelo nome padrão
             const defaultCategory = await FinancialCategory.findOne({
-                where: { name: { [Op.iLike]: 'Pagamento de Fatura' }, type: 'Saída', isActive: true },
+                where: { 
+                    name: { [Op.iLike]: 'Pagamento de Fatura' }, 
+                    // REMOVIDO: type: 'Saída', 
+                    // ADICIONADO: financialAccountId para buscar na conta correta
+                    financialAccountId: financialAccountId, 
+                    // isActive: true // Se você tiver o campo isActive em FinancialCategory
+                },
                 transaction: t
             });
-            if (defaultCategory) categoryId = defaultCategory.id;
-            else {
+            if (defaultCategory) {
+                categoryId = defaultCategory.id;
+            } else {
+                // Tenta um nome alternativo
                 const fallbackCategory = await FinancialCategory.findOne({
-                    where: { name: { [Op.iLike]: 'Pagamento de Cartão' }, type: 'Saída', isActive: true },
+                    where: { 
+                        name: { [Op.iLike]: 'Pagamento de Cartão' },
+                        // REMOVIDO: type: 'Saída',
+                        financialAccountId: financialAccountId,
+                        // isActive: true 
+                    },
                     transaction: t
                 });
-                if (fallbackCategory) categoryId = fallbackCategory.id;
-                else logger.warn(`[SERVICE] Categoria "Pagamento de Fatura" ou "Pag. Cartão" não encontrada para pagamento do cartão ${card.name}.`);
+                if (fallbackCategory) {
+                    categoryId = fallbackCategory.id;
+                } else {
+                    logger.warn(`[SERVICE payCreditCardInvoice] Categoria "Pagamento de Fatura" ou "Pagamento de Cartão" não encontrada para FinancialAccount ID ${financialAccountId}. Pagamento será registrado sem categoria.`);
+                }
+            }
+        } else {
+            // Se um financialCategoryId foi passado, verificar se ele existe e pertence à conta
+            const categoryExists = await FinancialCategory.findOne({
+                where: { id: financialCategoryId, financialAccountId: financialAccountId },
+                transaction: t
+            });
+            if (!categoryExists) {
+                logger.warn(`[SERVICE payCreditCardInvoice] Categoria com ID ${financialCategoryId} fornecida não encontrada ou não pertence à FinancialAccount ID ${financialAccountId}. Pagamento será registrado sem esta categoria.`);
+                categoryId = null; // Reseta para null se a categoria fornecida for inválida
             }
         }
+
 
         const paymentTransaction = await FinancialTransaction.create({
             financialAccountId,
             description: `Pagamento Fatura ${card.name}${originatingAccountDescription ? ` (Origem: ${originatingAccountDescription})` : ''}`,
             value: Math.abs(paymentAmount), type: 'Saída', transactionDate: paymentDate,
-            financialCategoryId: categoryId, creditCardId: null, 
+            financialCategoryId: categoryId, // Usa o ID da categoria encontrado ou null
+            creditCardId: null, 
             isPayableOrReceivable: false, isPaidOrReceived: true, paymentDate: paymentDate,
             notes: `Pagamento da fatura do cartão ${card.name} (ID Cartão: ${card.id}).`
+            // createdBy: actorClientId, // Se você rastrear quem criou
         }, { transaction: t });
 
         await t.commit();
@@ -734,11 +763,13 @@ async function payCreditCardInvoice(financialAccountId, creditCardId, paymentAmo
 
     } catch (error) {
         if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
-        logger.error(`Erro ao registrar pagamento de fatura para cartão ID ${creditCardId} (Conta: ${financialAccountId}): ${error.message}`, { error });
+        // Adicionando o financialAccountId ao log do erro para melhor rastreamento
+        logger.error(`Erro ao registrar pagamento de fatura para cartão ID ${creditCardId} (Conta: ${financialAccountId}): ${error.message}`, { error, financialAccountId });
         if (!error.statusCode) error.statusCode = 500;
         throw error;
     }
 }
+
 
 
 module.exports = {
