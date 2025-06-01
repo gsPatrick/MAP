@@ -9,8 +9,8 @@ const recurringTransactionService = require('../RecurringTransaction/recurringTr
 const creditCardService = require('../CreditCardManagement/creditCard.service');
 const businessClientService = require('../BusinessClient/BusinessClient.service');
 const sharedAccessService = require('../SharedAccess/sharedAccess.service');
-const systemService = require('../System/system.service'); // Para preferências e frases motivacionais
-const financialCategoryService = require('../FinancialCategory/financialCategory.service'); // PARA BUSCAR CATEGORIAS DA CONTA ATIVA
+const systemService = require('../System/system.service');
+const financialCategoryService = require('../FinancialCategory/financialCategory.service'); // << IMPORTANTE: Adicionar este
 
 // Importa as funções de envio e download do serviço de WhatsApp genérico
 const { sendWhatsappMessage, sendButtonListMessage, downloadZapiMedia } = require('../../services/whatsappService');
@@ -57,19 +57,6 @@ async function findBusinessClientIdByName(name, financialAccountId) {
         return clientsResult.businessClients[0].id;
     }
     return null;
-}
-
-// Função auxiliar para buscar ID da categoria pelo nome exato (que a IA deve fornecer)
-async function findFinancialCategoryIdByName(categoryName, financialAccountId) {
-    if (!categoryName || !financialAccountId) return null;
-    try {
-        // Usar a função correta do financialCategory.service.js
-        const category = await financialCategoryService.findFinancialCategoryByNameForAccount(categoryName, financialAccountId);
-        return category ? category.id : null;
-    } catch (error) {
-        logger.error(`[WHATSAPP SERVICE HELPER] Erro ao buscar ID da categoria "${categoryName}" para conta ${financialAccountId}: ${error.message}`);
-        return null; // Não interrompe o fluxo principal, a transação será sem categoria
-    }
 }
 
 
@@ -621,17 +608,17 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
             canAccessBusinessProfileId: sharedAccessRecord.canAccessBusinessProfileId,
         };
         if (sharedAccessRecord.ownerClient) { 
-            ownerClientForContext = sharedAccessRecord.ownerClient; // Aqui ownerClient é o objeto completo, incluindo accessLevel, etc.
+            ownerClientForContext = sharedAccessRecord.ownerClient; 
             ownerClientNameForContext = ownerClientForContext.name ? ownerClientForContext.name.split(" ")[0] : "Dono(a) da Conta";
         } else { 
             const ownerClientTemp = await clientService.getClientContactById(ownerClientIdForContext);
-             if(ownerClientTemp) { // ownerClientTemp será um objeto JSON
-                ownerClientForContext = ownerClientTemp; // Mantém como objeto JSON
+             if(ownerClientTemp) { 
+                ownerClientForContext = ownerClientTemp; 
                 ownerClientNameForContext = ownerClientTemp.name ? ownerClientTemp.name.split(" ")[0] : "Dono(a) da Conta";
             } else {
                  logger.error(`[InitializeState] CRITICAL: Dono da conta ${ownerClientIdForContext} não encontrado para acesso compartilhado.`);
                 ownerClientNameForContext = "Dono(a) da Conta"; 
-                ownerClientForContext = { accessLevel: 'gratuito', accessExpiresAt: null, id: ownerClientIdForContext, name: "Dono Desconhecido" }; // Objeto Padrão
+                ownerClientForContext = { accessLevel: 'gratuito', accessExpiresAt: null, id: ownerClientIdForContext, name: "Dono Desconhecido" }; 
             }
         }
         logger.info(`[WHATSAPP SERVICE - Initialize/UpdateState] Contexto de Acesso Compartilhado ATIVO. Ator: ${client.id} (${clientName}), Dono: ${ownerClientIdForContext} (${ownerClientNameForContext})`);
@@ -826,6 +813,10 @@ async function processIncomingAudioMessage(senderPhoneNormalized, mediaUrl, mime
     }
 
     try {
+        // Enviar mensagem de "processando áudio"
+        const processingMessage = `🎧 Opa, ${pushName || 'você'}! Já recebi seu áudio e tô aqui processando tudinho com carinho! 💻✨\nSó um segundinho 😉`;
+        await sendWhatsappMessage(senderPhoneNormalized, processingMessage);
+
         const downloadedMedia = await downloadZapiMedia(mediaUrl); 
         
         if (downloadedMedia && downloadedMedia.stream) {
@@ -867,14 +858,13 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
     let actorClient; 
 
     try {
-        actorClient = await clientService.findClientByPhone(senderPhone); 
-        
-        let sharedAccessRecord = null; 
-        let ownerClientIdForContext;  
-        let clientAccountsForOnboarding = []; 
-        let ownerAccountsIfShared = [];     
+        actorClient = await clientService.findClientByPhone(senderPhone);
+        let sharedAccessRecord = null;
+        let ownerClientIdForContext; 
+        let clientAccountsForOnboarding = [];
+        let ownerAccountsIfShared = [];
 
-        if (actorClient) { 
+        if (actorClient) {
             ownerClientIdForContext = actorClient.id; 
             clientAccountsForOnboarding = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
         } else {
@@ -905,7 +895,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     if (bizAccount) ownerAccountsIfShared.push(bizAccount);
                 }
 
-                if (ownerAccountsIfShared.length === 0) { 
+                if (ownerAccountsIfShared.length === 0 ) { 
                     if(sharedAccessRecord.canAccessPersonalProfile || sharedAccessRecord.canAccessBusinessProfileId){
                         logger.warn(`[WHATSAPP SERVICE] Acesso compartilhado para ${actorClient.name} (${senderPhone}) para contas de ${ownerClientIdForContext}, mas nenhuma conta do dono acessível encontrada (mesmo com permissões). Proprietário pode não ter contas do tipo permitido.`);
                         await sendWhatsappMessage(senderPhone, `Olá ${actorClient.name.split(" ")[0]}! Você tem um acesso compartilhado para as contas de ${sharedAccessRecord.ownerClient?.name || 'um usuário'}, mas parece que o proprietário não possui contas ativas do tipo que você pode acessar (Pessoal ou o Empresarial específico). Peça para ele verificar, por favor! 😉`);
@@ -1419,20 +1409,20 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                  // (lógica de forçar seleção de conta mantida)
             }
        
-            // ***** INÍCIO DA MODIFICAÇÃO PARA CATEGORIAS NO AI_CONTEXT *****
+            // <<<<<< INÍCIO DA MODIFICAÇÃO PARA CATEGORIAS >>>>>>
             let availableFinancialCategoriesForAI = [];
             if (state.activeFinancialAccountId) {
                 try {
-                    // Usa a função de financialCategoryService para buscar categorias formatadas para a IA
+                    // Usa a nova função de financialCategoryService que retorna nomes completos hierárquicos
                     const categoriesFromDb = await financialCategoryService.getAllCategoriesForAccountAI(state.activeFinancialAccountId); 
                     if (categoriesFromDb) { 
                         availableFinancialCategoriesForAI = categoriesFromDb; // Já está no formato [{id, name}]
                     }
                 } catch (catError) {
-                    logger.error(`[WHATSAPP HANDLER] Erro ao buscar categorias financeiras para IA da conta ID ${state.activeFinancialAccountId}: ${catError.message}`);
+                    logger.error(`[WHATSAPP HANDLER] Erro ao buscar categorias financeiras para IA: ${catError.message}`);
                 }
             }
-            // ***** FIM DA MODIFICAÇÃO PARA CATEGORIAS NO AI_CONTEXT *****
+            // <<<<<< FIM DA MODIFICAÇÃO PARA CATEGORIAS >>>>>>
        
             const aiContext = {
                 currentFinancialAccountId: state.activeFinancialAccountId,
@@ -1445,7 +1435,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 editingResource: state.editingResource,
                 currentAccessLevel: state.currentAccessLevel,
                 hasPaidAccess: state.hasPaidAccess,
-                availableFinancialCategories: availableFinancialCategoriesForAI, // Passa as categorias para a IA
+                availableFinancialCategories: availableFinancialCategoriesForAI, // <<< CATEGORIAS INCLUÍDAS NO CONTEXTO DA IA
             };
             const aiResponse = await aiModelService.interpretUserMessage(messageText, aiContext);
             logger.info(`[WHATSAPP HANDLER] AI Response for ${senderPhone}:`, {aiResponsePreview: JSON.stringify(aiResponse).substring(0,500) + "..."});
@@ -1557,13 +1547,18 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     try {
                         // *********************************************************************
                         // SWITCH CASE PARA TODAS AS AÇÕES (INTEIRO, COMO ANTES)
-                        // A LÓGICA INTERNA DE CADA CASE DEVE USAR `financialCategoryService.findFinancialCategoryByNameForAccount`
-                        // EM VEZ DE `systemService.findFinancialCategoryByNameAndType`
+                        // IMPORTANTE: Dentro dos cases que usam categoria (financialCategoryName),
+                        // a chamada para obter o ID da categoria deve ser feita usando
+                        // financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId)
                         // *********************************************************************
                         switch (actionName) {
                             case 'CREATE_FINANCIAL_TRANSACTION': {
-                                // MODIFICADO: Usa findFinancialCategoryIdByName
-                                const categoryId = params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId) : null;
+                                // MODIFICADO: Usa financialCategoryService e trata o nome completo da categoria vindo da IA
+                                const categoryObject = params.financialCategoryName 
+                                    ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId) 
+                                    : null;
+                                const categoryId = categoryObject ? categoryObject.id : null;
+
                                 const cardId = params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null;
                                 
                                 const txData = {
@@ -1571,7 +1566,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     type: params.type, 
                                     value: parseFloat(params.value), 
                                     transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0],
-                                    financialCategoryId: categoryId, // Passa o ID encontrado
+                                    financialCategoryId: categoryId,
                                     creditCardId: cardId,
                                     notes: params.notes,
                                     isPayableOrReceivable: params.isPayableOrReceivable !== undefined ? params.isPayableOrReceivable : (params.dueDate ? true : (cardId ? false : false)),
@@ -1611,9 +1606,10 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 if (params.hasOwnProperty('dueDate')) updateDataTx.dueDate = params.dueDate; else if (params.hasOwnProperty('dueDate') && params.dueDate === null) updateDataTx.dueDate = null;
                                 if (params.hasOwnProperty('isPaidOrReceived')) updateDataTx.isPaidOrReceived = params.isPaidOrReceived;
                                 
-                                // MODIFICADO: Usa findFinancialCategoryIdByName
+                                // MODIFICADO: Usa financialCategoryService
                                 if (params.financialCategoryName) {
-                                    updateDataTx.financialCategoryId = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId);
+                                    const categoryObject = await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId);
+                                    updateDataTx.financialCategoryId = categoryObject ? categoryObject.id : null;
                                 } else if (params.hasOwnProperty('financialCategoryName') && params.financialCategoryName === null) {
                                     updateDataTx.financialCategoryId = null;
                                 }
@@ -1635,9 +1631,90 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 actionWasAnEdit = true; state.editingResource = null; state.currentAction = null;
                                 break;
                             }
+                            case 'SCHEDULE_APPOINTMENT': {
+                                 const eventDateTime = params.eventDateTime;
+                                if (!params.title || !eventDateTime) throw new Error("Título e data/hora são obrigatórios para agendar.");
+                                if (params.associatedValue && (isNaN(parseFloat(params.associatedValue)) || parseFloat(params.associatedValue) <= 0 || !params.associatedTransactionType)) throw new Error("Valor associado deve ser maior que zero e tipo (entrada/saída) é obrigatório se um valor está associado.");
+
+                                let businessClientIds = [];
+                                if (params.businessClientNames && Array.isArray(params.businessClientNames) && ['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
+                                    for (const name of params.businessClientNames) {
+                                        const bcId = await findBusinessClientIdByName(name, state.activeFinancialAccountId);
+                                        if (bcId) businessClientIds.push(bcId);
+                                        else logger.warn(`[WHATSAPP SERVICE] Cliente de negócio "${name}" não encontrado para appointment na conta ${state.activeFinancialAccountId}.`);
+                                    }
+                                }
+
+                                const appointmentData = {
+                                    title: params.title,
+                                    eventDateTime: eventDateTime,
+                                    durationMinutes: params.durationMinutes ? parseInt(params.durationMinutes) : null,
+                                    location: params.location,
+                                    reminderLeadTimeMinutes: params.reminderLeadTimeMinutes ? parseInt(params.reminderLeadTimeMinutes) : 15,
+                                    notes: params.notes,
+                                    associatedValue: params.associatedValue ? parseFloat(params.associatedValue) : null,
+                                    associatedTransactionType: params.associatedTransactionType,
+                                    businessClientIds: businessClientIds.length > 0 ? businessClientIds : undefined
+                                };
+                                const newAppt = await appointmentService.scheduleAppointment(state.activeFinancialAccountId, appointmentData, actorId);
+                                const reloadedAppt = await appointmentService.getAppointmentById(state.activeFinancialAccountId, newAppt.id);
+
+                                if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,")|| aiMessageIntro.startsWith("Entendido"))) aiMessageIntro = aiResponse.overall_summary_suggestion || `Seu compromisso foi agendado, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Agendei o seguinte para você, ${clientNameToUse}:`;
+                                currentActionFormattedData = formatAppointmentDataStructure(reloadedAppt);
+                                if (aiResponse.detected_actions.length === 1 && isOwnerActingOnOwnBehalfGlobal) resourceForButtonsContext = { type: 'appointment', id: newAppt.id, description: newAppt.title };
+                                break;
+                            }
+                            case 'UPDATE_APPOINTMENT': {
+                                const appointmentIdToUpdate = state.editingResource?.type === 'appointment' && state.editingResource?.id
+                                    ? parseInt(state.editingResource.id, 10)
+                                    : (params.appointmentIdToUpdate ? parseInt(params.appointmentIdToUpdate, 10) : null);
+                                if (!appointmentIdToUpdate) throw new Error("ID do compromisso para atualizar não foi fornecido.");
+                                if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
+                                     throw new Error("Você não tem permissão para editar compromissos nesta conta compartilhada.");
+                                 }
+
+                                const updateDataAppt = {};
+                                if (params.hasOwnProperty('title')) updateDataAppt.title = params.title;
+                                if (params.hasOwnProperty('eventDateTime')) updateDataAppt.eventDateTime = params.eventDateTime;
+                                if (params.hasOwnProperty('durationMinutes')) updateDataAppt.durationMinutes = parseInt(params.durationMinutes);
+                                if (params.hasOwnProperty('location')) updateDataAppt.location = params.location;
+                                if (params.hasOwnProperty('reminderLeadTimeMinutes')) updateDataAppt.reminderLeadTimeMinutes = parseInt(params.reminderLeadTimeMinutes);
+                                if (params.hasOwnProperty('status')) updateDataAppt.status = params.status;
+                                if (params.hasOwnProperty('notes')) updateDataAppt.notes = params.notes;
+                                if (params.hasOwnProperty('associatedValue') && params.associatedValue !== null && !isNaN(parseFloat(params.associatedValue))) updateDataAppt.associatedValue = parseFloat(params.associatedValue);
+                                if (params.hasOwnProperty('associatedTransactionType')) updateDataAppt.associatedTransactionType = params.associatedTransactionType;
+                                
+                                let businessClientIdsToUpdate = undefined; 
+                                if (params.hasOwnProperty('businessClientNames') && ['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
+                                    businessClientIdsToUpdate = []; 
+                                    if (Array.isArray(params.businessClientNames) && params.businessClientNames.length > 0) {
+                                        for (const name of params.businessClientNames) {
+                                            const bcId = await findBusinessClientIdByName(name, state.activeFinancialAccountId);
+                                            if (bcId) businessClientIdsToUpdate.push(bcId);
+                                        }
+                                    }
+                                    updateDataAppt.businessClientIds = businessClientIdsToUpdate;
+                                }
+
+                                if (Object.keys(updateDataAppt).length === 0) throw new Error("Nenhum dado fornecido para atualizar o compromisso.");
+
+                                const updatedAppt = await appointmentService.updateAppointment(state.activeFinancialAccountId, appointmentIdToUpdate, updateDataAppt, actorId);
+                                const reloadedUpdatedAppt = await appointmentService.getAppointmentById(state.activeFinancialAccountId, updatedAppt.id);
+
+                                if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) aiMessageIntro = aiResponse.overall_summary_suggestion || `Compromisso atualizado, ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a edição do compromisso, ${clientNameToUse}:`;
+                                currentActionFormattedData = formatAppointmentDataStructure(reloadedUpdatedAppt);
+                                actionWasAnEdit = true; state.editingResource = null; state.currentAction = null;
+                                break;
+                            }
                             case 'CREATE_PARCELLED_ACCOUNT': {
-                                // MODIFICADO: Usa findFinancialCategoryIdByName
-                                const categoryId = params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId) : null;
+                                // MODIFICADO: Usa financialCategoryService
+                                const categoryObject = params.financialCategoryName 
+                                    ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId)
+                                    : null;
+                                const categoryId = categoryObject ? categoryObject.id : null;
+
                                 const cardId = params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null;
 
                                 if (params.creditCardName && !cardId) {
@@ -1653,7 +1730,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     totalValue: parseFloat(params.totalValue || params.value),
                                     numberOfParcels: parseInt(params.numberOfParcels),
                                     initialDueDate: params.initialDueDate, 
-                                    financialCategoryId: categoryId, // Passa o ID
+                                    financialCategoryId: categoryId,
                                     creditCardId: cardId,
                                     notes: params.notes,
                                     transactionDate: params.transactionDate || params.initialDueDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0]
@@ -1678,6 +1755,23 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 }
                                 break;
                             }
+                            case 'UPDATE_PARCELLED_ACCOUNT_DESCRIPTION': {
+                                const accountIdToUpdateDesc = state.editingResource?.type === 'parcelled_account' && state.editingResource?.id
+                                    ? parseInt(state.editingResource.id, 10)
+                                    : (params.originalAccountIdToUpdate ? parseInt(params.originalAccountIdToUpdate, 10) : null);
+                                if (!accountIdToUpdateDesc || !params.newDescription) throw new Error("ID da compra parcelada e nova descrição são obrigatórios.");
+                                if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
+                                     throw new Error("Você não tem permissão para editar descrições nesta conta compartilhada.");
+                                 }
+
+                                await financialService.updateParcelledAccountDescription(state.activeFinancialAccountId, accountIdToUpdateDesc, params.newDescription, actorId);
+
+                                if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) aiMessageIntro = aiResponse.overall_summary_suggestion || `Descrição da compra parcelada atualizada para "${params.newDescription}", ${clientNameToUse}!`;
+                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre a edição da compra parcelada, ${clientNameToUse}:`;
+                                currentActionFormattedData = `📝 Descrição atualizada para: ${params.newDescription}`;
+                                actionWasAnEdit = true; state.editingResource = null; state.currentAction = null;
+                                break;
+                            }
                             case 'RECREATE_PARCELLED_ACCOUNT': {
                                 const originalAccountIdToUpdate = state.editingResource?.type === 'parcelled_account' && state.editingResource?.id
                                     ? parseInt(state.editingResource.id, 10)
@@ -1687,8 +1781,12 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                      throw new Error("Você não tem permissão para recriar compras parceladas nesta conta compartilhada.");
                                  }
                                 
-                                // MODIFICADO: Usa findFinancialCategoryIdByName
-                                const newCatIdParcel = params.newFinancialCategoryName ? await findFinancialCategoryIdByName(params.newFinancialCategoryName, state.activeFinancialAccountId) : null;
+                                // MODIFICADO: Usa financialCategoryService
+                                const newCatObject = params.newFinancialCategoryName 
+                                    ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.newFinancialCategoryName, state.activeFinancialAccountId)
+                                    : null;
+                                const newCatIdParcel = newCatObject ? newCatObject.id : null;
+
                                 const newCardIdParcel = params.newCreditCardName ? await findCreditCardIdByName(params.newCreditCardName, state.activeFinancialAccountId) : null;
 
                                 if (params.newCreditCardName && !newCardIdParcel) {
@@ -1697,8 +1795,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 const newParcelData = {
                                     description: params.newDescription, type: params.newType || 'Saída', totalValue: parseFloat(params.newTotalValue),
                                     numberOfParcels: parseInt(params.newNumberOfParcels), initialDueDate: params.newInitialDueDate,
-                                    financialCategoryId: newCatIdParcel, // Passa o ID
-                                    creditCardId: newCardIdParcel, notes: params.newNotes,
+                                    financialCategoryId: newCatIdParcel, creditCardId: newCardIdParcel, notes: params.newNotes,
                                     transactionDate: params.newTransactionDate || params.newInitialDueDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0]
                                 };
                                 if (!newParcelData.description || isNaN(newParcelData.totalValue) || newParcelData.totalValue <= 0 || isNaN(newParcelData.numberOfParcels) || newParcelData.numberOfParcels < 1 || !newParcelData.initialDueDate) {
@@ -1722,15 +1819,20 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                      throw new Error("Você não tem permissão para marcar transações como pagas/recebidas nesta conta compartilhada.");
                                 }
                                 const paymentDate = params.paymentDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0];
-                                // MODIFICADO: Usa findFinancialCategoryIdByName
-                                const categoryIdForMark = params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId) : null;
+                                
+                                // MODIFICADO: Usa financialCategoryService
+                                const categoryObjectForMark = params.financialCategoryName 
+                                    ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId)
+                                    : null;
+                                const categoryIdForMark = categoryObjectForMark ? categoryObjectForMark.id : null;
+
 
                                 const result = await financialService.markTransactionAsPaidOrReceived(
                                     state.activeFinancialAccountId,
                                     params.transactionDescription,
                                     params.transactionValue ? parseFloat(params.transactionValue) : null,
                                     paymentDate,
-                                    categoryIdForMark, // Passa o ID
+                                    categoryIdForMark,
                                     actorId
                                 );
                                 if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) aiMessageIntro = aiResponse.overall_summary_suggestion || `Ótimo, ${clientNameToUse}! Transação marcada como liquidada.`;
@@ -1739,8 +1841,12 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 break;
                             }
                             case 'CREATE_RECURRING_RULE': {
-                                // MODIFICADO: Usa findFinancialCategoryIdByName
-                                const categoryIdRule = params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId) : null;
+                                // MODIFICADO: Usa financialCategoryService
+                                const categoryObjectRule = params.financialCategoryName 
+                                    ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId)
+                                    : null;
+                                const categoryIdRule = categoryObjectRule ? categoryObjectRule.id : null;
+
                                 const ruleData = {
                                     description: params.description, type: params.type, value: parseFloat(params.value),
                                     frequency: params.frequency, startDate: params.startDate,
@@ -1748,8 +1854,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     dayOfMonth: params.dayOfMonth ? parseInt(params.dayOfMonth) : null,
                                     dayOfWeek: params.dayOfWeek !== undefined && params.dayOfWeek !== null ? parseInt(params.dayOfWeek) : null,
                                     endDate: params.endDate, autoCreateTransaction: params.autoCreateTransaction !== undefined ? params.autoCreateTransaction : false,
-                                    financialCategoryId: categoryIdRule, // Passa o ID
-                                    notes: params.notes
+                                    financialCategoryId: categoryIdRule, notes: params.notes
                                 };
                                 if (!ruleData.description || !ruleData.type || isNaN(ruleData.value) || ruleData.value <=0 || !ruleData.frequency || !ruleData.startDate) {
                                     throw new Error("Dados insuficientes para criar regra recorrente (desc, tipo, valor, frequência, data início).");
@@ -1786,9 +1891,10 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 if (params.hasOwnProperty('isActive')) updateDataRule.isActive = params.isActive;
                                 if (params.hasOwnProperty('notes')) updateDataRule.notes = params.notes;
                                 
-                                // MODIFICADO: Usa findFinancialCategoryIdByName
+                                // MODIFICADO: Usa financialCategoryService
                                 if (params.financialCategoryName) {
-                                    updateDataRule.financialCategoryId = await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId);
+                                    const categoryObjectForRule = await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId);
+                                    updateDataRule.financialCategoryId = categoryObjectForRule ? categoryObjectForRule.id : null;
                                 } else if (params.hasOwnProperty('financialCategoryName') && params.financialCategoryName === null) {
                                     updateDataRule.financialCategoryId = null;
                                 }
@@ -1804,41 +1910,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 actionWasAnEdit = true; state.editingResource = null; state.currentAction = null;
                                 break;
                             }
-                            case 'PAY_CREDIT_CARD_INVOICE': {
-                                const cardNameToPay = params.creditCardName;
-                                const paymentAmount = parseFloat(params.paymentAmount);
-                                if (!cardNameToPay || isNaN(paymentAmount) || paymentAmount <= 0) throw new Error("Nome do cartão e valor do pagamento (maior que zero) são obrigatórios.");
-
-                                const cardIdToPay = await findCreditCardIdByName(cardNameToPay, state.activeFinancialAccountId);
-                                if (!cardIdToPay) {
-                                    throw new Error(`Não encontrei o cartão "${cardNameToPay}" para registrar o pagamento da fatura.`);
-                                }
-                                const paymentDateCard = params.paymentDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0];
-                                // MODIFICADO: Usa findFinancialCategoryIdByName
-                                let categoryIdPay = params.financialCategoryName 
-                                    ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId)
-                                    : await findFinancialCategoryIdByName("Pagamento de Fatura", state.activeFinancialAccountId); // Tenta a default
-                                
-                                if (!categoryIdPay && !params.financialCategoryName) { 
-                                    logger.warn(`[WHATSAPP SERVICE] Categoria "Pagamento de Fatura" ou fornecida pela IA não encontrada para conta ${state.activeFinancialAccountId}. Pagamento será sem categoria.`);
-                                } else if (!categoryIdPay && params.financialCategoryName) {
-                                     logger.warn(`[WHATSAPP SERVICE] Categoria "${params.financialCategoryName}" (para pagamento de fatura) não encontrada. Pagamento será sem categoria.`);
-                                }
-
-
-                                const paymentTransaction = await creditCardService.payCreditCardInvoice(
-                                    state.activeFinancialAccountId, cardIdToPay, paymentAmount, paymentDateCard,
-                                    params.originatingAccountDescription, 
-                                    categoryIdPay, // Passa o ID
-                                    actorId
-                                );
-                                if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) aiMessageIntro = aiResponse.overall_summary_suggestion || `Pagamento da fatura do cartão "${cardNameToPay}" registrado, ${clientNameToUse}!`;
-                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre o pagamento da fatura, ${clientNameToUse}:`;
-                                currentActionFormattedData = `✅ Pagamento de ${formatCurrency(paymentAmount)} para o cartão "${cardNameToPay}" registrado em ${formatDate(paymentDateCard)}.`;
-                                if (paymentTransaction.category) currentActionFormattedData += `\nCategoria: ${paymentTransaction.category.name}.`;
-                                break;
-                            }
-                            // ... (TODOS OS OUTROS CASES COMPLETOS COMO NO ARQUIVO ORIGINAL, SEM OMISSÃO)
+                            // ... (todos os outros cases como estavam, lembrando de ajustar chamadas a systemService.findFinancialCategoryByNameAndType
+                            // para financialCategoryService.findFinancialCategoryByNameForAccount onde aplicável, como em PAY_CREDIT_CARD_INVOICE) ...
                             case 'CREATE_PRODUCT': {
                                 if (!['PJ', 'MEI'].includes(state.activeFinancialAccountType)) throw new Error("Cadastro de produtos é apenas para contas PJ/MEI.");
                                 const productData = {
@@ -2015,9 +2088,15 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 break;
                             }
                             case 'LIST_FINANCIAL_TRANSACTIONS': {
+                                // MODIFICADO: Usa financialCategoryService para buscar ID da categoria pelo nome
+                                const categoryObjectList = params.financialCategoryName 
+                                    ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId) 
+                                    : null;
+                                const categoryIdList = categoryObjectList ? categoryObjectList.id : null;
+
                                 const filterParamsList = {
                                     dateStart: params.dateStart, dateEnd: params.dateEnd, type: params.type,
-                                    financialCategoryId: params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId) : null,
+                                    financialCategoryId: categoryIdList,
                                     creditCardId: params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null,
                                     isPayableOrReceivable: params.isPayableOrReceivable, isPaidOrReceived: params.isPaidOrReceived,
                                     search: params.searchTerm || params.description, 
@@ -2198,11 +2277,17 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 break;
                             }
                             case 'GET_FINANCIAL_SUMMARY': {
+                                // MODIFICADO: Usa financialCategoryService
+                                const categoryObjectSummary = params.financialCategoryName 
+                                    ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId)
+                                    : null;
+                                const categoryIdSummary = categoryObjectSummary ? categoryObjectSummary.id : null;
+
                                 const filters = {
                                     period: params.period || 'este_mes',
                                     dateStart: params.dateStart,
                                     dateEnd: params.dateEnd,
-                                    financialCategoryId: params.financialCategoryName ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId) : null,
+                                    financialCategoryId: categoryIdSummary, 
                                     type: params.type,
                                 };
                                 const summary = await financialService.getFinancialSummary(state.activeFinancialAccountId, filters);
@@ -2274,20 +2359,24 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     throw new Error(`Não encontrei o cartão "${cardNameToPay}" para registrar o pagamento da fatura.`);
                                 }
                                 const paymentDateCard = params.paymentDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0];
-                                let categoryIdPay = params.financialCategoryName 
-                                    ? await findFinancialCategoryIdByName(params.financialCategoryName, state.activeFinancialAccountId)
-                                    : await findFinancialCategoryIdByName("Pagamento de Fatura", state.activeFinancialAccountId); 
                                 
-                                if (!categoryIdPay && !params.financialCategoryName) { 
-                                    logger.warn(`[WHATSAPP SERVICE] Categoria "Pagamento de Fatura" ou fornecida pela IA não encontrada para conta ${state.activeFinancialAccountId}. Pagamento será sem categoria.`);
-                                } else if (!categoryIdPay && params.financialCategoryName) {
-                                     logger.warn(`[WHATSAPP SERVICE] Categoria "${params.financialCategoryName}" (para pagamento de fatura) não encontrada. Pagamento será sem categoria.`);
+                                // MODIFICADO: Usa financialCategoryService, e verifica se a categoria "Pagamento de Fatura" existe
+                                let categoryNameToUseForPayment = params.financialCategoryName || "Pagamento de Fatura";
+                                let categoryObjectPay = await financialCategoryService.findFinancialCategoryByNameForAccount(categoryNameToUseForPayment, state.activeFinancialAccountId);
+                                
+                                // Se a categoria específica (ou "Pagamento de Fatura") não foi encontrada, não atribui categoria.
+                                let categoryIdPay = categoryObjectPay ? categoryObjectPay.id : null;
+                                if (!categoryIdPay && params.financialCategoryName) { // Se o usuário especificou uma categoria e ela não foi encontrada
+                                    logger.warn(`[WHATSAPP SERVICE] Categoria "${params.financialCategoryName}" fornecida para pagamento de fatura não encontrada na conta ${state.activeFinancialAccountId}. Pagamento será sem categoria.`);
+                                } else if (!categoryIdPay && !params.financialCategoryName) { // Se era para usar "Pagamento de Fatura" e não achou
+                                    logger.warn(`[WHATSAPP SERVICE] Categoria padrão "Pagamento de Fatura" não encontrada na conta ${state.activeFinancialAccountId}. Pagamento de fatura será sem categoria.`);
                                 }
+
 
                                 const paymentTransaction = await creditCardService.payCreditCardInvoice(
                                     state.activeFinancialAccountId, cardIdToPay, paymentAmount, paymentDateCard,
                                     params.originatingAccountDescription, 
-                                    categoryIdPay, 
+                                    categoryIdPay,
                                     actorId
                                 );
                                 if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) aiMessageIntro = aiResponse.overall_summary_suggestion || `Pagamento da fatura do cartão "${cardNameToPay}" registrado, ${clientNameToUse}!`;
@@ -2298,11 +2387,11 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             }
                             case 'SET_MOTIVATIONAL_MESSAGE_PREFERENCE': {
                                 if (params.enable === undefined || (params.enable && !params.time)) throw new Error("Preciso saber se quer ativar/desativar e, se ativar, o horário (HH:MM).");
-                                await systemService.updateSystemPreferences({  // Não passa actorId, é uma config global
+                                await systemService.updateSystemPreferences({ // Removido actorId, pois UserPreference é global
                                     enableMotivationMessage: params.enable,
                                     motivationMessageTime: params.enable ? params.time : null
                                 });
-                                const updatedPrefsMotiv = await systemService.getSystemPreferences();
+                                const updatedPrefsMotiv = await systemService.getSystemPreferences(); // Removido actorId
                                 if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) aiMessageIntro = aiResponse.overall_summary_suggestion || `Preferências de mensagem motivacional atualizadas, ${clientNameToUse}!`;
                                 else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre as mensagens motivacionais, ${clientNameToUse}:`;
                                 currentActionFormattedData = formatMotivationalMessagePreferenceDataStructure(updatedPrefsMotiv);
@@ -2315,7 +2404,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 if (params.enable && params.frequencyType === 'custom' && !params.customIntervalMinutes) {
                                     throw new Error("Para frequência personalizada de lembrete de água, preciso do intervalo em minutos.");
                                 }
-                                await systemService.updateSystemPreferences({ // Não passa actorId
+                                await systemService.updateSystemPreferences({ // Removido actorId
                                     enableWaterReminder: params.enable,
                                     waterReminderFrequencyType: params.enable ? params.frequencyType : 'disabled',
                                     waterReminderCustomIntervalMinutes: params.enable && params.frequencyType === 'custom' ? parseInt(params.customIntervalMinutes) : null,
@@ -2323,7 +2412,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     waterReminderEndTime: params.enable ? params.endTime : null,
                                     dailyGoalMl: params.enable && params.dailyGoalMl ? parseInt(params.dailyGoalMl) : null
                                 });
-                                const updatedPrefsWater = await systemService.getSystemPreferences();
+                                const updatedPrefsWater = await systemService.getSystemPreferences(); // Removido actorId
                                 if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) aiMessageIntro = aiResponse.overall_summary_suggestion || `Preferências de lembrete de água atualizadas, ${clientNameToUse}!`;
                                 else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre os lembretes de água, ${clientNameToUse}:`;
                                 currentActionFormattedData = formatWaterReminderPreferenceDataStructure(updatedPrefsWater);
@@ -2397,18 +2486,20 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                     businessProfileIdToShare = bizAccount.id;
                                 }
 
-                                const accessRules = {
+                                // grantAccess agora espera um objeto grantData
+                                const grantDataForService = {
+                                    sharedWithUserIdentifier: params.sharedWithUserIdentifier,
                                     canAccessPersonalProfile: params.accessPersonalProfile || false,
                                     canAccessBusinessProfileId: businessProfileIdToShare,
+                                    sharedAccessEmail: params.sharedAccessEmailForGuest, // Nome correto
+                                    sharedAccessPassword: params.sharedAccessPasswordForGuest, // Nome correto
+                                    sharedAccessPhone: params.sharedAccessPhoneForGuest, // Nome correto
+                                    sharedWithClientName: params.sharedWithClientName // Se a IA extrair o nome do convidado
                                 };
-                                const sharedAccessCredentials = {
-                                    email: params.sharedAccessEmailForGuest,
-                                    password: params.sharedAccessPasswordForGuest,
-                                    phone: params.sharedAccessPhoneForGuest
-                                };
-                                const newSharedAccess = await sharedAccessService.grantAccess(ownerId, params.sharedWithUserIdentifier, accessRules, sharedAccessCredentials, actorId);
+
+                                const newSharedAccess = await sharedAccessService.grantAccess(ownerId, grantDataForService); // Passa actorId implicitamente se o service precisar
                                 
-                                const reloadedSA = await sharedAccessService.getSharedAccessById(newSharedAccess.id);
+                                const reloadedSA = await sharedAccessService.getSharedAccessById(newSharedAccess.id); // Use uma função que busca por ID com includes
 
                                 if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) aiMessageIntro = aiResponse.overall_summary_suggestion || `Convite enviado com sucesso para ${params.sharedWithUserIdentifier}! 🤝`;
                                 currentActionFormattedData = formatSharedAccessDataStructure(reloadedSA, 'owner');
@@ -2416,7 +2507,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                             }
                             case 'LIST_GRANTED_ACCESS': { 
                                 if (!isOwnerActingOnOwnBehalfGlobal) throw new Error("Use 'listar meus convites' para ver os que você recebeu.");
-                                const grantedList = await sharedAccessService.listGrantedAccess(ownerId, { status: params.status });
+                                const result = await sharedAccessService.getSharedAccessesByOwner(ownerId, { status: params.status });
+                                const grantedList = result.sharedAccesses;
                                 if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) {
                                      aiMessageIntro = aiResponse.overall_summary_suggestion || (grantedList.length === 0 ? `Você ainda não compartilhou seu acesso com ninguém, ${clientNameToUse}.` : `Aqui estão os acessos que você concedeu, ${clientNameToUse}:`);
                                 }
@@ -2424,7 +2516,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 break;
                             }
                             case 'LIST_RECEIVED_ACCESS': { 
-                                const receivedList = await sharedAccessService.listReceivedAccess(actorId, { status: params.status || 'Pendente' }); 
+                                const result = await sharedAccessService.getSharedAccessesForUser(actorId, { status: params.status || 'Pendente' }); 
+                                const receivedList = result.sharedAccesses;
                                  if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) {
                                      aiMessageIntro = aiResponse.overall_summary_suggestion || (receivedList.length === 0 ? `Você não tem convites de acesso pendentes ou ativos, ${clientNameToUse}.` : `Aqui estão os convites/acessos que você recebeu, ${clientNameToUse}:`);
                                 }
@@ -2437,7 +2530,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 
                                 let sharedAccessIdToRespond = params.sharedAccessId;
                                 if (!sharedAccessIdToRespond) { 
-                                    const pendingInvites = await sharedAccessService.listReceivedAccess(actorId, { status: 'Pendente' });
+                                    const {sharedAccesses: pendingInvites} = await sharedAccessService.getSharedAccessesForUser(actorId, { status: 'Pendente' });
                                     if (pendingInvites.length === 0) throw new Error("Você não tem convites pendentes para responder.");
                                     if (pendingInvites.length === 1 && !params.inviterNameOrIdentifier) {
                                         sharedAccessIdToRespond = pendingInvites[0].id;
@@ -2465,7 +2558,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 if (!isOwnerActingOnOwnBehalfGlobal) throw new Error("Ação não permitida em acesso compartilhado.");
                                 if (!params.sharedWithUserIdentifier) throw new Error("Preciso do telefone ou e-mail do usuário para revogar o acesso.");
 
-                                const sharedAccesses = await sharedAccessService.listGrantedAccess(ownerId, { guestIdentifier: params.sharedWithUserIdentifier, status: 'Active' }); 
+                                const {sharedAccesses} = await sharedAccessService.getSharedAccessesByOwner(ownerId, { guestIdentifier: params.sharedWithUserIdentifier, status: 'Ativo' }); 
                                 if (sharedAccesses.length === 0) throw new Error(`Não encontrei acessos ativos concedidos para "${params.sharedWithUserIdentifier}".`);
                                 
                                 let sharedAccessIdToRevoke = null;
@@ -2500,7 +2593,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 }
                                 
                                 if (sharedAccessIdToRevoke && !state.pendingConfirmation) {
-                                    await sharedAccessService.revokeAccessById(ownerId, sharedAccessIdToRevoke, actorId); 
+                                    await sharedAccessService.revokeAccess(ownerId, sharedAccessIdToRevoke); // Ajustado para revokeAccess 
                                     aiMessageIntro = aiResponse.overall_summary_suggestion || `Acesso de ${guestNameForMsg} revogado com sucesso!`;
                                     currentActionFormattedData = "Esta pessoa não poderá mais acessar as informações através deste convite.";
                                 }
@@ -2520,7 +2613,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                                 if (params.hasOwnProperty('isDefault')) updateDataFA.isDefault = params.isDefault;
                                 if (Object.keys(updateDataFA).length === 0) throw new Error("Nenhum dado fornecido para atualizar a conta.");
 
-                                const updatedFA = await clientService.updateFinancialAccount(ownerId, accountToUpdate.id, updateDataFA, actorId); 
+                                const updatedFA = await clientService.updateFinancialAccount(accountToUpdate.id, updateDataFA); 
                                 if (state.activeFinancialAccountId === updatedFA.id) {
                                     state.activeFinancialAccountName = updatedFA.accountName;
                                     state.activeFinancialAccountType = updatedFA.accountType; 
@@ -2732,8 +2825,6 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         case 'recurring_rule': buttons = [ { id: `edit_recurring_rule_${resourceForButtonsContext.id}`, label: "Editar Recorrência ✍️" }, { id: `delete_recurring_rule_${resourceForButtonsContext.id}`, label: "Excluir Recorrência 🗑️" }, ]; break;
                         case 'product': buttons = [ { id: `edit_product_${resourceForButtonsContext.id}`, label: "Editar Produto ✍️" }, ]; break;
                         case 'parcelled_account': buttons = [ { id: `edit_parcelled_account_${resourceForButtonsContext.id}`, label: "Alterar Compra Parcelada ✍️" }, { id: `delete_parcelled_account_${resourceForButtonsContext.id}`, label: "Excluir Compra Parcelada 🗑️" }, ]; break;
-                        // Adicionado caso faltante para business_client nos botões
-                        case 'business_client': buttons = [ { id: `edit_business_client_${resourceForButtonsContext.id}`, label: "Editar Cliente ✍️" }, /* sem delete direto */ ]; break;
                     }
        
                     if (buttons.length > 0) {
