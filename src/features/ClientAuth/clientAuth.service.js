@@ -4,6 +4,8 @@ const logger = require('../../utils/logger');
 const { generateToken } = require('../../utils/authUtils');
 const { Op } = require('sequelize');
 const subscriptionService = require('../Subscription/subscription.service');
+const googleCalendarService = require('../GoogleCalendar/googleCalendarService');
+
 
 // ... (setClientCredentials e loginClient permanecem os mesmos)
 async function setClientCredentials(phone, password, name = null, email = null) {
@@ -19,25 +21,18 @@ async function setClientCredentials(phone, password, name = null, email = null) 
       const error = new Error('A senha deve ter pelo menos 6 caracteres.');
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
-
     const normalizedPhone = phone.replace(/\D/g, '');
     let client = await Client.findOne({ where: { phone: normalizedPhone }, transaction: t });
-
     if (!client) {
       await t.rollback();
-      const error = new Error('Cliente não encontrado com este número de telefone. O registro inicial deve ocorrer via WhatsApp ou outro canal designado.');
+      const error = new Error('Cliente não encontrado com este número de telefone.');
       error.statusCode = 404; error.status = 'fail'; throw error;
     }
-
     const updateData = { passwordHash: password };
-
     if (email) {
       const lowerEmail = email.toLowerCase().trim();
       const existingEmailClient = await Client.findOne({
-        where: {
-          email: lowerEmail,
-          id: { [Op.ne]: client.id }
-        },
+        where: { email: lowerEmail, id: { [Op.ne]: client.id } },
         transaction: t
       });
       if (existingEmailClient) {
@@ -47,15 +42,12 @@ async function setClientCredentials(phone, password, name = null, email = null) 
       }
       updateData.email = lowerEmail;
     }
-
     if (name && name.trim() !== "" && name !== client.name) {
         updateData.name = name.trim();
     }
-
     await client.update(updateData, { transaction: t });
     await t.commit();
-
-    logger.info(`Credenciais (senha e/ou email/nome) atualizadas para o Cliente ${client.phone}.`);
+    logger.info(`Credenciais atualizadas para o Cliente ${client.phone}.`);
     const reloadedClient = await Client.findByPk(client.id);
     return reloadedClient.toJSON();
   } catch (error) {
@@ -296,38 +288,164 @@ async function getClientProfile(loggedInClientData, sharedAccessContext = null) 
 
 
 async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
+  const t = await sequelize.transaction(); // Iniciar transação para a atualização do cliente
   try {
-    const client = await Client.findByPk(clientId);
+    const client = await Client.findByPk(clientId, { transaction: t });
     if (!client) {
+      await t.rollback();
       const error = new Error('Cliente não encontrado.');
       error.statusCode = 404; error.status = 'fail'; throw error;
     }
 
+    const oldColorIdPF = client.googleCalendarColorIdPF;
+    const oldColorIdPJ = client.googleCalendarColorIdPJ;
+
     const updateData = {};
-    if (colorIdPF !== undefined) { // Permite string vazia ou null para resetar para default do modelo? Ou só aceita IDs válidos?
-        updateData.googleCalendarColorIdPF = colorIdPF ? String(colorIdPF) : null; // Permite resetar para default se null
+    let pfColorChanged = false;
+    let pjColorChanged = false;
+
+    if (colorIdPF !== undefined) {
+        const newPfColor = colorIdPF ? String(colorIdPF) : null;
+        if (newPfColor !== oldColorIdPF) {
+            updateData.googleCalendarColorIdPF = newPfColor;
+            pfColorChanged = true;
+        }
     }
     if (colorIdPJ !== undefined) {
-        updateData.googleCalendarColorIdPJ = colorIdPJ ? String(colorIdPJ) : null;
+        const newPjColor = colorIdPJ ? String(colorIdPJ) : null;
+        if (newPjColor !== oldColorIdPJ) {
+            updateData.googleCalendarColorIdPJ = newPjColor;
+            pjColorChanged = true;
+        }
     }
 
     if (Object.keys(updateData).length === 0) {
+        await t.commit(); // Comita mesmo se nada mudou nos dados do cliente
         logger.info(`[ClientAuthService] Nenhuma preferência de cor de calendário para atualizar para Cliente ID ${clientId}.`);
-        return client.toJSON(); // Retorna o cliente sem modificações
+        return client.toJSON();
     }
 
-    await client.update(updateData);
-    logger.info(`Preferências de cor de calendário atualizadas para Cliente ID ${clientId}. PF: ${updateData.googleCalendarColorIdPF}, PJ: ${updateData.googleCalendarColorIdPJ}`);
+    await client.update(updateData, { transaction: t });
+    await t.commit(); // Comita a atualização das preferências do cliente
+    logger.info(`Preferências de cor de calendário atualizadas para Cliente ID ${clientId}. PF: ${client.googleCalendarColorIdPF}, PJ: ${client.googleCalendarColorIdPJ}`);
+
+    // Disparar ressincronização de cores de forma assíncrona (fire-and-forget)
+    // para não bloquear a resposta da requisição.
+    if ((pfColorChanged || pjColorChanged) && client.isGoogleCalendarSynced && client.googleCalendarIdPrincipal) {
+        logger.info(`[ClientAuthService] Disparando ressincronização de cores para Cliente ID ${clientId}...`);
+        resyncGoogleEventColorsForClient(clientId, pfColorChanged ? client.googleCalendarColorIdPF : undefined, pjColorChanged ? client.googleCalendarColorIdPJ : undefined)
+            .then(() => logger.info(`[ClientAuthService] Ressincronização de cores para Cliente ID ${clientId} concluída/enfileirada.`))
+            .catch(err => logger.error(`[ClientAuthService] Erro na ressincronização de cores para Cliente ID ${clientId}: ${err.message}`));
+    }
     
-    // Retorna o cliente atualizado (o defaultScope já exclui tokens)
-    const reloadedClient = await Client.findByPk(clientId);
+    const reloadedClient = await Client.findByPk(clientId); // Busca fora da transação para pegar o estado mais recente
     return reloadedClient.toJSON();
 
   } catch (error) {
+    if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
     logger.error(`Erro ao atualizar preferências de cor de calendário para Cliente ID ${clientId}: ${error.message}`, { error });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
+}
+
+/**
+ * Função assíncrona para buscar todos os appointments sincronizados de um cliente
+ * e atualizar a cor de seus respectivos eventos no Google Agenda.
+ * @param {number} clientId
+ * @param {string|undefined} newPfColorId - Nova cor para PF, ou undefined se não mudou
+ * @param {string|undefined} newPjColorId - Nova cor para PJ, ou undefined se não mudou
+ */
+async function resyncGoogleEventColorsForClient(clientId, newPfColorId, newPjColorId) {
+    try {
+        const client = await Client.findByPk(clientId, {
+            include: [{ model: FinancialAccount, as: 'financialAccounts', attributes: ['id', 'accountType'] }]
+        });
+        if (!client || !client.isGoogleCalendarSynced || !client.googleCalendarIdPrincipal) {
+            logger.warn(`[resyncColors] Cliente ${clientId} não sincronizado ou sem calendário principal. Abortando ressincronização de cores.`);
+            return;
+        }
+
+        const appointmentsToResync = await Appointment.findAll({
+            where: {
+                googleEventId: { [Op.ne]: null }, // Apenas os que estão no Google
+                '$financialAccount.clientId$': clientId
+            },
+            include: [
+                {
+                    model: FinancialAccount,
+                    as: 'financialAccount',
+                    required: true, // Garante que só pegamos appointments com FA válida
+                    include: [{ model: Client, as: 'ownerClient' }] // ownerClient terá as novas cores
+                },
+                {
+                    model: BusinessClient, // Para passar para mapToGoogleEvent
+                    as: 'businessClients',
+                    through: { attributes: [] },
+                    required: false
+                }
+            ]
+        });
+
+        if (appointmentsToResync.length === 0) {
+            logger.info(`[resyncColors] Cliente ${clientId}: Nenhum agendamento sincronizado encontrado para atualizar cores.`);
+            return;
+        }
+
+        logger.info(`[resyncColors] Cliente ${clientId}: Encontrados ${appointmentsToResync.length} agendamentos para verificar/atualizar cor no Google Agenda.`);
+        let updatedCount = 0;
+
+        for (const appt of appointmentsToResync) {
+            const faType = appt.financialAccount.accountType;
+            let needsGoogleUpdate = false;
+
+            if (faType === 'PF' && newPfColorId !== undefined) { // newPfColorId pode ser null se o usuário limpou a preferência
+                needsGoogleUpdate = true;
+            } else if ((faType === 'PJ' || faType === 'MEI') && newPjColorId !== undefined) {
+                needsGoogleUpdate = true;
+            }
+
+            if (needsGoogleUpdate && appt.googleEventId) {
+                try {
+                    // mapToGoogleEvent usará as cores atualizadas do appt.financialAccount.ownerClient
+                    // que é o mesmo 'client' que buscamos no início desta função já com as novas cores.
+                    // Precisamos garantir que o `financialAccount` dentro do `appt` tenha o `ownerClient` com as cores atualizadas.
+                    // A forma mais simples é passar o objeto `client` (com as novas cores) para `updateGoogleEvent`
+                    // e deixar `mapToGoogleEvent` usá-lo.
+
+                    // O `appt.financialAccount.ownerClient` no `appt` buscado pode não ter as cores mais recentes
+                    // se o `client.update` não recarregar associações.
+                    // Então, é mais seguro construir o `appointmentSystem` para `updateGoogleEvent`
+                    // com o `client` que *já tem* as cores atualizadas.
+
+                    const appointmentSystemData = {
+                        ...appt.toJSON(), // Pega todos os dados do appointment
+                        financialAccount: { // Sobrescreve a financialAccount para garantir que o ownerClient dentro dela tenha as novas cores
+                            ...appt.financialAccount.toJSON(),
+                            ownerClient: client.toJSON() // Usa o 'client' que já tem as cores atualizadas
+                        }
+                    };
+                    
+                    const googleEvent = await googleCalendarService.updateGoogleEvent(
+                        clientId,
+                        appt.googleEventId,
+                        appointmentSystemData // Passa o objeto completo do sistema
+                    );
+                    if (googleEvent && googleEvent.id) {
+                        await appt.update({ googleEventLastUpdated: new Date(googleEvent.updated) });
+                        updatedCount++;
+                        logger.debug(`[resyncColors] Cliente ${clientId}: Evento Google ${appt.googleEventId} (Appt ID ${appt.id}) teve cor atualizada.`);
+                    }
+                } catch (err) {
+                    logger.error(`[resyncColors] Cliente ${clientId}: Erro ao atualizar cor do evento Google ${appt.googleEventId} (Appt ID ${appt.id}): ${err.message}`);
+                }
+            }
+        }
+        logger.info(`[resyncColors] Cliente ${clientId}: ${updatedCount} eventos tiveram suas cores atualizadas no Google Agenda.`);
+
+    } catch (error) {
+        logger.error(`[resyncColors] Erro geral ao ressincronizar cores para cliente ${clientId}: ${error.message}`, { stack: error.stack });
+    }
 }
 
 

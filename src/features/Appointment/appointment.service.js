@@ -473,7 +473,7 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
       if (!appointmentLocal) {
           logger.warn(`[ApptServiceFromGoogle] Appointment local ID ${systemAppointmentIdFromGoogle} (do evento Google ${googleEvent.id}) não encontrado para Cliente ${systemClientId}, apesar da prop. Será tratado como novo.`);
       }
-    } else {
+    } else { // Se não tem systemAppointmentId, tenta encontrar por googleEventId
       appointmentLocal = await Appointment.findOne({
         where: { googleEventId: googleEvent.id, '$financialAccount.clientId$': systemClientId },
         include: [
@@ -497,91 +497,132 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
 
     if (endDateTimeString) {
         const eventEndDateTime = new Date(endDateTimeString);
-        if (eventEndDateTime > eventStartDateTime) {
+        if (eventEndDateTime > eventStartDateTime) { // Garante que end é depois de start
             durationMinutes = Math.round((eventEndDateTime.getTime() - eventStartDateTime.getTime()) / 60000);
-        } else if (googleEvent.start?.dateTime && googleEvent.end?.dateTime) { // Se ambos são dateTime e end <= start
-            durationMinutes = 60; // Default para 60 min se inválido
-            logger.warn(`[ApptServiceFromGoogle] Duração inválida ou zero para evento ${googleEvent.id} (end: ${endDateTimeString}, start: ${startDateTimeString}). Usando default de 60 min.`);
         }
         // Se for evento de dia inteiro (só date), durationMinutes permanece null
+        // Se for evento com hora e a duração é zero ou negativa, mapToGoogleEvent no googleCalendarService define um default
     }
 
 
-    let systemStatus = 'Scheduled';
+    let systemStatus = 'Scheduled'; // Default
     if (googleEvent.status === 'cancelled') systemStatus = 'Cancelled';
     else if (googleEvent.status === 'confirmed') systemStatus = 'Confirmed';
 
+
     let systemTitle = googleEvent.summary || 'Compromisso do Google';
     const pfPrefix = "[Pessoal] ";
-    const pjPrefixRegex = /\[(.*?)\] /;
+    const pjMeiPrefixRegex = /^\[(PJ|MEI|[^\]]+)\]\s*/i;
+
     let identifiedFinancialAccountId = appointmentLocal ? appointmentLocal.financialAccountId : null;
-    let identifiedAccountType = appointmentLocal ? appointmentLocal.financialAccount.accountType : (googleEvent.extendedProperties?.private?.systemAccountType);
+    let identifiedAccountType = appointmentLocal
+        ? appointmentLocal.financialAccount.accountType
+        : (googleEvent.extendedProperties?.private?.systemAccountType);
+    let googleEventNeedsCosmeticUpdate = false; // Flag para saber se precisamos atualizar o evento Google (cor/título/props)
 
-    if (!identifiedFinancialAccountId) {
-        if (systemTitle.startsWith(pfPrefix)) {
-            systemTitle = systemTitle.substring(pfPrefix.length);
-            if (!identifiedAccountType) identifiedAccountType = 'PF';
-        } else {
-            const pjMatch = systemTitle.match(pjPrefixRegex);
-            if (pjMatch && pjMatch[1]) {
-                systemTitle = systemTitle.substring(pjMatch[0].length);
-                const companyNameInTitle = pjMatch[1];
-                if (!identifiedAccountType) identifiedAccountType = 'PJ'; // Ou MEI, o tipo exato virá da FA
-                const matchedPjAccount = clientPjAccounts.find(acc => acc.accountName.toLowerCase() === companyNameInTitle.toLowerCase());
-                if (matchedPjAccount) {
-                    identifiedFinancialAccountId = matchedPjAccount.id;
-                    identifiedAccountType = matchedPjAccount.accountType; // Pega o tipo exato da conta encontrada
-                }
+    // 1. Tenta identificar FA e Tipo pelas props do Google Event se já sincronizado antes
+    if (identifiedAccountType && !identifiedFinancialAccountId) {
+        if (identifiedAccountType === 'PF') identifiedFinancialAccountId = defaultFinancialAccountIdPF;
+        else if ((identifiedAccountType === 'PJ' || identifiedAccountType === 'MEI') && clientPjAccounts.length > 0) {
+            // Se o tipo é PJ/MEI e só há uma conta desse tipo, podemos assumir.
+            const specificTypeAccounts = clientPjAccounts.filter(acc => acc.accountType === identifiedAccountType);
+            if (specificTypeAccounts.length === 1) {
+                identifiedFinancialAccountId = specificTypeAccounts[0].id;
+            } else if (clientPjAccounts.length === 1 && (clientPjAccounts[0].accountType === 'PJ' || clientPjAccounts[0].accountType === 'MEI')) {
+                // Se só existe UMA conta empresarial no total, e o tipo da prop é PJ ou MEI
+                identifiedFinancialAccountId = clientPjAccounts[0].id;
+                identifiedAccountType = clientPjAccounts[0].accountType; // Garante que o tipo seja o da conta encontrada
             }
         }
+    }
+    
+    // 2. Tenta identificar/refinar pelo título do evento Google
+    const currentGoogleSummary = googleEvent.summary || '';
+    const pfPrefixLower = pfPrefix.toLowerCase();
 
-        if (identifiedAccountType && !identifiedFinancialAccountId) {
-            if (identifiedAccountType === 'PF') identifiedFinancialAccountId = defaultFinancialAccountIdPF;
-            else if ((identifiedAccountType === 'PJ' || identifiedAccountType === 'MEI') && clientPjAccounts.length > 0) {
-                if (clientPjAccounts.length === 1) { // Se só uma conta PJ/MEI, usa ela.
-                    identifiedFinancialAccountId = clientPjAccounts[0].id;
-                    identifiedAccountType = clientPjAccounts[0].accountType;
-                }
-                // Se mais de uma PJ/MEI e o nome no título não bateu, fica mais difícil deduzir.
-            }
+    if (currentGoogleSummary.toLowerCase().startsWith(pfPrefixLower)) {
+        systemTitle = currentGoogleSummary.substring(pfPrefix.length);
+        if (!identifiedAccountType) identifiedAccountType = 'PF'; // Define se não estava nas props
+        if (identifiedAccountType === 'PF' && !identifiedFinancialAccountId) identifiedFinancialAccountId = defaultFinancialAccountIdPF;
+        if (identifiedAccountType === 'PF' && !currentGoogleSummary.startsWith(pfPrefix)) googleEventNeedsCosmeticUpdate = true;
+    } else {
+      const pjMeiMatch = currentGoogleSummary.match(pjMeiPrefixRegex);
+      if (pjMeiMatch) {
+        const extractedNameOrType = pjMeiMatch[1];
+        systemTitle = currentGoogleSummary.substring(pjMeiMatch[0].length);
+
+        if (!identifiedAccountType) { // Se as props não definiram o tipo
+            if (extractedNameOrType.toUpperCase() === 'PJ') identifiedAccountType = 'PJ';
+            else if (extractedNameOrType.toUpperCase() === 'MEI') identifiedAccountType = 'MEI';
+            else identifiedAccountType = 'PJ'; // Assume PJ se for um nome de empresa não específico
         }
 
-        if (!identifiedFinancialAccountId && googleEvent.colorId) {
-            const clientFull = await Client.findByPk(systemClientId, { transaction: t });
-            if (clientFull) {
-                if (googleEvent.colorId === clientFull.googleCalendarColorIdPF) {
-                    identifiedFinancialAccountId = defaultFinancialAccountIdPF;
-                    if (!identifiedAccountType && defaultFinancialAccountIdPF) identifiedAccountType = 'PF';
-                } else if (googleEvent.colorId === clientFull.googleCalendarColorIdPJ && clientPjAccounts.length > 0) {
-                    if (clientPjAccounts.length === 1) {
-                         identifiedFinancialAccountId = clientPjAccounts[0].id;
-                         identifiedAccountType = clientPjAccounts[0].accountType;
+        if (identifiedAccountType === 'PJ' || identifiedAccountType === 'MEI') {
+            if (!identifiedFinancialAccountId) {
+                const matchedPjAccountByName = clientPjAccounts.find(acc => acc.accountName.toLowerCase() === extractedNameOrType.toLowerCase());
+                if (matchedPjAccountByName) {
+                    identifiedFinancialAccountId = matchedPjAccountByName.id;
+                    identifiedAccountType = matchedPjAccountByName.accountType; // Pega o tipo exato da conta
+                } else {
+                    // Se não achou pelo nome exato, e só tem uma conta do tipo identificado, usa ela
+                    const specificTypeAccounts = clientPjAccounts.filter(acc => acc.accountType === identifiedAccountType);
+                    if (specificTypeAccounts.length === 1) {
+                        identifiedFinancialAccountId = specificTypeAccounts[0].id;
+                    } else if (clientPjAccounts.length === 1 && (clientPjAccounts[0].accountType === 'PJ' || clientPjAccounts[0].accountType === 'MEI')) {
+                        // Se só tem uma conta empresarial no total E o título indica algo empresarial
+                        identifiedFinancialAccountId = clientPjAccounts[0].id;
+                        identifiedAccountType = clientPjAccounts[0].accountType;
                     }
-                    // Se tem mais de uma PJ e usou a cor PJ genérica, ainda é ambíguo sem o nome no título.
+                }
+            }
+            if (identifiedFinancialAccountId) {
+                const correctPjAccount = await FinancialAccount.findByPk(identifiedFinancialAccountId, {attributes: ['accountName'], transaction:t});
+                if (correctPjAccount && !currentGoogleSummary.startsWith(`[${correctPjAccount.accountName}]`)) googleEventNeedsCosmeticUpdate = true;
+            }
+        }
+      }
+    }
+
+    // 3. Tenta pela cor se ainda sem FA e se for um evento novo para o sistema
+    if (!appointmentLocal && !identifiedFinancialAccountId && googleEvent.colorId) {
+        const clientFull = await Client.findByPk(systemClientId, { transaction: t }); // Para pegar as googleCalendarColorIdPF/PJ
+        if (clientFull) {
+            if (googleEvent.colorId === clientFull.googleCalendarColorIdPF) {
+                identifiedFinancialAccountId = defaultFinancialAccountIdPF;
+                if (!identifiedAccountType && defaultFinancialAccountIdPF) identifiedAccountType = 'PF';
+                if (!currentGoogleSummary.startsWith(pfPrefix)) googleEventNeedsCosmeticUpdate = true;
+            } else if (googleEvent.colorId === clientFull.googleCalendarColorIdPJ) {
+                // Se a cor é PJ, tenta associar à conta PJ (se houver apenas uma, ou se o título ajudar)
+                const pjOrMeiAccounts = clientPjAccounts.filter(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
+                if (pjOrMeiAccounts.length === 1) {
+                     identifiedFinancialAccountId = pjOrMeiAccounts[0].id;
+                     identifiedAccountType = pjOrMeiAccounts[0].accountType;
+                     if (!currentGoogleSummary.startsWith(`[${pjOrMeiAccounts[0].accountName}]`)) googleEventNeedsCosmeticUpdate = true;
+                } else if (pjOrMeiAccounts.length > 1) {
+                    logger.warn(`[ApptServiceFromGoogle] Evento Google ${googleEvent.id} com cor PJ, mas cliente ${systemClientId} tem múltiplas contas PJ/MEI. Título é necessário para desambiguar.`);
                 }
             }
         }
-    } else if (appointmentLocal && !identifiedAccountType) { // Garante que temos o tipo da conta se o appointmentLocal existe
-        identifiedAccountType = appointmentLocal.financialAccount.accountType;
+    }
+    
+    // 4. Se temos ID da FA mas não o tipo, busca o tipo.
+    if (identifiedFinancialAccountId && !identifiedAccountType) {
+        const faForType = await FinancialAccount.findByPk(identifiedFinancialAccountId, { attributes: ['accountType'], transaction: t });
+        if (faForType) {
+            identifiedAccountType = faForType.accountType;
+        } else {
+             await t.rollback();
+             logger.error(`[ApptServiceFromGoogle] FinancialAccount ID ${identifiedFinancialAccountId} (deduzida) não encontrada no banco para evento ${googleEvent.id}. Abortando.`);
+             return null;
+        }
     }
 
 
     if (!identifiedFinancialAccountId) {
       await t.rollback();
-      logger.warn(`[ApptServiceFromGoogle] Não foi possível determinar FinancialAccount para Google Event ID ${googleEvent.id} (Cliente ${systemClientId}). Título: "${googleEvent.summary}", Cor: ${googleEvent.colorId}, Props: ${JSON.stringify(googleEvent.extendedProperties?.private)}. Ignorando.`);
+      logger.warn(`[ApptServiceFromGoogle] Não foi possível determinar FinancialAccount para Google Event ID ${googleEvent.id} (Cliente ${systemClientId}). Título: "${currentGoogleSummary}", Cor: ${googleEvent.colorId}. Ignorando.`);
       return null;
     }
-    // Se identificamos a FA, mas não o tipo ainda (caso raro), buscamos para garantir
-    if (!identifiedAccountType) {
-        const faCheck = await FinancialAccount.findByPk(identifiedFinancialAccountId, {attributes: ['accountType'], transaction:t});
-        if (faCheck) identifiedAccountType = faCheck.accountType;
-        else { // Se a FA ID não for válida, aborta.
-             await t.rollback();
-             logger.error(`[ApptServiceFromGoogle] FinancialAccount ID ${identifiedFinancialAccountId} (deduzida) não encontrada no banco. Abortando para Google Event ${googleEvent.id}`);
-             return null;
-        }
-    }
-
 
     let systemDescription = googleEvent.description || '';
     systemDescription = systemDescription.replace(/\n\n--- Participantes do Negócio ---\n(- .+\n?)+/, '').trim();
@@ -590,7 +631,7 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
     const appointmentData = {
       title: systemTitle.substring(0, 255),
       description: systemDescription,
-      eventDateTime: eventStartDateTime, // Já é um objeto Date
+      eventDateTime: eventStartDateTime,
       durationMinutes: durationMinutes,
       location: googleEvent.location ? googleEvent.location.substring(0, 255) : null,
       status: systemStatus,
@@ -616,52 +657,30 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
                     where: { email: attendeeEmailLower, financialAccountId: identifiedFinancialAccountId },
                     transaction: t
                 });
-
                 if (!businessClient) {
                     let nameForNewBC = attendee.displayName;
-                    if (!nameForNewBC && attendeeEmailLower) {
-                        nameForNewBC = attendeeEmailLower.split('@')[0];
-                    }
-                    if (!nameForNewBC || nameForNewBC.trim() === '') {
-                        nameForNewBC = "Convidado Google";
-                    }
+                    if (!nameForNewBC && attendeeEmailLower) nameForNewBC = attendeeEmailLower.split('@')[0];
+                    if (!nameForNewBC || nameForNewBC.trim() === '') nameForNewBC = "Convidado Google";
                     nameForNewBC = nameForNewBC.trim().substring(0, 255);
-
-                    logger.info(`[ApptServiceFromGoogle] Attendee "${nameForNewBC}" (Email: ${attendeeEmailLower}) não encontrado. Criando novo BusinessClient para FA ${identifiedFinancialAccountId}.`);
+                    logger.info(`[ApptServiceFromGoogle] Attendee "${nameForNewBC}" (Email: ${attendeeEmailLower}) não encontrado. Criando BusinessClient para FA ${identifiedFinancialAccountId}.`);
                     try {
                         businessClient = await businessClientService.createBusinessClient(
-                            identifiedFinancialAccountId,
-                            {
-                                name: nameForNewBC,
-                                email: attendeeEmailLower,
-                                phone: null,
-                                photoUrl: null,
-                                notes: '', // Notas vazias por padrão
-                                isActive: true,
-                            },
-                            { transaction: t }
+                            identifiedFinancialAccountId, {
+                                name: nameForNewBC, email: attendeeEmailLower, phone: null,
+                                photoUrl: null, notes: '', isActive: true,
+                            }, { transaction: t }
                         );
                     } catch (createBcError) {
-                        logger.error(`[ApptServiceFromGoogle] Erro ao criar BusinessClient para attendee ${attendeeEmailLower} com nome "${nameForNewBC}": ${createBcError.message}. Verificando se já existe por nome (sem email)...`);
-                        // Se a criação falhou (ex: email já existe em outro FA, ou nome duplicado neste FA se email era nulo)
-                        // Tenta buscar pelo nome (se o erro não foi de nome duplicado) ou apenas loga e continua.
-                        // A validação de unicidade de email no BusinessClient é global ou por FA? Se for por FA, a busca acima já pegaria.
-                        // Se o erro foi `Já existe um cliente com o email "${clientData.email}" nesta conta financeira.`, então o BC já existe.
-                        if (createBcError.message.includes('Já existe um cliente com o email')) {
+                        logger.error(`[ApptServiceFromGoogle] Erro ao criar BC para ${attendeeEmailLower} ("${nameForNewBC}"): ${createBcError.message}. Verificando se já existe...`);
+                        if (createBcError.message.includes('Já existe um cliente com o email') || createBcError.message.includes('unique_business_client_email_per_account')) {
                              businessClient = await BusinessClient.findOne({ where: { email: attendeeEmailLower, financialAccountId: identifiedFinancialAccountId }, transaction: t });
-                        } else if (createBcError.message.includes('Já existe um cliente com o nome')) {
-                             businessClient = await BusinessClient.findOne({ where: { name: nameForNewBC, financialAccountId: identifiedFinancialAccountId, email: null }, transaction: t });
+                        } else if (createBcError.message.includes('Já existe um cliente com o nome') || createBcError.message.includes('unique_business_client_name_per_account')) {
+                             businessClient = await BusinessClient.findOne({ where: { name: nameForNewBC, financialAccountId: identifiedFinancialAccountId }, transaction: t });
                         }
-
-                        if (!businessClient) {
-                            logger.warn(`[ApptServiceFromGoogle] Não foi possível encontrar ou criar BusinessClient para ${attendeeEmailLower} (Nome usado: "${nameForNewBC}") após erro.`);
-                            continue;
-                        }
+                        if (!businessClient) { logger.warn(`[ApptServiceFromGoogle] Impossível criar/encontrar BC para ${attendeeEmailLower}.`); continue; }
                     }
                 }
-                if (businessClient) {
-                    newBusinessClientIdsToAssociate.push(businessClient.id);
-                }
+                if (businessClient) newBusinessClientIdsToAssociate.push(businessClient.id);
             }
         }
     }
@@ -670,8 +689,7 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
         operation = 'updated';
         const localLastSyncTime = appointmentLocal.googleEventLastUpdated ? new Date(appointmentLocal.googleEventLastUpdated).getTime() : 0;
         const googleUpdateTime = googleEvent.updated ? new Date(googleEvent.updated).getTime() : new Date().getTime();
-
-        let dataFieldsChanged = googleUpdateTime > localLastSyncTime; // Assume que mudou se o timestamp do Google é mais novo
+        let dataFieldsChanged = googleUpdateTime > localLastSyncTime;
         if (!dataFieldsChanged && systemAppointmentIdFromGoogle) {
              if (appointmentLocal.title !== appointmentData.title ||
                 (appointmentLocal.description || null) !== (appointmentData.description || null) ||
@@ -679,73 +697,62 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
                 (appointmentLocal.durationMinutes || null) !== (appointmentData.durationMinutes || null) ||
                 (appointmentLocal.location || null) !== (appointmentData.location || null) ||
                 appointmentLocal.status !== appointmentData.status ||
-                appointmentLocal.financialAccountId !== appointmentData.financialAccountId ) { // Verifica se a FA mudou (importante!)
+                appointmentLocal.financialAccountId !== appointmentData.financialAccountId) {
                 dataFieldsChanged = true;
             }
         }
-
         const attendeesActuallyChanged = JSON.stringify(currentAssociatedBusinessClientIds.sort()) !== JSON.stringify(newBusinessClientIdsToAssociate.sort());
-
-        if (!dataFieldsChanged && !attendeesActuallyChanged && systemAppointmentIdFromGoogle) {
+        if (!dataFieldsChanged && !attendeesActuallyChanged && systemAppointmentIdFromGoogle && !googleEventNeedsCosmeticUpdate) { // Adicionado !googleEventNeedsCosmeticUpdate
             await t.commit();
-            logger.info(`[ApptServiceFromGoogle] Appointment local ID ${appointmentLocal.id} (Google ID ${googleEvent.id}) e participantes já estão atualizados. Nenhuma ação de dados. LastLocalSync: ${appointmentLocal.googleEventLastUpdated}, GoogleUpdated: ${googleEvent.updated}`);
+            logger.info(`[ApptServiceFromGoogle] Appointment local ID ${appointmentLocal.id} (Google ${googleEvent.id}) e participantes já atualizados. Nenhuma ação.`);
             return appointmentLocal.toJSON();
         }
         if(dataFieldsChanged){
             logger.info(`[ApptServiceFromGoogle] Atualizando Appointment local ID ${appointmentLocal.id} com dados do Google Event ${googleEvent.id}.`);
             await appointmentLocal.update(appointmentData, { transaction: t });
         } else {
-            logger.info(`[ApptServiceFromGoogle] Dados principais do Appointment local ID ${appointmentLocal.id} não mudaram, verificando apenas participantes.`);
+            logger.info(`[ApptServiceFromGoogle] Dados principais do Appt ${appointmentLocal.id} não mudaram, verificando participantes/cosmética.`);
         }
-
     } else {
         operation = 'created';
         appointmentLocal = await Appointment.create(appointmentData, { transaction: t });
-
-        const clientOwner = await Client.findByPk(systemClientId, { transaction: t });
-        const faForMapping = await FinancialAccount.findByPk(identifiedFinancialAccountId, { transaction: t });
-
-        if (clientOwner && faForMapping) {
-            let tempAppointmentForGoogleMap = {
-                ...appointmentLocal.toJSON(),
-                financialAccount: faForMapping.toJSON(),
-                businessClients: []
-            };
-            if (newBusinessClientIdsToAssociate.length > 0) {
-                tempAppointmentForGoogleMap.businessClients = await BusinessClient.findAll({ where: { id: { [Op.in]: newBusinessClientIdsToAssociate } }, transaction: t });
-            }
-            logger.info(`[ApptServiceFromGoogle] Novo Appointment ${appointmentLocal.id} criado do Google Event ${googleEvent.id}. Atualizando Google com extendedProperties...`);
-            googleCalendarService.updateGoogleEvent(systemClientId, googleEvent.id, tempAppointmentForGoogleMap)
-                .then(updatedGoogleEvent => {
-                    if (updatedGoogleEvent) logger.info(`[ApptServiceFromGoogle] Evento Google ${googleEvent.id} atualizado com props do sistema (async).`);
-                    else logger.warn(`[ApptServiceFromGoogle] Falha ao atualizar evento Google ${googleEvent.id} com props do sistema após criação local (async).`);
-                })
-                .catch(err => logger.error(`[ApptServiceFromGoogle] Erro na atualização assíncrona do evento Google ${googleEvent.id}: ${err.message}`));
-        }
+        googleEventNeedsCosmeticUpdate = true; // Sempre precisa adicionar props para novos e garantir cor/título
     }
 
     if (appointmentLocal && (identifiedAccountType === 'PJ' || identifiedAccountType === 'MEI')) {
-        const businessClientIdsToRemove = currentAssociatedBusinessClientIds.filter(id => !newBusinessClientIdsToAssociate.includes(id));
-        if (businessClientIdsToRemove.length > 0) {
-            await AppointmentBusinessClient.destroy({ where: { appointmentId: appointmentLocal.id, businessClientId: { [Op.in]: businessClientIdsToRemove } }, transaction: t });
-            logger.info(`[ApptServiceFromGoogle] Removidos ${businessClientIdsToRemove.length} BusinessClients do Appointment ID ${appointmentLocal.id}.`);
+        const toRemove = currentAssociatedBusinessClientIds.filter(id => !newBusinessClientIdsToAssociate.includes(id));
+        if (toRemove.length > 0) await AppointmentBusinessClient.destroy({ where: { appointmentId: appointmentLocal.id, businessClientId: { [Op.in]: toRemove } }, transaction: t });
+        const toAdd = newBusinessClientIdsToAssociate.filter(id => !currentAssociatedBusinessClientIds.includes(id));
+        if (toAdd.length > 0) await AppointmentBusinessClient.bulkCreate(toAdd.map(bcId => ({ appointmentId: appointmentLocal.id, businessClientId: bcId })), { transaction: t });
+    }
+
+    if (googleEventNeedsCosmeticUpdate && appointmentLocal) {
+        const clientOwner = await Client.findByPk(systemClientId, { transaction: t });
+        const faForGoogleMap = await FinancialAccount.findByPk(identifiedFinancialAccountId, { include: [{ model: Client, as: 'ownerClient' }], transaction: t });
+        let bcForGoogleMap = [];
+        if (newBusinessClientIdsToAssociate.length > 0) {
+            bcForGoogleMap = await BusinessClient.findAll({ where: { id: { [Op.in]: newBusinessClientIdsToAssociate } }, transaction: t });
         }
-        const businessClientIdsToAdd = newBusinessClientIdsToAssociate.filter(id => !currentAssociatedBusinessClientIds.includes(id));
-        if (businessClientIdsToAdd.length > 0) {
-            const associations = businessClientIdsToAdd.map(bcId => ({ appointmentId: appointmentLocal.id, businessClientId: bcId }));
-            await AppointmentBusinessClient.bulkCreate(associations, { transaction: t });
-            logger.info(`[ApptServiceFromGoogle] Adicionados ${businessClientIdsToAdd.length} BusinessClients ao Appointment ID ${appointmentLocal.id}.`);
+        if (clientOwner && faForGoogleMap && faForGoogleMap.ownerClient) { // Garante que ownerClient está carregado para as cores
+            // Atualiza o ownerClient na FA com as cores mais recentes do clientOwner
+            faForGoogleMap.ownerClient = clientOwner;
+
+            const tempAppointmentForGoogleMap = {
+                ...appointmentLocal.toJSON(),
+                financialAccount: faForGoogleMap.toJSON(),
+                businessClients: bcForGoogleMap.map(bc => bc.toJSON())
+            };
+            logger.info(`[ApptServiceFromGoogle] Appt ${appointmentLocal.id}. Evento Google ${googleEvent.id} precisa de atualização de props/cosmética.`);
+            googleCalendarService.updateGoogleEvent(systemClientId, googleEvent.id, tempAppointmentForGoogleMap) // Async fire-and-forget
+                .then(updatedGE => { if(updatedGE) logger.info(`[ApptServiceFromGoogle] Evento Google ${googleEvent.id} atualizado (cosmética/props) async.`);})
+                .catch(err => logger.error(`[ApptServiceFromGoogle] Erro na atualização cosmética async do evento Google ${googleEvent.id}: ${err.message}`));
         }
     }
 
     await t.commit();
     logger.info(`[ApptServiceFromGoogle] Appointment ${operation} (ID: ${appointmentLocal.id}) para Cliente ${systemClientId} a partir do Google Event ID ${googleEvent.id}.`);
-
     const reloadedAppt = await Appointment.findByPk(appointmentLocal.id, {
-        include: [
-            { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] },
-            { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES }
-        ]
+        include: [ { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] }, { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES }]
     });
     return reloadedAppt.toJSON();
 
@@ -757,6 +764,7 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
     return null;
   }
 }
+
 async function deleteOrCancelAppointmentByGoogleId(googleEventId, systemClientId) {
   const t = await sequelize.transaction();
   try {
@@ -776,8 +784,8 @@ async function deleteOrCancelAppointmentByGoogleId(googleEventId, systemClientId
         logger.info(`[ApptServiceFromGoogleDelete] Marcando Appointment ID ${appointmentLocal.id} (Google ID ${googleEventId}) como Cancelado e desvinculando...`);
         await appointmentLocal.update({
             status: 'Cancelled',
-            googleEventId: null,
-            googleEventLastUpdated: new Date()
+            googleEventId: null, 
+            googleEventLastUpdated: new Date() 
         }, { transaction: t });
     } else {
         logger.info(`[ApptServiceFromGoogleDelete] Appointment ID ${appointmentLocal.id} (Google ID ${googleEventId}) já estava Cancelado/desvinculado.`);
