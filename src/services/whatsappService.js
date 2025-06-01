@@ -1,6 +1,7 @@
 // src/services/whatsappService.js
 const logger = require('../utils/logger');
 const axios = require('axios'); // Certifique-se de que está instalado: npm install axios
+const path = require('path'); // Para extrair extensão do arquivo
 
 // Seus dados da Z-API (idealmente do .env)
 const ZAPI_INSTANCE_ID = process.env.ZAPI_INSTANCE_ID || "3E036BB2BDD5306BF3C102121E6AE94B";
@@ -71,31 +72,16 @@ async function sendButtonListMessage(phone, messageText, buttons, listTitle = "O
     return null;
   }
 
-  // O endpoint fornecido na documentação é /send-button-list
-  // Mas a estrutura do body que você passou é para uma "Lista de Botões" que é um tipo específico,
-  // não botões de resposta rápida (quick reply buttons) que são diferentes.
-  // Vou seguir a estrutura do body que você mandou, que parece ser para "Lista de Botões".
-  // Se for "Botões de Resposta Rápida", a estrutura do payload e o endpoint podem ser outros.
-  // A documentação da Z-API pode ter um endpoint específico como `/send-list-message` ou `/send-buttons`
-  // Vou usar o endpoint `/send-button-list` conforme você indicou.
   const endpoint = `${BASE_URL}/send-button-list`;
 
   const payload = {
     phone: phone.replace(/\D/g, ''),
-    message: messageText, // Mensagem principal que acompanha a lista
+    message: messageText, 
     buttonList: {
-      // title: listTitle, // Título da seção da lista (a Z-API pode ou não usar isso)
-      // buttonText: buttonListText, // Texto do botão que revela a lista
-      buttons: buttons.map(btn => ({ id: btn.id.toString(), label: btn.label })), // Garante que ID seja string
-      // description: "Selecione uma das opções abaixo" // Descrição opcional
+      buttons: buttons.map(btn => ({ id: btn.id.toString(), label: btn.label })), 
     }
   };
-
-  // Algumas APIs de lista de botões podem ter uma estrutura um pouco diferente, como:
-  // "buttonList": { "title": "Título Principal", "buttonText": "Ver Opções", "sections": [{ "title": "Seção 1", "rows": buttons }] }
-  // É CRUCIAL verificar a documentação exata da Z-API para o formato de "send-button-list".
-  // Estou usando o formato que você forneceu no exemplo de body.
-
+  
   const headers = {
     'Content-Type': 'application/json',
     'client-token': ZAPI_CLIENT_TOKEN,
@@ -116,7 +102,60 @@ async function sendButtonListMessage(phone, messageText, buttons, listTitle = "O
 }
 
 
+/**
+ * Baixa um arquivo de mídia da Z-API.
+ * @param {string} mediaUrl - URL do arquivo de mídia fornecida pela Z-API.
+ * @returns {Promise<{stream: ReadableStream, filename: string}|null>} Objeto com o stream do áudio e um nome de arquivo sugerido, ou null em caso de erro.
+ */
+async function downloadZapiMedia(mediaUrl) {
+  if (!ZAPI_CLIENT_TOKEN) {
+    logger.error('[WhatsAppService - Download] ZAPI_CLIENT_TOKEN não configurado.');
+    return null;
+  }
+  if (!mediaUrl) {
+    logger.error('[WhatsAppService - Download] mediaUrl não fornecida.');
+    return null;
+  }
+
+  try {
+    logger.info(`[WhatsAppService - Download] Baixando mídia de: ${mediaUrl}`);
+    const response = await axios({
+      method: 'get',
+      url: mediaUrl,
+      headers: {
+        'client-token': ZAPI_CLIENT_TOKEN, // Adiciona o client-token para autenticar o download
+      },
+      responseType: 'stream', // Importante para obter um stream
+    });
+
+    // Tentar extrair um nome de arquivo e extensão da URL ou dos headers
+    let filename = 'audio.ogg'; // Default filename
+    try {
+        const urlPath = new URL(mediaUrl).pathname;
+        const baseName = path.basename(urlPath);
+        if (baseName && baseName.includes('.')) { // Verifica se há uma extensão
+            filename = baseName;
+        }
+    } catch (e) {
+        logger.warn(`[WhatsAppService - Download] Não foi possível parsear a URL para extrair nome do arquivo: ${mediaUrl}. Usando default: ${filename}`);
+    }
+    // Poderia também verificar response.headers['content-type'] para inferir a extensão se necessário
+    // Ex: const contentType = response.headers['content-type'];
+    // if (contentType === 'audio/ogg') filename = 'audio.ogg';
+
+    logger.info(`[WhatsAppService - Download] Mídia baixada com sucesso. Nome de arquivo sugerido: ${filename}`);
+    return { stream: response.data, filename };
+
+  } catch (error) {
+    const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
+    const errorStatus = error.response?.status;
+    logger.error(`[WhatsAppService - Download] Erro ao baixar mídia de ${mediaUrl}. Status ${errorStatus}`, { errorMessage });
+    return null;
+  }
+}
+
 module.exports = {
   sendWhatsappMessage,
   sendButtonListMessage,
+  downloadZapiMedia, // <<< ADICIONADO
 };

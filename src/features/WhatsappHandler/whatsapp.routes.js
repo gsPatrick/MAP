@@ -10,9 +10,7 @@ router.post('/webhook', whatsappController.handleIncomingMessage);
 
 // Opcional: Rota GET para verificação do webhook pela Z-API (se eles usarem esse método)
 router.get('/webhook', (req, res) => {
-  // Lógica de verificação do token do webhook se a Z-API usar o método GET para isso
-  // Exemplo para APIs baseadas no modelo do Facebook/Meta:
-  const VERIFY_TOKEN = process.env.ZAPI_WEBHOOK_VERIFY_TOKEN; // Você precisaria definir isso no .env
+  const VERIFY_TOKEN = process.env.ZAPI_WEBHOOK_VERIFY_TOKEN; 
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
@@ -23,14 +21,12 @@ router.get('/webhook', (req, res) => {
       res.status(200).send(challenge);
     } else {
       logger.warn('[WHATSAPP WEBHOOK] Falha na verificação do Webhook GET (token inválido).');
-      res.sendStatus(403); // Forbidden
+      res.sendStatus(403); 
     }
   } else {
-    // Se não for uma requisição de verificação, apenas confirma que o endpoint GET está ativo.
     logger.info('[WHATSAPP WEBHOOK] Requisição GET recebida (sem parâmetros de verificação).');
     res.status(200).send('Endpoint de Webhook para WhatsApp (Z-API) está ativo. Use POST para enviar mensagens.');
   }
 });
-
 
 module.exports = router;

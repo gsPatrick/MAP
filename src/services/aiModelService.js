@@ -1,6 +1,10 @@
 // src/services/aiModelService.js
 const OpenAI = require('openai');
 const logger =require('../utils/logger');
+const axios = require('axios'); // Adicionado para o caso de precisar baixar (embora o whatsappService vá fazer isso)
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_API_KEY) {
@@ -12,6 +16,89 @@ const openai = new OpenAI({
 });
 
 const ASSISTANT_NAME = "MAP no Controle";
+
+/**
+ * Transcreve um stream de áudio usando o modelo Whisper da OpenAI.
+ * @param {ReadableStream} audioStream - O stream do áudio a ser transcrito.
+ * @param {string} inputFilename - O nome do arquivo original (ex: 'audio.ogg'), importante para o Whisper inferir o formato.
+ * @returns {Promise<string>} O texto transcrito.
+ */
+async function transcribeAudioStream(audioStream, inputFilename) {
+  if (!OPENAI_API_KEY) {
+    logger.error('[AI SERVICE - WHISPER] OPENAI_API_KEY não configurada.');
+    throw new Error('Configuração da API da OpenAI ausente para transcrição.');
+  }
+  if (!audioStream) {
+    logger.error('[AI SERVICE - WHISPER] Stream de áudio não fornecido.');
+    throw new Error('Stream de áudio é necessário para transcrição.');
+  }
+  if (!inputFilename) {
+    logger.warn('[AI SERVICE - WHISPER] inputFilename não fornecido para o stream de áudio. Usando "audio.unknown".');
+    inputFilename = 'audio.unknown';
+  }
+
+  let tempFilePath = null;
+  try {
+    // Whisper funciona melhor se receber um arquivo real ou um stream de arquivo.
+    // Salvar o stream em um arquivo temporário é a abordagem mais robusta.
+    tempFilePath = path.join(os.tmpdir(), `whisper_${Date.now()}_${path.basename(inputFilename)}`);
+    
+    logger.info(`[AI SERVICE - WHISPER] Salvando stream de áudio em arquivo temporário: ${tempFilePath}`);
+    const writer = fs.createWriteStream(tempFilePath);
+    audioStream.pipe(writer);
+
+    await new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', (err) => {
+        logger.error(`[AI SERVICE - WHISPER] Erro ao salvar áudio temporário do stream: ${err.message}`);
+        reject(new Error(`Erro ao escrever stream de áudio em arquivo temporário: ${err.message}`));
+      });
+      audioStream.on('error', (err) => { // Capturar erros do stream de origem também
+        logger.error(`[AI SERVICE - WHISPER] Erro no stream de áudio de origem: ${err.message}`);
+        writer.end(); // Garante que o writer seja fechado
+        reject(new Error(`Erro no stream de áudio de origem: ${err.message}`));
+      });
+    });
+
+    logger.info(`[AI SERVICE - WHISPER] Áudio salvo temporariamente. Enviando para transcrição Whisper...`);
+
+    const transcription = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(tempFilePath), // Envia o arquivo salvo
+      model: "whisper-1",
+      language: "pt", // Especificar o idioma (Português)
+      response_format: "text" // Queremos apenas o texto
+    });
+
+    const transcribedText = String(transcription); // O resultado de response_format: "text" é diretamente o texto
+
+    if (transcribedText.trim() === "") {
+      logger.warn(`[AI SERVICE - WHISPER] Transcrição do arquivo ${inputFilename} resultou em texto vazio.`);
+      return ""; // Retorna string vazia se a transcrição não produzir nada útil
+    }
+
+    logger.info(`[AI SERVICE - WHISPER] Texto transcrito de ${inputFilename}: "${transcribedText.substring(0, 100)}..."`);
+    return transcribedText;
+
+  } catch (error) {
+    let errorMessage = `Falha ao transcrever áudio (${inputFilename})`;
+    if (error.response && error.response.data) { // Erros da API OpenAI
+        logger.error('[AI SERVICE - WHISPER] Erro da API OpenAI:', error.response.data);
+        errorMessage += `: ${JSON.stringify(error.response.data.error?.message || error.response.data)}`;
+    } else {
+        logger.error('[AI SERVICE - WHISPER] Erro durante a transcrição do áudio (stream):', { message: error.message, stack: error.stack });
+        errorMessage += `: ${error.message}`;
+    }
+    throw new Error(errorMessage);
+  } finally {
+    if (tempFilePath) {
+      fs.unlink(tempFilePath, (err) => {
+        if (err) logger.error(`[AI SERVICE - WHISPER] Falha ao deletar arquivo de áudio temporário ${tempFilePath}: ${err.message}`);
+        else logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário ${tempFilePath} deletado.`);
+      });
+    }
+  }
+}
+
 
 function buildSystemPrompt(conversationContext) {
   const now = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
@@ -487,7 +574,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     const completion = await openai.chat.completions.create({
       model: modelToUse,
       messages: messagesToSendToAPI,
-      temperature: 0.15, // Aumentei levemente para mais criatividade nas saudações, mas ainda baixo para precisão.
+      temperature: 0.15, 
       response_format: { type: "json_object" },
     });
 
@@ -544,4 +631,5 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
 module.exports = {
   interpretUserMessage,
   ASSISTANT_NAME,
+  transcribeAudioStream, // <<< ADICIONADO
 };

@@ -11,10 +11,12 @@ const businessClientService = require('../BusinessClient/BusinessClient.service'
 const sharedAccessService = require('../SharedAccess/sharedAccess.service');
 const systemService = require('../System/system.service');
 
-
-const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
+// Importa as funções de envio e download do serviço de WhatsApp genérico
+const { sendWhatsappMessage, sendButtonListMessage, downloadZapiMedia } = require('../../services/whatsappService');
+// Importa o serviço do modelo de IA, que agora inclui a transcrição
 const aiModelService = require('../../services/aiModelService');
 const logger = require('../../utils/logger');
+const path = require('path'); // Necessário para extrair nome de arquivo da URL de mídia
 
 const conversationState = new Map();
 const MAX_HISTORY_FOR_AI = 8;
@@ -605,16 +607,20 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
             canAccessBusinessProfileId: sharedAccessRecord.canAccessBusinessProfileId,
         };
         if (sharedAccessRecord.ownerClient) { 
-            ownerClientForContext = sharedAccessRecord.ownerClient;
+            ownerClientForContext = sharedAccessRecord.ownerClient; // Aqui ownerClient é o objeto completo, incluindo accessLevel, etc.
             ownerClientNameForContext = ownerClientForContext.name ? ownerClientForContext.name.split(" ")[0] : "Dono(a) da Conta";
         } else { 
-            const ownerClientTemp = await clientService.findClientById(ownerClientIdForContext);
-             if(ownerClientTemp) {
-                ownerClientForContext = ownerClientTemp;
+            // Este 'else' idealmente não deveria ser atingido se sharedAccessRecord.ownerClient é populado corretamente
+            const ownerClientTemp = await clientService.getClientContactById(ownerClientIdForContext);
+             if(ownerClientTemp) { // ownerClientTemp será um objeto JSON
+                ownerClientForContext = ownerClientTemp; // Mantém como objeto JSON
                 ownerClientNameForContext = ownerClientTemp.name ? ownerClientTemp.name.split(" ")[0] : "Dono(a) da Conta";
             } else {
                  logger.error(`[InitializeState] CRITICAL: Dono da conta ${ownerClientIdForContext} não encontrado para acesso compartilhado.`);
                 ownerClientNameForContext = "Dono(a) da Conta"; 
+                // ownerClientForContext permaneceria como o 'client' (ator), o que é incorreto para lógica de plano
+                // É melhor lançar um erro ou ter um objeto 'ownerClientForContext' mockado/padrão para evitar 'undefined.accessLevel'
+                ownerClientForContext = { accessLevel: 'gratuito', accessExpiresAt: null, id: ownerClientIdForContext, name: "Dono Desconhecido" }; // Objeto Padrão
             }
         }
         logger.info(`[WHATSAPP SERVICE - Initialize/UpdateState] Contexto de Acesso Compartilhado ATIVO. Ator: ${client.id} (${clientName}), Dono: ${ownerClientIdForContext} (${ownerClientNameForContext})`);
@@ -722,12 +728,16 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
                 existingState.activeFinancialAccountId = defaultAccount.id;
                 existingState.activeFinancialAccountName = defaultAccount.accountName || defaultAccount.name;
                 existingState.activeFinancialAccountType = defaultAccount.accountType || defaultAccount.type;
-            } else if (!currentActiveStillValid && accountsForOperation.length > 0) {
+            } else if (!currentActiveStillValid && accountsForOperation.length > 0) { // Se não há default mas há contas, força seleção
+                existingState.activeFinancialAccountId = null;
+                existingState.activeFinancialAccountName = null;
+                existingState.activeFinancialAccountType = null;
+            } else if (!currentActiveStillValid && accountsForOperation.length === 0) { // Nenhuma conta acessível
                 existingState.activeFinancialAccountId = null;
                 existingState.activeFinancialAccountName = null;
                 existingState.activeFinancialAccountType = null;
             }
-        } else {
+        } else { // Se não está onboarding_complete ou não tem plano pago, zera conta ativa
             existingState.activeFinancialAccountId = null;
             existingState.activeFinancialAccountName = null;
             existingState.activeFinancialAccountType = null;
@@ -779,44 +789,117 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
     return newState;
 }
 
+/**
+ * Processa uma mensagem de áudio recebida.
+ * Baixa o áudio, transcreve e, se bem-sucedido, chama processIncomingMessage com o texto.
+ */
+async function processIncomingAudioMessage(senderPhoneNormalized, mediaUrl, mimeType, pushName, rawPayload) {
+    logger.info(`[WHATSAPP SERVICE] Processando mensagem de áudio de ${senderPhoneNormalized}. URL: ${mediaUrl}`);
+    // Define pushNameFromPayload aqui, pois esta função é o ponto de entrada para áudios
+    pushNameFromPayload = pushName; 
+    
+    let filenameFromMime = 'audio.ogg'; // Default
+    if (mimeType) { // Tenta inferir uma extensão mais precisa do mimeType
+        if (mimeType.includes('opus')) filenameFromMime = 'audio.opus';
+        else if (mimeType.includes('aac')) filenameFromMime = 'audio.aac';
+        else if (mimeType.includes('mpeg')) filenameFromMime = 'audio.mp3';
+        else if (mimeType.includes('amr')) filenameFromMime = 'audio.amr';
+        // Adicione outros mime types comuns se necessário
+    }
+    // Se a URL tiver uma extensão, pode ser mais precisa.
+     try {
+        const urlPath = new URL(mediaUrl).pathname;
+        const baseName = path.basename(urlPath);
+        if (baseName && baseName.includes('.')) { // Verifica se há uma extensão
+             filenameFromMime = baseName; // Usa o nome do arquivo da URL se tiver extensão
+        }
+    } catch (e) { 
+        logger.warn(`[WHATSAPP SERVICE] Não foi possível parsear a URL para extrair nome do arquivo da mídia: ${mediaUrl}. Usando nome inferido: ${filenameFromMime}`);
+    }
+
+    try {
+        // Usa o serviço genérico de WhatsApp para baixar a mídia
+        const downloadedMedia = await downloadZapiMedia(mediaUrl); 
+        
+        if (downloadedMedia && downloadedMedia.stream) {
+            // Usa o nome do arquivo retornado pelo downloadZapiMedia (que já tenta extrair da URL)
+            // ou o nome inferido pelo mimeType como fallback.
+            const finalFilenameForWhisper = downloadedMedia.filename && downloadedMedia.filename.includes('.')
+                ? downloadedMedia.filename
+                : filenameFromMime;
+
+            logger.info(`[WHATSAPP SERVICE] Áudio baixado, enviando para transcrição com nome de arquivo: ${finalFilenameForWhisper}`);
+            // Usa o serviço de IA para transcrever o stream de áudio
+            const transcribedText = await aiModelService.transcribeAudioStream(downloadedMedia.stream, finalFilenameForWhisper);
+
+            if (transcribedText && transcribedText.trim() !== "") {
+                logger.info(`[WHATSAPP SERVICE] Áudio de ${senderPhoneNormalized} transcrito com sucesso. Chamando processIncomingMessage com o texto.`);
+                // Chama a função principal de processamento de mensagem com o texto transcrito
+                // Não precisa passar pushName aqui, pois pushNameFromPayload já foi setado globalmente (temporariamente) para esta execução
+                return await processIncomingMessage(senderPhoneNormalized, transcribedText, pushName, rawPayload);
+            } else {
+                logger.warn(`[WHATSAPP SERVICE] Transcrição do áudio de ${senderPhoneNormalized} resultou em texto vazio. Notificando usuário.`);
+                await sendWhatsappMessage(senderPhoneNormalized, "Não consegui entender o áudio que você enviou. 🤫 Pode tentar gravar novamente ou digitar, por favor?");
+            }
+        } else {
+            logger.error(`[WHATSAPP SERVICE] Falha ao baixar áudio de ${senderPhoneNormalized} da URL: ${mediaUrl}. Notificando usuário.`);
+            await sendWhatsappMessage(senderPhoneNormalized, "Tive um problema ao acessar o áudio que você enviou. 🙁 Poderia tentar novamente?");
+        }
+    } catch (transcriptionError) {
+        logger.error(`[WHATSAPP SERVICE] Erro ao transcrever áudio de ${senderPhoneNormalized}: ${transcriptionError.message}`, {stack: transcriptionError.stack});
+        await sendWhatsappMessage(senderPhoneNormalized, "Puxa, tive um probleminha para processar seu áudio. 😵‍💫 Pode tentar de novo ou digitar sua mensagem?");
+    } finally {
+        pushNameFromPayload = null; // Limpa a variável global após o uso para esta chamada
+    }
+}
+
 
 async function processIncomingMessage(senderPhoneNormalized, messageText, pushName, rawPayload) {
-    pushNameFromPayload = pushName;
+    // Se pushNameFromPayload não foi setado (ex: chamada direta a esta função), usa o pushName passado.
+    // Se foi setado (ex: vindo de processIncomingAudioMessage), mantém o que já estava.
+    if (!pushNameFromPayload && pushName) { // Só atribui se pushNameFromPayload for null E pushName tiver valor
+        pushNameFromPayload = pushName;
+    }
+    
     const senderPhone = senderPhoneNormalized;
     const startTime = Date.now();
     let state;
-    let actorClient;
+    let actorClient; // Cliente que está agindo (pode ser o dono ou um convidado)
 
     try {
-        actorClient = await clientService.findClientByPhone(senderPhone);
-        let sharedAccessRecord = null;
-        let ownerClientIdForContext; 
-        let clientAccountsForOnboarding = [];
-        let ownerAccountsIfShared = [];
+        // 1. Identificar o Ator (quem está enviando a mensagem)
+        actorClient = await clientService.findClientByPhone(senderPhone); // Busca pelo telefone principal do cliente
+        
+        let sharedAccessRecord = null; // Informações sobre o acesso compartilhado, se houver
+        let ownerClientIdForContext;  // ID do Dono da conta que será usada para operações
+        let clientAccountsForOnboarding = []; // Contas do ator (se ele for o dono)
+        let ownerAccountsIfShared = [];     // Contas acessíveis do dono (se for acesso compartilhado)
 
-        if (actorClient) {
-            ownerClientIdForContext = actorClient.id; 
+        if (actorClient) { // Encontrou um cliente com este telefone como principal
+            ownerClientIdForContext = actorClient.id; // Por padrão, o ator é o dono do contexto
             clientAccountsForOnboarding = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
         } else {
+            // Se não encontrou como cliente principal, verifica se é um telefone de SharedAccess
             sharedAccessRecord = await sharedAccessService.findActiveSharedAccessByPhone(senderPhone);
-            if (sharedAccessRecord) {
-                const tempActor = await clientService.findClientById(sharedAccessRecord.sharedWithClientId);
-                if (!tempActor || !tempActor.isActive) {
-                    logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas convidado ${sharedAccessRecord.sharedWithClientId} não encontrado ou inativo.`);
-                    await sendWhatsappMessage(senderPhone, "Olá! Há um acesso compartilhado para este número, mas os detalhes do seu usuário convidado não estão ativos. Por favor, contate o proprietário da conta.");
-                    return;
-                }
-                actorClient = tempActor; 
-                ownerClientIdForContext = sharedAccessRecord.ownerClientId;
-                const ownerClientForPerms = await clientService.findClientById(ownerClientIdForContext);
-
-                if(!ownerClientForPerms || !ownerClientForPerms.isActive){
-                     logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas proprietário ${ownerClientIdForContext} não encontrado ou inativo.`);
-                     await sendWhatsappMessage(senderPhone, "Olá! O proprietário da conta que compartilhou acesso com você parece não estar ativo no momento. Por favor, tente mais tarde ou contate-o.");
+            
+            if (sharedAccessRecord && sharedAccessRecord.sharedWithClient) {
+                // É um acesso compartilhado, o ator é o 'sharedWithClient'
+                actorClient = sharedAccessRecord.sharedWithClient; // Agora actorClient é o objeto do convidado
+                ownerClientIdForContext = sharedAccessRecord.ownerClientId; // O contexto é do dono
+                
+                // Verifica se o dono e o convidado (ator) estão ativos
+                if (!actorClient.status || actorClient.status !== 'Ativo') {
+                     logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas convidado (ator) ${actorClient.id} está inativo.`);
+                     await sendWhatsappMessage(senderPhone, "Olá! Seu acesso a esta conta compartilhada não está ativo. Por favor, contate o proprietário.");
                      return;
                 }
-                sharedAccessRecord.ownerClient = ownerClientForPerms;
+                if (!sharedAccessRecord.ownerClient || sharedAccessRecord.ownerClient.status !== 'Ativo') {
+                    logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas proprietário ${ownerClientIdForContext} está inativo.`);
+                    await sendWhatsappMessage(senderPhone, "Olá! O proprietário da conta que compartilhou este acesso parece não estar ativo. Tente mais tarde ou contate-o.");
+                    return;
+                }
                 
+                // Busca as contas do DONO que o ATOR (convidado) pode acessar
                 const allOwnerAccounts = await clientService.getClientFinancialAccounts(ownerClientIdForContext, { isActive: true });
                 if (sharedAccessRecord.canAccessPersonalProfile) {
                     const pfAccount = allOwnerAccounts.find(acc => acc.accountType === 'PF');
@@ -827,7 +910,8 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     if (bizAccount) ownerAccountsIfShared.push(bizAccount);
                 }
 
-                if (ownerAccountsIfShared.length === 0 ) { 
+                if (ownerAccountsIfShared.length === 0) { 
+                    // ... (lógica de erro se nenhuma conta do dono for acessível permanece)
                     if(sharedAccessRecord.canAccessPersonalProfile || sharedAccessRecord.canAccessBusinessProfileId){
                         logger.warn(`[WHATSAPP SERVICE] Acesso compartilhado para ${actorClient.name} (${senderPhone}) para contas de ${ownerClientIdForContext}, mas nenhuma conta do dono acessível encontrada (mesmo com permissões). Proprietário pode não ter contas do tipo permitido.`);
                         await sendWhatsappMessage(senderPhone, `Olá ${actorClient.name.split(" ")[0]}! Você tem um acesso compartilhado para as contas de ${sharedAccessRecord.ownerClient?.name || 'um usuário'}, mas parece que o proprietário não possui contas ativas do tipo que você pode acessar (Pessoal ou o Empresarial específico). Peça para ele verificar, por favor! 😉`);
@@ -838,42 +922,51 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     return;
                 }
 
-            } else {
+            } else { // Não é cliente principal nem telefone de acesso compartilhado -> Novo Cliente
                 logger.info(`[WHATSAPP SERVICE] Telefone ${senderPhone} não reconhecido. Criando novo cliente...`);
-                actorClient = await clientService.createClient({ phone: senderPhone, name: pushName });
-                ownerClientIdForContext = actorClient.id;
+                // Usa pushNameFromPayload se disponível (vindo de áudio), senão o pushName da mensagem de texto
+                actorClient = await clientService.createClientContact({ phone: senderPhone, name: pushNameFromPayload || pushName });
+                ownerClientIdForContext = actorClient.id; // Novo cliente é o dono do seu próprio contexto
                 
-                const welcomeMsg = getOnboardingWelcomeNoPlanMessage(actorClient.name ? actorClient.name.split(" ")[0] : (pushNameFromPayload || "você"));
+                const welcomeMsg = getOnboardingWelcomeNoPlanMessage(actorClient.name ? actorClient.name.split(" ")[0] : (pushNameFromPayload || pushName || "você"));
                 await sendWhatsappMessage(senderPhone, welcomeMsg);
                 
                 const tempStateForNewUser = await initializeOrUpdateState(actorClient, null, null, [], []);
                 tempStateForNewUser.data.onboardingStage = 'awaiting_plan_confirmation';
                 tempStateForNewUser.currentAction = 'awaiting_plan_interest_generic';
                 conversationState.set(senderPhone, tempStateForNewUser);
+                pushNameFromPayload = null; // Limpa após o uso
                 return;
             }
         }
 
+        // 2. Inicializar ou Atualizar o Estado da Conversa
         const existingState = conversationState.get(senderPhone);
+        // Passa as contas corretas para initializeOrUpdateState
         state = await initializeOrUpdateState(actorClient, sharedAccessRecord, existingState, clientAccountsForOnboarding, ownerAccountsIfShared);
         
-        let isNewUserForSessionLogic = !existingState;
+        let isNewUserForSessionLogic = !existingState; // Se é a primeira interação nesta "sessão" do servidor
 
-
+        // Nome do ator para usar nas mensagens da IA
         const clientNameToUse = state.clientName; 
 
+        // Adiciona a mensagem atual ao histórico (se não for clique de botão)
         if (!(rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string')) {
-            state.messageHistory.push({ role: 'user', content: messageText });
+            // Garante que messageText seja string mesmo que venha nulo (ex: só áudio)
+            state.messageHistory.push({ role: 'user', content: messageText || "" }); 
         }
         if (state.messageHistory.length > MAX_STATE_HISTORY) {
             state.messageHistory = state.messageHistory.slice(-MAX_STATE_HISTORY);
         }
        
+        // 3. Lógica de Onboarding e Fluxo de Seleção de Conta
         let onboardingReply = "";
-        const lowerMessageText = messageText.toLowerCase().trim();
+        const lowerMessageText = (messageText || "").toLowerCase().trim(); // Garante que lowerMessageText não seja de null
        
         logger.debug(`[WHATSAPP ONBOARDING ENTRY] Ator: ${actorClient.id} (${clientNameToUse}), DonoCtx: ${state.ownerClientIdForContext} (${state.ownerClientNameForContext}), Stage (Ator): ${state.data.onboardingStage}, currentAction: ${state.currentAction}, hasPaidAccess (Dono): ${state.hasPaidAccess}, accessLevelText (Dono): ${state.accessLevelTextForUser}, isShared: ${state.isSharedAccessContext}`);
 
+        // ... Toda a sua lógica de if/else para state.data.onboardingStage ...
+        // (Esta parte é longa e complexa, mas permanece a mesma da versão anterior que você me forneceu)
         if (state.data.onboardingStage === 'awaiting_plan_confirmation') {
             if(state.hasPaidAccess_whenStageLastSet || isNewUserForSessionLogic === false) {
                 onboardingReply = getOnboardingWelcomeNoPlanMessage(clientNameToUse);
@@ -1083,6 +1176,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             await sendWhatsappMessage(senderPhone, onboardingReply);
             conversationState.set(senderPhone, state);
             if (state.data.onboardingStage !== 'onboarding_complete' && state.currentAction !== null) {
+                pushNameFromPayload = null; // Limpa após o uso
                 return;
             }
         }
@@ -1160,7 +1254,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                         }
                     }
                     conversationState.set(senderPhone, state);
-                    if (state.currentAction === 'selecting_account_flow_active' || !state.activeFinancialAccountId) return;
+                    if (state.currentAction === 'selecting_account_flow_active' || !state.activeFinancialAccountId) {
+                         pushNameFromPayload = null; return;
+                    }
                 } else if (!state.isSharedAccessContext) {
                     const aiIntro = `Olá ${clientNameToUse}! Seu plano ${state.accessLevelTextForUser} está tinindo, mas não encontrei nenhuma conta financeira sua.`;
                     const dataStructure = `Vamos criar sua conta Pessoal agora?`;
@@ -1171,11 +1267,11 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     state.currentAction = 'awaiting_input_pf_name';
                     await sendWhatsappMessage(senderPhone, noAccountsMsg);
                     conversationState.set(senderPhone, state);
-                    return;
+                    pushNameFromPayload = null; return;
                 } else {
                      logger.error(`[WHATSAPP HANDLER CRITICAL] Ator ${clientNameToUse} em acesso compartilhado, onboarding completo, mas NENHUMA conta do dono (${state.ownerClientIdForContext}) acessível ANTES DE CHAMAR A IA.`);
                      await sendWhatsappMessage(senderPhone, `Olá ${clientNameToUse}! Parece que ${state.ownerClientNameForContext} não tem contas financeiras ativas ou acessíveis para você no momento. Por favor, peça para ele verificar. 🙏`);
-                     return;
+                     pushNameFromPayload = null; return;
                 }
             }
 
@@ -1324,6 +1420,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                     state.messageHistory.push({ role: 'assistant', content: finalMsg });
                     await sendWhatsappMessage(senderPhone, finalMsg);
                     conversationState.set(senderPhone, state);
+                    pushNameFromPayload = null; // Limpa após o uso
                     return;
                 }
             }
@@ -1459,7 +1556,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
                     try {
                         // *********************************************************************
-                        // SWITCH CASE PARA TODAS AS AÇÕES
+                        // SWITCH CASE PARA TODAS AS AÇÕES (INTEIRO, COMO ANTES)
                         // *********************************************************************
                         switch (actionName) {
                             case 'CREATE_FINANCIAL_TRANSACTION': {
@@ -2721,8 +2818,12 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             });
             conversationState.set(senderPhone, state);
         }
-        pushNameFromPayload = null;
+        pushNameFromPayload = null; // Limpa a variável global após o uso para esta chamada
     }
 }
 
-module.exports = { processIncomingMessage, formatAppointmentDataStructure };
+module.exports = { 
+    processIncomingMessage, 
+    processIncomingAudioMessage, // Exporta a nova função
+    formatAppointmentDataStructure 
+};
