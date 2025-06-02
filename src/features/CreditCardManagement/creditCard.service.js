@@ -480,49 +480,53 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
           error.statusCode = 400; error.status = 'fail'; throw error;
       }
 
-      const today = new Date();
+      const today = new Date(); // Data atual para cálculos de ciclo
       let invoiceStartDate, invoiceEndDate, invoiceDescriptionPeriod;
-      let referenceYear, referenceMonthZeroBased;
+      let referenceYear, referenceMonthZeroBased; // Mês e ano de referência da fatura
 
+      // --- Lógica para determinar o ciclo da fatura (invoiceStartDate, invoiceEndDate) ---
+      // (Esta lógica de determinação de datas parece correta e pode ser mantida)
       if (periodOptions.type === 'especifico') {
-          if (!periodOptions.month || !periodOptions.year || isNaN(parseInt(periodOptions.month)) || isNaN(parseInt(periodOptions.year))) {
-              await t.rollback();
-              const error = new Error("Mês (1-12) e ano são obrigatórios para fatura de período específico.");
-              error.statusCode = 400; error.status = 'fail'; throw error;
-          }
+          // ... (lógica para período específico) ...
           referenceMonthZeroBased = parseInt(periodOptions.month, 10) - 1;
           referenceYear = parseInt(periodOptions.year, 10);
-
           invoiceEndDate = new Date(Date.UTC(referenceYear, referenceMonthZeroBased, card.closingDay));
           invoiceStartDate = new Date(Date.UTC(referenceYear, referenceMonthZeroBased -1 , card.closingDay + 1));
           invoiceDescriptionPeriod = `${new Date(Date.UTC(referenceYear, referenceMonthZeroBased)).toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone:'UTC' })}`;
+
       } else if (periodOptions.type === 'ultima_fechada') {
+          // ... (lógica para última fechada) ...
           let targetMonth = today.getUTCMonth();
           let targetYear = today.getUTCFullYear();
-          if (today.getUTCDate() <= card.closingDay) {
-              targetMonth -= 1;
+          if (today.getUTCDate() <= card.closingDay) { // Se hoje é antes ou no dia do fechamento do mês atual
+              targetMonth -= 1; // A última fechada foi a do mês anterior
               if (targetMonth < 0) { targetMonth = 11; targetYear -=1; }
-          }
+          } // Se hoje é depois do fechamento, a última fechada é a deste mês
           referenceMonthZeroBased = targetMonth;
           referenceYear = targetYear;
-
           invoiceEndDate = new Date(Date.UTC(referenceYear, referenceMonthZeroBased, card.closingDay));
           invoiceStartDate = new Date(Date.UTC(referenceYear, referenceMonthZeroBased -1 , card.closingDay + 1));
           invoiceDescriptionPeriod = `Última Fatura Fechada (${formatDate(invoiceStartDate.toISOString().split('T')[0])} - ${formatDate(invoiceEndDate.toISOString().split('T')[0])})`;
-      } else { 
-          let targetMonth = today.getUTCMonth();
+
+      } else { // Fatura aberta (type === 'aberta')
+          // ... (lógica para fatura aberta) ...
+          let targetMonth = today.getUTCMonth(); // Mês atual (0-11)
           let targetYear = today.getUTCFullYear();
+          // Se hoje for DEPOIS do dia de fechamento do cartão no mês atual,
+          // a fatura aberta já é para o próximo mês de fechamento.
           if (today.getUTCDate() > card.closingDay) {
               targetMonth += 1;
               if (targetMonth > 11) { targetMonth = 0; targetYear +=1; }
           }
-          referenceMonthZeroBased = targetMonth;
-          referenceYear = targetYear;
-
+          // Se hoje for ANTES ou NO dia de fechamento, a fatura aberta é a que fecha neste mês.
+          referenceMonthZeroBased = targetMonth; // Mês de fechamento da fatura aberta
+          referenceYear = targetYear;           // Ano de fechamento da fatura aberta
           invoiceEndDate = new Date(Date.UTC(referenceYear, referenceMonthZeroBased, card.closingDay));
           invoiceStartDate = new Date(Date.UTC(referenceYear, referenceMonthZeroBased -1 , card.closingDay + 1));
           invoiceDescriptionPeriod = `Fatura Atual/Aberta (Prev. Fechamento: ${formatDate(invoiceEndDate.toISOString().split('T')[0])})`;
       }
+      // --- Fim da Lógica para determinar o ciclo da fatura ---
+
 
       const transactions = await FinancialTransaction.findAll({
           where: {
@@ -540,17 +544,43 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
           transaction: t
       });
 
-      const totalAmount = transactions.reduce((sum, tx) => sum + parseFloat(tx.value), 0);
+      const totalSpendsInInvoice = transactions.reduce((sum, tx) => sum + parseFloat(tx.value), 0);
 
-      let paymentDueDate = new Date(invoiceEndDate);
+      // --- NOVO: Buscar pagamentos feitos para esta fatura específica ---
+      const referenceMonthYearForPaymentSearch = new Date(Date.UTC(referenceYear, referenceMonthZeroBased, 1))
+                                              .toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+      
+      const paymentsForThisInvoice = await FinancialTransaction.sum('value', {
+          where: {
+              financialAccountId,
+              type: 'Saída',
+              creditCardId: null, // Pagamentos de fatura não têm creditCardId
+              description: {
+                  [Op.iLike]: `Pagamento Fatura ${card.name} (${referenceMonthYearForPaymentSearch})%`
+              },
+              // Opcional: filtrar pagamentos dentro de um período razoável em torno do vencimento da fatura
+              // paymentDate: { [Op.between]: [invoiceStartDate, new Date(invoiceEndDate.getTime() + 30 * 24*60*60*1000)]}
+          },
+          transaction: t
+      }) || 0;
+      // --- FIM: Buscar pagamentos ---
+
+      const totalAmountDue = totalSpendsInInvoice - parseFloat(paymentsForThisInvoice);
+
+      let paymentDueDate = new Date(invoiceEndDate); // Data de fechamento
+      // Adicionar lógica de cálculo do dia de pagamento baseado no closingDay e paymentDay do cartão
+      // Se o dia de pagamento é menor ou igual ao dia de fechamento, a fatura vence no mês seguinte ao fechamento.
+      // Se o dia de pagamento é maior que o dia de fechamento, a fatura vence no mesmo mês do fechamento (mas após o fechamento).
       if (card.paymentDay <= card.closingDay) {
-          paymentDueDate.setUTCMonth(invoiceEndDate.getUTCMonth() + 1);
+          paymentDueDate.setUTCMonth(invoiceEndDate.getUTCMonth() + 1); 
       }
+      // Se paymentDay > closingDay, o mês já está correto (o mês do fechamento)
       paymentDueDate.setUTCDate(card.paymentDay);
+
 
       await t.commit(); 
 
-      const limitDetails = await getAvailableCreditLimit(financialAccountId, creditCardId);
+      const limitDetails = await getAvailableCreditLimit(financialAccountId, creditCardId); // Busca o limite atualizado
       
       return {
           cardId: card.id,
@@ -562,8 +592,10 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
           invoiceReferenceMonthYear: new Date(Date.UTC(invoiceEndDate.getUTCFullYear(), invoiceEndDate.getUTCMonth())).toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' }),
           invoiceCycleStartDate: invoiceStartDate.toISOString().split('T')[0],
           invoiceCycleEndDate: invoiceEndDate.toISOString().split('T')[0],
-          paymentDueDate: paymentDueDate.toISOString().split('T')[0],
-          totalAmount: parseFloat(totalAmount.toFixed(2)),
+          paymentDueDate: paymentDueDate.toISOString().split('T')[0], // Data de vencimento calculada
+          totalAmount: parseFloat(totalAmountDue.toFixed(2)), // Este é o valor líquido a pagar
+          totalSpendsOriginal: parseFloat(totalSpendsInInvoice.toFixed(2)), // Valor original dos gastos
+          totalPaidForThisInvoice: parseFloat(paymentsForThisInvoice.toFixed(2)), // Quanto foi pago para ESTA fatura
           transactions: transactions.map(tx => {
               const jsonTx = tx.toJSON();
               if (jsonTx.isParcel && jsonTx.originalAccount && jsonTx.originalAccount.totalParcels) {
@@ -572,7 +604,7 @@ async function getCreditCardInvoiceDetails(financialAccountId, creditCardId, per
               return jsonTx;
           }),
           cardTotalLimit: parseFloat(card.limit),
-          availableLimitAfterInvoice: limitDetails.availableLimit 
+          availableLimitAfterInvoice: limitDetails.availableLimit // Este vem de getAvailableCreditLimit
       };
 
   } catch (error) {
