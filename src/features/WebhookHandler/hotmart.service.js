@@ -5,155 +5,151 @@ const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
 
-// <<< NOVO: Telefone fixo para o teste do Prod=0 >>>
-const TEST_PROD_ZERO_PHONE = '5571982862912'; // Incluindo o DDI 55
+const TEST_PROD_ZERO_PHONE = '5571982862912'; // DDI + DDD + Número
 
 /**
  * Processa um evento de webhook recebido da Hotmart.
- * @param {object} eventData - O payload JSON do webhook da Hotmart.
- * @param {string} hottokFromHeader - O valor do Hottok recebido no header da requisição.
  */
 async function processWebhookEvent(eventData, hottokFromHeader) {
   const configuredHottok = process.env.HOTMART_HOTTOK;
 
   if (!configuredHottok) {
-    logger.error('[HOTMART SVC] HOTMART_HOTTOK não está configurado no ambiente. Não é possível validar o webhook.');
+    logger.error('[HOTMART SVC] HOTMART_HOTTOK não está configurado no ambiente.');
     throw new Error('Configuração interna do servidor impede a validação do webhook.');
   }
-
   if (configuredHottok !== hottokFromHeader) {
-    logger.warn(`[HOTMART SVC] Hottok inválido recebido. Esperado: ${configuredHottok ? ' configurado ' : 'NÃO configurado'}, Recebido: ${hottokFromHeader}`);
+    logger.warn(`[HOTMART SVC] Hottok inválido recebido.`);
     throw new Error('Hottok inválido.');
   }
-
   logger.info('[HOTMART SVC] Hottok validado com sucesso.');
 
   const data = eventData.data;
-
   if (!data) {
-    logger.error('[HOTMART SVC] Payload do webhook da Hotmart não contém o objeto "data" esperado. Payload recebido:', eventData);
+    logger.error('[HOTMART SVC] Payload do webhook da Hotmart não contém o objeto "data".', eventData);
     throw new Error('Formato de payload inesperado da Hotmart: objeto "data" ausente.');
   }
 
+  // Extração dos dados do payload
   const prod = data.product ? data.product.id : undefined;
   const buyer_email_from_payload = data.buyer ? data.buyer.email : undefined;
-  // const buyer_name_from_payload = data.buyer ? data.buyer.name : undefined; // Não usaremos
   const buyer_phone_local_code_from_payload = data.buyer ? data.buyer.checkout_phone_code : undefined;
   const buyer_phone_number_from_payload = data.buyer ? data.buyer.checkout_phone : undefined;
   const status = data.purchase ? data.purchase.status : undefined;
   const transactionId = data.purchase ? data.purchase.transaction : undefined;
   const approved_date = data.purchase ? data.purchase.approved_date : undefined;
-
   const subscriber_code = data.subscription && data.subscription.subscriber ? data.subscription.subscriber.code : undefined;
   const subscription_status = data.subscription ? data.subscription.status : undefined;
   const date_next_charge = data.subscription ? data.subscription.date_next_charge : undefined;
 
-  // <<< INÍCIO DA LÓGICA ESPECIAL PARA Prod=0 >>>
-  let targetClientPhone;
-  let targetClientEmail = null; // Para Prod=0, não usaremos o email do payload para buscar/criar
-  let targetClientName = null;  // Nem o nome
+  let clientPhoneNumberToUse;
+  let clientEmailForLookup = null; // Email do payload para BUSCA, não necessariamente para criação/update
+  let clientNameToSetOnCreate = null; // Nome a ser usado APENAS na criação
+  const isProdZeroTest = (prod !== undefined && prod !== null && prod.toString() === '0');
 
-  if (prod !== undefined && prod !== null && prod.toString() === '0') {
+  if (isProdZeroTest) {
     logger.info(`[HOTMART SVC] Evento para Prod=0 (TESTE). Usando telefone fixo: ${TEST_PROD_ZERO_PHONE}`);
-    targetClientPhone = TEST_PROD_ZERO_PHONE.replace(/\D/g, '');
-    // Opcional: Definir um nome fixo para este cliente de teste
-    targetClientName = "Cliente Teste Hotmart ID Zero";
+    clientPhoneNumberToUse = TEST_PROD_ZERO_PHONE.replace(/\D/g, '');
+    clientNameToSetOnCreate = "Cliente Teste Hotmart ID Zero";
+    // Não usaremos o email do payload para buscar ou criar o cliente de teste Prod=0
   } else {
-    // Lógica normal para outros produtos
-    targetClientEmail = buyer_email_from_payload ? buyer_email_from_payload.toLowerCase() : null;
-    // targetClientName = buyer_name_from_payload; // Se fosse usar o nome do payload
+    // Para produtos reais, usa os dados do payload
     if (buyer_phone_local_code_from_payload && buyer_phone_number_from_payload) {
-      targetClientPhone = (buyer_phone_local_code_from_payload.replace(/\D/g, '') + buyer_phone_number_from_payload.replace(/\D/g, ''));
+      clientPhoneNumberToUse = (buyer_phone_local_code_from_payload.replace(/\D/g, '') + buyer_phone_number_from_payload.replace(/\D/g, ''));
     } else {
-      targetClientPhone = null;
+      clientPhoneNumberToUse = null;
     }
+    if (buyer_email_from_payload) {
+      clientEmailForLookup = buyer_email_from_payload.toLowerCase();
+    }
+    // Não vamos usar buyer_name_from_payload para clientNameToSetOnCreate para produtos reais
+    // O nome será definido pelo onboarding do WhatsApp ou outra interação.
   }
-  // <<< FIM DA LÓGICA ESPECIAL PARA Prod=0 >>>
 
-  logger.info(`[HOTMART SVC] Processando evento: Prod=${prod}, Status=${status}, Email (do payload)=${buyer_email_from_payload}, Telefone (a ser usado)=${targetClientPhone}, Transação=${transactionId}, Assinatura Status=${subscription_status || 'N/A'}`);
+  logger.info(`[HOTMART SVC] Processando evento: Prod=${prod}, Status=${status}, Email(payload)=${buyer_email_from_payload}, Telefone(a ser usado)=${clientPhoneNumberToUse}, Transação=${transactionId}, Assinatura Status=${subscription_status || 'N/A'}`);
 
   if (prod === undefined || prod === null) {
-    logger.warn(`[HOTMART SVC] ID do produto (prod) não encontrado no payload da Hotmart. Evento ignorado.`);
+    logger.warn(`[HOTMART SVC] ID do produto (prod) não encontrado no payload. Evento ignorado.`);
     return;
   }
   const plan = await Plan.findOne({ where: { hotmartProductId: prod.toString() } });
   if (!plan) {
-    logger.warn(`[HOTMART SVC] Plano não encontrado no sistema para Hotmart Product ID: ${prod}. Evento para ${targetClientPhone || targetClientEmail} ignorado.`);
+    logger.warn(`[HOTMART SVC] Plano não encontrado no sistema para Hotmart Product ID: ${prod}. Evento para ${clientPhoneNumberToUse || clientEmailForLookup} ignorado.`);
     return;
   }
   logger.info(`[HOTMART SVC] Plano local encontrado: "${plan.name}" (ID: ${plan.id})`);
 
   let clientInstance;
 
-  // Busca ou Criação do Cliente
-  if (targetClientPhone) {
-    clientInstance = await Client.findOne({ where: { phone: targetClientPhone }});
+  // Lógica Unificada de Busca/Criação do Cliente:
+  // 1. Tenta encontrar por telefone (clientPhoneNumberToUse). Este é o identificador primário.
+  // 2. Se não encontrar por telefone E não for o teste Prod=0 E tiver um email no payload, tenta encontrar por email.
+  // 3. Se ainda não encontrar, cria um novo cliente.
+
+  if (clientPhoneNumberToUse) {
+    clientInstance = await Client.findOne({ where: { phone: clientPhoneNumberToUse }});
+    if (clientInstance) {
+        logger.info(`[HOTMART SVC] Cliente encontrado por telefone ${clientPhoneNumberToUse}: ID ${clientInstance.id}`);
+    }
   }
-  // Se for Prod=0 e não achou por telefone, e não tem email alvo, cria só com telefone.
-  // Se NÃO for Prod=0 e não achou por telefone mas tem email alvo, tenta por email.
-  if (!clientInstance && targetClientEmail && (prod.toString() !== '0')) {
-    clientInstance = await Client.findOne({ where: { email: targetClientEmail } });
+
+  if (!clientInstance && clientEmailForLookup && !isProdZeroTest) {
+    clientInstance = await Client.findOne({ where: { email: clientEmailForLookup } });
+    if (clientInstance) {
+        logger.info(`[HOTMART SVC] Cliente encontrado por email ${clientEmailForLookup}: ID ${clientInstance.id}`);
+        // Se encontrou por email mas não tinha telefone no banco, e o payload da Hotmart tem telefone,
+        // podemos considerar atualizar o telefone do cliente.
+        if (clientPhoneNumberToUse && !clientInstance.phone) {
+            logger.info(`[HOTMART SVC] Cliente ID ${clientInstance.id} (encontrado por email) não tinha telefone. Atualizando para ${clientPhoneNumberToUse}.`);
+            await clientInstance.update({ phone: clientPhoneNumberToUse });
+            clientInstance = await Client.findByPk(clientInstance.id); // Recarrega
+        }
+    }
   }
 
   if (!clientInstance) {
-    if (!targetClientPhone) {
-        const idInfo = prod.toString() === '0' ? `Prod=0 (telefone fixo ${TEST_PROD_ZERO_PHONE} deveria ter sido usado)` : `email ${targetClientEmail}`;
-        logger.error(`[HOTMART SVC] Tentativa de criar novo cliente, mas o número de telefone não foi determinado para ${idInfo}. Abortando.`);
-        throw new Error('Número de telefone não determinado para criação de novo cliente via Hotmart.');
+    // Condições para criar:
+    // - Se for Prod=0, clientPhoneNumberToUse (TEST_PROD_ZERO_PHONE) deve estar definido.
+    // - Se não for Prod=0, clientPhoneNumberToUse (do payload) deve estar definido.
+    if (!clientPhoneNumberToUse) {
+        const idInfo = isProdZeroTest ? `Prod=0 (telefone fixo ${TEST_PROD_ZERO_PHONE} não foi definido corretamente no código)` : `email ${clientEmailForLookup}`;
+        logger.error(`[HOTMART SVC] Tentativa de criar novo cliente, mas o número de telefone não foi determinado/fornecido para ${idInfo}. Payload do comprador:`, data.buyer);
+        throw new Error('Número de telefone não fornecido/determinado para criação de novo cliente via Hotmart.');
     }
-    logger.info(`[HOTMART SVC] Cliente não encontrado por telefone '${targetClientPhone}' ou email (se aplicável). Criando novo cliente...`);
+
+    logger.info(`[HOTMART SVC] Nenhum cliente existente encontrado. Criando novo cliente com Telefone: ${clientPhoneNumberToUse}...`);
     const clientDataForCreation = {
-      email: (prod.toString() === '0') ? null : targetClientEmail, // Só usa email se não for o teste de Prod=0
-      name: (prod.toString() === '0') ? targetClientName : null, // Nome específico para o teste de Prod=0, nulo para outros
-      phone: targetClientPhone,
-      status: 'Aguardando Pagamento',
+      email: null, // Email não será usado na criação inicial, conforme sua regra
+      name: clientNameToSetOnCreate, // Será "Cliente Teste Hotmart ID Zero" para Prod=0, ou null para outros
+      phone: clientPhoneNumberToUse,
+      status: 'Aguardando Pagamento', // Ou 'Ativo' se preferir que já comece ativo antes da confirmação do plano
     };
     clientInstance = await clientService.createClientContact(clientDataForCreation);
     logger.info(`[HOTMART SVC] Novo cliente criado: ID ${clientInstance.id}, Telefone: ${clientInstance.phone}, Email: ${clientInstance.email}, Nome: ${clientInstance.name}`);
   } else {
-    logger.info(`[HOTMART SVC] Cliente existente encontrado: ID ${clientInstance.id}, Email: ${clientInstance.email}, Telefone: ${clientInstance.phone}`);
-    // Lógica de atualização do cliente existente (opcional e controlada)
-    // Para Prod=0, não vamos atualizar nada no cliente existente.
-    // Para outros produtos, podemos atualizar o telefone se vier diferente.
-    if (prod.toString() !== '0') {
-        let clientNeedsUpdate = false;
-        const updatePayloadClient = {};
-        if (targetClientPhone && (!clientInstance.phone || clientInstance.phone !== targetClientPhone)) {
-            logger.info(`[HOTMART SVC] Telefone do cliente ID ${clientInstance.id} (NÃO Prod=0) será atualizado de "${clientInstance.phone}" para "${targetClientPhone}".`);
-            updatePayloadClient.phone = targetClientPhone;
-            clientNeedsUpdate = true;
-        }
-        // Se o cliente foi encontrado pelo email, mas não tem telefone no banco e a Hotmart enviou um, atualiza.
-        if (targetClientPhone && !clientInstance.phone && targetClientEmail && clientInstance.email === targetClientEmail) {
-            logger.info(`[HOTMART SVC] Cliente ID ${clientInstance.id} (NÃO Prod=0, encontrado por email) não tinha telefone, atualizando para "${targetClientPhone}".`);
-            updatePayloadClient.phone = targetClientPhone;
-            clientNeedsUpdate = true;
-        }
-
-        if (clientNeedsUpdate) {
-            await Client.update(updatePayloadClient, { where: { id: clientInstance.id } });
-            logger.info(`[HOTMART SVC] Telefone do cliente ID ${clientInstance.id} (NÃO Prod=0) atualizado.`);
+    // Cliente existente encontrado.
+    // Para Prod=0, forçamos o nome para o de teste se estiver diferente. Não atualizamos telefone/email.
+    if (isProdZeroTest) {
+        if (clientInstance.name !== clientNameToSetOnCreate && clientNameToSetOnCreate) {
+            await clientInstance.update({ name: clientNameToSetOnCreate });
+            logger.info(`[HOTMART SVC] Nome do cliente de teste ID ${clientInstance.id} (Prod=0) atualizado para "${clientNameToSetOnCreate}".`);
             clientInstance = await Client.findByPk(clientInstance.id);
+        } else {
+             logger.info(`[HOTMART SVC] Cliente de teste ID ${clientInstance.id} (Prod=0) encontrado. Nome e telefone não serão alterados pelo payload.`);
         }
     }
+    // Para produtos reais, não atualizamos nome/email. O telefone já foi tratado acima se encontrou por email.
   }
 
   const externalIdForSubscription = subscriber_code || transactionId;
   if (!externalIdForSubscription) {
-    logger.error(`[HOTMART SVC] ID externo da assinatura/transação (subscriber_code ou transactionId) não encontrado no payload. Não é possível prosseguir. Payload:`, data.subscription, data.purchase);
+    logger.error(`[HOTMART SVC] ID externo da assinatura/transação (subscriber_code ou transactionId) não encontrado. Abortando. Payload:`, data.subscription, data.purchase);
     throw new Error('ID externo da assinatura/transação ausente no payload da Hotmart.');
   }
 
   const t = await sequelize.transaction();
   try {
-    // A lógica para encontrar ou criar/atualizar a 'localSubscription' e
-    // o switch para 'effectiveStatus' permanecem os mesmos do código anterior.
-    // O 'clientInstance' já estará definido como o "Cliente de Teste Fixo" se Prod=0.
-
     let localSubscription = await Subscription.findOne({
         where: {
-            // Para Prod=0, a busca é sempre pelo clientInstance.id (que será o do TEST_PROD_ZERO_PHONE)
-            // E pelo externalIdForSubscription (que virá da Hotmart)
             clientId: clientInstance.id,
             externalSubscriptionId: externalIdForSubscription
         },
@@ -194,7 +190,7 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
             status: 'Ativa',
             autoRenew: !!date_next_charge
           }, { transaction: t });
-          logger.info(`[HOTMART SVC] Assinatura existente ID ${localSubscription.id} (Cliente: ${clientInstance.id}, Externo: ${externalIdForSubscription}) atualizada para ATIVA. Válida até ${localSubscription.endDate}.`);
+          logger.info(`[HOTMART SVC] Assinatura existente ID ${localSubscription.id} (Cliente: ${clientInstance.id}, Externo: ${externalIdForSubscription}) atualizada para ATIVA. Válida até ${endDateApproved.toISOString().split('T')[0]}.`);
 
           const clientAccessLevel = plan.tier === 'avancado' ?
             (plan.durationDays > 7000 ? 'vitalicio_avancado' : (plan.durationDays > 60 ? 'avancado_anual' : 'avancado_mensal')) :
@@ -205,7 +201,7 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
             accessExpiresAt: plan.durationDays > 7000 ? null : endDateApproved.toISOString().split('T')[0],
             status: 'Ativo'
            }, { where: {id: clientInstance.id }, transaction: t });
-           logger.info(`[HOTMART SVC] Cliente ID ${clientInstance.id} teve acesso atualizado para ${clientAccessLevel}, expira em: ${endDateApproved.toISOString().split('T')[0]}.`);
+           logger.info(`[HOTMART SVC] Cliente ID ${clientInstance.id} teve acesso ATUALIZADO para ${clientAccessLevel}, expira em: ${endDateApproved.toISOString().split('T')[0]}.`);
 
         } else {
           localSubscription = await subscriptionService.createSubscription(
@@ -215,12 +211,11 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
             'Ativa',
             externalIdForSubscription
           );
+          // createSubscription já loga a atualização do cliente.
           logger.info(`[HOTMART SVC] Nova assinatura ID ${localSubscription.id} (Cliente: ${clientInstance.id}, Externo: ${externalIdForSubscription}) criada como ATIVA.`);
         }
         break;
 
-      // Casos de billet_printed, canceled, expired, etc. permanecem os mesmos
-      // ... (copie os cases de 'billet_printed' até 'default' do código anterior aqui) ...
       case 'billet_printed':
         logger.info(`[HOTMART SVC] Status BOLETO GERADO para Cliente ID ${clientInstance.id}, Plano ${plan.name}.`);
         if (!localSubscription) {
@@ -302,14 +297,13 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
         break;
 
       default:
-        logger.warn(`[HOTMART SVC] Status não tratado ou desconhecido: '${effectiveStatus}'. Evento para Prod=${prod}, Email (payload)=${buyer_email_from_payload} ignorado.`);
-
-    } // Fim do switch
+        logger.warn(`[HOTMART SVC] Status não tratado ou desconhecido: '${effectiveStatus}'. Evento para Prod=${prod}, Email(payload)=${buyer_email_from_payload} ignorado.`);
+    }
 
     await t.commit();
   } catch (error) {
     await t.rollback();
-    logger.error(`[HOTMART SVC] Erro na transação ao processar evento Hotmart para Cliente ${clientInstance ? clientInstance.id : 'N/A'} (Telefone Alvo: ${targetClientPhone}): ${error.message}`, { stack: error.stack, eventData });
+    logger.error(`[HOTMART SVC] Erro na transação ao processar evento Hotmart para Cliente ${clientInstance ? clientInstance.id : 'N/A'} (Telefone Alvo: ${clientPhoneNumberToUse}): ${error.message}`, { stack: error.stack, eventData });
     throw error;
   }
 }
