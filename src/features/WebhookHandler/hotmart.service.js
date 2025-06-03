@@ -5,7 +5,7 @@ const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
 
-const TEST_PROD_ZERO_PHONE = '5571982862912'; // Seu número de teste
+const TEST_PROD_ZERO_PHONE = '557182862912'; // Seu número de teste
 
 /**
  * Processa um evento de webhook recebido da Hotmart.
