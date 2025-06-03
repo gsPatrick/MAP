@@ -5,12 +5,13 @@ const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
 
-const TEST_PROD_ZERO_PHONE = '5571982862912'; // DDI + DDD + Número
+const TEST_PROD_ZERO_PHONE = '5571982862912'; // Seu número de teste
 
 /**
  * Processa um evento de webhook recebido da Hotmart.
  */
 async function processWebhookEvent(eventData, hottokFromHeader) {
+  // ... (validação do hottok e extração inicial do payload data, prod, status, etc. como antes)
   const configuredHottok = process.env.HOTMART_HOTTOK;
 
   if (!configuredHottok) {
@@ -29,7 +30,6 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
     throw new Error('Formato de payload inesperado da Hotmart: objeto "data" ausente.');
   }
 
-  // Extração dos dados do payload
   const prod = data.product ? data.product.id : undefined;
   const buyer_email_from_payload = data.buyer ? data.buyer.email : undefined;
   const buyer_phone_local_code_from_payload = data.buyer ? data.buyer.checkout_phone_code : undefined;
@@ -41,31 +41,29 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
   const subscription_status = data.subscription ? data.subscription.status : undefined;
   const date_next_charge = data.subscription ? data.subscription.date_next_charge : undefined;
 
-  let clientPhoneNumberToUse;
-  let clientEmailForLookup = null; // Email do payload para BUSCA, não necessariamente para criação/update
-  let clientNameToSetOnCreate = null; // Nome a ser usado APENAS na criação
+  let clientPhoneNumberForLookup;
+  let clientNameToSetOnCreate = null; // Nome será null por padrão, exceto para Prod=0
   const isProdZeroTest = (prod !== undefined && prod !== null && prod.toString() === '0');
 
   if (isProdZeroTest) {
     logger.info(`[HOTMART SVC] Evento para Prod=0 (TESTE). Usando telefone fixo: ${TEST_PROD_ZERO_PHONE}`);
-    clientPhoneNumberToUse = TEST_PROD_ZERO_PHONE.replace(/\D/g, '');
-    clientNameToSetOnCreate = "Cliente Teste Hotmart ID Zero";
-    // Não usaremos o email do payload para buscar ou criar o cliente de teste Prod=0
+    clientPhoneNumberForLookup = TEST_PROD_ZERO_PHONE.replace(/\D/g, '');
+    clientNameToSetOnCreate = "Cliente Teste Hotmart ID Zero"; // Nome específico para o cliente de teste
   } else {
-    // Para produtos reais, usa os dados do payload
     if (buyer_phone_local_code_from_payload && buyer_phone_number_from_payload) {
-      clientPhoneNumberToUse = (buyer_phone_local_code_from_payload.replace(/\D/g, '') + buyer_phone_number_from_payload.replace(/\D/g, ''));
+      clientPhoneNumberForLookup = (buyer_phone_local_code_from_payload.replace(/\D/g, '') + buyer_phone_number_from_payload.replace(/\D/g, ''));
     } else {
-      clientPhoneNumberToUse = null;
+      clientPhoneNumberForLookup = null;
+      // Se o telefone não vier no payload para um produto real, o que fazer?
+      // A lógica atual abaixo lançará um erro se não conseguir determinar um telefone para criar um novo cliente.
+      // Se você quiser usar o email como fallback para BUSCAR, mas não para CRIAR, a lógica precisa ser mais granular.
+      // Por ora, a prioridade é o telefone.
+      logger.warn(`[HOTMART SVC] Telefone do comprador não fornecido no payload para Prod=${prod}. Email do payload: ${buyer_email_from_payload}`);
     }
-    if (buyer_email_from_payload) {
-      clientEmailForLookup = buyer_email_from_payload.toLowerCase();
-    }
-    // Não vamos usar buyer_name_from_payload para clientNameToSetOnCreate para produtos reais
-    // O nome será definido pelo onboarding do WhatsApp ou outra interação.
+    // clientNameToSetOnCreate permanece null para produtos reais, conforme sua regra.
   }
 
-  logger.info(`[HOTMART SVC] Processando evento: Prod=${prod}, Status=${status}, Email(payload)=${buyer_email_from_payload}, Telefone(a ser usado)=${clientPhoneNumberToUse}, Transação=${transactionId}, Assinatura Status=${subscription_status || 'N/A'}`);
+  logger.info(`[HOTMART SVC] Processando evento: Prod=${prod}, Status=${status}, Email(payload)=${buyer_email_from_payload}, Telefone(para lookup/criação)=${clientPhoneNumberForLookup}, Transação=${transactionId}, Assinatura Status=${subscription_status || 'N/A'}`);
 
   if (prod === undefined || prod === null) {
     logger.warn(`[HOTMART SVC] ID do produto (prod) não encontrado no payload. Evento ignorado.`);
@@ -73,71 +71,60 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
   }
   const plan = await Plan.findOne({ where: { hotmartProductId: prod.toString() } });
   if (!plan) {
-    logger.warn(`[HOTMART SVC] Plano não encontrado no sistema para Hotmart Product ID: ${prod}. Evento para ${clientPhoneNumberToUse || clientEmailForLookup} ignorado.`);
+    logger.warn(`[HOTMART SVC] Plano não encontrado no sistema para Hotmart Product ID: ${prod}. Evento para Telefone ${clientPhoneNumberForLookup} ignorado.`);
     return;
   }
   logger.info(`[HOTMART SVC] Plano local encontrado: "${plan.name}" (ID: ${plan.id})`);
 
   let clientInstance;
 
-  // Lógica Unificada de Busca/Criação do Cliente:
-  // 1. Tenta encontrar por telefone (clientPhoneNumberToUse). Este é o identificador primário.
-  // 2. Se não encontrar por telefone E não for o teste Prod=0 E tiver um email no payload, tenta encontrar por email.
-  // 3. Se ainda não encontrar, cria um novo cliente.
-
-  if (clientPhoneNumberToUse) {
-    clientInstance = await Client.findOne({ where: { phone: clientPhoneNumberToUse }});
-    if (clientInstance) {
-        logger.info(`[HOTMART SVC] Cliente encontrado por telefone ${clientPhoneNumberToUse}: ID ${clientInstance.id}`);
+  if (clientPhoneNumberForLookup) {
+    logger.info(`[HOTMART SVC - DEBUG] Tentando encontrar cliente com phone: '${clientPhoneNumberForLookup}'`);
+    clientInstance = await Client.findOne({ where: { phone: clientPhoneNumberForLookup }});
+  }
+  // Adicional: Se não encontrou por telefone E NÃO É o teste Prod=0 E tem email no payload, tenta buscar por email.
+  // Isso ajuda se um cliente se cadastrou no seu sistema com email, mas a compra na Hotmart veio com um telefone diferente
+  // ou sem telefone, mas com o mesmo email.
+  if (!clientInstance && !isProdZeroTest && buyer_email_from_payload) {
+    logger.info(`[HOTMART SVC - DEBUG] Cliente não encontrado por telefone. Tentando por email (payload): '${buyer_email_from_payload.toLowerCase()}'`);
+    clientInstance = await Client.findOne({ where: { email: buyer_email_from_payload.toLowerCase() } });
+    if (clientInstance && clientPhoneNumberForLookup && !clientInstance.phone) {
+        // Encontrou por email, não tem telefone no DB, mas Hotmart enviou telefone: atualiza telefone.
+        logger.info(`[HOTMART SVC] Cliente ID ${clientInstance.id} (encontrado por email) não tinha telefone. Atualizando para ${clientPhoneNumberForLookup}.`);
+        await clientInstance.update({ phone: clientPhoneNumberForLookup });
+        clientInstance = await Client.findByPk(clientInstance.id); // Recarrega
     }
   }
 
-  if (!clientInstance && clientEmailForLookup && !isProdZeroTest) {
-    clientInstance = await Client.findOne({ where: { email: clientEmailForLookup } });
-    if (clientInstance) {
-        logger.info(`[HOTMART SVC] Cliente encontrado por email ${clientEmailForLookup}: ID ${clientInstance.id}`);
-        // Se encontrou por email mas não tinha telefone no banco, e o payload da Hotmart tem telefone,
-        // podemos considerar atualizar o telefone do cliente.
-        if (clientPhoneNumberToUse && !clientInstance.phone) {
-            logger.info(`[HOTMART SVC] Cliente ID ${clientInstance.id} (encontrado por email) não tinha telefone. Atualizando para ${clientPhoneNumberToUse}.`);
-            await clientInstance.update({ phone: clientPhoneNumberToUse });
-            clientInstance = await Client.findByPk(clientInstance.id); // Recarrega
-        }
-    }
-  }
 
   if (!clientInstance) {
-    // Condições para criar:
-    // - Se for Prod=0, clientPhoneNumberToUse (TEST_PROD_ZERO_PHONE) deve estar definido.
-    // - Se não for Prod=0, clientPhoneNumberToUse (do payload) deve estar definido.
-    if (!clientPhoneNumberToUse) {
-        const idInfo = isProdZeroTest ? `Prod=0 (telefone fixo ${TEST_PROD_ZERO_PHONE} não foi definido corretamente no código)` : `email ${clientEmailForLookup}`;
-        logger.error(`[HOTMART SVC] Tentativa de criar novo cliente, mas o número de telefone não foi determinado/fornecido para ${idInfo}. Payload do comprador:`, data.buyer);
-        throw new Error('Número de telefone não fornecido/determinado para criação de novo cliente via Hotmart.');
+    // Se chegamos aqui, o cliente não foi encontrado nem por telefone nem por email (ou é Prod=0 e não foi achado pelo telefone fixo).
+    // Precisamos de um telefone para criar o cliente.
+    if (!clientPhoneNumberForLookup) {
+        logger.error(`[HOTMART SVC] Não foi possível determinar um número de telefone para criar o novo cliente (Prod=${prod}, Email Payload=${buyer_email_from_payload}). Abortando.`);
+        throw new Error('Número de telefone ausente ou não determinado para criação de cliente via webhook.');
     }
 
-    logger.info(`[HOTMART SVC] Nenhum cliente existente encontrado. Criando novo cliente com Telefone: ${clientPhoneNumberToUse}...`);
+    logger.info(`[HOTMART SVC] Nenhum cliente existente encontrado. Criando novo cliente com Telefone: ${clientPhoneNumberForLookup}...`);
     const clientDataForCreation = {
-      email: null, // Email não será usado na criação inicial, conforme sua regra
-      name: clientNameToSetOnCreate, // Será "Cliente Teste Hotmart ID Zero" para Prod=0, ou null para outros
-      phone: clientPhoneNumberToUse,
-      status: 'Aguardando Pagamento', // Ou 'Ativo' se preferir que já comece ativo antes da confirmação do plano
+      email: null, // Email sempre nulo na criação via Hotmart, conforme sua regra
+      name: clientNameToSetOnCreate, // Nome específico para Prod=0, ou null para outros
+      phone: clientPhoneNumberForLookup,
+      status: 'Aguardando Pagamento', // Será 'Ativo' após ativação do plano
     };
     clientInstance = await clientService.createClientContact(clientDataForCreation);
     logger.info(`[HOTMART SVC] Novo cliente criado: ID ${clientInstance.id}, Telefone: ${clientInstance.phone}, Email: ${clientInstance.email}, Nome: ${clientInstance.name}`);
   } else {
-    // Cliente existente encontrado.
-    // Para Prod=0, forçamos o nome para o de teste se estiver diferente. Não atualizamos telefone/email.
-    if (isProdZeroTest) {
-        if (clientInstance.name !== clientNameToSetOnCreate && clientNameToSetOnCreate) {
-            await clientInstance.update({ name: clientNameToSetOnCreate });
-            logger.info(`[HOTMART SVC] Nome do cliente de teste ID ${clientInstance.id} (Prod=0) atualizado para "${clientNameToSetOnCreate}".`);
-            clientInstance = await Client.findByPk(clientInstance.id);
-        } else {
-             logger.info(`[HOTMART SVC] Cliente de teste ID ${clientInstance.id} (Prod=0) encontrado. Nome e telefone não serão alterados pelo payload.`);
-        }
+    // Cliente existente encontrado
+    logger.info(`[HOTMART SVC] Cliente existente encontrado: ID ${clientInstance.id}, Telefone: ${clientInstance.phone}, Email: ${clientInstance.email}, Nome: ${clientInstance.name}`);
+    // Se for o teste Prod=0 e o nome do cliente encontrado não for o nome de teste, atualiza o nome.
+    if (isProdZeroTest && clientInstance.name !== clientNameToSetOnCreate && clientNameToSetOnCreate) {
+        await clientInstance.update({ name: clientNameToSetOnCreate });
+        logger.info(`[HOTMART SVC] Nome do cliente de teste ID ${clientInstance.id} (Prod=0) verificado/atualizado para "${clientNameToSetOnCreate}".`);
+        clientInstance = await Client.findByPk(clientInstance.id); // Recarrega para consistência
     }
-    // Para produtos reais, não atualizamos nome/email. O telefone já foi tratado acima se encontrou por email.
+    // Para produtos reais, não atualizamos nome/email de clientes existentes.
+    // A atualização do telefone (se o cliente foi encontrado por email mas não tinha telefone) já foi feita acima.
   }
 
   const externalIdForSubscription = subscriber_code || transactionId;
@@ -148,6 +135,10 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
 
   const t = await sequelize.transaction();
   try {
+    // A lógica para encontrar ou criar/atualizar a 'localSubscription' e
+    // o switch para 'effectiveStatus' permanecem os mesmos.
+    // O 'clientInstance' já estará definido corretamente (seja o de teste ou o do payload).
+
     let localSubscription = await Subscription.findOne({
         where: {
             clientId: clientInstance.id,
@@ -211,7 +202,6 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
             'Ativa',
             externalIdForSubscription
           );
-          // createSubscription já loga a atualização do cliente.
           logger.info(`[HOTMART SVC] Nova assinatura ID ${localSubscription.id} (Cliente: ${clientInstance.id}, Externo: ${externalIdForSubscription}) criada como ATIVA.`);
         }
         break;
@@ -303,7 +293,7 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
     await t.commit();
   } catch (error) {
     await t.rollback();
-    logger.error(`[HOTMART SVC] Erro na transação ao processar evento Hotmart para Cliente ${clientInstance ? clientInstance.id : 'N/A'} (Telefone Alvo: ${clientPhoneNumberToUse}): ${error.message}`, { stack: error.stack, eventData });
+    logger.error(`[HOTMART SVC] Erro na transação ao processar evento Hotmart para Cliente ${clientInstance ? clientInstance.id : 'N/A'} (Telefone Alvo: ${clientPhoneNumberForLookup}): ${error.message}`, { stack: error.stack, eventData });
     throw error;
   }
 }
