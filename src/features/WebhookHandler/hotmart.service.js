@@ -1,7 +1,7 @@
 // src/features/WebhookHandler/hotmart.service.js
 const { Client, Plan, Subscription, sequelize } = require('../../database');
-const clientService = require('../Client/client.service'); // Usaremos para encontrar/criar clientes
-const subscriptionService = require('../Subscription/subscription.service'); // Usaremos para gerenciar assinaturas locais
+const clientService = require('../Client/client.service');
+const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
 
@@ -25,21 +25,16 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
 
   logger.info('[HOTMART SVC] Hottok validado com sucesso.');
 
-  // ---------------------------------------------------------------------------
-  // INÍCIO DA CORREÇÃO: Extração de dados aninhados
-  // ---------------------------------------------------------------------------
-  const data = eventData.data; // Objeto principal que contém os dados úteis
+  const data = eventData.data;
 
   if (!data) {
     logger.error('[HOTMART SVC] Payload do webhook da Hotmart não contém o objeto "data" esperado. Payload recebido:', eventData);
     throw new Error('Formato de payload inesperado da Hotmart: objeto "data" ausente.');
   }
 
-  // Extração cuidadosa, verificando a existência de cada objeto pai
   const prod = data.product ? data.product.id : undefined;
-  const buyer_email = data.buyer ? data.buyer.email : undefined;
-  const buyer_name = data.buyer ? data.buyer.name : undefined;
-  // Ajustado para os nomes corretos dos campos no payload da Hotmart
+  const buyer_email = data.buyer ? data.buyer.email : undefined; // Email do comprador
+  // const buyer_name = data.buyer ? data.buyer.name : undefined; // Nome do comprador (não usaremos para criar/atualizar nome)
   const buyer_phone_local_code = data.buyer ? data.buyer.checkout_phone_code : undefined;
   const buyer_phone_number = data.buyer ? data.buyer.checkout_phone : undefined;
   const status = data.purchase ? data.purchase.status : undefined;
@@ -48,18 +43,12 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
 
   const subscriber_code = data.subscription && data.subscription.subscriber ? data.subscription.subscriber.code : undefined;
   const subscription_status = data.subscription ? data.subscription.status : undefined;
-  // date_next_charge não está no exemplo de payload, assumindo undefined se não vier.
-  // Se vier em outro local, ajuste aqui. Ex: data.subscription.plan.date_next_charge
   const date_next_charge = data.subscription ? data.subscription.date_next_charge : undefined;
-  // ---------------------------------------------------------------------------
-  // FIM DA CORREÇÃO
-  // ---------------------------------------------------------------------------
 
-  logger.info(`[HOTMART SVC] Processando evento: Prod=${prod}, Status=${status}, Email=${buyer_email}, Transação=${transactionId}, Assinatura Status=${subscription_status || 'N/A'}`);
+  logger.info(`[HOTMART SVC] Processando evento: Prod=${prod}, Status=${status}, Email=${buyer_email}, Telefone(completo payload)=${buyer_phone_local_code}${buyer_phone_number}, Transação=${transactionId}, Assinatura Status=${subscription_status || 'N/A'}`);
 
-  // 1. Encontrar o Plano no nosso sistema usando o ID do produto da Hotmart
   if (prod === undefined || prod === null) {
-    logger.warn(`[HOTMART SVC] ID do produto (prod) não encontrado no payload da Hotmart. Evento para ${buyer_email} ignorado.`);
+    logger.warn(`[HOTMART SVC] ID do produto (prod) não encontrado no payload da Hotmart. Evento ignorado.`);
     return;
   }
   const plan = await Plan.findOne({ where: { hotmartProductId: prod.toString() } });
@@ -69,70 +58,77 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
   }
   logger.info(`[HOTMART SVC] Plano local encontrado: "${plan.name}" (ID: ${plan.id})`);
 
-  // 2. Encontrar ou criar o Cliente no nosso sistema
   let clientInstance;
-  if (buyer_email) {
-    clientInstance = await Client.findOne({ where: { email: buyer_email.toLowerCase() } });
-  }
-
-  // Constrói o número de telefone completo a partir do DDD e número
   const fullPhoneNumberFromHotmart = buyer_phone_local_code && buyer_phone_number
     ? (buyer_phone_local_code.replace(/\D/g, '') + buyer_phone_number.replace(/\D/g, ''))
     : null;
 
-
-  if (!clientInstance && fullPhoneNumberFromHotmart) {
+  // Tenta encontrar por telefone primeiro, se existir
+  if (fullPhoneNumberFromHotmart) {
     clientInstance = await Client.findOne({ where: { phone: fullPhoneNumberFromHotmart }});
   }
+  // Se não encontrou por telefone mas tem email, tenta por email
+  if (!clientInstance && buyer_email) {
+    clientInstance = await Client.findOne({ where: { email: buyer_email.toLowerCase() } });
+  }
+
 
   if (!clientInstance) {
-    logger.info(`[HOTMART SVC] Cliente não encontrado para ${buyer_email || fullPhoneNumberFromHotmart}. Criando novo cliente...`);
+    if (!fullPhoneNumberFromHotmart) {
+        logger.error('[HOTMART SVC] Tentativa de criar novo cliente via Hotmart, mas o número de telefone não foi fornecido no payload. O email é: ' + buyer_email +'. Abortando criação de cliente.');
+        // Se o telefone é absolutamente obrigatório, você pode lançar um erro ou retornar.
+        // Se o email for aceitável como ÚNICO identificador e você não tiver telefone,
+        // você precisaria de uma lógica para criar o cliente só com email aqui.
+        // Por ora, estamos priorizando telefone. Se não tem telefone, não cria (baseado na sua última instrução).
+        throw new Error('Número de telefone não fornecido pela Hotmart para criação de novo cliente.');
+    }
+    logger.info(`[HOTMART SVC] Cliente não encontrado por telefone '${fullPhoneNumberFromHotmart}' ou email '${buyer_email}'. Criando novo cliente SOMENTE COM TELEFONE...`);
     const clientDataForCreation = {
-      email: buyer_email ? buyer_email.toLowerCase() : null,
-      name: buyer_name,
-      phone: fullPhoneNumberFromHotmart,
-      status: 'Aguardando Pagamento',
+      email: null, // Forçar email como nulo na criação
+      name: null,  // Forçar nome como nulo na criação
+      phone: fullPhoneNumberFromHotmart, // Telefone é obrigatório para novo cliente via Hotmart
+      status: 'Aguardando Pagamento', // Começa como aguardando, será 'Ativo' se o plano for ativado
     };
     clientInstance = await clientService.createClientContact(clientDataForCreation);
-    logger.info(`[HOTMART SVC] Novo cliente criado: ID ${clientInstance.id}, Email: ${clientInstance.email}`);
+    logger.info(`[HOTMART SVC] Novo cliente criado (SOMENTE COM TELEFONE): ID ${clientInstance.id}, Telefone: ${clientInstance.phone}`);
   } else {
-    logger.info(`[HOTMART SVC] Cliente existente encontrado: ID ${clientInstance.id}, Email: ${clientInstance.email}`);
+    logger.info(`[HOTMART SVC] Cliente existente encontrado: ID ${clientInstance.id}, Email: ${clientInstance.email}, Telefone: ${clientInstance.phone}`);
+    // Não vamos mais atualizar nome ou email com dados da Hotmart para clientes existentes.
+    // Apenas o telefone, se vier diferente e o do banco estiver vazio ou diferente.
     let clientNeedsUpdate = false;
     const updatePayloadClient = {};
-    if (buyer_name && (!clientInstance.name || clientInstance.name.length < buyer_name.length)) {
-        updatePayloadClient.name = buyer_name;
-        clientNeedsUpdate = true;
-    }
+
     if (fullPhoneNumberFromHotmart && (!clientInstance.phone || clientInstance.phone !== fullPhoneNumberFromHotmart)) {
+        logger.info(`[HOTMART SVC] Telefone do cliente ID ${clientInstance.id} será atualizado de "${clientInstance.phone}" para "${fullPhoneNumberFromHotmart}".`);
         updatePayloadClient.phone = fullPhoneNumberFromHotmart;
         clientNeedsUpdate = true;
     }
-    // Adicionar atualização de email se o email da Hotmart for diferente e o campo no DB estiver vazio ou for diferente
-    if (buyer_email && buyer_email.toLowerCase() !== clientInstance.email) {
-        const existingEmailUser = await Client.findOne({where: {email: buyer_email.toLowerCase(), id: {[Op.ne]: clientInstance.id}}});
-        if(!existingEmailUser){
-            updatePayloadClient.email = buyer_email.toLowerCase();
-            clientNeedsUpdate = true;
-        } else {
-            logger.warn(`[HOTMART SVC] Email ${buyer_email} do webhook já existe para outro cliente (ID: ${existingEmailUser.id}). Não atualizando email para cliente ${clientInstance.id}.`);
-        }
+    // Se o cliente foi encontrado pelo email, mas não tem telefone no banco e a Hotmart enviou um, atualiza.
+    if (fullPhoneNumberFromHotmart && !clientInstance.phone && buyer_email && clientInstance.email === buyer_email.toLowerCase()) {
+        logger.info(`[HOTMART SVC] Cliente ID ${clientInstance.id} (encontrado por email) não tinha telefone, atualizando para "${fullPhoneNumberFromHotmart}".`);
+        updatePayloadClient.phone = fullPhoneNumberFromHotmart;
+        clientNeedsUpdate = true;
     }
 
     if (clientNeedsUpdate) {
         await Client.update(updatePayloadClient, { where: { id: clientInstance.id } });
-        logger.info(`[HOTMART SVC] Dados do cliente ID ${clientInstance.id} atualizados.`);
-        clientInstance = await Client.findByPk(clientInstance.id);
+        logger.info(`[HOTMART SVC] Telefone do cliente ID ${clientInstance.id} atualizado.`);
+        clientInstance = await Client.findByPk(clientInstance.id); // Recarrega para ter os dados atualizados
     }
   }
 
   const externalIdForSubscription = subscriber_code || transactionId;
+  if (!externalIdForSubscription) {
+    logger.error(`[HOTMART SVC] ID externo da assinatura/transação (subscriber_code ou transactionId) não encontrado no payload. Não é possível prosseguir. Payload:`, eventData.data.subscription, eventData.data.purchase);
+    throw new Error('ID externo da assinatura/transação ausente no payload da Hotmart.');
+  }
 
   const t = await sequelize.transaction();
   try {
     let localSubscription = await Subscription.findOne({
         where: {
             clientId: clientInstance.id,
-            externalSubscriptionId: externalIdForSubscription
+            externalSubscriptionId: externalIdForSubscription // Usar o ID externo para encontrar
         },
         include: [{model: Plan, as: 'plan'}],
         transaction: t
@@ -145,56 +141,56 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
       case 'approved':
       case 'active':
       case 'completed':
-        logger.info(`[HOTMART SVC] Status APROVADO/ATIVO para Cliente ID ${clientInstance.id}, Plano ${plan.name}.`);
+        logger.info(`[HOTMART SVC] Status ${effectiveStatus.toUpperCase()} para Cliente ID ${clientInstance.id}, Plano ${plan.name}.`);
 
         let endDateApproved;
-        if (date_next_charge && plan.durationDays) {
-            const nextChargeDate = new Date(date_next_charge.replace(' ', 'T') + 'Z');
+        if (date_next_charge && plan.durationDays) { // Assinatura renovando
+            const nextChargeDate = new Date(date_next_charge.replace(' ', 'T') + 'Z'); // Garante UTC
             endDateApproved = new Date(nextChargeDate);
-            endDateApproved.setDate(endDateApproved.getDate() -1);
-        } else if (plan.durationDays) {
+            endDateApproved.setUTCDate(endDateApproved.getUTCDate() -1); // Um dia antes da próxima cobrança
+             logger.info(`[HOTMART SVC] Renovação de assinatura. Próxima cobrança: ${date_next_charge}. Nova data de fim da vigência: ${endDateApproved.toISOString().split('T')[0]}`);
+        } else if (plan.durationDays) { // Primeira ativação ou produto único
             endDateApproved = new Date(subscriptionStartDate);
             endDateApproved.setDate(endDateApproved.getDate() + plan.durationDays);
+            logger.info(`[HOTMART SVC] Primeira ativação/produto único. Data de início: ${subscriptionStartDate}. Nova data de fim da vigência: ${endDateApproved.toISOString().split('T')[0]}`);
         } else {
-             logger.warn(`[HOTMART SVC] Não foi possível determinar a data de término para o plano ${plan.name}. Usando padrão de 30 dias.`);
+             logger.warn(`[HOTMART SVC] Duração do plano ${plan.name} (ID: ${plan.id}) não definida (durationDays). Usando fallback de 30 dias.`);
              endDateApproved = new Date(subscriptionStartDate);
              endDateApproved.setDate(endDateApproved.getDate() + 30);
         }
 
         if (localSubscription) {
-          // Importante: O subscriptionService.createSubscription lida com a atualização do Client.
-          // Se atualizarmos aqui, precisamos replicar essa lógica ou chamar um service de update.
-          // Por ora, o createSubscription será chamado se não houver localSubscription.
-          // Se houver, atualizamos a assinatura local e DEPOIS o cliente.
+          // Assinatura já existe, vamos atualizá-la (renovação ou mudança de status)
           await localSubscription.update({
-            planId: plan.id,
-            startDate: subscriptionStartDate,
+            planId: plan.id, // Garante que o planId está correto (pode ter mudado de plano)
+            startDate: subscriptionStartDate, // Pode ser a mesma ou uma nova data de aprovação
             endDate: endDateApproved.toISOString().split('T')[0],
             status: 'Ativa',
-            autoRenew: !!date_next_charge
+            autoRenew: !!date_next_charge // Se tem próxima cobrança, é auto-renovável
           }, { transaction: t });
-          logger.info(`[HOTMART SVC] Assinatura existente ID ${localSubscription.id} (Externo: ${externalIdForSubscription}) atualizada para ATIVA.`);
+          logger.info(`[HOTMART SVC] Assinatura existente ID ${localSubscription.id} (Externo: ${externalIdForSubscription}) atualizada para ATIVA. Válida até ${localSubscription.endDate}.`);
 
-          // Atualizar o cliente após atualizar a assinatura existente
+          // Atualizar o cliente APÓS atualizar a assinatura existente
           const clientAccessLevel = plan.tier === 'avancado' ?
             (plan.durationDays > 7000 ? 'vitalicio_avancado' : (plan.durationDays > 60 ? 'avancado_anual' : 'avancado_mensal')) :
             (plan.durationDays > 7000 ? 'vitalicio_basico' : (plan.durationDays > 60 ? 'basico_anual' : 'basico_mensal'));
+
           await Client.update({
             accessLevel: clientAccessLevel,
-            accessExpiresAt: plan.durationDays > 7000 ? null : endDateApproved.toISOString().split('T')[0],
-            status: 'Ativo'
+            accessExpiresAt: plan.durationDays > 7000 ? null : endDateApproved.toISOString().split('T')[0], // Se for vitalício, não expira
+            status: 'Ativo' // Garante que o cliente está ativo
            }, { where: {id: clientInstance.id }, transaction: t });
-           logger.info(`[HOTMART SVC] Cliente ID ${clientInstance.id} teve acesso atualizado para ${clientAccessLevel} devido à atualização da assinatura.`);
+           logger.info(`[HOTMART SVC] Cliente ID ${clientInstance.id} teve acesso atualizado para ${clientAccessLevel}, expira em: ${endDateApproved.toISOString().split('T')[0]}.`);
 
         } else {
-          // subscriptionService.createSubscription já deve tratar a atualização do Client.accessLevel e accessExpiresAt
+          // Assinatura não existe, criar uma nova.
+          // O serviço subscriptionService.createSubscription já lida com a atualização do Client.accessLevel e accessExpiresAt.
           localSubscription = await subscriptionService.createSubscription(
             clientInstance.id,
             plan.id,
             subscriptionStartDate,
             'Ativa',
-            externalIdForSubscription,
-            // true // autoRenew (se criarSubscription aceitar) - o default no service é baseado em durationDays
+            externalIdForSubscription // Passa o ID externo aqui
           );
           logger.info(`[HOTMART SVC] Nova assinatura ID ${localSubscription.id} (Externo: ${externalIdForSubscription}) criada como ATIVA.`);
         }
@@ -215,8 +211,10 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
           await localSubscription.update({ status: 'Pendente', planId: plan.id }, { transaction: t });
           logger.info(`[HOTMART SVC] Assinatura existente ID ${localSubscription.id} (Externo: ${externalIdForSubscription}) atualizada para PENDENTE (Boleto).`);
         }
-        if (clientInstance.accessLevel === 'gratuito' || clientInstance.status === 'Ativo') { // Se estava ativo gratuito ou apenas ativo (ex. pós-trial)
+        // Se o cliente estava ativo com plano gratuito ou outro status que não seja 'Aguardando Pagamento' ou 'Pagamento Falhou'
+        if (clientInstance.status === 'Ativo' && clientInstance.accessLevel === 'gratuito') {
             await Client.update({ status: 'Aguardando Pagamento' }, { where: { id: clientInstance.id }, transaction: t });
+            logger.info(`[HOTMART SVC] Status do Cliente ID ${clientInstance.id} atualizado para 'Aguardando Pagamento'.`);
         }
         break;
 
@@ -224,14 +222,14 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
       case 'expired':
       case 'refunded':
       case 'chargeback':
-      case 'overdue':
-      case 'inactive':
+      case 'overdue': // Cliente com pagamento atrasado
+      case 'inactive': // Assinatura se tornou inativa na Hotmart
         const actionType = effectiveStatus.charAt(0).toUpperCase() + effectiveStatus.slice(1);
         logger.info(`[HOTMART SVC] Status ${actionType} para Cliente ID ${clientInstance.id}, Plano ${plan.name} (Externo: ${externalIdForSubscription}). Revogando acesso se necessário.`);
 
-        let newSubscriptionStatusLocal = 'Expirada';
+        let newSubscriptionStatusLocal = 'Expirada'; // Default
         if (effectiveStatus === 'canceled') newSubscriptionStatusLocal = 'Cancelada';
-        else if (effectiveStatus === 'refunded' || effectiveStatus === 'chargeback') newSubscriptionStatusLocal = 'Cancelada';
+        else if (effectiveStatus === 'refunded' || effectiveStatus === 'chargeback') newSubscriptionStatusLocal = 'Cancelada'; // Pode ter um status específico
         else if (effectiveStatus === 'overdue' || effectiveStatus === 'inactive') newSubscriptionStatusLocal = 'Pagamento Falhou';
 
         if (localSubscription) {
@@ -241,6 +239,7 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
            logger.warn(`[HOTMART SVC] Nenhuma assinatura local encontrada com ID externo ${externalIdForSubscription} para marcar como ${newSubscriptionStatusLocal}.`);
         }
 
+        // Verificar se há QUALQUER outra assinatura ATIVA antes de revogar o acesso do cliente
         const anyOtherActiveSubscription = await Subscription.findOne({
           where: {
             clientId: clientInstance.id,
@@ -253,12 +252,17 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
         });
 
         if (!anyOtherActiveSubscription) {
+          let clientNewStatus = 'Ativo'; // Por padrão, se não for pagamento falho, mantém ativo mas com acesso gratuito
+          if (effectiveStatus === 'overdue' || effectiveStatus === 'inactive' || effectiveStatus === 'Pagamento Falhou'){
+            clientNewStatus = 'Pagamento Falhou';
+          }
+
           await Client.update({
             accessLevel: 'gratuito',
             accessExpiresAt: null,
-            status: (effectiveStatus === 'overdue' || effectiveStatus === 'inactive') ? 'Pagamento Falhou' : 'Ativo'
+            status: clientNewStatus
           }, { where: { id: clientInstance.id }, transaction: t });
-          logger.info(`[HOTMART SVC] Acesso do cliente ID ${clientInstance.id} revertido para gratuito.`);
+          logger.info(`[HOTMART SVC] Acesso do cliente ID ${clientInstance.id} revertido para gratuito. Status do cliente: ${clientNewStatus}.`);
         } else {
            const otherPlan = anyOtherActiveSubscription.plan;
            const otherEndDate = new Date(anyOtherActiveSubscription.endDate);
@@ -270,7 +274,7 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
           await Client.update({
             accessLevel: otherClientAccessLevel,
             accessExpiresAt: otherAccessDurationDays > 7000 ? null : otherEndDate.toISOString().split('T')[0],
-            status: 'Ativo'
+            status: 'Ativo' // Garante que está ativo se tem outra assinatura válida
           }, { where: { id: clientInstance.id }, transaction: t });
           logger.info(`[HOTMART SVC] Cliente ID ${clientInstance.id} ainda possui outra assinatura ativa ("${otherPlan.name}"). Acesso atualizado para ${otherClientAccessLevel}.`);
         }
