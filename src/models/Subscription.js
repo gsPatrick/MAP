@@ -1,5 +1,5 @@
 // src/models/Subscription.js
-const { DataTypes } = require('sequelize');
+const { DataTypes, Op } = require('sequelize'); // Adicione Op se for usar no índice
 const sequelize = require('../config/database');
 
 const Subscription = sequelize.define('Subscription', {
@@ -16,7 +16,7 @@ const Subscription = sequelize.define('Subscription', {
       key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'CASCADE', // Se o cliente for deletado, suas assinaturas também são
+    onDelete: 'CASCADE',
   },
   planId: {
     type: DataTypes.INTEGER,
@@ -26,7 +26,7 @@ const Subscription = sequelize.define('Subscription', {
       key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'RESTRICT', // Não permitir deletar um plano se houver assinaturas ativas (ou SET NULL e tratar)
+    onDelete: 'RESTRICT',
   },
   startDate: {
     type: DataTypes.DATEONLY,
@@ -39,23 +39,19 @@ const Subscription = sequelize.define('Subscription', {
     comment: 'Data de término da vigência da assinatura',
   },
   status: {
-    type: DataTypes.ENUM('Ativa', 'Inativa', 'Cancelada', 'Pendente', 'Expirada'),
+    type: DataTypes.ENUM('Ativa', 'Inativa', 'Cancelada', 'Pendente', 'Expirada', 'Pagamento Falhou'), // Adicionei 'Pagamento Falhou'
     allowNull: false,
     defaultValue: 'Pendente',
     comment: 'Status atual da assinatura',
   },
-  // externalSubscriptionId: { // Para ID da assinatura na plataforma de pagamento
-  //   type: DataTypes.STRING,
-  //   allowNull: true,
-  //   unique: true,
-  //   comment: 'ID da assinatura na plataforma de pagamento externa'
-  // },
-  // paymentDetails: { // JSONB para armazenar detalhes do último pagamento ou da configuração do pagamento
-  //   type: DataTypes.JSONB,
-  //   allowNull: true,
-  //   comment: 'Detalhes do pagamento ou configuração da assinatura externa'
-  // },
-  autoRenew: { // Se a assinatura deve ser renovada automaticamente (lógica a ser implementada com webhooks)
+  externalSubscriptionId: { // <<<<<< DESCOMENTE ESTA SEÇÃO
+    type: DataTypes.STRING,
+    allowNull: true, // Pode ser nulo se a assinatura não for de um gateway externo
+    unique: true,    // Garante que cada ID externo seja único
+    comment: 'ID da assinatura na plataforma de pagamento externa (ex: Hotmart subscriber_code ou transactionId)'
+  },
+  // paymentDetails: { ... } // Mantenha comentado se não estiver usando
+  autoRenew: {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
     allowNull: false,
@@ -69,8 +65,9 @@ const Subscription = sequelize.define('Subscription', {
     { fields: ['planId'] },
     { fields: ['status'] },
     { fields: ['endDate'] },
-    // Índice para buscar rapidamente a assinatura ativa de um cliente
-    { fields: ['clientId', 'status', 'endDate'] }
+    { fields: ['clientId', 'status', 'endDate'] },
+    // Adicione um índice para externalSubscriptionId se você descomentá-lo:
+    { fields: ['externalSubscriptionId'], unique: true, where: { externalSubscriptionId: { [Op.ne]: null } } } // <<< DESCOMENTE OU ADICIONE
   ]
 });
 

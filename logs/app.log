@@ -1848,3 +1848,27 @@ Error
 2025-05-31T15:50:27.290Z [DEBUG]: [SEQUELIZE DEV SQL]: Executing (default): CREATE TABLE IF NOT EXISTS "credit_cards" ("id"  SERIAL , "financialAccountId" INTEGER NOT NULL REFERENCES "financial_accounts" ("id") ON DELETE CASCADE ON UPDATE CASCADE, "name" VARCHAR(255) NOT NULL, "limit" DECIMAL(12,2) NOT NULL, "closingDay" INTEGER NOT NULL, "paymentDay" INTEGER NOT NULL, "isDefault" BOOLEAN NOT NULL DEFAULT false, "lastFourDigits" VARCHAR(4), "flag" VARCHAR(50), "isActive" BOOLEAN NOT NULL DEFAULT true, "dominantColor" VARCHAR(20) , "flagIconUrl" VARCHAR(2048) , "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL, "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY ("id")); COMMENT ON TABLE "credit_cards" IS 'Cartões de crédito vinculados a uma FinancialAccount'; COMMENT ON COLUMN "credit_cards"."dominantColor" IS 'Cor predominante para UI (opcional, ex: #RRGGBB ou nome)'; COMMENT ON COLUMN "credit_cards"."flagIconUrl" IS 'URL para um ícone customizado da bandeira (opcional)';
 2025-05-31T15:50:27.325Z [DEBUG]: [SEQUELIZE DEV SQL]: Executing (default): SELECT i.relname AS name, ix.indisprimary AS primary, ix.indisunique AS unique, ix.indkey AS indkey, array_agg(a.attnum) as column_indexes, array_agg(a.attname) AS column_names, pg_get_indexdef(ix.indexrelid) AS definition FROM pg_class t, pg_class i, pg_index ix, pg_attribute a WHERE t.oid = ix.indrelid AND i.oid = ix.indexrelid AND a.attrelid = t.oid AND t.relkind = 'r' and t.relname = 'credit_cards' GROUP BY i.relname, ix.indexrelid, ix.indisprimary, ix.indisunique, ix.indkey ORDER BY i.relname;
 2025-05-31T15:50:27.362Z [DEBUG]: [SEQUELIZE DEV SQL]: Executing (default): CREATE INDEX "credit_cards_financial_account_id" ON "credit_cards" ("financialAccountId")
+2025-06-03T04:48:09.768Z [ERROR]: Erro durante a operação no banco de dados: | Adicional: {"name":"SequelizeConnectionRefusedError","parent":{"errno":-111,"code":"ECONNREFUSED","syscall":"connect","address":"127.0.0.1","port":5432},"original":{"errno":-111,"code":"ECONNREFUSED","syscall":"connect","address":"127.0.0.1","port":5432}}
+2025-06-03T04:48:09.768Z [INFO]: Conexão com o banco de dados fechada.
+2025-06-03T04:50:49.537Z [INFO]: Conexão com o banco de dados estabelecida.
+2025-06-03T04:50:49.577Z [WARN]: Plano "No Controle Plano Pessoal - Mensal" não encontrado no banco de dados e não é o plano de teste ID 0. Pulando.
+2025-06-03T04:50:49.609Z [WARN]: Plano "No Controle Plano Pessoal + Empresarial - Mensal" não encontrado no banco de dados e não é o plano de teste ID 0. Pulando.
+2025-06-03T04:50:49.641Z [INFO]: Plano "Plano Webhook Teste ID 0" não encontrado. Tentando criar com Hotmart ID 0...
+2025-06-03T04:50:49.721Z [INFO]: Plano "Plano Webhook Teste ID 0" criado com Hotmart Product ID: 0
+2025-06-03T04:50:49.756Z [INFO]: Conexão com o banco de dados fechada.
+2025-06-03T04:53:30.751Z [INFO]: Conexão com o banco de dados estabelecida.
+2025-06-03T04:53:30.786Z [INFO]: Plano "No Controle Plano Pessoal - Mensal" não encontrado. Tentando criar com Hotmart ID 5626407...
+2025-06-03T04:53:30.858Z [INFO]: Plano "No Controle Plano Pessoal - Mensal" criado com Hotmart Product ID: 5626407
+2025-06-03T04:53:30.889Z [INFO]: Plano "No Controle Plano Pessoal + Empresarial - Mensal" não encontrado. Tentando criar com Hotmart ID 5626407...
+2025-06-03T04:53:30.923Z [WARN]: Um plano ("No Controle Plano Pessoal - Mensal") já existe com Hotmart Product ID "5626407". Não será criado um novo plano chamado "No Controle Plano Pessoal + Empresarial - Mensal" com este mesmo Hotmart ID.
+2025-06-03T04:53:30.956Z [INFO]: Plano "Plano Webhook Teste ID 0" já está com Hotmart ID 0 ou nenhum ID foi fornecido para atualização.
+2025-06-03T04:53:30.956Z [INFO]: Plano "Plano Webhook Teste ID 0" encontrado. Verificando/Atualizando Hotmart ID para 0...
+2025-06-03T04:53:30.992Z [INFO]: Conexão com o banco de dados fechada.
+2025-06-03T04:58:40.077Z [INFO]: Conexão com o banco de dados estabelecida.
+2025-06-03T04:58:40.115Z [INFO]: Plano "No Controle Plano Pessoal - Mensal" já está com Hotmart ID 5626407 ou nenhum ID foi fornecido para atualização.
+2025-06-03T04:58:40.115Z [INFO]: Plano "No Controle Plano Pessoal - Mensal" encontrado. Verificando/Atualizando Hotmart ID para 5626407...
+2025-06-03T04:58:40.148Z [INFO]: Plano "No Controle Plano Pessoal + Empresarial - Mensal" não encontrado. Tentando criar com Hotmart ID 5626407...
+2025-06-03T04:58:40.180Z [WARN]: Um plano ("No Controle Plano Pessoal - Mensal") já existe com Hotmart Product ID "5626407". Não será criado um novo plano chamado "No Controle Plano Pessoal + Empresarial - Mensal" com este mesmo Hotmart ID.
+2025-06-03T04:58:40.214Z [INFO]: Plano "Plano Webhook Teste ID 0" encontrado. Verificando/Atualizando Hotmart ID para 0...
+2025-06-03T04:58:40.215Z [INFO]: Plano "Plano Webhook Teste ID 0" já está com Hotmart ID 0 ou nenhum ID foi fornecido para atualização.
+2025-06-03T04:58:40.251Z [INFO]: Conexão com o banco de dados fechada.
