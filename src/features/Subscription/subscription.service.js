@@ -2,8 +2,8 @@
 const { Client, Plan, Subscription, sequelize } = require('../../database');
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
-const { sendWhatsappMessage } = require('../../services/whatsappService'); // <--- ADICIONADO
-const { formatDate } = require('../../utils/formatters'); // <--- ADICIONADO
+const { sendWhatsappMessage } = require('../../services/whatsappService'); // Importa o serviço de WhatsApp
+const { formatDate } = require('../../utils/formatters'); // Importa o formatador de data
 
 /**
  * Cria uma nova assinatura para um cliente.
@@ -18,11 +18,26 @@ const { formatDate } = require('../../utils/formatters'); // <--- ADICIONADO
 async function createSubscription(clientId, planId, startDate = null, status = 'Ativa', externalSubscriptionId = null) {
   const t = await sequelize.transaction();
   try {
-    const client = await Client.findByPk(clientId, { transaction: t });
-    if (!client) {
+    const clientInstance = await Client.findByPk(clientId, { transaction: t });
+    if (!clientInstance) {
       const error = new Error(`Cliente com ID ${clientId} não encontrado.`);
       error.statusCode = 404; error.status = 'fail'; throw error;
     }
+
+    // Capturar o estado de acesso PAGO do cliente ANTES de qualquer alteração nesta função
+    let clientHadActivePaidAccessBeforeThisCreation = false;
+    if (clientInstance.accessLevel && clientInstance.accessLevel !== 'gratuito') {
+        if (clientInstance.accessLevel.startsWith('vitalicio_')) {
+            clientHadActivePaidAccessBeforeThisCreation = true;
+        } else if (clientInstance.accessExpiresAt) {
+            const expiryDate = new Date(clientInstance.accessExpiresAt + 'T00:00:00Z');
+            const today = new Date(); today.setUTCHours(0,0,0,0);
+            if (expiryDate >= today) {
+                clientHadActivePaidAccessBeforeThisCreation = true;
+            }
+        }
+    }
+    logger.debug(`[SUBSCRIPTION SERVICE - createSubscription] Cliente ${clientId} tinha acesso pago ativo ANTES desta criação? ${clientHadActivePaidAccessBeforeThisCreation}`);
 
     const plan = await Plan.findByPk(planId, { transaction: t });
     if (!plan) {
@@ -40,7 +55,6 @@ async function createSubscription(clientId, planId, startDate = null, status = '
     let clientAccessLevel = 'gratuito';
     let clientAccessExpiresAt = null;
 
-    const planNameLower = plan.name.toLowerCase();
     const planTier = plan.tier || 'basico';
 
     if (plan.durationDays > 7000) {
@@ -55,14 +69,14 @@ async function createSubscription(clientId, planId, startDate = null, status = '
     }
     
     if (status === 'Ativa') {
-        await client.update({
+        await clientInstance.update({
             accessLevel: clientAccessLevel,
             accessExpiresAt: clientAccessExpiresAt,
             status: 'Ativo'
         }, { transaction: t });
         logger.info(`[SUBSCRIPTION SERVICE] Cliente ID ${clientId} atualizado para accessLevel: ${clientAccessLevel}, expiresAt: ${clientAccessExpiresAt}`);
-    } else if (status === 'Pendente' && client.status === 'Ativo' && client.accessLevel === 'gratuito') {
-        await client.update({ status: 'Aguardando Pagamento' }, { transaction: t });
+    } else if (status === 'Pendente' && clientInstance.status === 'Ativo' && clientInstance.accessLevel === 'gratuito') {
+        await clientInstance.update({ status: 'Aguardando Pagamento' }, { transaction: t });
     }
 
     const newSubscriptionData = {
@@ -79,42 +93,32 @@ async function createSubscription(clientId, planId, startDate = null, status = '
 
     const newSubscription = await Subscription.create(newSubscriptionData, { transaction: t });
 
-    await t.commit(); // Commit da transação ANTES de enviar notificações
+    await t.commit(); 
 
-    // === INÍCIO DA LÓGICA DE MENSAGEM DE BOAS-VINDAS ===
-    if (status === 'Ativa' && client.phone) {
-      // Verificar se o cliente JÁ TEVE alguma assinatura que FOI 'Ativa' ANTES desta.
-      // Esta verificação considera que uma assinatura 'Ativa' implica um plano pago ou um trial significativo.
-      // Se houver distinção entre planos pagos e gratuitos/trial, essa lógica pode ser refinada
-      // verificando o `plan.price` ou um campo `isTrial` no plano/assinatura.
-      const previousPaidActiveSubscriptionsCount = await Subscription.count({
-        where: {
-          clientId: clientId,
-          status: 'Ativa',
-          id: { [Op.ne]: newSubscription.id }, // Exclui a assinatura que acabamos de criar
-          // Adicionar aqui condição para verificar se o plano era pago, se necessário
-          // Ex: '$plan.price$': { [Op.gt]: 0 } (requer include: Plan)
-        }
-      });
-
-      if (previousPaidActiveSubscriptionsCount === 0) {
-        const clientName = client.name ? client.name.split(' ')[0] : 'Cliente';
+    // === LÓGICA DE MENSAGEM DE BOAS-VINDAS (APENAS SE O CLIENTE *NÃO TINHA* ACESSO PAGO ATIVO ANTES) ===
+    if (status === 'Ativa' && clientInstance.phone && !clientHadActivePaidAccessBeforeThisCreation) {
+        const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Cliente';
         const platformUrl = process.env.PLATFORM_URL || 'app.mapnocontrole.com.br';
-        const welcomeMessage = `🎉 Olá ${clientName}! Seja muito bem-vindo(a) ao MAP no Controle!\n\nQue demais que você garantiu seu acesso ao nosso plano *${plan.name}*!\n\nSeu acesso está válido até ${formatDate(newSubscription.endDate)}.\n\nPara começar, que tal me dizer "oi" por aqui para darmos o pontapé inicial na organização? Se preferir, você também já pode acessar nossa plataforma em https://${platformUrl}.\n\nEstou pronto para te ajudar a organizar tudo! 🚀`;
+        
+        let expiryWelcomePart = `Seu acesso está válido até ${formatDate(newSubscription.endDate)}.`;
+        if (clientAccessLevel.includes('vitalicio')) {
+            expiryWelcomePart = "Você garantiu acesso vitalício!";
+        }
+
+        const welcomeMessage = `🎉 Olá ${clientName}! Seja muito bem-vindo(a) ao MAP no Controle!\n\nQue demais que você garantiu seu acesso ao nosso plano *${plan.name}*!\n\n${expiryWelcomePart}\n\nPara começar, que tal me dizer "oi" por aqui para darmos o pontapé inicial na organização? Se preferir, você também já pode acessar nossa plataforma em https://${platformUrl}.\n\nEstou pronto para te ajudar a organizar tudo! 🚀`;
         try {
-          await sendWhatsappMessage(client.phone, welcomeMessage);
+          await sendWhatsappMessage(clientInstance.phone, welcomeMessage);
           logger.info(`[SUBSCRIPTION SERVICE] Mensagem de boas-vindas enviada para o cliente ID ${clientId} (Plano: ${plan.name}).`);
         } catch (whatsappError) {
           logger.error(`[SUBSCRIPTION SERVICE] Falha ao enviar mensagem de boas-vindas para o cliente ID ${clientId}: ${whatsappError.message}`);
         }
-      }
     }
     // === FIM DA LÓGICA DE MENSAGEM DE BOAS-VINDAS ===
 
     logger.info(`Assinatura ID ${newSubscription.id} criada para Cliente ID ${clientId} com Plano "${plan.name}" (ID ${planId}). Válida até ${newSubscription.endDate}. Status: ${status}.`);
     return newSubscription.toJSON();
   } catch (error) {
-    await t.rollback();
+    if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
     logger.error(`Erro ao criar assinatura para Cliente ID ${clientId}: ${error.message}`, { error, planId, startDate, status });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
@@ -177,103 +181,148 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
     try {
         const subscription = await Subscription.findOne({
             where: { externalSubscriptionId },
-            include: [{ model: Client, as: 'client' }, {model: Plan, as: 'plan'}],
-            // Não colocar transaction: t aqui na busca inicial, para pegar o oldEndDate antes da transação
+            include: [
+                { model: Client, as: 'client' },
+                { model: Plan, as: 'plan' }
+            ]
         });
 
         if (!subscription) {
             logger.warn(`[SUBSCRIPTION SERVICE] Assinatura com ID externo ${externalSubscriptionId} não encontrada para atualização de status.`);
-            // Não precisa de rollback se a transação nem começou
             return null;
         }
 
-        const client = subscription.client;
+        const clientInstance = subscription.client;
         const plan = subscription.plan;
-        if (!client || !plan) {
-            logger.error(`[SUBSCRIPTION SERVICE] Cliente ou Plano não encontrado para a assinatura ${subscription.id}. Dados inconsistentes.`);
-            // Não precisa de rollback
+
+        if (!clientInstance || !plan) {
+            logger.error(`[SUBSCRIPTION SERVICE] Cliente ou Plano não encontrado para la assinatura ${subscription.id}. Dados inconsistentes.`);
             return null;
         }
-        
-        const oldEndDate = subscription.endDate; // Captura a data de término ANTES da atualização
-        const oldStatus = subscription.status; // Captura o status ANTES da atualização
 
+        const oldClientAccessLevel = clientInstance.accessLevel;
+        const oldClientAccessExpiresAt = clientInstance.accessExpiresAt;
+        let clientHadActivePaidAccessBeforeUpdate = false;
+        if (oldClientAccessLevel && oldClientAccessLevel !== 'gratuito') {
+            if (oldClientAccessLevel.startsWith('vitalicio_')) {
+                clientHadActivePaidAccessBeforeUpdate = true;
+            } else if (oldClientAccessExpiresAt) {
+                const expiryDate = new Date(oldClientAccessExpiresAt + 'T00:00:00Z');
+                const today = new Date(); today.setUTCHours(0,0,0,0);
+                if (expiryDate >= today) {
+                    clientHadActivePaidAccessBeforeUpdate = true;
+                }
+            }
+        }
+        logger.debug(`[SUBSCRIPTION SERVICE - updateSubscriptionStatus] Cliente ${clientInstance.id} tinha acesso pago ANTES da atualização? ${clientHadActivePaidAccessBeforeUpdate}. Nível: ${oldClientAccessLevel}, Expira em: ${oldClientAccessExpiresAt}`);
+        
         const updateSubData = { status: newStatus };
+        let newClientAccessLevel = clientInstance.accessLevel;
+        let newClientAccessExpiresAt = clientInstance.accessExpiresAt;
+
         if (newStatus === 'Ativa' && newEndDate) {
             updateSubData.endDate = newEndDate;
-            let clientAccessLevel = 'gratuito';
             const planTier = plan.tier || 'basico';
-
             if (plan.durationDays > 7000) {
-                clientAccessLevel = planTier === 'avancado' ? 'vitalicio_avancado' : 'vitalicio_basico';
-            } else if (plan.durationDays > 60) {
-                clientAccessLevel = planTier === 'avancado' ? 'avancado_anual' : 'basico_anual';
+                newClientAccessLevel = planTier === 'avancado' ? 'vitalicio_avancado' : 'vitalicio_basico';
+                newClientAccessExpiresAt = null;
             } else if (plan.durationDays > 0) {
-                clientAccessLevel = planTier === 'avancado' ? 'avancado_mensal' : 'basico_mensal';
+                newClientAccessLevel = planTier === 'avancado' 
+                    ? (plan.durationDays > 60 ? 'avancado_anual' : 'avancado_mensal')
+                    : (plan.durationDays > 60 ? 'basico_anual' : 'basico_mensal');
+                newClientAccessExpiresAt = newEndDate;
             }
 
-            await client.update({
-                accessLevel: clientAccessLevel,
-                accessExpiresAt: newEndDate,
+            await clientInstance.update({
+                accessLevel: newClientAccessLevel,
+                accessExpiresAt: newClientAccessExpiresAt,
                 status: 'Ativo'
-            }, { transaction: t }); // A atualização do cliente ocorre DENTRO da transação
-            logger.info(`[SUBSCRIPTION SERVICE] Cliente ID ${client.id} atualizado para accessLevel: ${clientAccessLevel}, expiresAt: ${newEndDate} devido à ativação/renovação da assinatura ${subscription.id}.`);
+            }, { transaction: t });
+            logger.info(`[SUBSCRIPTION SERVICE] Cliente ID ${clientInstance.id} atualizado para accessLevel: ${newClientAccessLevel}, expiresAt: ${newClientAccessExpiresAt} devido à ativação/renovação da assinatura ${subscription.id}.`);
 
-        } else if (newStatus === 'Cancelada' || newStatus === 'Expirada' || newStatus === 'Pagamento Falhou') {
+        } else if (['Cancelada', 'Expirada', 'Pagamento Falhou'].includes(newStatus)) {
             const otherActiveSubscriptions = await Subscription.count({
                 where: {
-                    clientId: client.id,
+                    clientId: clientInstance.id,
                     status: 'Ativa',
                     id: { [Op.ne]: subscription.id },
                     endDate: { [Op.gte]: new Date().toISOString().split('T')[0] }
                 },
-                transaction: t // Dentro da transação
+                transaction: t
             });
 
             if (otherActiveSubscriptions === 0) {
-                await client.update({
-                    accessLevel: 'gratuito',
-                    accessExpiresAt: null,
-                    status: newStatus === 'Pagamento Falhou' ? 'Pagamento Falhou' : client.status 
+                newClientAccessLevel = 'gratuito';
+                newClientAccessExpiresAt = null;
+                await clientInstance.update({
+                    accessLevel: newClientAccessLevel,
+                    accessExpiresAt: newClientAccessExpiresAt,
+                    status: newStatus === 'Pagamento Falhou' ? 'Pagamento Falhou' : clientInstance.status 
                 }, { transaction: t });
-                logger.info(`[SUBSCRIPTION SERVICE] Cliente ID ${client.id} revertido para 'gratuito' pois a assinatura ${subscription.id} foi ${newStatus}.`);
+                logger.info(`[SUBSCRIPTION SERVICE] Cliente ID ${clientInstance.id} revertido para 'gratuito' pois a assinatura ${subscription.id} foi ${newStatus}.`);
             }
         }
 
-        await subscription.update(updateSubData, { transaction: t }); // Atualiza a assinatura DENTRO da transação
-        await t.commit(); // Commit da transação ANTES de enviar notificações
+        await subscription.update(updateSubData, { transaction: t });
+        await t.commit();
 
-        // === INÍCIO DA LÓGICA DE MENSAGEM DE RENOVAÇÃO/REATIVAÇÃO ===
-        if (newStatus === 'Ativa' && client.phone) {
-            // Condição 1: A assinatura já estava ativa e sua data de término foi estendida (renovação pura).
-            const isExtensionRenewal = oldStatus === 'Ativa' && newEndDate && oldEndDate && newEndDate > oldEndDate;
-
-            // Condição 2: A assinatura NÃO estava ativa (Expirada, Cancelada, Pendente, etc.) e agora foi (RE)ATIVADA.
-            // E não é a *primeira vez absoluta* que o cliente se torna ativo (isso é coberto pelo createSubscription).
-            // Para simplificar, consideramos uma reativação se o status antigo não era 'Ativa'.
-            const isReactivation = oldStatus !== 'Ativa';
-            
-            // Evitar enviar mensagem de renovação se a mensagem de boas-vindas já foi/seria enviada
-            // (ex: se createSubscription foi chamado com status 'Pendente' e agora está sendo ativada)
-            // Uma heurística: se a data de início da assinatura for muito próxima de "agora",
-            // e o status antigo não era 'Ativa', é provável que seja a primeira ativação.
-            const isLikelyFirstActivationOfThisSubscription = isReactivation && (new Date(subscription.startDate) >= new Date(new Date().setDate(new Date().getDate() - 2)));
-
-
-            if ((isExtensionRenewal || isReactivation) && !isLikelyFirstActivationOfThisSubscription) {
-                const clientName = client.name ? client.name.split(' ')[0] : 'Cliente';
-                // subscription.endDate já reflete newEndDate após a atualização
-                const messageType = isExtensionRenewal ? 'renovada' : 'reativada';
-                const renewalMessage = `🥳 Olá ${clientName}! Boas notícias!\n\nSua assinatura do plano *${plan.name}* foi ${messageType} com sucesso!\n\nSeu acesso agora está garantido até ${formatDate(subscription.endDate)}.\n\nAgradecemos por continuar conosco nessa jornada de organização e controle. Vamos juntos a mais um período de sucesso! 💪`;
-                try {
-                    await sendWhatsappMessage(client.phone, renewalMessage);
-                    logger.info(`[SUBSCRIPTION SERVICE] Mensagem de ${messageType} enviada para o cliente ID ${client.id} (Plano: ${plan.name}).`);
-                } catch (whatsappError) {
-                    logger.error(`[SUBSCRIPTION SERVICE] Falha ao enviar mensagem de ${messageType} para o cliente ID ${client.id}: ${whatsappError.message}`);
+        let clientNowHasActivePaidAccess = false;
+        if (newClientAccessLevel && newClientAccessLevel !== 'gratuito') {
+            if (newClientAccessLevel.startsWith('vitalicio_')) {
+                clientNowHasActivePaidAccess = true;
+            } else if (newClientAccessExpiresAt) {
+                const expiryDate = new Date(newClientAccessExpiresAt + 'T00:00:00Z');
+                const today = new Date(); today.setUTCHours(0,0,0,0);
+                if (expiryDate >= today) {
+                    clientNowHasActivePaidAccess = true;
                 }
             }
         }
-        // === FIM DA LÓGICA DE MENSAGEM DE RENOVAÇÃO/REATIVAÇÃO ===
+        logger.debug(`[SUBSCRIPTION SERVICE - updateSubscriptionStatus] Cliente ${clientInstance.id} tem acesso pago AGORA? ${clientNowHasActivePaidAccess}. Nível: ${newClientAccessLevel}, Expira em: ${newClientAccessExpiresAt}`);
+
+        if (newStatus === 'Ativa' && clientInstance.phone && clientNowHasActivePaidAccess) {
+            const isGenuineRenewal = clientHadActivePaidAccessBeforeUpdate &&
+                                    newClientAccessExpiresAt && oldClientAccessExpiresAt &&
+                                    new Date(newClientAccessExpiresAt) > new Date(oldClientAccessExpiresAt);
+
+            const isReactivationToPaid = !clientHadActivePaidAccessBeforeUpdate;
+            
+            const isLikelyFirstGainOfAccessViaThisSubscription = isReactivationToPaid &&
+                (new Date(subscription.startDate) >= new Date(new Date().setDate(new Date().getDate() - 2)));
+
+
+            if (isGenuineRenewal || (isReactivationToPaid && !isLikelyFirstGainOfAccessViaThisSubscription) ) {
+                const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Cliente';
+                const messageType = isGenuineRenewal ? 'renovada' : 'reativada';
+                let expiryMessagePart = `Seu acesso agora está garantido até ${formatDate(newClientAccessExpiresAt)}.`;
+                if (newClientAccessLevel.includes('vitalicio')) {
+                    expiryMessagePart = "Seu acesso vitalício continua firme e forte!";
+                }
+                
+                const renewalMessage = `🥳 Olá ${clientName}! Boas notícias!\n\nSua assinatura do plano *${plan.name}* foi ${messageType} com sucesso!\n\n${expiryMessagePart}\n\nAgradecemos por continuar conosco nessa jornada de organização e controle. Vamos juntos a mais um período de sucesso! 💪`;
+                try {
+                    await sendWhatsappMessage(clientInstance.phone, renewalMessage);
+                    logger.info(`[SUBSCRIPTION SERVICE] Mensagem de ${messageType} enviada para o cliente ID ${clientInstance.id} (Plano: ${plan.name}).`);
+                } catch (whatsappError) {
+                    logger.error(`[SUBSCRIPTION SERVICE] Falha ao enviar mensagem de ${messageType} para o cliente ID ${clientInstance.id}: ${whatsappError.message}`);
+                }
+            } else if (isLikelyFirstGainOfAccessViaThisSubscription) {
+                const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Cliente';
+                const platformUrl = process.env.PLATFORM_URL || 'app.mapnocontrole.com.br';
+                let expiryWelcomePart = `Seu acesso está válido até ${formatDate(newClientAccessExpiresAt)}.`;
+                if (newClientAccessLevel.includes('vitalicio')) {
+                    expiryWelcomePart = "Você garantiu acesso vitalício!";
+                }
+
+                const welcomeMessage = `🎉 Olá ${clientName}! Seja muito bem-vindo(a) ao MAP no Controle!\n\nSua assinatura do plano *${plan.name}* foi ativada com sucesso!\n\n${expiryWelcomePart}\n\nPara começar, que tal me dizer "oi" por aqui para darmos o pontapé inicial na organização? Se preferir, você também já pode acessar nossa plataforma em https://${platformUrl}.\n\nEstou pronto para te ajudar a organizar tudo! 🚀`;
+                try {
+                    await sendWhatsappMessage(clientInstance.phone, welcomeMessage);
+                    logger.info(`[SUBSCRIPTION SERVICE] Mensagem de BOAS-VINDAS (via ativação de assinatura) enviada para o cliente ID ${clientInstance.id} (Plano: ${plan.name}).`);
+                } catch (whatsappError) {
+                    logger.error(`[SUBSCRIPTION SERVICE] Falha ao enviar mensagem de BOAS-VINDAS (via ativação) para o cliente ID ${clientInstance.id}: ${whatsappError.message}`);
+                }
+            }
+        }
 
         logger.info(`[SUBSCRIPTION SERVICE] Status da assinatura ID ${subscription.id} (Externo: ${externalSubscriptionId}) atualizado para ${newStatus}.`);
         const reloadedSubscription = await Subscription.findByPk(subscription.id, {
@@ -282,12 +331,11 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         return reloadedSubscription ? reloadedSubscription.toJSON() : null;
 
     } catch (error) {
-        await t.rollback();
+        if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
         logger.error(`[SUBSCRIPTION SERVICE] Erro ao atualizar status da assinatura externa ${externalSubscriptionId}: ${error.message}`, { error });
         throw error;
     }
 }
-
 
 module.exports = {
   createSubscription,
