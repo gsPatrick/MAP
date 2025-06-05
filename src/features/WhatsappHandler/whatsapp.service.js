@@ -11,6 +11,8 @@ const businessClientService = require('../BusinessClient/BusinessClient.service'
 const sharedAccessService = require('../SharedAccess/sharedAccess.service');
 const systemService = require('../System/system.service');
 const financialCategoryService = require('../FinancialCategory/financialCategory.service'); // << IMPORTANTE: Adicionar este
+const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
+
 
 // Importa as funções de envio e download do serviço de WhatsApp genérico
 const { sendWhatsappMessage, sendButtonListMessage, downloadZapiMedia } = require('../../services/whatsappService');
@@ -791,8 +793,19 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
  * Processa uma mensagem de áudio recebida.
  * Baixa o áudio, transcreve e, se bem-sucedido, chama processIncomingMessage com o texto.
  */
-async function processIncomingAudioMessage(senderPhoneNormalized, mediaUrl, mimeType, pushName, rawPayload) {
-    logger.info(`[WHATSAPP SERVICE] Processando mensagem de áudio de ${senderPhoneNormalized}. URL: ${mediaUrl}`);
+async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, pushName, rawPayload) {
+    // >>> INÍCIO DA MODIFICAÇÃO <<<
+    // O nome do parâmetro foi mudado para 'senderPhoneRaw' para clareza.
+    // Aplicamos a normalização universal imediatamente.
+    const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
+
+    if (!canonicalPhone) {
+        logger.error(`[WHATSAPP SERVICE] Falha ao normalizar o telefone para MENSAGEM DE ÁUDIO: ${senderPhoneRaw}`);
+        return; // Aborta o processamento se o número for inválido.
+    }
+    // >>> FIM DA MODIFICAÇÃO <<<
+
+    logger.info(`[WHATSAPP SERVICE] Processando mensagem de áudio de ${canonicalPhone}. URL: ${mediaUrl}`);
     pushNameFromPayload = pushName; 
     
     let filenameFromMime = 'audio.ogg'; 
@@ -815,7 +828,7 @@ async function processIncomingAudioMessage(senderPhoneNormalized, mediaUrl, mime
     try {
         // Enviar mensagem de "processando áudio"
         const processingMessage = `🎧 Opa, ${pushName || 'você'}! Já recebi seu áudio e tô aqui processando tudinho com carinho! 💻✨\nSó um segundinho 😉`;
-        await sendWhatsappMessage(senderPhoneNormalized, processingMessage);
+        await sendWhatsappMessage(canonicalPhone, processingMessage); // Usa o número canônico
 
         const downloadedMedia = await downloadZapiMedia(mediaUrl); 
         
@@ -828,37 +841,50 @@ async function processIncomingAudioMessage(senderPhoneNormalized, mediaUrl, mime
             const transcribedText = await aiModelService.transcribeAudioStream(downloadedMedia.stream, finalFilenameForWhisper);
 
             if (transcribedText && transcribedText.trim() !== "") {
-                logger.info(`[WHATSAPP SERVICE] Áudio de ${senderPhoneNormalized} transcrito com sucesso. Chamando processIncomingMessage com o texto.`);
-                return await processIncomingMessage(senderPhoneNormalized, transcribedText, pushName, rawPayload);
+                logger.info(`[WHATSAPP SERVICE] Áudio de ${canonicalPhone} transcrito com sucesso. Chamando processIncomingMessage com o texto.`);
+                // Chama a próxima função JÁ com o número canônico
+                return await processIncomingMessage(canonicalPhone, transcribedText, pushName, rawPayload);
             } else {
-                logger.warn(`[WHATSAPP SERVICE] Transcrição do áudio de ${senderPhoneNormalized} resultou em texto vazio. Notificando usuário.`);
-                await sendWhatsappMessage(senderPhoneNormalized, "Não consegui entender o áudio que você enviou. 🤫 Pode tentar gravar novamente ou digitar, por favor?");
+                logger.warn(`[WHATSAPP SERVICE] Transcrição do áudio de ${canonicalPhone} resultou em texto vazio. Notificando usuário.`);
+                await sendWhatsappMessage(canonicalPhone, "Não consegui entender o áudio que você enviou. 🤫 Pode tentar gravar novamente ou digitar, por favor?");
             }
         } else {
-            logger.error(`[WHATSAPP SERVICE] Falha ao baixar áudio de ${senderPhoneNormalized} da URL: ${mediaUrl}. Notificando usuário.`);
-            await sendWhatsappMessage(senderPhoneNormalized, "Tive um problema ao acessar o áudio que você enviou. 🙁 Poderia tentar novamente?");
+            logger.error(`[WHATSAPP SERVICE] Falha ao baixar áudio de ${canonicalPhone} da URL: ${mediaUrl}. Notificando usuário.`);
+            await sendWhatsappMessage(canonicalPhone, "Tive um problema ao acessar o áudio que você enviou. 🙁 Poderia tentar novamente?");
         }
     } catch (transcriptionError) {
-        logger.error(`[WHATSAPP SERVICE] Erro ao transcrever áudio de ${senderPhoneNormalized}: ${transcriptionError.message}`, {stack: transcriptionError.stack});
-        await sendWhatsappMessage(senderPhoneNormalized, "Puxa, tive um probleminha para processar seu áudio. 😵‍💫 Pode tentar de novo ou digitar sua mensagem?");
+        logger.error(`[WHATSAPP SERVICE] Erro ao transcrever áudio de ${canonicalPhone}: ${transcriptionError.message}`, {stack: transcriptionError.stack});
+        await sendWhatsappMessage(canonicalPhone, "Puxa, tive um probleminha para processar seu áudio. 😵‍💫 Pode tentar de novo ou digitar sua mensagem?");
     } finally {
         pushNameFromPayload = null; 
     }
 }
 
+async function processIncomingMessage(senderPhoneRaw, messageText, pushName, rawPayload) {
+    // >>> INÍCIO DA MODIFICAÇÃO <<<
+    // O nome do parâmetro foi mudado para 'senderPhoneRaw' para clareza.
+    // Aplicamos a normalização universal imediatamente.
+    const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
 
-async function processIncomingMessage(senderPhoneNormalized, messageText, pushName, rawPayload) {
+    if (!canonicalPhone) {
+        logger.error(`[WHATSAPP HANDLER] Falha ao normalizar o telefone para MENSAGEM DE TEXTO: ${senderPhoneRaw}`);
+        return; // Aborta o processamento se o número for inválido.
+    }
+    // A partir daqui, a variável 'senderPhone' será o nosso número canônico e seguro.
+    const senderPhone = canonicalPhone;
+    // >>> FIM DA MODIFICAÇÃO <<<
+
     if (!pushNameFromPayload && pushName) { 
         pushNameFromPayload = pushName;
     }
     
-    const senderPhone = senderPhoneNormalized;
+    // const senderPhone = senderPhoneNormalized; // Esta linha não é mais necessária, já definimos acima
     const startTime = Date.now();
     let state;
     let actorClient; 
 
     try {
-        actorClient = await clientService.findClientByPhone(senderPhone);
+        actorClient = await clientService.findClientByPhone(senderPhone); // JÁ USA O NÚMERO CORRETO
         let sharedAccessRecord = null;
         let ownerClientIdForContext; 
         let clientAccountsForOnboarding = [];
@@ -868,7 +894,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
             ownerClientIdForContext = actorClient.id; 
             clientAccountsForOnboarding = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
         } else {
-            sharedAccessRecord = await sharedAccessService.findActiveSharedAccessByPhone(senderPhone);
+            sharedAccessRecord = await sharedAccessService.findActiveSharedAccessByPhone(senderPhone); // JÁ USA O NÚMERO CORRETO
             
             if (sharedAccessRecord && sharedAccessRecord.sharedWithClient) {
                 actorClient = sharedAccessRecord.sharedWithClient; 
@@ -908,7 +934,7 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
 
             } else { 
                 logger.info(`[WHATSAPP SERVICE] Telefone ${senderPhone} não reconhecido. Criando novo cliente...`);
-                actorClient = await clientService.createClientContact({ phone: senderPhone, name: pushNameFromPayload || pushName });
+                actorClient = await clientService.createClientContact({ phone: senderPhone, name: pushNameFromPayload || pushName }); // JÁ USA O NÚMERO CORRETO
                 ownerClientIdForContext = actorClient.id; 
                 
                 const welcomeMsg = getOnboardingWelcomeNoPlanMessage(actorClient.name ? actorClient.name.split(" ")[0] : (pushNameFromPayload || pushName || "você"));
@@ -922,6 +948,9 @@ async function processIncomingMessage(senderPhoneNormalized, messageText, pushNa
                 return;
             }
         }
+        
+        // ... (O RESTO DA FUNÇÃO CONTINUA EXATAMENTE IGUAL, POIS ELA JÁ USA A VARIÁVEL 'senderPhone' CORRETAMENTE) ...
+        // ... (Todo o seu código de state, onboarding, switch case, etc., permanece aqui) ...
 
         const existingState = conversationState.get(senderPhone);
         state = await initializeOrUpdateState(actorClient, sharedAccessRecord, existingState, clientAccountsForOnboarding, ownerAccountsIfShared);
