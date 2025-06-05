@@ -7,8 +7,8 @@ const { Op } = require('sequelize'); // Importar Op
 
 const plansData = [
   {
-    targetName: 'No Controle Plano Pessoal - Mensal', // Nome EXATO como você quer no seu banco
-    hotmartId: '5626771',                            // NOVO ID da Hotmart para este plano
+    targetName: 'MAP - Meu Acessor Pessoal - Plano Pessoal', // Nome EXATO como você quer no seu banco
+    hotmartId: '5635064',                            // NOVO ID da Hotmart para este plano
     defaults: {
       description: 'Plano mensal para acesso pessoal.',
       price: 39.90, // << AJUSTE O PREÇO SE NECESSÁRIO
@@ -19,8 +19,8 @@ const plansData = [
     }
   },
   {
-    targetName: 'No Controle Plano Pessoal + Empresarial - Mensal', // Nome EXATO
-    hotmartId: '5626776',                                        // NOVO ID da Hotmart para este plano
+    targetName: 'MAP - Meu Acessor Pessoal - Plano Empresarial', // Nome EXATO
+    hotmartId: '5635601',                                        // NOVO ID da Hotmart para este plano
     defaults: {
       description: 'Plano mensal para acesso pessoal e empresarial.',
       price: 49.90, // << AJUSTE O PREÇO SE NECESSÁRIO
