@@ -4,43 +4,7 @@ const clientService = require('../Client/client.service');
 const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
-
-/**
- * Normaliza um número de telefone brasileiro para o formato usado pelo WhatsApp (sem o nono dígito).
- * @param {string} phoneNumber - O número de telefone a ser normalizado.
- * @returns {string|null} - O número normalizado ou null se a entrada for inválida.
- */
-function normalizePhoneNumber(phoneNumber) {
-    if (!phoneNumber) return null;
-
-    // 1. Limpa tudo que não for número.
-    let cleanNumber = phoneNumber.replace(/\D/g, '');
-
-    // 2. Padroniza para o formato DDI+DDD+Numero (13 dígitos) se vier sem o DDI.
-    // Ex: '71982862912' (11 dígitos) -> '5571982862912' (13 dígitos)
-    if (cleanNumber.length === 11) {
-        cleanNumber = '55' + cleanNumber;
-    }
-    
-    // 3. AGORA, com o número padronizado com 13 dígitos, aplicamos a regra de remoção.
-    // DDI (55) + DDD (XX) + 9º dígito (9) + Resto (XXXXXXXX) = 13 dígitos.
-    if (cleanNumber.length === 13 && cleanNumber.startsWith('55')) {
-        const nonoDigito = cleanNumber.charAt(4); // Posição do nono dígito
-
-        // Se for um celular (começa com 9), removemos o nono dígito.
-        if (nonoDigito === '9') {
-            const ddi_ddd = cleanNumber.substring(0, 4); // Pega '55XX'
-            const numeroSemNonoDigito = cleanNumber.substring(5); // Pega os 8 dígitos restantes
-            const numeroNormalizado = ddi_ddd + numeroSemNonoDigito;
-            logger.info(`[NORMALIZE_PHONE] Removendo nono dígito de '${cleanNumber}' para '${numeroNormalizado}'.`);
-            return numeroNormalizado; // Retorna '55XXYYYYYYYY' (12 dígitos)
-        }
-    }
-    
-    // Se não se encaixar na regra de remoção (ex: telefone fixo ou formato já correto), retorna o número limpo.
-    logger.info(`[NORMALIZE_PHONE] Número '${cleanNumber}' não se encaixa na regra de remoção do nono dígito. Usando como está.`);
-    return cleanNumber;
-}
+const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils'); // <-- IMPORTAÇÃO DA FUNÇÃO UNIVERSAL
 
 
 /**
@@ -68,7 +32,11 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
   // Extração de dados do payload da Hotmart
   const prod = data.product ? data.product.id : undefined;
   const buyer_email_from_payload = data.buyer ? data.buyer.email : undefined;
-  const buyer_phone_number_from_payload = data.buyer ? data.buyer.checkout_phone : undefined;
+  const raw_phone_from_payload = data.buyer ? (data.buyer.checkout_phone || data.buyer.phone) : undefined;
+  
+  // --- APLICA A NORMALIZAÇÃO UNIVERSAL AQUI ---
+  const clientPhoneNumberForLookup = normalizePhoneNumberToCanonical(raw_phone_from_payload);
+
   const buyer_name_from_payload = data.buyer ? data.buyer.name : null;
   const status = data.purchase ? data.purchase.status : undefined;
   const transactionId = data.purchase ? data.purchase.transaction : undefined;
@@ -76,13 +44,6 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
   const subscriber_code = data.subscription && data.subscription.subscriber ? data.subscription.subscriber.code : undefined;
   const subscription_status = data.subscription ? data.subscription.status : undefined;
   const date_next_charge = data.subscription ? data.subscription.date_next_charge : undefined;
-
-  // --- LÓGICA DE NORMALIZAÇÃO DE TELEFONE (CORRIGIDA) ---
-  const clientPhoneNumberForLookup = normalizePhoneNumber(buyer_phone_number_from_payload);
-
-  if (!clientPhoneNumberForLookup) {
-      logger.warn(`[HOTMART SVC] Telefone do comprador não pôde ser determinado ou não foi fornecido no payload para Prod=${prod}. Email: ${buyer_email_from_payload}`);
-  }
 
   logger.info(`[HOTMART SVC] Processando evento: Prod=${prod}, Status Compra=${status}, Status Assinatura=${subscription_status || 'N/A'}, Email(payload)=${buyer_email_from_payload}, Telefone(lookup/criação)=${clientPhoneNumberForLookup}, Transação=${transactionId}, ID Assinante=${subscriber_code || 'N/A'}`);
 
@@ -109,6 +70,7 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
     if (clientInstance && clientPhoneNumberForLookup && !clientInstance.phone) {
         logger.info(`[HOTMART SVC] Cliente ID ${clientInstance.id} (encontrado por email) não tinha telefone. Atualizando para ${clientPhoneNumberForLookup}.`);
         await clientInstance.update({ phone: clientPhoneNumberForLookup });
+        clientInstance = await Client.findByPk(clientInstance.id); // Recarrega a instância para ter os dados atualizados
     }
   }
 
@@ -138,12 +100,11 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
     if (Object.keys(updates).length > 0) {
         logger.info(`[HOTMART SVC] Atualizando dados do cliente existente ID ${clientInstance.id} com informações da Hotmart.`, updates);
         await clientInstance.update(updates);
+        clientInstance = await Client.findByPk(clientInstance.id); // Recarrega a instância para ter os dados atualizados
     }
   }
 
-  // O resto do arquivo permanece exatamente o mesmo
-  // ... (código de processamento de status: approved, billet_printed, etc.) ...
-  
+  // ID externo: subscriber_code para assinaturas, transactionId para compras únicas
   const externalIdForSubscription = subscriber_code || transactionId;
   if (!externalIdForSubscription) {
     logger.error(`[HOTMART SVC] ID externo da assinatura/transação (subscriber_code ou transactionId) não encontrado. Abortando.`, { sub_payload: data.subscription, purchase_payload: data.purchase });
@@ -151,29 +112,34 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
   }
 
   try {
+    // Determina o status efetivo a ser usado para a lógica
+    // Prioriza o status da assinatura, se houver, senão o status da compra.
     const effectiveStatus = (subscription_status || status || 'unknown').toLowerCase();
+    
+    // Data de início da assinatura/acesso. Usa a data de aprovação se disponível.
     let accessStartDate = approved_date ? new Date(parseInt(approved_date,10)).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
 
     switch (effectiveStatus) {
-      case 'approved':
-      case 'active':
-      case 'completed':
+      case 'approved':    // Status da Compra
+      case 'active':      // Status da Assinatura
+      case 'completed':   // Status da Compra (para produtos de pagamento único)
         logger.info(`[HOTMART SVC] Status EFETIVO ${effectiveStatus.toUpperCase()} para Cliente ID ${clientInstance.id}, Plano ${plan.name}.`);
 
         let accessEndDate;
+        // Se for uma assinatura e tiver 'date_next_charge', é uma renovação ou continuação.
         if (subscription_status && date_next_charge && plan.durationDays) {
             const nextChargeDate = new Date(date_next_charge.replace(' ', 'T') + 'Z');
             accessEndDate = new Date(nextChargeDate);
             accessEndDate.setUTCDate(accessEndDate.getUTCDate() - 1);
             logger.info(`[HOTMART SVC] Processando como assinatura recorrente. Próxima cobrança: ${date_next_charge}. Vigência atual do acesso até: ${accessEndDate.toISOString().split('T')[0]}`);
-        } else if (plan.durationDays) {
+        } else if (plan.durationDays) { // Produto de pagamento único ou primeira ativação de uma assinatura
             accessEndDate = new Date(accessStartDate);
             accessEndDate.setDate(accessEndDate.getDate() + plan.durationDays);
             logger.info(`[HOTMART SVC] Processando como produto único ou primeira ativação. Data de início: ${accessStartDate}. Vigência do acesso até: ${accessEndDate.toISOString().split('T')[0]}`);
         } else {
              logger.warn(`[HOTMART SVC] Duração do plano ${plan.name} (ID: ${plan.id}) não definida (durationDays). Usando fallback de 30 dias para cálculo de data de fim.`);
              accessEndDate = new Date(accessStartDate);
-             accessEndDate.setDate(accessEndDate.getDate() + 30);
+             accessEndDate.setDate(accessEndDate.getDate() + 30); // Fallback
         }
         
         const existingLocalSubscription = await Subscription.findOne({
@@ -258,7 +224,7 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
 
   } catch (error) {
     logger.error(`[HOTMART SVC] Erro ao processar evento Hotmart para Cliente ${clientInstance ? clientInstance.id : 'N/A'} (Telefone Alvo: ${clientPhoneNumberForLookup}): ${error.message}`, { stack: error.stack, eventData });
-    throw error;
+    throw error; // Relança para o controller tratar a resposta HTTP
   }
 }
 
