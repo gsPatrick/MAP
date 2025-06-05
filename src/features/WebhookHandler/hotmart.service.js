@@ -10,34 +10,34 @@ const { Op } = require('sequelize');
  * @param {string} phoneNumber - O número de telefone a ser normalizado.
  * @returns {string|null} - O número normalizado ou null se a entrada for inválida.
  */
-function normalizePhoneNumberForWhatsapp(phoneNumber) {
+function normalizePhoneNumber(phoneNumber) {
     if (!phoneNumber) return null;
 
     // 1. Limpa tudo que não for número.
     let cleanNumber = phoneNumber.replace(/\D/g, '');
 
-    // 2. Garante que o número tenha o DDI 55 (padrão Brasil).
-    if (cleanNumber.length === 11) { // Formato comum: DDD (2) + Número (9) = 11 dígitos
+    // 2. Padroniza para o formato DDI+DDD+Numero (13 dígitos) se vier sem o DDI.
+    // Ex: '71982862912' (11 dígitos) -> '5571982862912' (13 dígitos)
+    if (cleanNumber.length === 11) {
         cleanNumber = '55' + cleanNumber;
     }
-
-    // 3. Verifica se o número está no formato brasileiro completo (DDI + DDD + 9º dígito).
-    // DDI (55) + DDD (XX) + 9º dígito (9) + Resto (XXXXXXXX) = 13 dígitos
+    
+    // 3. AGORA, com o número padronizado com 13 dígitos, aplicamos a regra de remoção.
+    // DDI (55) + DDD (XX) + 9º dígito (9) + Resto (XXXXXXXX) = 13 dígitos.
     if (cleanNumber.length === 13 && cleanNumber.startsWith('55')) {
-        const ddd = cleanNumber.substring(2, 4);
-        const nonoDigito = cleanNumber.charAt(4);
+        const nonoDigito = cleanNumber.charAt(4); // Posição do nono dígito
 
-        // A regra do nono dígito se aplica a celulares. DDDs de celular começam de 11 a 99.
-        // O nono dígito é sempre '9'.
+        // Se for um celular (começa com 9), removemos o nono dígito.
         if (nonoDigito === '9') {
-            const numeroSemNonoDigito = cleanNumber.substring(5);
-            const numeroNormalizado = '55' + ddd + numeroSemNonoDigito;
+            const ddi_ddd = cleanNumber.substring(0, 4); // Pega '55XX'
+            const numeroSemNonoDigito = cleanNumber.substring(5); // Pega os 8 dígitos restantes
+            const numeroNormalizado = ddi_ddd + numeroSemNonoDigito;
             logger.info(`[NORMALIZE_PHONE] Removendo nono dígito de '${cleanNumber}' para '${numeroNormalizado}'.`);
-            return numeroNormalizado;
+            return numeroNormalizado; // Retorna '55XXYYYYYYYY' (12 dígitos)
         }
     }
     
-    // Se não se encaixar na regra de remoção, retorna o número limpo como está.
+    // Se não se encaixar na regra de remoção (ex: telefone fixo ou formato já correto), retorna o número limpo.
     logger.info(`[NORMALIZE_PHONE] Número '${cleanNumber}' não se encaixa na regra de remoção do nono dígito. Usando como está.`);
     return cleanNumber;
 }
@@ -77,12 +77,11 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
   const subscription_status = data.subscription ? data.subscription.status : undefined;
   const date_next_charge = data.subscription ? data.subscription.date_next_charge : undefined;
 
-  // --- LÓGICA DE NORMALIZAÇÃO DE TELEFONE (VERSÃO DEFINITIVA COM REMOÇÃO DO 9) ---
-  const clientPhoneNumberForLookup = normalizePhoneNumberForWhatsapp(buyer_phone_number_from_payload);
+  // --- LÓGICA DE NORMALIZAÇÃO DE TELEFONE (CORRIGIDA) ---
+  const clientPhoneNumberForLookup = normalizePhoneNumber(buyer_phone_number_from_payload);
 
   if (!clientPhoneNumberForLookup) {
       logger.warn(`[HOTMART SVC] Telefone do comprador não pôde ser determinado ou não foi fornecido no payload para Prod=${prod}. Email: ${buyer_email_from_payload}`);
-      // A lógica abaixo continuará e tentará encontrar pelo email.
   }
 
   logger.info(`[HOTMART SVC] Processando evento: Prod=${prod}, Status Compra=${status}, Status Assinatura=${subscription_status || 'N/A'}, Email(payload)=${buyer_email_from_payload}, Telefone(lookup/criação)=${clientPhoneNumberForLookup}, Transação=${transactionId}, ID Assinante=${subscriber_code || 'N/A'}`);
@@ -145,7 +144,6 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
   // O resto do arquivo permanece exatamente o mesmo
   // ... (código de processamento de status: approved, billet_printed, etc.) ...
   
-  // ID externo: subscriber_code para assinaturas, transactionId para compras únicas
   const externalIdForSubscription = subscriber_code || transactionId;
   if (!externalIdForSubscription) {
     logger.error(`[HOTMART SVC] ID externo da assinatura/transação (subscriber_code ou transactionId) não encontrado. Abortando.`, { sub_payload: data.subscription, purchase_payload: data.purchase });
