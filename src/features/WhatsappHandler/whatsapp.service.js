@@ -586,7 +586,7 @@ function formatAccountSelectionMessage(clientName, planDetailsText, accounts, ow
     accounts.forEach((acc, index) => {
         dataStructure += `\n${index + 1}️⃣ *${acc.name || acc.accountName}* (${acc.type || acc.accountType})`;
     });
-    let linkText = `🤔 Qual delas vamos usar hoje? Me diga o nome ou o número da conta para começarmos! 😉`;
+    let linkText = `🤔 Qual delas vamos usar hoje? Me diga o nome começarmos! 😉`;
     return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
 }
 
