@@ -1,6 +1,6 @@
 // src/features/Client/client.service.js
-// <<< MODIFICAÇÃO: Adicionado 'Category' ao import >>>
-const { Client, FinancialAccount, Category, sequelize } = require('../../database');
+// <<< CORREÇÃO: Importado 'FinancialCategory' em vez de 'Category' >>>
+const { Client, FinancialAccount, FinancialCategory, sequelize } = require('../../database');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
 
@@ -53,25 +53,18 @@ async function createDefaultCategoriesForAccount(financialAccountId, accountType
         return; // Não há categorias para este tipo de conta
     }
 
-    // Palavras-chave para identificar categorias de receita
-    const incomeKeywords = ['receita', 'salário', 'venda', 'serviços'];
-
+    // <<< CORREÇÃO: Removida a lógica do campo 'type' que não existe mais no modelo FinancialCategory >>>
     const categoriesToCreate = categoryNames.map(name => {
-        // Converte o nome para minúsculas para uma verificação case-insensitive
-        const lowerCaseName = name.toLowerCase();
-        // Verifica se alguma das palavras-chave de receita está presente no nome da categoria
-        const type = incomeKeywords.some(keyword => lowerCaseName.includes(keyword)) ? 'Receita' : 'Despesa';
-
         return {
             financialAccountId: financialAccountId,
             name: name,
-            type: type, // Define o tipo como 'Receita' ou 'Despesa'
-            isActive: true
+            // O campo 'type' foi removido do objeto de criação.
         };
     });
 
     if (categoriesToCreate.length > 0) {
-        await Category.bulkCreate(categoriesToCreate, { transaction });
+        // <<< CORREÇÃO: Usando 'FinancialCategory.bulkCreate' em vez de 'Category.bulkCreate' >>>
+        await FinancialCategory.bulkCreate(categoriesToCreate, { transaction });
         logger.info(`${categoriesToCreate.length} categorias padrão do tipo '${accountType}' criadas com sucesso para a conta ID ${financialAccountId}.`);
     }
 }
