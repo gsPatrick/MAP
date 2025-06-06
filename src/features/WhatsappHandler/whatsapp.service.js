@@ -97,14 +97,20 @@ function formatPlanName(accessLevelString) {
     if (!accessLevelString || typeof accessLevelString !== 'string') {
         return 'Nenhum plano';
     }
-    // Transforma "vitalicio_avancado" em "Vitalício Avancado"
-    let formattedName = accessLevelString.replace('vitalicio_', 'Vitalício ').replace(/_/g, ' ');
-    
-    // Capitaliza cada palavra
-    return formattedName
-        .split(' ')
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' ');
+
+    // Dicionário para traduzir e formatar os nomes dos planos
+    const planTranslations = {
+        'basico': 'Básico',
+        'avancado': 'Avançado',
+        'mensal': 'Mensal',
+        'anual': 'Anual',
+        'vitalicio': 'Vitalício'
+    };
+
+    return accessLevelString
+        .split('_') // Separa por underscore: 'avancado_mensal' -> ['avancado', 'mensal']
+        .map(part => planTranslations[part] || (part.charAt(0).toUpperCase() + part.slice(1))) // Traduz cada parte ou apenas capitaliza se não encontrar
+        .join(' '); // Junta com espaço: ['Avançado', 'Mensal'] -> 'Avançado Mensal'
 }
 // >>> FIM DA MODIFICAÇÃO 2 <<<
 
