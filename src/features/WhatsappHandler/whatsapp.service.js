@@ -92,7 +92,7 @@ function formatCurrency(value) {
     return `R$${parseFloat(value).toFixed(2).replace('.', ',')}`;
 }
 
-function formatPlatformLink(customText = "") {
+function formatPlatformLink(customText = "map-nocontrole.com.br") {
     const platformUrl = process.env.PLATFORM_URL || 'map-nocontrole.com.br/painel';
     const defaultText = `📊 Para visualizar mais detalhes e relatórios, acesse a plataforma em https://${platformUrl}. Qualquer coisa, estou por aqui! 😉`;
     return customText || defaultText;
