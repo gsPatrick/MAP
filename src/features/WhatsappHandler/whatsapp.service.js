@@ -507,7 +507,7 @@
 
     // --- Funções de Onboarding (Mantidas) ---
     function getOnboardingWelcomeNoPlanMessage(clientName) {
-        const siteUrl = process.env.PLAN_SITE_URL || "https://mapnocontrole.com.br/#planos";
+        const siteUrl = process.env.PLAN_SITE_URL || "https://ma-pnocontrole.com.br/#planos";
         const aiIntro = `🚀 Olá, ${clientName}! Preparado para simplificar suas finanças e ter tudo na palma da mão? Vamos juntos nessa jornada! 💪✨`;
         const dataStructure = `🎯 Planos MAP no Controle:\n\n` +
                             `📅 Opções disponíveis: Mensal e Anual\n` +
