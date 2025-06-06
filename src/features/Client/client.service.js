@@ -1,7 +1,83 @@
 // src/features/Client/client.service.js
-const { Client, FinancialAccount, sequelize } = require('../../database');
+const { Client, FinancialAccount, FinancialCategory, sequelize } = require('../../database'); // <-- ADICIONADO FinancialCategory
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
+// <<< INÍCIO DA MODIFICAÇÃO: DEFINIÇÃO DAS CATEGORIAS PADRÃO (SEM HIERARQUIA) >>>
+// Lista plana com mais de 30 nomes de categorias padrão.
+const defaultCategoryNames = [
+'Alimentação',
+'Supermercado',
+'Restaurantes',
+'Ifood',
+'Delivery',
+'Mercado',
+'Moradia',
+'Aluguel',
+'Condomínio',
+'Contas',
+'Conta de Agua',
+'Conta de Luz',
+'Conta de Internet',
+'Internet',
+'Transporte',
+'Abastecimento',
+'Estacionamento',
+'Uber',
+'99',
+'Transporte Público',
+'Manutenção Veicular',
+'Saúde',
+'Farmácia',
+'Plano de Saúde',
+'Consultas',
+'Exames',
+'Academia',
+'Lazer',
+'Entretenimento',
+'Viagens',
+'Cinema',
+'Shows',
+'Assinaturas',
+'Streamings',
+'Cuidados Pessoais',
+'Beleza',
+'Compras',
+'Vestuário',
+'Eletrônicos',
+'Casa',
+'Presentes',
+'Educação',
+'Dívidas',
+'Emprestimos',
+'Pagamento de Fatura',
+'Receitas',
+'Salário',
+'Renda Extra',
+'Investimentos'
+];
+/**
+Cria as categorias financeiras padrão para uma nova conta financeira.
+@param {number} financialAccountId - O ID da conta financeira recém-criada.
+@param {object} transaction - A transação do Sequelize para garantir atomicidade.
+*/
+async function createDefaultCategoriesForAccount(financialAccountId, transaction) {
+try {
+// Usa Promise.all para criar todas as categorias em paralelo, o que é mais performático.
+const categoryCreationPromises = defaultCategoryNames.map(name => {
+return FinancialCategory.create({
+name: name,
+parentId: null, // Garante que não há subcategorias
+financialAccountId: financialAccountId,
+}, { transaction });
+});
+await Promise.all(categoryCreationPromises);
+} catch (error) {
+// Lança o erro para que a transação principal possa fazer rollback.
+throw new Error('Falha ao criar categorias padrão.');
+}
+}
+// <<< FIM DA MODIFICAÇÃO >>>
+/**
 
 /**
  * Busca um Client (contato WhatsApp) pelo número de telefone.
