@@ -6,10 +6,13 @@ const logger = require('../utils/logger');
 const { calculateNextDueDate } = require('../utils/dateUtils');
 const financialService = require('../features/Financial/financial.service');
 const { sendWhatsappMessage } = require('../services/whatsappService');
+// Importando formatadores para consistência
+const { formatCurrency, formatDate } = require('../utils/formatters');
+
 
 async function processRecurringTransactions() {
   logger.info('[JOB RECORRÊNCIA] Iniciando verificação de transações recorrentes...');
-  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  const today = new Date().toISOString().split('T')[0];
   
   try {
     const rulesToProcess = await RecurringTransactionRule.findAll({
@@ -60,6 +63,7 @@ async function processRecurringTransactions() {
 
         const client = currentRule.financialAccount.ownerClient;
         const financialAccount = currentRule.financialAccount;
+        const clientFirstName = client?.name ? client.name.split(' ')[0] : 'você';
 
         if (currentRule.autoCreateTransaction) {
           await financialService.createTransaction(currentRule.financialAccountId, {
@@ -67,23 +71,26 @@ async function processRecurringTransactions() {
             type: currentRule.type,
             value: currentRule.value,
             financialCategoryId: currentRule.financialCategoryId,
-            transactionDate: currentRule.nextDueDate, // A data da transação é a data de vencimento da recorrência
+            transactionDate: currentRule.nextDueDate,
             isPayableOrReceivable: currentRule.isPayableOrReceivable,
             dueDate: currentRule.nextDueDate,
-            isPaidOrReceived: false, // Sempre criada como pendente
+            isPaidOrReceived: false,
             paymentMethod: currentRule.paymentMethod,
             notes: `Gerado automaticamente: ${currentRule.notes || ''} (Regra ID ${currentRule.id})`,
-            recurringTransactionRuleId: currentRule.id, // <<< ADICIONADO AQUI
+            recurringTransactionRuleId: currentRule.id,
           }, { transaction: ruleProcessingTransaction });
 
           logger.info(`[JOB RECORRÊNCIA] Transação criada para regra ID ${currentRule.id} ("${currentRule.description}") na FinancialAccount "${financialAccount.accountName}" em ${currentRule.nextDueDate}.`);
         } else {
           if (client && client.phone) {
-            const message = `🔔 LEMBRETE RECORRENTE (${financialAccount.accountName}) 🔔\n\n` +
-                            `Lembrete para "${currentRule.description}"\n` +
-                            `Valor: R$ ${parseFloat(currentRule.value).toFixed(2)}\n` +
-                            `Tipo: ${currentRule.type}\n` +
-                            `Vencimento: ${new Date(currentRule.nextDueDate).toLocaleDateString('pt-BR')}`;
+            const intro = `Oi, ${clientFirstName}! Passando pra te lembrar da sua conta recorrente que vence hoje! 🤓`;
+            const body = `📜 *Descrição:* ${currentRule.description}\n` +
+                         `💰 *Valor:* ${formatCurrency(currentRule.value)} (${currentRule.type})\n` +
+                         `🗓️ *Vencimento:* ${formatDate(currentRule.nextDueDate)}\n` +
+                         `🏦 *Conta:* ${financialAccount.accountName}`;
+            const footer = "Não se esqueça de registrar o pagamento quando fizer, ok? 😉";
+            const message = `${intro}\n\n${body}\n\n${footer}`;
+
             await sendWhatsappMessage(client.phone, message);
             logger.info(`[JOB RECORRÊNCIA] Lembrete enviado para regra ID ${currentRule.id} para Cliente ${client.name} (${client.phone}).`);
           } else {
@@ -98,7 +105,7 @@ async function processRecurringTransactions() {
           currentRule.interval,
           currentRule.dayOfMonth,
           currentRule.dayOfWeek,
-          oldNextDueDate // A próxima é calculada a partir da última data de vencimento processada
+          oldNextDueDate
         );
 
         if (newNextDueDate && (!currentRule.endDate || new Date(newNextDueDate) <= new Date(currentRule.endDate))) {
@@ -108,7 +115,6 @@ async function processRecurringTransactions() {
           }, { transaction: ruleProcessingTransaction });
           logger.info(`[JOB RECORRÊNCIA] Regra ID ${currentRule.id} atualizada. Próximo vencimento: ${newNextDueDate}.`);
         } else {
-          // Se não há próxima data ou ultrapassou a data final, desativa a regra
           await currentRule.update({ isActive: false, lastGeneratedDate: oldNextDueDate, nextDueDate: null }, { transaction: ruleProcessingTransaction });
           logger.info(`[JOB RECORRÊNCIA] Regra ID ${currentRule.id} ("${currentRule.description}") finalizada/expirada. Regra desativada.`);
         }
@@ -124,24 +130,19 @@ async function processRecurringTransactions() {
   }
 }
 
-function startRecurringTransactionJob() {
-  UserPreference.findOne({ order: [['id', 'ASC']] })
-    .then(preferences => {
-      const schedule = preferences?.recurringJobSchedule || '0 4 * * *'; // Ex: 4 da manhã por padrão
-      if (cron.validate(schedule)) {
-        logger.info(`[JOB RECORRÊNCIA] Agendado para: ${schedule}`);
-        cron.schedule(schedule, processRecurringTransactions, {
-          timezone: process.env.TZ || "America/Sao_Paulo",
-        });
-      } else {
-        logger.error(`[JOB RECORRÊNCIA] Schedule cron inválido nas preferências: ${schedule}. Usando default '0 4 * * *'.`);
-        cron.schedule('0 4 * * *', processRecurringTransactions, { timezone: process.env.TZ || "America/Sao_Paulo" });
-      }
-    })
-    .catch(error => {
-        logger.error('[JOB RECORRÊNCIA] Erro ao buscar preferências para agendar job. Usando default. Detalhes:', error);
-        cron.schedule('0 4 * * *', processRecurringTransactions, { timezone: process.env.TZ || "America/Sao_Paulo" });
+function startRecurringTransactionJob(preferences, models) { // Mudança aqui para receber prefs e models
+  const schedule = preferences?.recurringJobSchedule || '0 4 * * *';
+  if (cron.validate(schedule)) {
+    logger.info(`[JOB RECORRÊNCIA] Agendado para: ${schedule}`);
+    cron.schedule(schedule, processRecurringTransactions, {
+      timezone: process.env.TZ || "America/Sao_Paulo",
     });
+  } else {
+    logger.error(`[JOB RECORRÊNCIA] Schedule cron inválido nas preferências: ${schedule}. Usando default '0 4 * * *'.`);
+    cron.schedule('0 4 * * *', processRecurringTransactions, { timezone: process.env.TZ || "America/Sao_Paulo" });
+  }
 }
 
+// Removida a lógica de busca de preferências daqui, pois ela é passada como argumento.
+// A função agora recebe as preferências para configurar o job.
 module.exports = startRecurringTransactionJob;

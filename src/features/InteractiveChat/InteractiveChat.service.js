@@ -38,7 +38,7 @@ function formatCurrency(value) {
     return `R$${parseFloat(value).toFixed(2).replace('.', ',')}`;
 }
 function formatPlatformLink(customText = "") {
-    const platformUrl = process.env.REACT_APP_BASE_URL || 'app.mapnocontrole.com.br';
+    const platformUrl = process.env.REACT_APP_BASE_URL || 'map-nocontrole.com.br';
     const defaultText = `📊 Para visualizar mais detalhes e relatórios, acesse outras áreas da plataforma. Qualquer coisa, estou por aqui! 😉`;
     return customText || defaultText;
 }
@@ -988,7 +988,7 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
                            aiMessageIntro = `Entendido, ${state.clientName}! 😊`;
                        }
                         currentActionFormattedData = "";
-                        platformLinkFooter = (actionName === 'GENERAL_QUESTION_OR_HELP' && !(aiMessageIntro && aiMessageIntro.includes('app.mapnocontrole.com.br'))) ? formatPlatformLink("Se precisar de mais funcionalidades, explore outras áreas da plataforma!") : "";
+                        platformLinkFooter = (actionName === 'GENERAL_QUESTION_OR_HELP' && !(aiMessageIntro && aiMessageIntro.includes('map-nocontrole.com.br'))) ? formatPlatformLink("Se precisar de mais funcionalidades, explore outras áreas da plataforma!") : "";
                        if (actionName === 'ACTION_CONFIRMATION_YES' || actionName === 'ACTION_CONFIRMATION_NO') {
                            state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                        }
@@ -1083,7 +1083,7 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
             return actionNameCheck?.startsWith("GENERAL_GREETING") || actionNameCheck?.startsWith("ACTION_CONFIRMATION_") || actionNameCheck === "SWITCH_FINANCIAL_ACCOUNT" || actionNameCheck === "CREATE_FINANCIAL_ACCOUNT";
         });
     }
-    const noLinkConditions = noLinkCurrentAction || (finalMessageToReturn && finalMessageToReturn.includes('app.mapnocontrole.com.br')) || noLinkDetectedAction;
+    const noLinkConditions = noLinkCurrentAction || (finalMessageToReturn && finalMessageToReturn.includes('map-nocontrole.com.br')) || noLinkDetectedAction;
 
     if (platformLinkFooter && platformLinkFooter.trim() !== "" && !noLinkConditions ) {
          finalMessageToReturn += `\n\n${platformLinkFooter.trim()}`;

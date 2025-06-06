@@ -4,6 +4,8 @@ const { UserPreference, FinancialAccount, Client } = require('../database');
 const financialService = require('../features/Financial/financial.service');
 const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
+// Importando formatadores para consistência
+const { formatCurrency } = require('../utils/formatters');
 
 async function sendFinancialSummariesForPeriod(period) {
   logger.info(`[JOB RESUMO FINANCEIRO] Iniciando geração de resumos (${period})...`);
@@ -23,30 +25,34 @@ async function sendFinancialSummariesForPeriod(period) {
     }
 
     let dateStart, dateEndFilter;
-    const todayForCalc = new Date(new Date().toISOString().slice(0,10) + 'T00:00:00Z'); // Hoje em UTC para consistência
+    const todayForCalc = new Date(new Date().toISOString().slice(0,10) + 'T00:00:00Z');
     let titlePeriod;
+    let introMessageTemplate;
 
     switch (period) {
       case 'daily':
         dateStart = new Date(todayForCalc);
-        dateStart.setUTCDate(todayForCalc.getUTCDate() - 1); // Dia anterior completo
+        dateStart.setUTCDate(todayForCalc.getUTCDate() - 1);
         dateEndFilter = new Date(dateStart); 
         dateEndFilter.setUTCHours(23,59,59,999);
-        titlePeriod = `Diário (${dateStart.toLocaleDateString('pt-BR', {timeZone: 'UTC'})})`;
+        titlePeriod = `Resumo de Ontem (${dateStart.toLocaleDateString('pt-BR', {timeZone: 'UTC'})})`;
+        introMessageTemplate = "Oi, {clientName}! ☀️ Que tal um cafezinho e o resumo do seu dia de ontem na conta *{accountName}*?";
         break;
       case 'weekly':
         dateEndFilter = new Date(todayForCalc); 
-        dateEndFilter.setUTCDate(todayForCalc.getUTCDate() - 1); // Até o final do dia anterior
+        dateEndFilter.setUTCDate(todayForCalc.getUTCDate() - 1);
         dateEndFilter.setUTCHours(23,59,59,999);
         dateStart = new Date(dateEndFilter);
-        dateStart.setUTCDate(dateEndFilter.getUTCDate() - 6); // Últimos 7 dias
+        dateStart.setUTCDate(dateEndFilter.getUTCDate() - 6);
         dateStart.setUTCHours(0,0,0,0);
-        titlePeriod = `Semanal (${dateStart.toLocaleDateString('pt-BR', {timeZone: 'UTC'})} - ${dateEndFilter.toLocaleDateString('pt-BR', {timeZone: 'UTC'})})`;
+        titlePeriod = `Resumo da Semana (${dateStart.toLocaleDateString('pt-BR', {timeZone: 'UTC'})} a ${dateEndFilter.toLocaleDateString('pt-BR', {timeZone: 'UTC'})})`;
+        introMessageTemplate = "E aí, {clientName}? 🚀 Fim de semana chegando! Hora de conferir o balanço da sua semana na conta *{accountName}*.";
         break;
       case 'monthly':
-        dateEndFilter = new Date(todayForCalc.getUTCFullYear(), todayForCalc.getUTCMonth(), 0); // Último dia do mês anterior
-        dateStart = new Date(dateEndFilter.getUTCFullYear(), dateEndFilter.getUTCMonth(), 1); // Primeiro dia do mês anterior
-        titlePeriod = `Mensal (${dateStart.toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' })})`;
+        dateEndFilter = new Date(todayForCalc.getUTCFullYear(), todayForCalc.getUTCMonth(), 0);
+        dateStart = new Date(dateEndFilter.getUTCFullYear(), dateEndFilter.getUTCMonth(), 1);
+        titlePeriod = `Resumo de ${dateStart.toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' })}`;
+        introMessageTemplate = "Olá, {clientName}! 🗓️ Mês novo, vida nova! Vamos dar uma olhada em como foi o último mês na sua conta *{accountName}*?";
         break;
       default:
         logger.error(`[JOB RESUMO FINANCEIRO] Período inválido: ${period}`);
@@ -56,7 +62,8 @@ async function sendFinancialSummariesForPeriod(period) {
     for (const account of activeFinancialAccounts) {
         try {
             const clientPhone = account.ownerClient?.phone;
-            const targetPhone = clientPhone || adminPhoneNumber; // Envia para cliente ou admin
+            const clientName = account.ownerClient?.name ? account.ownerClient.name.split(' ')[0] : 'você';
+            const targetPhone = clientPhone || adminPhoneNumber;
 
             if (!targetPhone) {
                 logger.warn(`[JOB RESUMO FINANCEIRO] Sem destinatário para resumo da conta ${account.accountName}.`);
@@ -67,13 +74,19 @@ async function sendFinancialSummariesForPeriod(period) {
                 dateStart: dateStart.toISOString().split('T')[0],
                 dateEnd: dateEndFilter.toISOString().split('T')[0]
             });
+            
+            const intro = introMessageTemplate.replace('{clientName}', clientName).replace('{accountName}', account.accountName);
 
-            let message = `📊 RESUMO FINANCEIRO ${titlePeriod.toUpperCase()} (${account.accountName}) 📊\n\n`;
-            message += `Entradas Efetivadas: R$ ${summary.totalEntradas.toFixed(2)}\n`;
-            message += `Saídas Efetivadas: R$ ${summary.totalSaidas.toFixed(2)}\n`;
-            message += `*Saldo do Período: R$ ${summary.saldoEfetivado.toFixed(2)}*\n\n`;
-            message += `Contas a Receber (Pendentes): R$ ${summary.totalAReceberPendente.toFixed(2)}\n`;
-            message += `Contas a Pagar (Pendentes): R$ ${summary.totalAPagarPendente.toFixed(2)}\n`;
+            const body = `*${titlePeriod}*\n\n` +
+                         `✅ *Entradas:* ${formatCurrency(summary.totalEntradas)}\n` +
+                         `❌ *Saídas:* ${formatCurrency(summary.totalSaidas)}\n` +
+                         `⚖️ *Balanço do Período:* ${formatCurrency(summary.saldoEfetivado)}\n\n` +
+                         `🗓️ *A Receber (pendente):* ${formatCurrency(summary.totalAReceberPendente)}\n` +
+                         `🧾 *A Pagar (pendente):* ${formatCurrency(summary.totalAPagarPendente)}`;
+
+            const footer = "Para ver mais detalhes, acesse a plataforma! 😉";
+
+            const message = `${intro}\n\n${body}\n\n${footer}`;
 
             await sendWhatsappMessage(targetPhone, message);
             logger.info(`[JOB RESUMO FINANCEIRO] Resumo ${period} para conta ${account.accountName} (ID: ${account.id}) enviado para ${targetPhone}.`);

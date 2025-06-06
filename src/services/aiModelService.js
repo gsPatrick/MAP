@@ -541,7 +541,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     const clientNameForError = conversationContext.clientName || "você";
     const errorMessageIntro = `Puxa, ${clientNameForError}! 🧠💥 Parece que estou com um probleminha técnico para acessar minha inteligência...`;
     const errorDetails = `Não consigo pensar direito agora porque minha chave da OpenAI não está configurada.`;
-    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://app.mapnocontrole.com.br.`;
+    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://map-nocontrole.com.br`;
     const finalErrorMessage = `${errorMessageIntro}\n\n🎯 Detalhes do Problema:\n\n${errorDetails}\n\n${platformLink}`;
 
     return {
@@ -625,7 +625,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     const errorType = isJsonError ? "entender a resposta da minha inteligência" : "me comunicar com minha inteligência";
     const errorMessageIntro = `Puxa vida, ${clientNameForError}! 😬 Tive um curto-circuito aqui e não consegui processar sua mensagem direito (${errorType}).`;
     const errorDetails = `Minha equipe de engenheiros já foi notificada para dar uma olhadinha nisso! 👩‍💻👨‍💻`;
-    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://app.mapnocontrole.com.br.`;
+    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://map-nocontrole.com.br`;
     const tryAgain = `Por favor, tente de novo em um momentinho. Desculpe o transtorno! 🙏`;
     const finalErrorMessage = `${errorMessageIntro}\n\n🎯 Detalhes do Ocorrido:\n${errorDetails}\n\n${tryAgain}\n\n${platformLink}`;
 

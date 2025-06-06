@@ -39,10 +39,9 @@ async function createSubscription(clientId, planId, startDate = null, status = '
         clientAccessExpiresAt = endDate.toISOString().split('T')[0];
     }
     
-    // Verifica se o cliente já teve QUALQUER assinatura antes desta
     const previousSubscriptionsCount = await Subscription.count({
         where: { clientId: clientId },
-        transaction: t // Importante para consistência na transação
+        transaction: t
     });
 
     if (status === 'Ativa') {
@@ -62,7 +61,7 @@ async function createSubscription(clientId, planId, startDate = null, status = '
       startDate: effectiveStartDate.toISOString().split('T')[0],
       endDate: endDate.toISOString().split('T')[0],
       status: status,
-      autoRenew: plan.durationDays > 31, // Exemplo
+      autoRenew: plan.durationDays > 31,
     };
     if (externalSubscriptionId) {
         newSubscriptionData.externalSubscriptionId = externalSubscriptionId;
@@ -72,17 +71,21 @@ async function createSubscription(clientId, planId, startDate = null, status = '
 
     await t.commit(); 
 
-    // === LÓGICA DE MENSAGEM DE BOAS-VINDAS (APENAS SE ESTA É A PRIMEIRA ASSINATURA CRIADA PARA O CLIENTE) ===
+    // === NOVA LÓGICA DE MENSAGEM DE BOAS-VINDAS (PRIMEIRA ASSINATURA) ===
     if (status === 'Ativa' && clientInstance.phone && previousSubscriptionsCount === 0) {
         const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Cliente';
         const platformUrl = process.env.PLATFORM_URL || 'app.mapnocontrole.com.br';
         
-        let expiryWelcomePart = `Seu acesso está válido até ${formatDate(newSubscription.endDate)}.`;
+        let expiryWelcomePart = `Seu acesso está garantido até *${formatDate(newSubscription.endDate)}*.`;
         if (clientAccessLevel.includes('vitalicio')) {
-            expiryWelcomePart = "Você garantiu acesso vitalício!";
+            expiryWelcomePart = "Você agora tem *acesso vitalício*! 🎉";
         }
 
-        const welcomeMessage = `🎉 Olá ${clientName}! Seja muito bem-vindo(a) ao MAP no Controle!\n\nQue demais que você garantiu seu acesso ao nosso plano *${plan.name}*!\n\n${expiryWelcomePart}\n\nPara começar, que tal me dizer "oi" por aqui para darmos o pontapé inicial na organização? Se preferir, você também já pode acessar nossa plataforma em https://${platformUrl}.\n\nEstou pronto para te ajudar a organizar tudo! 🚀`;
+        const intro = `Ebaaa, ${clientName}! 🚀 Seja muito bem-vindo(a) ao time MAP no Controle!`;
+        const body = `Sua assinatura do plano *${plan.name}* foi ativada com sucesso e eu não poderia estar mais feliz em ter você por aqui!\n\n${expiryWelcomePart}`;
+        const footer = `Para começarmos, que tal me dizer "oi"? Ou, se preferir, já pode explorar a plataforma em https://${platformUrl}\n\nEstou a postos para te ajudar a organizar tudo! 💪✨`;
+        const welcomeMessage = `${intro}\n\n${body}\n\n${footer}`;
+        
         try {
           await sendWhatsappMessage(clientInstance.phone, welcomeMessage);
           logger.info(`[SUBSCRIPTION SERVICE] Mensagem de boas-vindas (primeira assinatura) enviada para o cliente ID ${clientId} (Plano: ${plan.name}).`);
@@ -90,7 +93,7 @@ async function createSubscription(clientId, planId, startDate = null, status = '
           logger.error(`[SUBSCRIPTION SERVICE] Falha ao enviar mensagem de boas-vindas para o cliente ID ${clientId}: ${whatsappError.message}`);
         }
     }
-    // === FIM DA LÓGICA DE MENSAGEM DE BOAS-VINDAS ===
+    // === FIM DA LÓGICA DE MENSAGEM ===
 
     logger.info(`Assinatura ID ${newSubscription.id} criada para Cliente ID ${clientId} com Plano "${plan.name}" (ID ${planId}). Válida até ${newSubscription.endDate}. Status: ${status}.`);
     return newSubscription.toJSON();
@@ -103,7 +106,6 @@ async function createSubscription(clientId, planId, startDate = null, status = '
 }
 
 async function getActiveSubscription(clientId) {
-  // ... (código inalterado)
   try {
     const today = new Date().toISOString().split('T')[0];
     const subscription = await Subscription.findOne({
@@ -124,7 +126,6 @@ async function getActiveSubscription(clientId) {
 }
 
 async function getClientSubscriptions(clientId) {
-    // ... (código inalterado)
     try {
         const subscriptions = await Subscription.findAll({
             where: { clientId },
@@ -168,7 +169,7 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         let finalClientAccessExpiresAt = clientInstance.accessExpiresAt;
 
         if (newStatus === 'Ativa' && newEndDate) {
-            updateSubData.endDate = newEndDate; // Atualiza a data de fim da ASSINATURA
+            updateSubData.endDate = newEndDate;
             const planTier = plan.tier || 'basico';
 
             if (plan.durationDays > 7000) {
@@ -214,32 +215,19 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         await subscription.update(updateSubData, { transaction: t });
         await t.commit();
 
-        // === LÓGICA DE MENSAGEM DE RENOVAÇÃO/REATIVAÇÃO SIMPLIFICADA ===
-        // Se o novo status é 'Ativa' E esta função foi chamada (o que implica que a assinatura já existia),
-        // E o cliente tem telefone, enviamos a mensagem de renovação.
+        // === NOVA LÓGICA DE MENSAGEM DE RENOVAÇÃO/REATIVAÇÃO ===
         if (newStatus === 'Ativa' && clientInstance.phone) {
-            // Verifica se o cliente tinha ALGUMA assinatura ANTES desta específica ser criada.
-            // Se sim, esta ativação é tratada como uma renovação/reativação de um serviço já conhecido.
-            const totalSubscriptionsForClient = await Subscription.count({
-                 where: { clientId: clientInstance.id }
-            });
-
-            // Se o cliente tem mais de uma assinatura OU se esta assinatura não é a primeira que ele já teve
-            // (considerando que `createSubscription` lida com a "primeiríssima" mensagem),
-            // então esta ativação é uma renovação/reativação.
-            // A condição `subscription.id` garante que estamos falando da assinatura que acabou de ser atualizada.
-            // E `totalSubscriptionsForClient > 0` (ou `totalSubscriptionsForClient > 1` se a lógica de boas vindas de createSubscription for exata sobre "primeira assinatura")
-            // Mas para simplificar: se updateSubscriptionStatusByExternalId é chamado e ativa, é uma continuação.
-            
-            // Se esta função foi chamada, a assinatura `subscription.id` já existia.
-            // Portanto, qualquer ativação aqui é uma "renovação" ou "reativação" do serviço.
             const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Cliente';
-            let expiryMessagePart = `Seu acesso agora está garantido até ${formatDate(finalClientAccessExpiresAt)}.`;
+            let expiryMessagePart = `Seu acesso foi renovado e agora está garantido até *${formatDate(finalClientAccessExpiresAt)}*.`;
             if (finalClientAccessLevel.includes('vitalicio')) {
-                expiryMessagePart = "Seu acesso vitalício continua firme e forte!";
+                expiryMessagePart = "Seu acesso *vitalício* continua firme e forte!";
             }
             
-            const renewalMessage = `🥳 Olá ${clientName}! Boas notícias!\n\nSua assinatura do plano *${plan.name}* foi atualizada com sucesso!\n\n${expiryMessagePart}\n\nAgradecemos por continuar conosco nessa jornada de organização e controle. Vamos juntos a mais um período de sucesso! 💪`;
+            const intro = `Olá, ${clientName}! Boas notícias! 🥳`;
+            const body = `Sua assinatura do plano *${plan.name}* foi reativada/renovada com sucesso.\n\n${expiryMessagePart}`;
+            const footer = `Agradecemos por continuar conosco nessa jornada de organização e controle. Vamos juntos a mais um período de sucesso! 💪`;
+            const renewalMessage = `${intro}\n\n${body}\n\n${footer}`;
+
             try {
                 await sendWhatsappMessage(clientInstance.phone, renewalMessage);
                 logger.info(`[SUBSCRIPTION SERVICE] Mensagem de atualização/renovação enviada para o cliente ID ${clientInstance.id} (Plano: ${plan.name}).`);

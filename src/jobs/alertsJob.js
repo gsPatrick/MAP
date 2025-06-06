@@ -1,9 +1,11 @@
 // src/jobs/alertsJob.js
 const cron = require('node-cron');
-const { FinancialTransaction, Product, FinancialAccount, Client, UserPreference, sequelize } = require('../database');
+const { FinancialTransaction, Product, FinancialAccount, Client, UserPreference, RecurringTransactionRule, sequelize } = require('../database');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
+// Importando formatadores para consistência
+const { formatCurrency, formatDate } = require('../utils/formatters');
 
 async function checkAndSendAlerts() {
   logger.info('[JOB ALERTAS] Verificando alertas...');
@@ -25,11 +27,13 @@ async function checkAndSendAlerts() {
     for (const account of activeFinancialAccounts) {
         const client = account.ownerClient;
         const clientPhone = client?.phone;
-        let accountAlertsMessages = []; // Array para acumular mensagens de alerta para esta conta
+        const clientFirstName = client?.name ? client.name.split(' ')[0] : 'você';
+
+        let alertSections = []; // Array para acumular seções de alerta formatadas
 
         // --- 1. Alerta de Contas a Vencer/Vencidas ---
         const today = new Date();
-        const leadDays = preferences?.dueAlertLeadDays || 3; // Dias de antecedência para alerta
+        const leadDays = preferences?.dueAlertLeadDays || 3;
         const NdaysFromNow = new Date(today);
         NdaysFromNow.setDate(today.getDate() + leadDays);
 
@@ -39,19 +43,20 @@ async function checkAndSendAlerts() {
             isPayableOrReceivable: true,
             isPaidOrReceived: false,
             dueDate: {
-              [Op.gte]: today.toISOString().split('T')[0], // A partir de hoje
-              [Op.lte]: NdaysFromNow.toISOString().split('T')[0], // Até N dias no futuro
+              [Op.gte]: today.toISOString().split('T')[0],
+              [Op.lte]: NdaysFromNow.toISOString().split('T')[0],
             }
           },
           order: [['dueDate', 'ASC']]
         });
 
         if (upcomingDues.length > 0) {
-          let dueAlertMsg = `--- CONTAS A VENCER (Próximos ${leadDays} dias) ---\n`;
+          let dueAlertSection = `🗓️ *Contas Próximas do Vencimento:*\n`;
           upcomingDues.forEach(due => {
-            dueAlertMsg += `- ${due.description} (R$ ${parseFloat(due.value).toFixed(2)}) vence em ${new Date(due.dueDate + 'T00:00:00Z').toLocaleDateString('pt-BR', {timeZone: 'UTC'})}\n`; // Adiciona T00:00:00Z para tratar como data local
+            const formattedDueDate = formatDate(due.dueDate);
+            dueAlertSection += `>  💸 ${due.description} (${formatCurrency(due.value)}) vence em *${formattedDueDate}*\n`;
           });
-          accountAlertsMessages.push(dueAlertMsg);
+          alertSections.push(dueAlertSection.trim());
         }
 
         // --- 2. Alerta de Estoque Mínimo (para contas PJ/MEI) ---
@@ -65,11 +70,11 @@ async function checkAndSendAlerts() {
             }
           });
           if (lowStockProducts.length > 0) {
-            let stockAlertMsg = `--- ESTOQUE MÍNIMO ---\n`;
+            let stockAlertSection = `📦 *Alerta de Estoque Baixo:*\n`;
             lowStockProducts.forEach(p => {
-              stockAlertMsg += `- ${p.name}: ${p.quantity} un. (Mín: ${p.minimumStock} un.)\n`;
+              stockAlertSection += `>  📉 ${p.name}: Apenas *${p.quantity} un.* em estoque (Mínimo: ${p.minimumStock} un.)\n`;
             });
-            accountAlertsMessages.push(stockAlertMsg);
+            alertSections.push(stockAlertSection.trim());
           }
         }
         
@@ -79,41 +84,44 @@ async function checkAndSendAlerts() {
             const currentDay = today.getDate();
             const daysUntilDAS = dasPaymentDay - currentDay;
 
-            // Alerta alguns dias antes ou no dia
             if (daysUntilDAS >= 0 && daysUntilDAS <= (preferences?.fiscalAlertLeadDaysMEI || 5)) {
                 const dasMonth = today.toLocaleDateString('pt-BR', {month: 'long'});
-                let meiAlertMsg = `--- IMPOSTO MEI ---\n`;
-                meiAlertMsg += `- Lembrete: Pagamento do DAS MEI (${dasMonth}) vence dia ${dasPaymentDay}.\n`;
-                // Verificar se já existe uma RecurringTransactionRule para o DAS deste mês
+                let meiAlertSection = `🧾 *Lembrete Fiscal (MEI):*\n`;
+                meiAlertSection += `>  📮 O pagamento do *DAS de ${dasMonth}* vence no dia *${dasPaymentDay}*. Fique de olho!\n`;
+                
                 const dasRule = await RecurringTransactionRule.findOne({
                     where: {
                         financialAccountId: account.id,
-                        description: {[Op.iLike]: `%DAS MEI%${dasMonth}%`}, // Procura por "DAS MEI Janeiro", por exemplo
+                        description: {[Op.iLike]: `%DAS MEI%${dasMonth}%`},
                         isActive: true
                     }
                 });
                 if (!dasRule) {
-                    meiAlertMsg += `  (Você pode criar uma recorrência para este pagamento.)\n`;
+                    meiAlertSection += `>  💡 _Dica: Você pode criar uma recorrência para este pagamento para não esquecer._\n`;
                 }
-                accountAlertsMessages.push(meiAlertMsg);
+                alertSections.push(meiAlertSection.trim());
             }
         }
-        // TODO: Adicionar lógica mais robusta para outros impostos PJ (pode envolver RecurringTransactionRules com categorias fiscais)
 
         // Enviar alertas acumulados para o cliente desta conta
-        if (accountAlertsMessages.length > 0) {
-          const finalMessage = `🔔 ALERTAS PARA CONTA: ${account.accountName} (${account.accountType}) 🔔\n\n` + accountAlertsMessages.join("\n");
+        if (alertSections.length > 0) {
+          const intro = `Epa, ${clientFirstName}! 🕵️‍♂️ Dei uma olhadinha nos seus controles e encontrei alguns pontos de atenção para a conta *${account.accountName}*:`;
+          const body = alertSections.join('\n\n');
+          const footer = `Qualquer coisa, é só me chamar! 😉`;
+
+          const finalMessage = `${intro}\n\n${body}\n\n${footer}`;
+
           if (clientPhone) {
             await sendWhatsappMessage(clientPhone, finalMessage);
             logger.info(`[JOB ALERTAS] Alertas enviados para Cliente ${client?.name} (${clientPhone}) para a conta ${account.accountName}.`);
-          } else if (adminPhoneNumberForGlobalAlerts) { // Fallback para admin se cliente não tem telefone
+          } else if (adminPhoneNumberForGlobalAlerts) {
             logger.warn(`[JOB ALERTAS] Cliente da conta ${account.accountName} sem telefone. Enviando para admin.`);
             await sendWhatsappMessage(adminPhoneNumberForGlobalAlerts, `ALERTAS (Conta Cliente S/ Tel: ${account.accountName}):\n${finalMessage}`);
           } else {
             logger.warn(`[JOB ALERTAS] Alertas gerados para conta ${account.accountName} mas sem destinatário (cliente sem tel e admin não configurado).`);
           }
         }
-    } // Fim do loop por FinancialAccounts
+    }
      logger.info('[JOB ALERTAS] Verificação de alertas concluída.');
   } catch (error) {
     logger.error('[JOB ALERTAS] Erro ao verificar/enviar alertas:', { message: error.message, stack: error.stack });
