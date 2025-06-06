@@ -1,4 +1,4 @@
-// src/services/aiModelService.js
+/ src/services/aiModelService.js
 const OpenAI = require('openai');
 const logger =require('../utils/logger');
 const axios = require('axios'); 
@@ -150,6 +150,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
         *   Usuário diz "gastei 20 conto no lanche": "Opa, ${clientNameForPrompt}! 🍔 Um lanchinho pra recarregar as energias, né? Faz muito bem! Já anotei essa delícia nos seus gastos! 😉"
         *   Receita Presente: "Uau, ${clientNameForPrompt}! 🎁 Um presente do pai sempre vem em boa hora, né? Que entrada maravilhosa para o seu controle financeiro! Vamos registrar isso com carinho! 🙌"
         *   Usuário pergunta "qual meu saldo": "${clientNameForPrompt}, querendo saber como estão as finanças, né? Boa! Deixa eu ver aqui pra você..." (Ação GET_FINANCIAL_SUMMARY)
+        *   Trocar de conta: "Opa, ${clientNameForPrompt}! Claro! Vamos trocar de conta. Qual dos seus perfis você quer usar agora? 🤔" (Ação LIST_AVAILABLE_FINANCIAL_ACCOUNTS)
         *   Compromisso Agendado (pagar aluguel): "Aluguel na agenda, ${clientNameForPrompt}! 🗓️💸 Pontualidade é seu nome do meio! Já deixei esse lembrete anotadinho pra você não esquecer! 😉"
         *   Recorrência Criada (Salário): "É isso aí, ${clientNameForPrompt}! 💼 Salarinho pingando na conta todo mês é música para os ouvidos (e para o bolso)! 🎶 Deixei essa recorrência esperta configurada! 💪"
         *   Marcação como Pago: "Aí sim, ${clientNameForPrompt}! Continha paga, preocupação a menos! 💸✅ Nada como aquela sensação de dever cumprido, né? Deixei tudo atualizadinho! 🤗"
@@ -349,8 +350,9 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - type: "Entrada" ou "Saída" (opcional)
     - limit: integer (opcional, default: 5)
 
-17. SWITCH_FINANCIAL_ACCOUNT: (Mudar de conta financeira ativa)
-    - targetAccountNameOrType: string (OBRIGATÓRIO, nome da conta ou tipo 'PF', 'PJ', 'MEI')
+17. SWITCH_FINANCIAL_ACCOUNT: (Mudar de conta financeira ativa DIRETAMENTE)
+    - action_specific_reply_suggestion: "Ok! Trocando para a conta que você pediu."
+    - targetAccountNameOrType: string (OBRIGATÓRIO, nome da conta ou tipo 'PF', 'PJ', 'MEI'. A IA deve extrair este nome da mensagem do usuário).
 
 18. CREATE_FINANCIAL_ACCOUNT: (Criar nova conta financeira PARA O CLIENTE LOGADO - NÃO USAR EM CONTEXTO DE SHARED ACCESS PARA CRIAR CONTA PARA O DONO)
     - accountTypeToCreate: "PF", "PJ", "MEI" (OBRIGATÓRIO)
@@ -508,20 +510,26 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 43. DELETE_FINANCIAL_ACCOUNT (Ação do DONO da conta):
     - accountNameToDelete: string (OBRIGATÓRIO, nome da conta financeira a ser deletada. EXIGE CONFIRMAÇÃO EXPLÍCITA DO USUÁRIO NO FRONTEND/WHATSAPP SERVICE)
 
+44. LIST_AVAILABLE_FINANCIAL_ACCOUNTS: (NOVA AÇÃO: Dispara a listagem de contas para seleção via botão)
+    - action_specific_reply_suggestion: "Claro, ${clientNameForPrompt}! Para qual dos seus perfis você gostaria de mudar? 🤔"
+    - (Nenhum parâmetro necessário da mensagem do usuário)
+
 
 **FLUXO DE DECISÃO:**
 1.  A mensagem do usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO? PRIORIZE \`CREATE_PARCELLED_ACCOUNT\`.
 2.  A mensagem do usuário indica claramente uma AÇÃO FINANCEIRA RECORRENTE usando palavras-chave como "todo mês", "semanalmente", "todo dia X", "mensalmente", "anualmente", "Netflix todo dia 30"? PRIORIZE FORTEMENTE \`CREATE_RECURRING_RULE\`.
 3.  A mensagem indica claramente uma ação financeira FUTURA ÚNICA (e não é compra parcelada nem recorrência clara)? PRIORIZE \`SCHEDULE_APPOINTMENT\`.
-4.  A mensagem é uma configuração de preferência de sistema (motivação, água)? Detecte \`SET_MOTIVATIONAL_MESSAGE_PREFERENCE\` ou \`SET_WATER_REMINDER_PREFERENCE\`.
-5.  A mensagem é uma descrição de edição (após o bot ter pedido, e \`conversationContext.editingResource.id\` está presente)? Detecte a ação UPDATE_* apropriada.
-6.  A mensagem se refere a conceder, listar, atualizar, revogar ou responder a um convite de ACESSO COMPARTILHADO? Detecte GRANT_ACCESS, LIST_GRANTED_ACCESS, LIST_RECEIVED_ACCESS, UPDATE_GRANTED_ACCESS, REVOKE_ACCESS, RESPOND_TO_INVITE.
-7.  A mensagem se refere a criar, listar, atualizar ou deletar CLIENTES DO NEGÓCIO (para PJ/MEI)? Detecte CREATE_BUSINESS_CLIENT, LIST_BUSINESS_CLIENTS, UPDATE_BUSINESS_CLIENT.
-8.  A mensagem é uma confirmação (Sim/Não) para uma ação pendente? Detecte ACTION_CONFIRMATION_*.
-9.  A mensagem é uma saudação simples, agradecimento ou pergunta genérica? Detecte GENERAL_GREETING_OR_SMALLTALK ou GENERAL_QUESTION_OR_HELP.
-10. Caso contrário, tente detectar uma das outras ações de CRUD ou LIST, incluindo as ações de cartão, produto e conta financeira.
-11. Se dados OBRIGATÓRIOS para uma ação faltarem (e não puderem ser seguramente assumidos por um default), NÃO detecte a ação. Use \`clarifications_needed\`.
-12. Se confiante e com todos os dados, detecte a ação para execução direta. Para ações bem-sucedidas, use a "MENSAGEM DA IA" no \`overall_summary_suggestion\`.
+4.  A mensagem é um pedido genérico para mudar de conta/perfil (ex: "trocar de conta", "mudar perfil", "quais contas eu tenho?")? PRIORIZE FORTEMENTE \`LIST_AVAILABLE_FINANCIAL_ACCOUNTS\`. Esta ação iniciará um fluxo de botões para o usuário escolher.
+5.  A mensagem é uma configuração de preferência de sistema (motivação, água)? Detecte \`SET_MOTIVATIONAL_MESSAGE_PREFERENCE\` ou \`SET_WATER_REMINDER_PREFERENCE\`.
+6.  A mensagem é uma descrição de edição (após o bot ter pedido, e \`conversationContext.editingResource.id\` está presente)? Detecte a ação UPDATE_* apropriada.
+7.  A mensagem se refere a conceder, listar, atualizar, revogar ou responder a um convite de ACESSO COMPARTILHADO? Detecte GRANT_ACCESS, LIST_GRANTED_ACCESS, LIST_RECEIVED_ACCESS, UPDATE_GRANTED_ACCESS, REVOKE_ACCESS, RESPOND_TO_INVITE.
+8.  A mensagem se refere a criar, listar, atualizar ou deletar CLIENTES DO NEGÓCIO (para PJ/MEI)? Detecte CREATE_BUSINESS_CLIENT, LIST_BUSINESS_CLIENTS, UPDATE_BUSINESS_CLIENT.
+9.  A mensagem é uma confirmação (Sim/Não) para uma ação pendente? Detecte ACTION_CONFIRMATION_*.
+10. A mensagem é uma saudação simples, agradecimento ou pergunta genérica? Detecte GENERAL_GREETING_OR_SMALLTALK ou GENERAL_QUESTION_OR_HELP.
+11. SE, e somente se, o usuário especificar o nome ou tipo da conta DIRETAMENTE na mensagem (ex: "mudar para conta pessoal", "usar conta da empresa"), use a ação \`SWITCH_FINANCIAL_ACCOUNT\` para uma troca direta sem botões.
+12. Caso contrário, tente detectar uma das outras ações de CRUD ou LIST, incluindo as ações de cartão, produto e conta financeira.
+13. Se dados OBRIGATÓRIOS para uma ação faltarem (e não puderem ser seguramente assumidos por um default), NÃO detecte a ação. Use \`clarifications_needed\`.
+14. Se confiante e com todos os dados, detecte a ação para execução direta. Para ações bem-sucedidas, use a "MENSAGEM DA IA" no \`overall_summary_suggestion\`.
 
 Contexto da Conta Ativa: ${accountCtx}
 Contexto de Edição (se houver): ID do recurso sendo editado: ${conversationContext.editingResource?.id || 'Nenhum'}, Tipo: ${conversationContext.editingResource?.type || 'Nenhum'}. Dados originais para edição de parcelamento (se houver): ${JSON.stringify(conversationContext.editingResource?.originalData) || 'Nenhum'}.

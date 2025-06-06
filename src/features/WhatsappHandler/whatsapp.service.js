@@ -93,7 +93,7 @@ function formatCurrency(value) {
 }
 
 function formatPlatformLink(customText = "") {
-    const platformUrl = process.env.PLATFORM_URL || 'app.mapnocontrole.com.br';
+    const platformUrl = process.env.PLATFORM_URL || 'map-nocontrole.com.br/painel';
     const defaultText = `📊 Para visualizar mais detalhes e relatórios, acesse a plataforma em https://${platformUrl}. Qualquer coisa, estou por aqui! 😉`;
     return customText || defaultText;
 }
@@ -1292,6 +1292,33 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 
                 const isOwnerContextForEditDelete = !state.isSharedAccessContext; 
 
+                if (buttonId.startsWith('switch_fa_to_')) {
+                const accountIdToSwitch = parseInt(buttonId.replace('switch_fa_to_', ''), 10);
+                if (!isNaN(accountIdToSwitch)) {
+                    // Busca as contas disponíveis para o usuário novamente para validar a permissão
+                    const accountsForSelection = state.isSharedAccessContext
+                        ? ownerAccountsIfShared
+                        : await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
+                    
+                    const accountToSelect = accountsForSelection.find(acc => acc.id === accountIdToSwitch);
+
+                    if (accountToSelect) {
+                        state.activeFinancialAccountId = accountToSelect.id;
+                        state.activeFinancialAccountName = accountToSelect.name || accountToSelect.accountName;
+                        state.activeFinancialAccountType = accountToSelect.type || accountToSelect.accountType;
+                        state.currentAction = null; // Finaliza o fluxo de seleção
+
+                        const ownerNameText = state.isSharedAccessContext ? `de ${state.ownerClientNameForContext} ` : '';
+                        const confirmationMsg = `Maravilha, ${clientNameToUse}! Selecionei a conta "${state.activeFinancialAccountName}" ${ownerNameText}para você. O que vamos fazer agora? 🚀`;
+                        
+                        state.messageHistory.push({ role: 'assistant', content: confirmationMsg });
+                        await sendWhatsappMessage(senderPhone, confirmationMsg);
+                        conversationState.set(senderPhone, state); // Salva o estado atualizado
+                        return; // IMPORTANTE: Retorna para não continuar o processamento e chamar a IA
+                    }
+                }
+            }
+
                 if (buttonId.startsWith('edit_')) {
                     if (!isOwnerContextForEditDelete) {
                         aiMessageIntroForButton = `Ops, ${clientNameToUse}! 😬`;
@@ -1507,8 +1534,17 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             const isOwnerActingOnOwnBehalfGlobal = !state.isSharedAccessContext || state.ownerClientIdForContext === actorClient.id;
 
 
-            if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
+           if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
+                // <<< INÍCIO DO CONTEXTO PARA COPIAR E COLAR >>>
+                state.pendingConfirmation = null;
+                let actionWasAnEdit = false; 
+                let resourceForButtonsContext = null;
+                let multipleActionBodiesList = [];
+                let buttonsToSend = []; // <<< ADICIONE ESTA LINHA AQUI
+                const isOwnerActingOnOwnBehalfGlobal = !state.isSharedAccessContext || state.ownerClientIdForContext === actorClient.id;
+
                 for (const detectedAction of aiResponse.detected_actions) {
+                // <<< FIM DO CONTEXTO >>>
                     const params = detectedAction.parameters || detectedAction; 
                     const actionName = detectedAction.action || detectedAction.action_type; 
                     if (!actionName) {
@@ -2198,69 +2234,36 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                                 }
                                 break;
                             }
-                            case 'SWITCH_FINANCIAL_ACCOUNT': {
-                                const targetAccountIdentifier = params.targetAccountNameOrType;
-                                if (!targetAccountIdentifier) {
-                                    currentActionFormattedData = "Para qual conta você gostaria de mudar? Me diga o nome ou o tipo (PF, PJ, MEI).";
-                                    if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,") || aiMessageIntro.startsWith("Entendido"))) aiMessageIntro = aiResponse.overall_summary_suggestion || `Hmm, ${clientNameToUse}, preciso de mais detalhes.`;
-                                    else if (multipleActionBodiesList.length === 0) aiMessageIntro = `Sobre a troca de contas, ${clientNameToUse}:`;
-                                    platformLinkFooter = "";
-                                    break;
+                                                   case 'LIST_FINANCIAL_ACCOUNTS': {
+                            const accountsToList = state.isSharedAccessContext
+                                ? ownerAccountsIfShared
+                                : await clientService.getClientFinancialAccounts(actorId, { isActive: true });
+                            
+                            if (accountsToList.length === 0) {
+                                currentActionFormattedData = `Você não tem nenhuma conta financeira configurada ou acessível no momento.`;
+                                if(isOwnerActingOnOwnBehalfGlobal) {
+                                    currentActionFormattedData += `\n\nQue tal criar uma? Diga "criar conta pessoal".`;
                                 }
+                            } else if (accountsToList.length === 1) {
+                                currentActionFormattedData = `Você tem apenas uma conta: "${accountsToList[0].accountName || accountsToList[0].name}". Ela já está selecionada.`;
+                            } else {
+                                // Prepara a mensagem e os botões
+                                if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) {
+                                    aiMessageIntro = aiResponse.overall_summary_suggestion || `Claro, ${clientNameToUse}! Qual conta você gostaria de usar agora? 👇`;
+                                }
+                                
+                                buttonsToSend = accountsToList.map(acc => ({
+                                    id: `switch_fa_to_${acc.id}`,
+                                    label: `${acc.name || acc.accountName} (${acc.type || acc.accountType})`
+                                }));
 
-                                const accountsForSwitch = state.isSharedAccessContext
-                                    ? ownerAccountsIfShared 
-                                    : await clientService.getClientFinancialAccounts(actorId, { isActive: true });
-
-                                if (accountsForSwitch.length === 0) {
-                                    aiMessageIntro = `Você não tem nenhuma conta ${state.isSharedAccessContext ? `de ${state.ownerClientNameForContext} ` : ''}acessível no momento, ${clientNameToUse}. 😕`;
-                                    currentActionFormattedData = isOwnerActingOnOwnBehalfGlobal ? "Que tal criar uma conta pessoal?" : `Peça para ${state.ownerClientNameForContext} verificar os acessos.`;
-                                    platformLinkFooter = "";
-                                    if (isOwnerActingOnOwnBehalfGlobal) { state.currentAction = 'awaiting_explicit_account_type_from_ai'; state.data.pendingAccountCreation = true; } 
-                                    break;
-                                }
-                                 if (accountsForSwitch.length === 1 && accountsForSwitch[0].id === state.activeFinancialAccountId) {
-                                    aiMessageIntro = `Você já está usando a conta "${accountsForSwitch[0].name || accountsForSwitch[0].accountName}", ${clientNameToUse}. 😉`;
-                                    currentActionFormattedData = "Não precisamos trocar nada!"; platformLinkFooter = "";
-                                    break;
-                                }
-
-                                let foundAccount = accountsForSwitch.find(acc =>
-                                    (acc.accountName || acc.name).toLowerCase() === targetAccountIdentifier.toLowerCase() ||
-                                    (acc.accountType || acc.type).toLowerCase() === targetAccountIdentifier.toLowerCase() ||
-                                    (acc.id && acc.id.toString() === targetAccountIdentifier)
-                                );
-                                if (!foundAccount) {
-                                    foundAccount = accountsForSwitch.find(acc => (acc.accountName || acc.name).toLowerCase().includes(targetAccountIdentifier.toLowerCase()));
-                                }
-
-                                if (foundAccount && foundAccount.id !== state.activeFinancialAccountId) {
-                                    state.activeFinancialAccountId = foundAccount.id;
-                                    state.activeFinancialAccountName = foundAccount.accountName || foundAccount.name;
-                                    state.activeFinancialAccountType = foundAccount.accountType || foundAccount.type;
-                                    
-                                    if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,") || aiMessageIntro.startsWith("Entendido"))) {
-                                         aiMessageIntro = aiResponse.overall_summary_suggestion || `Prontinho, ${clientNameToUse}! Mudei para a conta "${state.activeFinancialAccountName}" (${state.activeFinancialAccountType}).`;
-                                    } else if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.includes(clientNameToUse)) && !aiResponse.overall_summary_suggestion) {
-                                        aiMessageIntro = `Ok, ${clientNameToUse}! Selecionei a conta:`;
-                                    }
-                                    currentActionFormattedData = `Conta Ativa: *${state.activeFinancialAccountName}* (${state.activeFinancialAccountType})\n\nO que vamos fazer por aqui agora?`;
-                                    platformLinkFooter = "";
-                                } else if (foundAccount && foundAccount.id === state.activeFinancialAccountId) {
-                                    aiMessageIntro = `Você já está na conta "${state.activeFinancialAccountName}", ${clientNameToUse}! 😉`;
-                                    currentActionFormattedData = ""; platformLinkFooter = "";
-                                } else {
-                                    aiMessageIntro = `Não encontrei uma conta ${state.isSharedAccessContext ? `de ${state.ownerClientNameForContext} ` : ''}chamada ou do tipo "${targetAccountIdentifier}" que você possa acessar, ${clientNameToUse}. 😕`;
-                                    let accountListForMsg = "Suas opções são:\n";
-                                    accountsForSwitch.forEach(a => accountListForMsg += `\n- *${a.name || a.accountName}* (${a.type || a.accountType})`);
-                                    currentActionFormattedData = accountListForMsg;
-                                    platformLinkFooter = "";
-                                    state.currentAction = 'selecting_account_flow_active';
-                                    state.data.accountsToList = accountsForSwitch.map(a => ({id: a.id, name: a.accountName || a.name, type: a.accountType || a.type}));
-                                }
-                                if (foundAccount) state.currentAction = null; 
-                                break;
+                                currentActionFormattedData = ""; // O corpo da mensagem já está no intro
+                                platformLinkFooter = ""; // Não precisa de link da plataforma aqui
+                                state.currentAction = 'selecting_account_flow_active'; // Mantém o estado de seleção
                             }
+                            break;
+                        }
+
                             case 'CREATE_FINANCIAL_ACCOUNT': {
                                 if (!isOwnerActingOnOwnBehalfGlobal) throw new Error("Você não pode criar contas financeiras em um acesso compartilhado.");
                                 const accountTypeToCreate = params.accountTypeToCreate;
@@ -2818,7 +2821,9 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 delete state.data.clarificationContext;
             }
        
-            if (finalMessageToSend) {
+                   if (finalMessageToSend) {
+                state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
+            
                 const performedConcreteAction = (aiResponse.detected_actions && aiResponse.detected_actions.length > 0 &&
                                            aiResponse.detected_actions.some(a => {
                                                const actionNameCheck = a.action || a.action_type;
@@ -2840,7 +2845,14 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                              );
                 }).length === 1;
 
-                if (resourceForButtonsContext && singleConcreteNonEditAction && isOwnerActingOnOwnBehalfGlobal) { 
+                // --- Início da Lógica de Envio com Prioridade ---
+
+                // 1. Prioridade Máxima: Enviar lista de botões para troca de conta, se houver.
+                if (buttonsToSend.length > 0) {
+                    await sendButtonListMessage(senderPhone, finalMessageToSend, buttonsToSend, "Escolha uma conta");
+                } 
+                // 2. Segunda Prioridade: Enviar botões de edição/exclusão para um item recém-criado.
+                else if (resourceForButtonsContext && singleConcreteNonEditAction && isOwnerActingOnOwnBehalfGlobal) { 
                     let buttons = [];
                     let buttonItemDesc = "item";
                     if (resourceForButtonsContext.description && typeof resourceForButtonsContext.description === 'string') {
@@ -2862,11 +2874,15 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     } else {
                         await sendWhatsappMessage(senderPhone, finalMessageToSend);
                     }
-                } else {
+                } 
+                // 3. Fallback: Enviar apenas a mensagem de texto normal.
+                else {
                     await sendWhatsappMessage(senderPhone, finalMessageToSend);
                     if(state.editingResource && !resourceForButtonsContext && !actionWasAnEdit) state.editingResource = null;
                 }
             }
+            // <<< FIM DO BLOCO DE SUBSTITUIÇÃO >>>
+
         }
 
     } catch (error) {
