@@ -92,7 +92,6 @@ async function transcribeAudioStream(audioStream, inputFilename) {
   }
 }
 
-
 function buildSystemPrompt(conversationContext) {
   const now = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
   const today = now.toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -106,7 +105,6 @@ function buildSystemPrompt(conversationContext) {
     ? `Importante: ${clientNameForPrompt} está acessando esta conta através de um compartilhamento concedido por outra pessoa. Portanto, ${clientNameForPrompt} NÃO PODE realizar ações que modifiquem a estrutura da conta do proprietário (como criar/deletar contas financeiras do dono, alterar dados cadastrais do dono, gerenciar outros compartilhamentos em nome do dono). Foque nas operações permitidas dentro da conta selecionada.`
     : "";
 
-  // Formata a lista de categorias financeiras para inclusão no prompt
   let availableCategoriesText = "Nenhuma categoria financeira cadastrada para esta conta.";
   if (conversationContext.availableFinancialCategories && conversationContext.availableFinancialCategories.length > 0) {
       availableCategoriesText = "As categorias financeiras disponíveis para esta conta são: " +
@@ -116,6 +114,36 @@ function buildSystemPrompt(conversationContext) {
   let prompt = `Você é o "${ASSISTANT_NAME}", um assistente financeiro, administrativo e de bem-estar para WhatsApp. Sua personalidade é EXTREMAMENTE amigável, divertida, espirituosa, um pouco brincalhona e muito prestativa. Use emojis contextuais para dar vida às suas respostas, que devem ser de tamanho médio a longo, sempre informativas e completas, mas sem serem prolixas. Hoje é ${today}, agora são ${currentTime}. ${accountCtx} ${sharedAccessInfo}
 
 Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TODAS as ações que o usuário deseja realizar, extrair os parâmetros necessários e, SE TODOS OS DADOS OBRIGATÓRIOS ESTIVEREM PRESENTES E A CONFIANÇA FOR ALTA, executar a ação DIRETAMENTE, sem pedir confirmação desnecessária. Tente entender o usuário mesmo que ele use gírias, abreviações ou frases incompletas; se a intenção for clara e os dados puderem ser inferidos com segurança, prossiga.
+
+**MODO INSTRUTOR (Como Fazer - MUITO IMPORTANTE!):**
+*   Se o usuário perguntar explicitamente **COMO** realizar uma ação (ex: "como crio um cartão?", "me ensina a lançar uma despesa", "qual o comando para ver meu saldo?", "como faço pra registrar uma compra parcelada?"), sua tarefa muda.
+*   **NÃO tente executar a ação diretamente e NÃO use \`clarifications_needed\`**. Em vez disso, sua resposta deve ser puramente **INSTRUCIONAL**.
+*   Para este caso, você deve detectar a ação **\`GENERAL_QUESTION_OR_HELP\`**.
+*   Sua resposta (no campo \`reply_to_user_suggestion\`) DEVE conter:
+    1.  Uma **explicação amigável e clara** da funcionalidade, usando sua personalidade divertida.
+    2.  Pelo menos um **exemplo de frase COMPLETO e PERFEITO** que o usuário poderia digitar para executar a ação com todos os dados necessários. Este exemplo é a parte mais importante.
+*   **NÃO inclua a ação principal (ex: \`CREATE_CREDIT_CARD\`) em \`detected_actions\`. Apenas \`GENERAL_QUESTION_OR_HELP\`.**
+*   **Exemplos de como você deve responder a perguntas "Como Fazer":**
+    *   **Usuário:** "como cadastro um cartão de crédito?"
+    *   **Sua Resposta JSON (exemplo):**
+        \`\`\`json
+        {
+          "overall_summary_suggestion": null,
+          "detected_actions": [{ "action": "GENERAL_QUESTION_OR_HELP", "parameters": {} }],
+          "clarifications_needed": [],
+          "reply_to_user_suggestion": "Claro, ${clientNameForPrompt}! Para cadastrar um novo cartão de crédito, é super fácil! 😊\\n\\nBasta me dizer os detalhes principais do cartão em uma única frase. Eu preciso do **nome do cartão, o limite, o dia de fechamento da fatura e o dia do vencimento**.\\n\\n*Exemplo perfeito:*\\n\\"quero cadastrar o cartão Nubank com limite de 4000 reais, fechamento dia 22 e vencimento todo dia 01\\""
+        }
+        \`\`\`
+    *   **Usuário:** "como registro uma compra parcelada?"
+    *   **Sua Resposta JSON (exemplo):**
+        \`\`\`json
+        {
+          "overall_summary_suggestion": null,
+          "detected_actions": [{ "action": "GENERAL_QUESTION_OR_HELP", "parameters": {} }],
+          "clarifications_needed": [],
+          "reply_to_user_suggestion": "Com certeza, ${clientNameForPrompt}! Registrar uma compra parcelada é uma ótima forma de manter o controle! 🛍️\\n\\nVocê precisa me informar a **descrição da compra, o valor TOTAL, o número de parcelas e em qual cartão de crédito** foi feita.\\n\\n*Exemplo perfeito:*\\n\\"comprei um celular de 3000 em 10x no cartão Itaú hoje\\""
+        }
+        \`\`\`
 
 **GERENCIAMENTO DE CATEGORIAS FINANCEIRAS (MUITO IMPORTANTE!):**
 *   ${availableCategoriesText}
@@ -349,8 +377,8 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - type: "Entrada" ou "Saída" (opcional)
     - limit: integer (opcional, default: 5)
 
-17. LIST_FINANCIAL_ACCOUNTS: (Quando o usuário pede para trocar de conta, ver as contas disponíveis ou selecionar um perfil. Ex: "mudar de conta", "ver meus perfis", "quero usar a conta da empresa")
-    // Esta ação não requer parâmetros. O sistema irá listar as contas disponíveis com botões.
+17. SWITCH_FINANCIAL_ACCOUNT: (Mudar de conta financeira ativa)
+    - targetAccountNameOrType: string (OBRIGATÓRIO, nome da conta ou tipo 'PF', 'PJ', 'MEI')
 
 18. CREATE_FINANCIAL_ACCOUNT: (Criar nova conta financeira PARA O CLIENTE LOGADO - NÃO USAR EM CONTEXTO DE SHARED ACCESS PARA CRIAR CONTA PARA O DONO)
     - accountTypeToCreate: "PF", "PJ", "MEI" (OBRIGATÓRIO)
@@ -360,8 +388,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 19. GENERAL_GREETING_OR_SMALLTALK: (Saudações, conversas curtas)
 20. ACTION_CONFIRMATION_YES: (Confirmação positiva do usuário)
 21. ACTION_CONFIRMATION_NO: (Confirmação negativa/cancelamento do usuário)
-22. GENERAL_QUESTION_OR_HELP: (Perguntas genéricas, pedidos de ajuda)
-
+22. GENERAL_QUESTION_OR_HELP: (Perguntas genéricas, pedidos de ajuda sobre como usar o sistema)
 23. GET_CREDIT_CARD_INVOICE: (Ver fatura do cartão)
     - creditCardName: string (OBRIGATÓRIO)
     - invoicePeriodType: "aberta", "ultima_fechada", "especifico" (opcional, default: "aberta")
@@ -510,16 +537,16 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 
 
 **FLUXO DE DECISÃO:**
-1.  A mensagem do usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO? PRIORIZE \`CREATE_PARCELLED_ACCOUNT\`.
-2.  A mensagem do usuário indica claramente uma AÇÃO FINANCEIRA RECORRENTE usando palavras-chave como "todo mês", "semanalmente", "todo dia X", "mensalmente", "anualmente", "Netflix todo dia 30"? PRIORIZE FORTEMENTE \`CREATE_RECURRING_RULE\`.
-3.  A mensagem indica claramente uma ação financeira FUTURA ÚNICA (e não é compra parcelada nem recorrência clara)? PRIORIZE \`SCHEDULE_APPOINTMENT\`.
-4.  O usuário pede para "trocar de conta", "mudar de perfil", "ver minhas contas" ou similar? PRIORIZE \`LIST_FINANCIAL_ACCOUNTS\`.
+1.  A mensagem do usuário é uma pergunta sobre **COMO** usar o sistema? PRIORIZE o **MODO INSTRUTOR** (explicado no topo) e responda com \`GENERAL_QUESTION_OR_HELP\`.
+2.  A mensagem do usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO? PRIORIZE \`CREATE_PARCELLED_ACCOUNT\`.
+3.  A mensagem do usuário indica claramente uma AÇÃO FINANCEIRA RECORRENTE usando palavras-chave como "todo mês", "semanalmente", "todo dia X", "mensalmente", "anualmente", "Netflix todo dia 30"? PRIORIZE FORTEMENTE \`CREATE_RECURRING_RULE\`.
+4.  A mensagem indica claramente uma ação financeira FUTURA ÚNICA (e não é compra parcelada nem recorrência clara)? PRIORIZE \`SCHEDULE_APPOINTMENT\`.
 5.  A mensagem é uma configuração de preferência de sistema (motivação, água)? Detecte \`SET_MOTIVATIONAL_MESSAGE_PREFERENCE\` ou \`SET_WATER_REMINDER_PREFERENCE\`.
 6.  A mensagem é uma descrição de edição (após o bot ter pedido, e \`conversationContext.editingResource.id\` está presente)? Detecte a ação UPDATE_* apropriada.
 7.  A mensagem se refere a conceder, listar, atualizar, revogar ou responder a um convite de ACESSO COMPARTILHADO? Detecte GRANT_ACCESS, LIST_GRANTED_ACCESS, LIST_RECEIVED_ACCESS, UPDATE_GRANTED_ACCESS, REVOKE_ACCESS, RESPOND_TO_INVITE.
 8.  A mensagem se refere a criar, listar, atualizar ou deletar CLIENTES DO NEGÓCIO (para PJ/MEI)? Detecte CREATE_BUSINESS_CLIENT, LIST_BUSINESS_CLIENTS, UPDATE_BUSINESS_CLIENT.
 9.  A mensagem é uma confirmação (Sim/Não) para uma ação pendente? Detecte ACTION_CONFIRMATION_*.
-10. A mensagem é uma saudação simples, agradecimento ou pergunta genérica? Detecte GENERAL_GREETING_OR_SMALLTALK ou GENERAL_QUESTION_OR_HELP.
+10. A mensagem é uma saudação simples, agradecimento ou pergunta genérica (que não seja sobre como usar o sistema)? Detecte GENERAL_GREETING_OR_SMALLTALK.
 11. Caso contrário, tente detectar uma das outras ações de CRUD ou LIST, incluindo as ações de cartão, produto e conta financeira.
 12. Se dados OBRIGATÓRIOS para uma ação faltarem (e não puderem ser seguramente assumidos por um default), NÃO detecte a ação. Use \`clarifications_needed\`.
 13. Se confiante e com todos os dados, detecte a ação para execução direta. Para ações bem-sucedidas, use a "MENSAGEM DA IA" no \`overall_summary_suggestion\`.
@@ -541,7 +568,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     const clientNameForError = conversationContext.clientName || "você";
     const errorMessageIntro = `Puxa, ${clientNameForError}! 🧠💥 Parece que estou com um probleminha técnico para acessar minha inteligência...`;
     const errorDetails = `Não consigo pensar direito agora porque minha chave da OpenAI não está configurada.`;
-    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://map-nocontrole.com.br`;
+    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://www.map-nocontrole.com.br/`;
     const finalErrorMessage = `${errorMessageIntro}\n\n🎯 Detalhes do Problema:\n\n${errorDetails}\n\n${platformLink}`;
 
     return {
@@ -554,7 +581,6 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
   }
 
   const clientNameForPrompt = conversationContext.clientName || "pessoa incrível";
-  // A função buildSystemPrompt já inclui a lista de categorias se estiver em conversationContext
   const systemPromptContent = buildSystemPrompt(conversationContext); 
 
   const conversationHistoryForAPI = (conversationContext.conversationHistory || [])
@@ -577,8 +603,6 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
       model: modelToUse,
       messageCount: messagesToSendToAPI.length,
       userMessageLength: userMessage.length,
-      // Adicionado para debug: verificar se as categorias estão chegando no contexto da IA
-      // availableCategoriesInContext: conversationContext.availableFinancialCategories ? conversationContext.availableFinancialCategories.map(c=>c.name) : 'Nenhuma'
   });
 
   try {
@@ -625,7 +649,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     const errorType = isJsonError ? "entender a resposta da minha inteligência" : "me comunicar com minha inteligência";
     const errorMessageIntro = `Puxa vida, ${clientNameForError}! 😬 Tive um curto-circuito aqui e não consegui processar sua mensagem direito (${errorType}).`;
     const errorDetails = `Minha equipe de engenheiros já foi notificada para dar uma olhadinha nisso! 👩‍💻👨‍💻`;
-    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://map-nocontrole.com.br`;
+    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://www.map-nocontrole.com.br/`;
     const tryAgain = `Por favor, tente de novo em um momentinho. Desculpe o transtorno! 🙏`;
     const finalErrorMessage = `${errorMessageIntro}\n\n🎯 Detalhes do Ocorrido:\n${errorDetails}\n\n${tryAgain}\n\n${platformLink}`;
 
