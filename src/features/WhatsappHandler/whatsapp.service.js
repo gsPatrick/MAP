@@ -14,6 +14,7 @@ const financialCategoryService = require('../FinancialCategory/financialCategory
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 
 
+
 // Importa as funções de envio e download do serviço de WhatsApp genérico
 const { sendWhatsappMessage, sendButtonListMessage, downloadZapiMedia } = require('../../services/whatsappService');
 // Importa o serviço do modelo de IA, que agora inclui a transcrição

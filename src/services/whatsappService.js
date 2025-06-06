@@ -6,9 +6,13 @@ const axios = require('axios');
 const path = require('path');
 
 // <<< NOVAS DEPENDÊNCIAS NECESSÁRIAS PARA A LÓGICA DE RECEBIMENTO >>>
-const { Client } = require('../database');
-const { normalizePhoneNumberToCanonical } = require('../utils/phoneUtils');
-const { handleIncomingMessageLogic } = require('../features/WhatsappHandler/whatsapp.service'); // Você precisará criar ou ajustar este handler
+// ESTAS DEPENDÊNCIAS SÃO REMOVIDAS DAQUI, POIS PERTENCEM AO SERVICE DE FEATURES
+// const { Client } = require('../database');
+// const { normalizePhoneNumberToCanonical } = require('../utils/phoneUtils');
+
+// <<< ESTA É A LINHA QUE CAUSA A DEPENDÊNCIA CIRCULAR E SERÁ REMOVIDA >>>
+// const { handleIncomingMessageLogic } = require('../features/WhatsappHandler/whatsapp.service');
+
 
 // SUAS CONFIGURAÇÕES EXISTENTES
 const ZAPI_INSTANCE_ID = process.env.ZAPI_INSTANCE_ID || "3E036BB2BDD5306BF3C102121E6AE94B";
@@ -142,66 +146,19 @@ async function downloadZapiMedia(mediaUrl) {
 }
 
 // ========================================================================
-// <<< NOVA LÓGICA DE RECEBIMENTO DE WEBHOOK >>>
+// IMPORTANTE: AS FUNÇÕES DE RECEBIMENTO DE MENSAGEM NÃO FICAM AQUI.
+// Elas pertencem ao seu `features/WhatsappHandler/whatsapp.service.js`,
+// que é o "cérebro" que USA este arquivo para ENVIAR mensagens.
 // ========================================================================
 
-/**
- * Ponto de entrada principal para processar um webhook de mensagem recebida da Z-API.
- * Esta função deve ser chamada pelo seu controller de webhook.
- * @param {object} payload - O objeto de payload completo do webhook da Z-API.
- */
-async function handleIncomingMessage(payload) {
-  // Pega o número "bruto" que a Z-API enviou
-  const rawPhoneFromZapi = payload.phone; 
-
-  // >>> APLICA A NORMALIZAÇÃO UNIVERSAL <<<
-  const canonicalPhone = normalizePhoneNumberToCanonical(rawPhoneFromZapi);
-
-  if (!canonicalPhone) {
-    logger.error(`[WHATSAPP SVC] Não foi possível normalizar o telefone do remetente: ${rawPhoneFromZapi}. Mensagem ignorada.`);
-    return;
-  }
-
-  try {
-    // Usa o número canônico para encontrar ou criar o cliente
-    const [client, created] = await Client.findOrCreate({
-      where: { phone: canonicalPhone },
-      defaults: {
-        phone: canonicalPhone,
-        name: payload.senderName || 'Novo Contato',
-        status: 'Ativo',
-        accessLevel: 'gratuito',
-      }
-    });
-
-    if (created) {
-      logger.info(`[WHATSAPP SVC] Telefone ${canonicalPhone} não reconhecido. Novo cliente (ID: ${client.id}) criado.`);
-    }
-
-    // A partir daqui, você pode chamar uma função centralizadora que lida com o que fazer com a mensagem.
-    // Isso mantém este arquivo focado na comunicação e normalização.
-    // Exemplo:
-    // await handleIncomingMessageLogic(client, payload, created);
-    
-    logger.info(`[WHATSAPP SVC] Mensagem de ${canonicalPhone} (Cliente ID: ${client.id}) recebida.`, { type: payload.type });
-    // Aqui você adicionaria a lógica para tratar o conteúdo da mensagem (texto, áudio, etc.)
-    // e chamar os respectivos handlers (onboarding, IA, etc.), passando a instância 'client'.
-
-  } catch (error) {
-    logger.error(`[WHATSAPP SVC] Erro ao processar mensagem de ${canonicalPhone}:`, error);
-  }
-}
 
 // ========================================================================
-// EXPORTS (Adicionando a nova função)
+// EXPORTS
 // ========================================================================
 
 module.exports = {
-  // Funções que você já tinha
+  // Apenas as funções de comunicação com a API externa são exportadas.
   sendWhatsappMessage,
   sendButtonListMessage,
   downloadZapiMedia,
-
-  // <<< NOVA FUNÇÃO ADICIONADA PARA SER USADA PELO SEU CONTROLLER >>>
-  handleIncomingMessage,
 };
