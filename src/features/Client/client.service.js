@@ -1,83 +1,177 @@
 // src/features/Client/client.service.js
-const { Client, FinancialAccount, FinancialCategory, sequelize } = require('../../database'); // <-- ADICIONADO FinancialCategory
+const { Client, FinancialAccount, sequelize } = require('../../database');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
-// <<< INÍCIO DA MODIFICAÇÃO: DEFINIÇÃO DAS CATEGORIAS PADRÃO (SEM HIERARQUIA) >>>
-// Lista plana com mais de 30 nomes de categorias padrão.
-const defaultCategoryNames = [
-'Alimentação',
-'Supermercado',
-'Restaurantes',
-'Ifood',
-'Delivery',
-'Mercado',
-'Moradia',
-'Aluguel',
-'Condomínio',
-'Contas',
-'Conta de Agua',
-'Conta de Luz',
-'Conta de Internet',
-'Internet',
-'Transporte',
-'Abastecimento',
-'Estacionamento',
-'Uber',
-'99',
-'Transporte Público',
-'Manutenção Veicular',
-'Saúde',
-'Farmácia',
-'Plano de Saúde',
-'Consultas',
-'Exames',
-'Academia',
-'Lazer',
-'Entretenimento',
-'Viagens',
-'Cinema',
-'Shows',
-'Assinaturas',
-'Streamings',
-'Cuidados Pessoais',
-'Beleza',
-'Compras',
-'Vestuário',
-'Eletrônicos',
-'Casa',
-'Presentes',
-'Educação',
-'Dívidas',
-'Emprestimos',
-'Pagamento de Fatura',
-'Receitas',
-'Salário',
-'Renda Extra',
-'Investimentos'
+
+
+
+// <<< INÍCIO DA MODIFICAÇÃO: DEFINIÇÃO DAS CATEGORIAS PADRÃO POR TIPO DE CONTA >>>
+
+// Lista de categorias para Contas Pessoais (PF)
+const defaultPersonalCategoryNames = [
+    'Alimentação',
+    'Supermercado',
+    'Restaurantes',
+    'Ifood e Delivery',
+    'Moradia',
+    'Aluguel',
+    'Condomínio',
+    'Contas (Luz, Água, Gás)',
+    'Internet',
+    'Transporte',
+    'Abastecimento',
+    'Estacionamento',
+    'Uber/99 (Apps)',
+    'Transporte Público',
+    'Manutenção Veicular',
+    'Saúde',
+    'Farmácia',
+    'Plano de Saúde',
+    'Consultas e Exames',
+    'Academia',
+    'Lazer e Entretenimento',
+    'Viagens',
+    'Cinema e Shows',
+    'Assinaturas (Streaming)',
+    'Cuidados Pessoais',
+    'Beleza (Salão, Produtos)',
+    'Compras',
+    'Vestuário',
+    'Eletrônicos',
+    'Casa e Decoração',
+    'Presentes',
+    'Educação',
+    'Dívidas e Empréstimos',
+    'Pagamento de Fatura',
+    'Receitas',
+    'Salário',
+    'Renda Extra',
+    'Investimentos'
 ];
+
+// Lista de categorias para Contas de Negócio (PJ/MEI)
+const defaultBusinessCategoryNames = [
+    'Receitas Operacionais',
+    'Venda de Produtos',
+    'Prestação de Serviços',
+    'Outras Receitas',
+    'Custos dos Produtos/Serviços (CPV/CSV)',
+    'Matéria-prima e Insumos',
+    'Mercadorias para Revenda',
+    'Fretes sobre Vendas',
+    'Despesas Administrativas',
+    'Salários e Pró-labore',
+    'Aluguel (Escritório/Loja)',
+    'Contas (Luz, Água, Internet)',
+    'Telefonia',
+    'Honorários (Contador, Advogado)',
+    'Material de Escritório',
+    'Despesas de Marketing',
+    'Marketing e Publicidade',
+    'Comissões de Vendas',
+    'Despesas Financeiras',
+    'Taxas Bancárias',
+    'Juros de Empréstimos',
+    'Taxas de Cartão',
+    'Impostos e Tributos',
+    'Simples Nacional / DAS',
+    'Outros Impostos',
+    'Investimentos e Ativos',
+    'Compra de Equipamentos',
+    'Manutenção de Ativos',
+    'Despesas com Pessoal',
+    'Benefícios (VT, VR)',
+    'Treinamentos',
+    'Outras Despesas Operacionais',
+    'Viagens e Representação',
+    'Manutenção de Software/Licenças'
+];
+
 /**
-Cria as categorias financeiras padrão para uma nova conta financeira.
-@param {number} financialAccountId - O ID da conta financeira recém-criada.
-@param {object} transaction - A transação do Sequelize para garantir atomicidade.
-*/
-async function createDefaultCategoriesForAccount(financialAccountId, transaction) {
-try {
-// Usa Promise.all para criar todas as categorias em paralelo, o que é mais performático.
-const categoryCreationPromises = defaultCategoryNames.map(name => {
-return FinancialCategory.create({
-name: name,
-parentId: null, // Garante que não há subcategorias
-financialAccountId: financialAccountId,
-}, { transaction });
-});
-await Promise.all(categoryCreationPromises);
-} catch (error) {
-// Lança o erro para que a transação principal possa fazer rollback.
-throw new Error('Falha ao criar categorias padrão.');
+ * Cria uma nova FinancialAccount para um Client.
+ * @param {number} clientId - ID do Client (dono da conta).
+ * @param {object} accountData - { accountName, accountType, documentNumber (opcional), isActive (opcional), isDefault (opcional) }
+ * @returns {Promise<object>} A FinancialAccount criada.
+ */
+async function createFinancialAccount(clientId, accountData) {
+  const t = await sequelize.transaction();
+  try {
+    const client = await Client.findByPk(clientId, { transaction: t });
+    if (!client) {
+      await t.rollback();
+      const error = new Error(`Cliente com ID ${clientId} não encontrado para associar a conta financeira.`);
+      error.statusCode = 404; error.status = 'fail'; throw error;
+    }
+    if (!accountData.accountName || !accountData.accountType) {
+      await t.rollback();
+      const error = new Error('Nome da Conta e Tipo da Conta são obrigatórios.');
+      error.statusCode = 400; error.status = 'fail'; throw error;
+    }
+    if (!['PF', 'PJ', 'MEI'].includes(accountData.accountType)) {
+        await t.rollback();
+        const error = new Error('Tipo de conta inválido. Use PF, PJ ou MEI.');
+        error.statusCode = 400; error.status = 'fail'; throw error;
+    }
+
+    const existingAccountName = await FinancialAccount.findOne({
+        where: { clientId, accountName: accountData.accountName }, transaction: t
+    });
+    if(existingAccountName){
+        await t.rollback();
+        const error = new Error(`O cliente já possui uma conta financeira chamada "${accountData.accountName}".`);
+        error.statusCode = 409; error.status = 'fail'; throw error;
+    }
+    if(accountData.documentNumber){
+        const existingDoc = await FinancialAccount.findOne({
+            where: { documentNumber: accountData.documentNumber }, transaction: t
+        });
+        if(existingDoc){
+            await t.rollback();
+            const error = new Error(`O documento ${accountData.documentNumber} já está associado a outra conta financeira (ID: ${existingDoc.id}).`);
+            error.statusCode = 409; error.status = 'fail'; throw error;
+        }
+    }
+
+    if (accountData.isDefault === true || accountData.isDefault === 'true') {
+      await FinancialAccount.update(
+        { isDefault: false },
+        { where: { clientId, isDefault: true }, transaction: t }
+      );
+    } else {
+      const defaultCount = await FinancialAccount.count({ where: { clientId, isDefault: true }, transaction: t });
+      if (defaultCount === 0) {
+        accountData.isDefault = true; // A primeira conta do cliente se torna default
+      } else {
+        accountData.isDefault = false; // Garante que seja false se não explicitamente true
+      }
+    }
+    accountData.isActive = accountData.isActive === undefined ? true : (accountData.isActive === 'true' || accountData.isActive === true);
+
+
+    const newAccount = await FinancialAccount.create({ ...accountData, clientId }, { transaction: t });
+    
+    // <<< MODIFICAÇÃO AQUI >>>
+    // Agora passamos o tipo da conta para a função de criação de categorias
+    await createDefaultCategoriesForAccount(newAccount.id, newAccount.accountType, t);
+    
+    await t.commit();
+    logger.info(`Conta Financeira "${newAccount.accountName}" (Tipo: ${newAccount.accountType}) criada para Cliente ID ${clientId}. Default: ${newAccount.isDefault}`);
+    return newAccount.toJSON();
+  } catch (error) {
+    await t.rollback();
+    logger.error(`Erro ao criar conta financeira para Cliente ID ${clientId}: ${error.message}`, { error, accountData });
+    if (error.name === 'SequelizeValidationError' || error.name === 'SequelizeUniqueConstraintError') {
+        const customError = new Error(error.errors.map(e => e.message).join(', '));
+        customError.statusCode = error.name === 'SequelizeUniqueConstraintError' ? 409 : 400;
+        customError.status = 'fail';
+        throw customError;
+    }
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
 }
-}
-// <<< FIM DA MODIFICAÇÃO >>>
-/**
+
+
 
 /**
  * Busca um Client (contato WhatsApp) pelo número de telefone.
@@ -397,8 +491,6 @@ async function deleteClientContact(clientId) {
 }
 
 
-// === Gerenciamento de FinancialAccounts de um Client ===
-
 /**
  * Cria uma nova FinancialAccount para um Client.
  * @param {number} clientId - ID do Client (dono da conta).
@@ -461,6 +553,11 @@ async function createFinancialAccount(clientId, accountData) {
 
 
     const newAccount = await FinancialAccount.create({ ...accountData, clientId }, { transaction: t });
+    
+    // <<< MODIFICAÇÃO AQUI >>>
+    // Agora passamos o tipo da conta para a função de criação de categorias
+    await createDefaultCategoriesForAccount(newAccount.id, newAccount.accountType, t);
+    
     await t.commit();
     logger.info(`Conta Financeira "${newAccount.accountName}" (Tipo: ${newAccount.accountType}) criada para Cliente ID ${clientId}. Default: ${newAccount.isDefault}`);
     return newAccount.toJSON();
