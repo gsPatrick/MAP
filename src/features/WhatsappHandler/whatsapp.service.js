@@ -531,7 +531,7 @@ function formatFinancialAccountDataStructure(account) {
 
 // --- Funções de Onboarding (Mantidas) ---
 function getOnboardingWelcomeNoPlanMessage(clientName) {
-    const siteUrl = process.env.PLAN_SITE_URL || "https://map-nocontrole.com.br/#planos";
+    const siteUrl = process.env.PLAN_SITE_URL || "https://map-nocontrole.com.br/planos";
     const aiIntro = `🚀 Olá, ${clientName}! Preparado para simplificar suas finanças e ter tudo na palma da mão? Vamos juntos nessa jornada! 💪✨`;
     const dataStructure = `🎯 Planos MAP no Controle:\n\n` +
                           `📅 Opções disponíveis: Mensal e Anual\n` +
@@ -1586,7 +1586,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                         blockReasonMessage = `Sua conta "${state.activeFinancialAccountName}" é do tipo ${state.activeFinancialAccountType}. Você pode criar uma conta empresarial ou mudar para ela, se tiver uma! 😉`;
                         platformLinkFooter = ""; currentActionBlocked = true;
                     } else if (pjMeiActions.includes(actionName) && state.activeFinancialAccountType && ['PJ', 'MEI'].includes(state.activeFinancialAccountType) && !state.currentAccessLevel.startsWith('avancado') && !state.currentAccessLevel.startsWith('vitalicio_avancado') && !currentActionBlocked) {
-                        const siteUrlPjMei = process.env.PLAN_SITE_URL || "https://map-nocontrole.com.br/#planos";
+                        const siteUrlPjMei = process.env.PLAN_SITE_URL || "https://map-nocontrole.com.br/planos";
                          if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.startsWith("Ah, ")) && aiMessageIntro !== aiResponse.overall_summary_suggestion) aiMessageIntro = `Ah, ${clientNameToUse}! Para usar as funcionalidades de ${state.activeFinancialAccountType === 'PJ' ? 'Empresa (PJ)' : 'MEI'}, como "${actionName.toLowerCase().replace(/_/g, " ")}", o plano de ${state.ownerClientNameForContext} precisa ser um dos nossos Planos Avançados. 🚀`;
                         blockReasonMessage = `Eles são perfeitos para quem quer ir além! Confira em ${siteUrlPjMei} e depois me avise para continuarmos! 😉`;
                         platformLinkFooter = ""; currentActionBlocked = true;
