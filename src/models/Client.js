@@ -27,13 +27,13 @@ const Client = sequelize.define('Client', {
   phone: {
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true,
+    // A restrição de unicidade foi movida para o bloco 'indexes' abaixo para melhor compatibilidade.
     comment: 'Número de telefone do WhatsApp do cliente (com DDI+DDD)',
   },
   email: {
     type: DataTypes.STRING,
     allowNull: true,
-    unique: true,
+    // A restrição de unicidade foi movida para o bloco 'indexes' abaixo para melhor compatibilidade.
     validate: {
       isEmailOrNull(value) {
         if (value === null || value === '') {
@@ -115,28 +115,26 @@ const Client = sequelize.define('Client', {
     defaultValue: '2',
     comment: 'ID da cor padrão para eventos de Pessoa Jurídica no Google Calendar',
   },
-  // --- Campos para Webhook (Push Notifications) do Google Calendar ---
-  googleChannelId: { // ID do canal de notificação retornado pelo Google
+  googleChannelId: {
     type: DataTypes.STRING(255),
     allowNull: true,
     comment: 'ID do canal de notificação do Google Calendar',
   },
-  googleChannelResourceId: { // ID do recurso que está sendo observado (geralmente o calendarId)
+  googleChannelResourceId: {
     type: DataTypes.STRING(255),
     allowNull: true,
     comment: 'ID do recurso (calendário) que está sendo observado pelo Google',
   },
-  googleChannelExpiryDate: { // Data de expiração do canal de notificação
+  googleChannelExpiryDate: {
     type: DataTypes.DATE,
     allowNull: true,
     comment: 'Data de expiração do canal de notificação do Google Calendar',
   },
-  googleLastSyncToken: { // Para sincronização incremental futura (não usado com webhook inicialmente)
+  googleLastSyncToken: {
     type: DataTypes.STRING(255),
     allowNull: true,
     comment: 'Último syncToken do Google Calendar para este cliente',
   }
-  // --- Fim dos Campos Google Calendar ---
 }, {
   tableName: 'clients',
   timestamps: true,
@@ -188,7 +186,7 @@ const Client = sequelize.define('Client', {
     { fields: ['accessLevel'] },
     { fields: ['accessExpiresAt'] },
     { fields: ['isGoogleCalendarSynced'] },
-    { fields: ['googleChannelId'] }, // Para buscar canais para renovação
+    { fields: ['googleChannelId'] },
     { fields: ['googleChannelExpiryDate'] },
   ]
 });
