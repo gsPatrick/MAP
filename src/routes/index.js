@@ -26,6 +26,7 @@ const sharedAccessRoutes = require('../features/SharedAccess/sharedAccess.routes
 const hotmartWebhookRoutes = require('../features/WebhookHandler/hotmart.routes');
 const googleAuthRoutes = require('../features/GoogleAuth/googleAuth.routes'); // <<< NOVA ROTA GOOGLE AUTH
 const googleWebhookRoutes = require('../features/GoogleWebhook/googleWebhook.routes'); // <<< NOVO WEBHOOK
+const hydrationRoutes = require('../features/Hydration/hydration.routes'); // <<< ADICIONE ESTA LINHA
 
 
 
@@ -125,6 +126,7 @@ clientFinancialAccountRouter.use('/categories', financialCategoryRoutes);
 clientFinancialAccountRouter.use('/kanban', kanbanRoutes);
 // ROTAS DE BUSINESS CLIENTS ANINHADAS SOB FINANCIAL ACCOUNT
 clientFinancialAccountRouter.use('/business-clients', businessClientRoutes);
+router.use('/hydration', hydrationRoutes); // <<< ADICIONE ESTA LINHA
 
 
 // Monta o router de conta financeira no router principal da API

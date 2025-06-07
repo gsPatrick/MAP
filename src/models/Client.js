@@ -135,7 +135,24 @@ const Client = sequelize.define('Client', {
     type: DataTypes.STRING(255),
     allowNull: true,
     comment: 'Último syncToken do Google Calendar para este cliente',
-  }
+  },
+   wantsMotivationMessage: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true, // Começa como desabilitado por padrão
+    comment: 'Indica se o cliente deseja receber a mensagem motivacional diária.',
+  },
+    motivationMessageTime: {
+    type: DataTypes.TIME, // Formato 'HH:MM:SS'
+    allowNull: false,
+    defaultValue: '13:00:00', // <-- Horário padrão que você pediu
+    comment: 'Horário preferencial do cliente para receber a mensagem motivacional.',
+  },
+   lastMotivationSentDate: {
+    type: DataTypes.DATEONLY, // Apenas a data YYYY-MM-DD
+    allowNull: true,
+    comment: 'Registra a data do último envio de mensagem motivacional para este cliente.',
+  },
   // --- Fim dos Campos Google Calendar ---
 }, {
   tableName: 'clients',
@@ -190,6 +207,7 @@ const Client = sequelize.define('Client', {
     { fields: ['isGoogleCalendarSynced'] },
     { fields: ['googleChannelId'] }, // Para buscar canais para renovação
     { fields: ['googleChannelExpiryDate'] },
+    { fields: ['wantsMotivationMessage'] }, // Adicionar índice para performance
   ]
 });
 

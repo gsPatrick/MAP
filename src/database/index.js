@@ -22,7 +22,8 @@ require('../models/Plan');
 require('../models/Subscription');
 require('../models/MotivationalPhrase');
 require('../models/UserPreference');
-require('../models/SharedAccess'); // <<< SharedAccess está aqui
+require('../models/SharedAccess');
+require ('../models/WaterIntakeLog') // <<< SharedAccess está aqui
 
 const models = sequelize.models;
 

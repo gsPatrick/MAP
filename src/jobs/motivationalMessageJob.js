@@ -1,77 +1,72 @@
 // src/jobs/motivationalMessageJob.js
 const cron = require('node-cron');
-const { UserPreference, MotivationalPhrase, sequelize } = require('../database');
+const { MotivationalPhrase, Client, sequelize } = require('../database');
+const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
 
+// Função para formatar a hora atual para 'HH:MM:00'
+function getCurrentScheduledTime() {
+    const now = new Date();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}:00`;
+}
+
 async function checkAndSendDailyMotivation() {
   try {
-    const preferences = await UserPreference.findOne({ order: [['id', 'ASC']] }); // Assume uma única linha de preferências globais
-    
-    if (!preferences) {
-        logger.warn('[JOB MOTIVAÇÃO] Preferências do sistema não encontradas. Job não pode rodar.');
-        return;
-    }
+    const currentTime = getCurrentScheduledTime(); // Ex: "13:00:00"
+    const todayDateString = new Date().toISOString().split('T')[0]; // Ex: "2023-10-27"
 
-    if (!preferences.enableMotivationMessage || !preferences.motivationMessageTime) {
-      // logger.debug('[JOB MOTIVAÇÃO] Mensagem motivacional desabilitada ou sem horário configurado nas preferências.');
+    // 1. Busca todos os clientes que:
+    //    - Querem receber a mensagem.
+    //    - Agendaram para o horário ATUAL.
+    //    - Ainda não receberam a mensagem HOJE.
+    const clientsToSend = await Client.findAll({
+      where: {
+        wantsMotivationMessage: true,
+        status: 'Ativo',
+        phone: { [Op.ne]: null },
+        motivationMessageTime: currentTime,
+        [Op.or]: [
+          { lastMotivationSentDate: null },
+          { lastMotivationSentDate: { [Op.lt]: todayDateString } }
+        ]
+      },
+      attributes: ['id', 'name', 'phone']
+    });
+
+    if (clientsToSend.length === 0) {
+      // Nenhum cliente agendado para este exato minuto. Isso é normal.
       return;
     }
 
-    // Garantir que estamos trabalhando com o fuso horário correto da aplicação (process.env.TZ)
-    // para todas as comparações de data e hora.
-    const appTimeZone = process.env.TZ || "America/Sao_Paulo";
+    logger.info(`[JOB MOTIVAÇÃO] Encontrados ${clientsToSend.length} clientes agendados para ${currentTime}.`);
 
-    // Data e hora atuais no fuso da aplicação
-    const nowInAppTimeZone = new Date(new Date().toLocaleString("en-US", { timeZone: appTimeZone }));
-    const todayDateStringInAppTimeZone = nowInAppTimeZone.toISOString().split('T')[0]; // YYYY-MM-DD de hoje no fuso da app
+    // 2. Pega UMA frase motivacional para enviar para este grupo de clientes
+    const phraseRecord = await MotivationalPhrase.findOne({
+      where: { isActive: true },
+      order: sequelize.random(),
+    });
 
-    // Se já enviou hoje (comparando datas no mesmo fuso), não faz nada
-    if (preferences.lastMotivationalMessageSentDate === todayDateStringInAppTimeZone) {
-      // logger.debug(`[JOB MOTIVAÇÃO] Mensagem motivacional para ${todayDateStringInAppTimeZone} já enviada.`);
+    if (!phraseRecord) {
+      logger.warn('[JOB MOTIVAÇÃO] Nenhuma frase motivacional ativa encontrada. Abortando envio.');
       return;
     }
 
-    const [targetHour, targetMinute] = preferences.motivationMessageTime.split(':').map(Number);
-    
-    // Cria um objeto Date para o horário alvo de hoje, no fuso da aplicação
-    const targetTimeTodayInAppTimeZone = new Date(nowInAppTimeZone);
-    targetTimeTodayInAppTimeZone.setHours(targetHour, targetMinute, 0, 0);
+    const phrase = phraseRecord.text;
+    logger.info(`[JOB MOTIVAÇÃO] Frase do dia: "${phrase}"`);
 
-
-    // Verifica se a hora atual (no fuso da app) já passou ou é igual à hora alvo de hoje (no fuso da app)
-    // E se a mensagem de hoje ainda não foi enviada
-    if (nowInAppTimeZone >= targetTimeTodayInAppTimeZone) {
-      logger.info(`[JOB MOTIVAÇÃO] Horário alvo (${preferences.motivationMessageTime} no fuso ${appTimeZone}) alcançado/passado para ${todayDateStringInAppTimeZone}. Tentando enviar.`);
-
-      const phraseRecord = await MotivationalPhrase.findOne({
-        where: { isActive: true },
-        order: sequelize.random(), // Para PostgreSQL. Para outros DBs: [[sequelize.fn('RANDOM')]]
-      });
-
-      if (!phraseRecord) {
-        logger.warn('[JOB MOTIVAÇÃO] Nenhuma frase motivacional ativa encontrada.');
-        return;
-      }
-      const phrase = phraseRecord.text;
-      logger.info(`[JOB MOTIVAÇÃO] Frase do dia para ${todayDateStringInAppTimeZone}: "${phrase}"`);
-
-      const adminPhone = process.env.ADMIN_PHONE_FOR_MOTIVATION;
-      if (adminPhone) {
-        const sent = await sendWhatsappMessage(adminPhone, phrase);
-        if (sent) {
-          logger.info(`[JOB MOTIVAÇÃO] Enviada para admin ${adminPhone}.`);
-          // Atualiza a data do último envio para a data de hoje no fuso da aplicação
-          await preferences.update({ lastMotivationalMessageSentDate: todayDateStringInAppTimeZone });
-          logger.info(`[JOB MOTIVAÇÃO] lastMotivationalMessageSentDate atualizado para ${todayDateStringInAppTimeZone}.`);
-        } else {
-          logger.error(`[JOB MOTIVAÇÃO] Falha ao enviar mensagem para admin ${adminPhone}. lastMotivationalMessageSentDate não atualizado.`);
-        }
+    // 3. Envia a mensagem para cada cliente e atualiza seu registro individualmente
+    for (const client of clientsToSend) {
+      const sent = await sendWhatsappMessage(client.phone, phrase);
+      if (sent) {
+        // ATUALIZA O CLIENTE INDIVIDUALMENTE
+        await client.update({ lastMotivationSentDate: todayDateString });
+        logger.info(`[JOB MOTIVAÇÃO] Mensagem enviada e registro atualizado para ${client.name} (${client.phone}).`);
       } else {
-        logger.warn('[JOB MOTIVAÇÃO] ADMIN_PHONE_FOR_MOTIVATION não configurado. Mensagem não enviada, lastMotivationalMessageSentDate não atualizado.');
+        logger.error(`[JOB MOTIVAÇÃO] Falha ao enviar para ${client.name} (${client.phone}). O envio será tentado novamente amanhã.`);
       }
-    } else {
-      // logger.debug(`[JOB MOTIVAÇÃO] Horário alvo (${preferences.motivationMessageTime} no fuso ${appTimeZone}) para ${todayDateStringInAppTimeZone} ainda não alcançado.`);
     }
   } catch (error) {
     logger.error('[JOB MOTIVAÇÃO] Erro ao verificar e enviar mensagem motivacional:', { message: error.message, stack: error.stack });
@@ -79,20 +74,13 @@ async function checkAndSendDailyMotivation() {
 }
 
 function startMotivationalMessageJob() {
-  // O job agora vai rodar com mais frequência para verificar se a mensagem do dia precisa ser enviada.
-  // A cada 1 minuto. Ajuste conforme necessidade.
-  const schedule = '*/1 * * * *'; 
-  // Você pode tornar isso mais espaçado, como '*/5 * * * *' (a cada 5 minutos) ou '*/15 * * * *' (a cada 15 minutos)
-  // se o envio exato no minuto não for super crítico e para economizar algumas execuções.
-  
-  logger.info(`[JOB MOTIVAÇÃO] Agendado para verificar a necessidade de envio (schedule: ${schedule} no fuso ${process.env.TZ || "America/Sao_Paulo"})`);
+  // Roda a cada minuto para verificar se há agendamentos para aquele minuto.
+  const schedule = '*/1 * * * *';
+  logger.info(`[JOB MOTIVAÇÃO] Agendado para verificar envios individuais a cada minuto (schedule: ${schedule})`);
   
   cron.schedule(schedule, checkAndSendDailyMotivation, {
-    timezone: process.env.TZ || "America/Sao_Paulo", // Importante para o cron disparar no fuso correto
+    timezone: process.env.TZ || "America/Sao_Paulo",
   });
-
-  // Para fins de teste imediato ao iniciar, você pode chamar a função uma vez:
-  // setTimeout(checkAndSendDailyMotivation, 5000); // Ex: 5 segundos após o início
 }
 
 module.exports = startMotivationalMessageJob;
