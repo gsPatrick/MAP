@@ -11,17 +11,21 @@ const { formatCurrency, formatDate } = require('../utils/formatters');
 
 
 async function processRecurringTransactions() {
-  logger.info('[JOB RECORRÊNCIA] Iniciando verificação de transações recorrentes...');
+  logger.info('[JOB RECORRÊNCIA - DIÁRIO] Iniciando verificação de transações recorrentes de baixa frequência...');
   const today = new Date().toISOString().split('T')[0];
   
   try {
     const rulesToProcess = await RecurringTransactionRule.findAll({
       where: {
         isActive: true,
-        nextDueDate: { [Op.lte]: today },
+        nextDueDate: { [Op.lte]: new Date() }, // Compara com a data e hora atual
+        // <<< MUDANÇA CRÍTICA: Ignora as regras de alta frequência >>>
+        frequency: {
+            [Op.notIn]: ['minutely', 'hourly']
+        },
         [Op.or]: [
             { endDate: null },
-            { endDate: { [Op.gte]: today } }
+            { endDate: { [Op.gte]: new Date() } }
         ]
       },
       include: [{
@@ -34,11 +38,11 @@ async function processRecurringTransactions() {
     });
 
     if (rulesToProcess.length === 0) {
-      logger.info('[JOB RECORRÊNCIA] Nenhuma regra de recorrência para processar hoje.');
+      logger.info('[JOB RECORRÊNCIA - DIÁRIO] Nenhuma regra de baixa frequência para processar.');
       return;
     }
 
-    logger.info(`[JOB RECORRÊNCIA] ${rulesToProcess.length} regras encontradas para processar.`);
+    logger.info(`[JOB RECORRÊNCIA - DIÁRIO] ${rulesToProcess.length} regras encontradas para processar.`);
 
     for (const rule of rulesToProcess) {
       const ruleProcessingTransaction = await sequelize.transaction();
@@ -53,10 +57,10 @@ async function processRecurringTransactions() {
             }]
         });
 
-        if (!currentRule || !currentRule.isActive || new Date(currentRule.nextDueDate).toISOString().split('T')[0] > today || 
-            (currentRule.endDate && new Date(currentRule.nextDueDate) > new Date(currentRule.endDate)) ||
+        if (!currentRule || !currentRule.isActive || currentRule.nextDueDate > new Date() || 
+            (currentRule.endDate && currentRule.nextDueDate > currentRule.endDate) ||
             !currentRule.financialAccount || !currentRule.financialAccount.isActive) {
-            logger.info(`[JOB RECORRÊNCIA] Regra ID ${rule.id} não aplicável ou processada. Pulando.`);
+            logger.info(`[JOB RECORRÊNCIA - DIÁRIO] Regra ID ${rule.id} não aplicável ou já processada. Pulando.`);
             await ruleProcessingTransaction.commit();
             continue;
         }
@@ -80,7 +84,7 @@ async function processRecurringTransactions() {
             recurringTransactionRuleId: currentRule.id,
           }, { transaction: ruleProcessingTransaction });
 
-          logger.info(`[JOB RECORRÊNCIA] Transação criada para regra ID ${currentRule.id} ("${currentRule.description}") na FinancialAccount "${financialAccount.accountName}" em ${currentRule.nextDueDate}.`);
+          logger.info(`[JOB RECORRÊNCIA - DIÁRIO] Transação criada para regra ID ${currentRule.id} ("${currentRule.description}") na FinancialAccount "${financialAccount.accountName}" em ${currentRule.nextDueDate}.`);
         } else {
           if (client && client.phone) {
             const intro = `Oi, ${clientFirstName}! Passando pra te lembrar da sua conta recorrente que vence hoje! 🤓`;
@@ -92,9 +96,9 @@ async function processRecurringTransactions() {
             const message = `${intro}\n\n${body}\n\n${footer}`;
 
             await sendWhatsappMessage(client.phone, message);
-            logger.info(`[JOB RECORRÊNCIA] Lembrete enviado para regra ID ${currentRule.id} para Cliente ${client.name} (${client.phone}).`);
+            logger.info(`[JOB RECORRÊNCIA - DIÁRIO] Lembrete enviado para regra ID ${currentRule.id} para Cliente ${client.name} (${client.phone}).`);
           } else {
-            logger.warn(`[JOB RECORRÊNCIA] Cliente ou telefone não encontrado para lembrete da regra ID ${currentRule.id}.`);
+            logger.warn(`[JOB RECORRÊNCIA - DIÁRIO] Cliente ou telefone não encontrado para lembrete da regra ID ${currentRule.id}.`);
           }
         }
 
@@ -108,41 +112,39 @@ async function processRecurringTransactions() {
           oldNextDueDate
         );
 
-        if (newNextDueDate && (!currentRule.endDate || new Date(newNextDueDate) <= new Date(currentRule.endDate))) {
+        if (newNextDueDate && (!currentRule.endDate || newNextDueDate <= newNextDueDate.endDate)) {
           await currentRule.update({
             lastGeneratedDate: oldNextDueDate,
             nextDueDate: newNextDueDate
           }, { transaction: ruleProcessingTransaction });
-          logger.info(`[JOB RECORRÊNCIA] Regra ID ${currentRule.id} atualizada. Próximo vencimento: ${newNextDueDate}.`);
+          logger.info(`[JOB RECORRÊNCIA - DIÁRIO] Regra ID ${currentRule.id} atualizada. Próximo vencimento: ${newNextDueDate}.`);
         } else {
           await currentRule.update({ isActive: false, lastGeneratedDate: oldNextDueDate, nextDueDate: null }, { transaction: ruleProcessingTransaction });
-          logger.info(`[JOB RECORRÊNCIA] Regra ID ${currentRule.id} ("${currentRule.description}") finalizada/expirada. Regra desativada.`);
+          logger.info(`[JOB RECORRÊNCIA - DIÁRIO] Regra ID ${currentRule.id} ("${currentRule.description}") finalizada/expirada. Regra desativada.`);
         }
         await ruleProcessingTransaction.commit();
       } catch (ruleError) {
         await ruleProcessingTransaction.rollback();
-        logger.error(`[JOB RECORRÊNCIA] Erro ao processar regra ID ${rule.id} ("${rule.description}"): ${ruleError.message}`, { stack: ruleError.stack });
+        logger.error(`[JOB RECORRÊNCIA - DIÁRIO] Erro ao processar regra ID ${rule.id} ("${rule.description}"): ${ruleError.message}`, { stack: ruleError.stack });
       }
     }
-    logger.info('[JOB RECORRÊNCIA] Processamento de transações recorrentes finalizado.');
+    logger.info('[JOB RECORRÊNCIA - DIÁRIO] Processamento de transações recorrentes finalizado.');
   } catch (error) {
-    logger.error('[JOB RECORRÊNCIA] Erro geral no job:', { message: error.message, stack: error.stack });
+    logger.error('[JOB RECORRÊNCIA - DIÁRIO] Erro geral no job:', { message: error.message, stack: error.stack });
   }
 }
 
-function startRecurringTransactionJob(preferences, models) { // Mudança aqui para receber prefs e models
+function startRecurringTransactionJob(preferences, models) {
   const schedule = preferences?.recurringJobSchedule || '0 4 * * *';
   if (cron.validate(schedule)) {
-    logger.info(`[JOB RECORRÊNCIA] Agendado para: ${schedule}`);
+    logger.info(`[JOB RECORRÊNCIA - DIÁRIO] Agendado para: ${schedule}`);
     cron.schedule(schedule, processRecurringTransactions, {
       timezone: process.env.TZ || "America/Sao_Paulo",
     });
   } else {
-    logger.error(`[JOB RECORRÊNCIA] Schedule cron inválido nas preferências: ${schedule}. Usando default '0 4 * * *'.`);
+    logger.error(`[JOB RECORRÊNCIA - DIÁRIO] Schedule cron inválido nas preferências: ${schedule}. Usando default '0 4 * * *'.`);
     cron.schedule('0 4 * * *', processRecurringTransactions, { timezone: process.env.TZ || "America/Sao_Paulo" });
   }
 }
 
-// Removida a lógica de busca de preferências daqui, pois ela é passada como argumento.
-// A função agora recebe as preferências para configurar o job.
 module.exports = startRecurringTransactionJob;

@@ -44,6 +44,115 @@ async function findCreditCardByName(financialAccountId, cardName, transaction = 
     return card;
 }
 
+async function closeDueInvoices() {
+  const today = new Date().getDate(); // Pega apenas o dia do mês (1-31)
+  logger.info(`[INVOICE-JOB] Iniciando fechamento de faturas para o dia ${today}...`);
+
+  try {
+    const cardsToProcess = await CreditCard.findAll({
+      where: { closingDay: today, isActive: true },
+      include: ['financialAccount']
+    });
+
+    if (cardsToProcess.length === 0) {
+      logger.info(`[INVOICE-JOB] Nenhum cartão com fechamento hoje.`);
+      return;
+    }
+
+    for (const card of cardsToProcess) {
+      const t = await sequelize.transaction();
+      try {
+        const lastInvoice = await CreditCardInvoice.findOne({
+          where: { creditCardId: card.id },
+          order: [['endDate', 'DESC']],
+          transaction: t
+        });
+
+        const startDate = lastInvoice ? new Date(lastInvoice.endDate) : new Date(card.createdAt);
+        if (lastInvoice) startDate.setDate(startDate.getDate() + 1); // Período começa um dia após o fim do último
+
+        const endDate = new Date();
+        endDate.setHours(23, 59, 59, 999);
+
+        // Previne fechamento duplo no mesmo dia
+        if (lastInvoice && lastInvoice.endDate === endDate.toISOString().split('T')[0]) {
+            logger.warn(`[INVOICE-JOB] Fatura para cartão ${card.id} no dia ${endDate.toISOString().split('T')[0]} já parece fechada. Pulando.`);
+            await t.commit();
+            continue;
+        }
+
+        const transactionsToInclude = await FinancialTransaction.findAll({
+          where: {
+            creditCardId: card.id,
+            invoiceId: null, // Apenas transações que ainda não pertencem a nenhuma fatura
+            transactionDate: { [Op.between]: [startDate, endDate] }
+          },
+          transaction: t
+        });
+
+        const totalAmount = transactionsToInclude.reduce((sum, tx) => sum + parseFloat(tx.value), 0);
+
+        if (totalAmount === 0 && transactionsToInclude.length === 0) {
+            logger.info(`[INVOICE-JOB] Cartão ${card.id} (${card.name}) sem movimentação no período. Nenhuma fatura gerada.`);
+            await t.commit();
+            continue;
+        }
+
+        const paymentDate = new Date();
+        paymentDate.setDate(card.paymentDay);
+        if (card.paymentDay < card.closingDay) { // Se o pagamento é no mês seguinte
+            paymentDate.setMonth(paymentDate.getMonth() + 1);
+        }
+
+        const newInvoice = await CreditCardInvoice.create({
+          creditCardId: card.id,
+          financialAccountId: card.financialAccountId,
+          startDate: startDate.toISOString().split('T')[0],
+          endDate: endDate.toISOString().split('T')[0],
+          dueDate: paymentDate.toISOString().split('T')[0],
+          totalAmount: totalAmount,
+          status: 'Fechada',
+        }, { transaction: t });
+
+        await FinancialTransaction.update(
+          { invoiceId: newInvoice.id },
+          { where: { id: { [Op.in]: transactionsToInclude.map(tx => tx.id) } }, transaction: t }
+        );
+        
+        // Criar a "Conta a Pagar" da fatura
+        const category = await FinancialCategory.findOne({
+            where: { name: {[Op.iLike]: 'Pagamento de Fatura'}, financialAccountId: card.financialAccountId },
+            transaction: t
+        });
+        const paymentTx = await financialService.createTransaction(card.financialAccountId, {
+            description: `Pagamento Fatura - ${card.name}`,
+            type: 'Saída',
+            value: totalAmount,
+            financialCategoryId: category ? category.id : null,
+            transactionDate: endDate.toISOString().split('T')[0],
+            isPayableOrReceivable: true,
+            dueDate: paymentDate.toISOString().split('T')[0],
+            notes: `Fatura referente ao período de ${newInvoice.startDate} a ${newInvoice.endDate}. Fatura ID: ${newInvoice.id}`
+        }, { transaction: t });
+
+        await newInvoice.update({ relatedPaymentTransactionId: paymentTx.id }, { transaction: t });
+
+        await t.commit();
+        logger.info(`[INVOICE-JOB] Fatura ID ${newInvoice.id} para o cartão "${card.name}" fechada com valor ${totalAmount}. Conta a pagar ID ${paymentTx.id} criada.`);
+
+      } catch (error) {
+        await t.rollback();
+        logger.error(`[INVOICE-JOB] Erro ao fechar fatura para o cartão ${card.id}: ${error.message}`, { stack: error.stack });
+      }
+    }
+
+  } catch (error) {
+    logger.error(`[INVOICE-JOB] Erro fatal no job de fechamento de faturas: ${error.message}`, { stack: error.stack });
+  }
+}
+
+
+
 async function createCreditCard(financialAccountId, cardData) {
   const t = await sequelize.transaction();
   try {
@@ -365,101 +474,116 @@ async function deleteCreditCard(financialAccountId, cardId) {
     throw error;
   }
 }
-
+/**
+ * Calcula o limite disponível de um cartão de crédito.
+ * @param {number} financialAccountId 
+ * @param {number} creditCardId 
+ * @returns {Promise<{availableLimit: number, totalLimit: number, spentAmount: number}>}
+ */
 async function getAvailableCreditLimit(financialAccountId, creditCardId) {
+    const card = await CreditCard.findOne({ where: { id: creditCardId, financialAccountId } });
+    if (!card) throw new Error('Cartão de crédito não encontrado.');
+
+    // Soma o valor de todas as transações de saída não faturadas para este cartão.
+    const spentAmount = await FinancialTransaction.sum('value', {
+        where: {
+            creditCardId: creditCardId,
+            type: 'Saída',
+            creditCardInvoiceId: null, // Apenas despesas que ainda não pertencem a uma fatura fechada
+        }
+    }) || 0;
+
+    const totalLimit = parseFloat(card.limit);
+    const availableLimit = totalLimit - parseFloat(spentAmount);
+
+    return {
+        totalLimit: totalLimit,
+        spentAmount: parseFloat(spentAmount),
+        availableLimit: availableLimit
+    };
+}
+
+/**
+ * Gera uma nova transação de fatura para um cartão de crédito.
+ * @param {number} creditCardId - O ID do cartão de crédito.
+ * @returns {Promise<object|null>} A transação de fatura criada ou null.
+ */
+async function generateCreditCardInvoice(creditCardId) {
     const t = await sequelize.transaction();
     try {
-        await validateOwningFinancialAccount(financialAccountId, t);
         const card = await CreditCard.findByPk(creditCardId, { transaction: t });
-
-        if (!card || card.financialAccountId !== financialAccountId) {
+        if (!card) {
+            logger.warn(`[CC-SERVICE] Tentativa de gerar fatura para cartão inexistente ID ${creditCardId}.`);
             await t.rollback();
-            const error = new Error(`Cartão ID ${creditCardId} não encontrado ou não pertence à conta ${financialAccountId}.`);
-            error.statusCode = 404; error.status = 'fail'; throw error;
-        }
-        if (!card.isActive) {
-            await t.rollback();
-            const error = new Error(`Cartão "${card.name}" (ID: ${creditCardId}) está inativo.`);
-            error.statusCode = 400; error.status = 'fail'; throw error;
+            return null;
         }
 
-        const totalLimit = parseFloat(card.limit);
-        let totalSpendsImpactingLimit = 0;
-
-        const parcelledPurchasesMothers = await FinancialTransaction.findAll({
-            where: { creditCardId: card.id, financialAccountId, type: 'Saída', isParcel: true, originalAccountId: { [Op.eq]: col('id') } },
-            transaction: t
-        });
-        parcelledPurchasesMothers.forEach(motherTx => {
-            totalSpendsImpactingLimit += parseFloat(motherTx.originalPurchaseTotalValue || motherTx.value);
-        });
-
-        const singlePurchases = await FinancialTransaction.findAll({
-            where: { creditCardId: card.id, financialAccountId, type: 'Saída', isParcel: false },
-            transaction: t
-        });
-        singlePurchases.forEach(tx => { totalSpendsImpactingLimit += parseFloat(tx.value); });
-
-        const directCreditsOnCard = await FinancialTransaction.sum('value', {
-            where: { creditCardId: card.id, financialAccountId, type: 'Entrada'},
-            transaction: t
-        }) || 0;
-        totalSpendsImpactingLimit -= parseFloat(directCreditsOnCard);
-        
-        const invoicePayments = await FinancialTransaction.sum('value', {
-            where: { financialAccountId, type: 'Saída', creditCardId: null, description: { [Op.iLike]: `Pagamento Fatura ${card.name}%` } },
-            transaction: t
-        }) || 0;
-        
-        const currentDebtOnCard = Math.max(0, totalSpendsImpactingLimit - parseFloat(invoicePayments));
-        const availableLimitFinal = totalLimit - currentDebtOnCard;
-
-        const today = new Date();
-        let currentInvoiceYear = today.getUTCFullYear();
-        let currentInvoiceMonthZeroBased = today.getUTCMonth();
-        let invoiceStartDate, invoiceEndDate;
-
-        if (today.getUTCDate() <= card.closingDay) {
-            invoiceEndDate = new Date(Date.UTC(currentInvoiceYear, currentInvoiceMonthZeroBased, card.closingDay));
-            invoiceStartDate = new Date(Date.UTC(currentInvoiceYear, currentInvoiceMonthZeroBased - 1, card.closingDay + 1));
-        } else {
-            invoiceStartDate = new Date(Date.UTC(currentInvoiceYear, currentInvoiceMonthZeroBased, card.closingDay + 1));
-            invoiceEndDate = new Date(Date.UTC(currentInvoiceYear, currentInvoiceMonthZeroBased + 1, card.closingDay));
-        }
-        
-        const openInvoiceSpends = await FinancialTransaction.sum('value',{
+        const expensesToInvoice = await FinancialTransaction.findAll({
             where: {
-                creditCardId: card.id, financialAccountId, type: 'Saída', 
-                transactionDate: { 
-                    [Op.gte]: invoiceStartDate.toISOString().split('T')[0],
-                    [Op.lte]: invoiceEndDate.toISOString().split('T')[0],
-                },
+                creditCardId: card.id,
+                type: 'Saída',
+                creditCardInvoiceId: null // Crucial: apenas despesas "soltas"
             },
             transaction: t
-        }) || 0;
-        
-        await t.commit();
+        });
 
-        return {
-            cardId: card.id,
-            cardName: card.name,
-            totalLimit: totalLimit,
-            netUsedInOpenInvoice: parseFloat(parseFloat(openInvoiceSpends).toFixed(2)),
-            totalDebtOnCard: parseFloat(currentDebtOnCard.toFixed(2)),
-            availableLimit: parseFloat(availableLimitFinal.toFixed(2)),
-            closingDay: card.closingDay,
-            paymentDay: card.paymentDay,
-            currentInvoiceCycle: {
-                start: invoiceStartDate.toISOString().split('T')[0],
-                end: invoiceEndDate.toISOString().split('T')[0]
-            }
-        };
+        if (expensesToInvoice.length === 0) {
+            logger.info(`[CC-SERVICE] Nenhuma despesa nova para faturar no cartão "${card.name}" (ID ${card.id}).`);
+            await t.rollback();
+            return null;
+        }
+
+        const totalValue = expensesToInvoice.reduce((sum, tx) => sum + parseFloat(tx.value), 0);
+
+        // Encontra ou cria a categoria "Pagamento de Fatura"
+        let category = await FinancialCategory.findOne({
+            where: { name: 'Pagamento de Fatura', financialAccountId: card.financialAccountId },
+            transaction: t
+        });
+        if (!category) {
+            category = await FinancialCategory.create({
+                name: 'Pagamento de Fatura',
+                financialAccountId: card.financialAccountId
+            }, { transaction: t });
+        }
+        
+        // Calcula a data de vencimento da fatura
+        const closingDate = new Date(); // Hoje é o dia de fechamento
+        const paymentDay = card.paymentDay;
+        const dueDate = new Date(closingDate.getFullYear(), closingDate.getMonth(), paymentDay);
+        if (paymentDay <= card.closingDay) { // Se o pagamento é no mês seguinte
+            dueDate.setMonth(dueDate.getMonth() + 1);
+        }
+
+        const invoiceTransaction = await financialService.createTransaction(card.financialAccountId, {
+            description: `Fatura Cartão ${card.name} - Venc. ${dueDate.toLocaleDateString('pt-BR')}`,
+            type: 'Saída',
+            value: totalValue,
+            financialCategoryId: category.id,
+            transactionDate: closingDate.toISOString().split('T')[0], // Data de fechamento
+            isPayableOrReceivable: true,
+            isPaidOrReceived: false,
+            dueDate: dueDate.toISOString().split('T')[0],
+        }, { transaction: t });
+
+        // Vincula todas as despesas a esta nova fatura
+        const expenseIds = expensesToInvoice.map(tx => tx.id);
+        await FinancialTransaction.update(
+            { creditCardInvoiceId: invoiceTransaction.id },
+            { where: { id: { [Op.in]: expenseIds } }, transaction: t }
+        );
+
+        // Atualiza o cartão com o ID da última fatura gerada
+        await card.update({ lastInvoiceGeneratedId: invoiceTransaction.id }, { transaction: t });
+
+        await t.commit();
+        logger.info(`[CC-SERVICE] Fatura (ID ${invoiceTransaction.id}) de R$ ${totalValue} gerada para o cartão "${card.name}".`);
+        return invoiceTransaction;
 
     } catch (error) {
-        if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
-        logger.error(`Erro ao calc limite disp. cartão ID ${creditCardId} (Conta: ${financialAccountId}): ${error.message}`, { error });
-        if (!error.statusCode) error.statusCode = 500;
-        throw error;
+        await t.rollback();
+        logger.error(`[CC-SERVICE] Erro ao gerar fatura para cartão ID ${creditCardId}: ${error.message}`, { stack: error.stack });
+        return null;
     }
 }
 

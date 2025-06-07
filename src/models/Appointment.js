@@ -62,19 +62,45 @@ const Appointment = sequelize.define('Appointment', {
     type: DataTypes.TEXT,
     allowNull: true,
   },
-  // --- Campos para Integração Google Calendar ---
-  googleEventId: {
-    type: DataTypes.STRING(255), // ID do evento no Google Calendar
+  // --- CAMPOS PARA TRANSAÇÃO AUTOMÁTICA ---
+  associatedValue: {
+    type: DataTypes.DECIMAL(12, 2),
     allowNull: true,
-    unique: true, // Garante que um evento do Google não seja mapeado para múltiplos appointments
+    comment: 'Valor financeiro associado ao compromisso.',
+  },
+  associatedTransactionType: {
+    type: DataTypes.ENUM('Entrada', 'Saída'),
+    allowNull: true,
+    comment: 'Tipo da transação financeira (Entrada/Saída) a ser criada.',
+  },
+  transactionGeneratedTimestamp: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: 'Timestamp de quando a transação financeira foi gerada a partir deste compromisso.',
+  },
+  relatedTransactionId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: {
+      model: 'financial_transactions',
+      key: 'id',
+    },
+    onUpdate: 'CASCADE',
+    onDelete: 'SET NULL',
+    comment: 'ID da transação financeira gerada a partir deste compromisso.',
+  },
+  // --- FIM DOS CAMPOS ---
+  googleEventId: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+    unique: true,
     comment: 'ID do evento correspondente no Google Calendar',
   },
   googleEventLastUpdated: {
-    type: DataTypes.DATE, // Timestamp da última atualização vinda do Google ou enviada para o Google
+    type: DataTypes.DATE,
     allowNull: true,
     comment: 'Timestamp da última sincronização com o Google Calendar para este evento',
   },
-  // --- Fim dos Campos Google Calendar ---
 }, {
   tableName: 'appointments',
   timestamps: true,
@@ -82,7 +108,8 @@ const Appointment = sequelize.define('Appointment', {
   indexes: [
     { fields: ['financialAccountId'] },
     { fields: ['eventDateTime'] },
-    { fields: ['googleEventId'], unique: true, where: { googleEventId: { [require('sequelize').Op.ne]: null } } }, // Índice único condicional
+    { fields: ['googleEventId'], unique: true, where: { googleEventId: { [require('sequelize').Op.ne]: null } } },
+    { fields: ['status', 'transactionGeneratedTimestamp', 'eventDateTime', 'associatedValue'] }
   ]
 });
 
@@ -93,6 +120,11 @@ Appointment.associate = (models) => {
     foreignKey: 'appointmentId',
     otherKey: 'businessClientId',
     as: 'businessClients'
+  });
+  Appointment.belongsTo(models.FinancialTransaction, {
+      foreignKey: 'relatedTransactionId',
+      as: 'relatedTransaction',
+      constraints: false
   });
 };
 

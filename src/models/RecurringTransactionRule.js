@@ -8,15 +8,15 @@ const RecurringTransactionRule = sequelize.define('RecurringTransactionRule', {
     autoIncrement: true,
     primaryKey: true,
   },
-  financialAccountId: { // Chave estrangeira para FinancialAccount
+  financialAccountId: {
     type: DataTypes.INTEGER,
     allowNull: false,
     references: {
-      model: 'financial_accounts', // Nome da tabela 'financial_accounts'
+      model: 'financial_accounts',
       key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'CASCADE', // Se a FinancialAccount for deletada, suas regras de recorrência também são
+    onDelete: 'CASCADE',
   },
   description: {
     type: DataTypes.STRING,
@@ -39,7 +39,8 @@ const RecurringTransactionRule = sequelize.define('RecurringTransactionRule', {
     onDelete: 'SET NULL',
   },
   frequency: {
-    type: DataTypes.ENUM('daily', 'weekly', 'bi-weekly', 'monthly', 'quarterly', 'semi-annually', 'annually'),
+    // <<< MUDANÇA CRÍTICA: Adicionando 'minutely' e 'hourly'
+    type: DataTypes.ENUM('minutely', 'hourly', 'daily', 'weekly', 'bi-weekly', 'monthly', 'quarterly', 'semi-annually', 'annually'),
     allowNull: false,
   },
   interval: {
@@ -49,11 +50,13 @@ const RecurringTransactionRule = sequelize.define('RecurringTransactionRule', {
     validate: { min: 1 },
   },
   startDate: {
-    type: DataTypes.DATEONLY,
+    // <<< MUDANÇA CRÍTICA: De DATEONLY para DATE
+    type: DataTypes.DATE, // Armazena data e hora de início
     allowNull: false,
   },
   endDate: {
-    type: DataTypes.DATEONLY,
+    // <<< MUDANÇA CRÍTICA: De DATEONLY para DATE
+    type: DataTypes.DATE, // Armazena data e hora de término
     allowNull: true,
   },
   dayOfWeek: {
@@ -64,20 +67,21 @@ const RecurringTransactionRule = sequelize.define('RecurringTransactionRule', {
   dayOfMonth: {
     type: DataTypes.INTEGER,
     allowNull: true,
-    validate: { min: 1, max: 31 }, // Lógica para dias > 28 será no job
+    validate: { min: 1, max: 31 },
   },
   nextDueDate: {
-    type: DataTypes.DATEONLY,
-    allowNull: false, // Calculada e atualizada pelo sistema/job
+    // <<< MUDANÇA CRÍTICA: De DATEONLY para DATE
+    type: DataTypes.DATE, // Agora armazena a data e hora exatas do próximo vencimento
+    allowNull: false,
   },
   autoCreateTransaction: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
-    defaultValue: false,
+    defaultValue: true,
   },
   isPayableOrReceivable: {
       type: DataTypes.BOOLEAN,
-      defaultValue: true, // Transações recorrentes geralmente são contas
+      defaultValue: true,
   },
   paymentMethod: {
     type: DataTypes.STRING,
@@ -93,7 +97,8 @@ const RecurringTransactionRule = sequelize.define('RecurringTransactionRule', {
     defaultValue: true,
   },
   lastGeneratedDate: {
-    type: DataTypes.DATEONLY,
+    // <<< MUDANÇA CRÍTICA: De DATEONLY para DATE
+    type: DataTypes.DATE, // Armazena data e hora da última geração
     allowNull: true,
   }
 }, {
@@ -109,11 +114,9 @@ const RecurringTransactionRule = sequelize.define('RecurringTransactionRule', {
 RecurringTransactionRule.associate = (models) => {
   RecurringTransactionRule.belongsTo(models.FinancialAccount, { foreignKey: 'financialAccountId', as: 'financialAccount' });
   RecurringTransactionRule.belongsTo(models.FinancialCategory, { foreignKey: 'financialCategoryId', as: 'category' });
-
-  // NOVA ASSOCIAÇÃO (INVERSA)
   RecurringTransactionRule.hasMany(models.FinancialTransaction, {
     foreignKey: 'recurringTransactionRuleId',
-    as: 'generatedTransactions', // Nome do alias para acessar as transações geradas
+    as: 'generatedTransactions',
   });
 };
 

@@ -862,6 +862,71 @@ async function getMonthlyTrend(financialAccountId, numberOfMonths = 6) {
     }
   }
 
+// <<< INÍCIO DA NOVA FUNÇÃO >>>
+
+/**
+ * Paga uma transação de fatura, criando a transação de débito correspondente na conta de origem.
+ * @param {number} sourceAccountId - O ID da conta financeira de onde o dinheiro sairá.
+ * @param {number} invoiceId - O ID da transação que representa a fatura a ser paga.
+ * @param {string|null} paymentDate - A data do pagamento.
+ * @returns {Promise<object>} A transação de débito criada.
+ */
+async function payInvoiceTransaction(sourceAccountId, invoiceId, paymentDate = null) {
+    const t = await sequelize.transaction();
+    try {
+        // Valida a conta de origem do pagamento
+        const sourceAccount = await validateAndGetFinancialAccount(sourceAccountId, t);
+
+        // Encontra a fatura, sem restringir pela conta, para garantir que podemos pagar uma fatura de conta X com dinheiro da conta Y
+        const invoiceTx = await FinancialTransaction.findByPk(invoiceId, { transaction: t, include: ['financialAccount'] });
+
+        if (!invoiceTx) {
+            throw new Error(`Fatura com ID ${invoiceId} não encontrada.`);
+        }
+        if (invoiceTx.financialAccount.clientId !== sourceAccount.clientId) {
+            throw new Error("Você não pode pagar uma fatura que não pertence ao mesmo cliente da conta de origem.");
+        }
+        if (!invoiceTx.isPayableOrReceivable || invoiceTx.isPaidOrReceived) {
+            throw new Error(`Esta transação (ID: ${invoiceId}) não é uma fatura pendente de pagamento.`);
+        }
+
+        const effectivePaymentDate = paymentDate || new Date().toISOString().split('T')[0];
+
+        // 1. Marca a fatura como paga
+        await invoiceTx.update({
+            isPaidOrReceived: true,
+            paymentDate: effectivePaymentDate
+        }, { transaction: t });
+
+        // 2. Cria a transação de SAÍDA real da conta de origem
+        const debitTx = await createTransaction(sourceAccountId, {
+            description: `Pagamento: ${invoiceTx.description}`,
+            type: 'Saída',
+            value: invoiceTx.value,
+            financialCategoryId: invoiceTx.financialCategoryId, // Usa a mesma categoria "Pagamento de Fatura"
+            transactionDate: effectivePaymentDate,
+            isPayableOrReceivable: false,
+            notes: `Pagamento da fatura ID ${invoiceTx.id} da conta "${invoiceTx.financialAccount.accountName}".`
+        }, { transaction: t });
+
+        await t.commit();
+        logger.info(`Fatura ID ${invoiceId} paga com sucesso usando a conta ID ${sourceAccountId}. Transação de débito ID ${debitTx.id} criada.`);
+        return debitTx;
+
+    } catch (error) {
+        if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
+        logger.error(`Erro ao pagar fatura ID ${invoiceId} com a conta ${sourceAccountId}: ${error.message}`, { stack: error.stack });
+        if (!error.statusCode) { // Garante que o erro seja propagado corretamente
+            error.statusCode = 500;
+            error.status = 'error';
+        }
+        throw error;
+    }
+}
+
+// <<< FIM DA NOVA FUNÇÃO >>>
+
+
 
 module.exports = {
   createTransaction,
@@ -877,6 +942,7 @@ module.exports = {
   updateParcelledAccountDescription,
   recreateParcelledAccount,
   getMonthlyTrend,
-  getExpenseCategorySummary
+  getExpenseCategorySummary,
+  payInvoiceTransaction
 
 };

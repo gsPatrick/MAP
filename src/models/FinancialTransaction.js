@@ -227,6 +227,11 @@ FinancialTransaction.associate = (models) => {
     as: 'recurringRuleOrigin', 
   });
 
+  FinancialTransaction.hasOne(models.Appointment, {
+    foreignKey: 'relatedTransactionId',
+    as: 'originatingAppointment'
+  });
+
   // Se adicionar o campo paidForCreditCardId:
   // FinancialTransaction.belongsTo(models.CreditCard, {
   //   foreignKey: 'paidForCreditCardId',

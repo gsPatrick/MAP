@@ -113,11 +113,17 @@ const UserPreference = sequelize.define('UserPreference', {
   // --- Campos para agendamento dos Jobs (schedules cron) ---
   // Estes definem QUANDO os jobs de verificação rodam.
   // A lógica interna do job decide se algo precisa ser ENVIADO.
-  recurringJobSchedule: {
+ recurringJobSchedule: {
     type: DataTypes.STRING,
-    defaultValue: '0 1 * * *', // Todo dia à 01:00 da manhã (para processar recorrências)
+    defaultValue: '0 1 * * *',
     allowNull: false,
-    comment: 'Schedule cron para o job de transações recorrentes.',
+    comment: 'Schedule cron para o job de transações recorrentes (baixa frequência).',
+  },
+  highFrequencyRecurringJobSchedule: {
+    type: DataTypes.STRING,
+    defaultValue: '*/1 * * * *', // A cada 1 minuto
+    allowNull: false,
+    comment: 'Schedule cron para o job de transações recorrentes (alta frequência: min/hora).',
   },
   appointmentReminderJobSchedule: {
     type: DataTypes.STRING,
@@ -142,6 +148,12 @@ const UserPreference = sequelize.define('UserPreference', {
     defaultValue: '*/2 * * * *', // A cada 2 minutos (para verificar se precisa enviar lembrete de água)
     allowNull: false,
     comment: 'Schedule cron para o job de lembrete de água (verificação).',
+  },
+   invoiceGenerationJobSchedule: {
+    type: DataTypes.STRING,
+    defaultValue: '0 3 * * *', // Todo dia às 3 da manhã
+    allowNull: false,
+    comment: 'Schedule cron para o job de geração automática de faturas de cartão.',
   },
   
   // --- Campos para controle de comportamento dos Alertas ---

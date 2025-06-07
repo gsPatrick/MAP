@@ -1,0 +1,78 @@
+// src/jobs/invoiceGenerationJob.js
+const cron = require('node-cron');
+const { CreditCard, FinancialAccount, Client } = require('../database');
+const { Op } = require('sequelize');
+const logger = require('../utils/logger');
+const creditCardService = require('../features/CreditCardManagement/creditCard.service');
+const { sendButtonListMessage } = require('../services/whatsappService');
+const { formatCurrency, formatDate } = require('../utils/formatters');
+
+async function checkAndGenerateInvoices() {
+    const todayDayOfMonth = new Date().getDate();
+    logger.info(`[JOB FATURA] Verificando cartões com fechamento no dia ${todayDayOfMonth}...`);
+
+    try {
+        const cardsToProcess = await CreditCard.findAll({
+            where: {
+                isActive: true,
+                closingDay: todayDayOfMonth
+            },
+            include: [{
+                model: FinancialAccount,
+                as: 'financialAccount',
+                include: [{ model: Client, as: 'ownerClient', attributes: ['id', 'name', 'phone'] }]
+            }]
+        });
+
+        if (cardsToProcess.length === 0) {
+            logger.info('[JOB FATURA] Nenhum cartão com fechamento hoje.');
+            return;
+        }
+
+        logger.info(`[JOB FATURA] ${cardsToProcess.length} cartão(ões) encontrados para gerar fatura.`);
+
+        for (const card of cardsToProcess) {
+            const invoice = await creditCardService.generateCreditCardInvoice(card.id);
+
+            if (invoice) {
+                const client = card.financialAccount.ownerClient;
+                if (client && client.phone) {
+                    const clientFirstName = client.name ? client.name.split(' ')[0] : 'você';
+                    const intro = `Olá, ${clientFirstName}! 👋 Sua fatura do cartão *${card.name}* acabou de fechar!`;
+                    const body = `🧾 *Valor Total:* ${formatCurrency(invoice.value)}\n` +
+                                 `🗓️ *Vencimento:* ${formatDate(invoice.dueDate)}`;
+                    const footer = "Já deixei a conta registrada para você. Para pagar, basta usar o botão abaixo. 😉";
+                    
+                    const message = `${intro}\n\n${body}\n\n${footer}`;
+                    
+                    // Criamos o botão de pagamento com um ID único e descritivo
+                    const buttons = [
+                        { id: `pay_invoice_${invoice.id}`, label: "Pagar Fatura 💵" }
+                    ];
+
+                    // Usamos a função de envio de botões
+                    await sendButtonListMessage(client.phone, message, buttons, "Ações da Fatura");
+                    
+                    logger.info(`[JOB FATURA] Notificação de fatura fechada com botão de pagamento enviada para ${client.name}.`);
+                }
+            }
+        }
+    } catch (error) {
+        logger.error(`[JOB FATURA] Erro geral no job de geração de faturas: ${error.message}`, { stack: error.stack });
+    }
+}
+
+function startInvoiceGenerationJob(preferences, models) {
+    const schedule = preferences?.invoiceGenerationJobSchedule || '0 3 * * *'; // Todo dia às 3 da manhã
+    if (cron.validate(schedule)) {
+        logger.info(`[JOB FATURA] Agendado para: ${schedule}`);
+        cron.schedule(schedule, checkAndGenerateInvoices, {
+            timezone: process.env.TZ || "America/Sao_Paulo",
+        });
+    } else {
+        logger.error(`[JOB FATURA] Schedule cron inválido: ${schedule}. Usando default '0 3 * * *'.`);
+        cron.schedule('0 3 * * *', checkAndGenerateInvoices, { timezone: process.env.TZ || "America/Sao_Paulo" });
+    }
+}
+
+module.exports = startInvoiceGenerationJob;

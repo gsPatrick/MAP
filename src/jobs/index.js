@@ -5,7 +5,11 @@ const startAppointmentReminderJob = require('./appointmentReminderJob');
 const startAlertsJob = require('./alertsJob');
 const startFinancialSummaryJobs = require('./financialSummaryJob');
 const startRecurringTransactionJob = require('./recurringTransactionJob');
-const startGoogleCalendarWatchRenewalJob = require('./googleCalendarWatchRenewalJob'); // <<< NOVO JOB
+const startGoogleCalendarWatchRenewalJob = require('./googleCalendarWatchRenewalJob');
+// <<< NOVO IMPORT >>>
+const startHighFrequencyRecurringJob = require('./highFrequencyRecurringJob');
+const startAppointmentToTransactionJob = require('./appointmentToTransactionJob'); // O job da resposta anterior
+const startInvoiceGenerationJob = require('./invoiceGenerationJob'); // <<< NOVO IMPORT
 
 const logger = require('../utils/logger');
 const { sequelize, UserPreference } = require('../database');
@@ -16,7 +20,6 @@ async function startJobs() {
     const preferences = await UserPreference.findOne({ order: [['id', 'ASC']] });
     if (!preferences) {
       logger.warn('[JOBS INDEX] Preferências do sistema não encontradas.');
-      // Considerar criar preferências padrão se o hook do modelo não for suficiente
     }
     const models = sequelize.models;
 
@@ -25,8 +28,13 @@ async function startJobs() {
     startAppointmentReminderJob(preferences, models);
     startAlertsJob(preferences, models);
     startFinancialSummaryJobs(preferences, models);
-    startRecurringTransactionJob(preferences, models);
-    startGoogleCalendarWatchRenewalJob(preferences, models); // <<< INICIA O NOVO JOB
+    startRecurringTransactionJob(preferences, models); // Job de baixa frequência
+    startGoogleCalendarWatchRenewalJob(preferences, models);
+    startAppointmentToTransactionJob(preferences, models); // Job da resposta anterior
+    // <<< INICIAR NOVO JOB >>>
+    startHighFrequencyRecurringJob(preferences, models); // Job de alta frequência
+        startInvoiceGenerationJob(preferences, models); // <<< INICIA O NOVO JOB DE FATURAS
+
 
     logger.info('Todos os Jobs foram configurados e agendados.');
   } catch (error) {

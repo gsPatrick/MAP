@@ -802,6 +802,60 @@ async function deleteOrCancelAppointmentByGoogleId(googleEventId, systemClientId
   }
 }
 
+async function getAppointmentsDueForTransactionCreation() {
+  const now = new Date();
+  try {
+    const appointments = await Appointment.findAll({
+      where: {
+        status: { [Op.in]: ['Scheduled', 'Confirmed'] }, // Apenas compromissos ativos
+        associatedValue: { [Op.ne]: null },             // Que tenham valor financeiro
+        associatedTransactionType: { [Op.ne]: null },   // E tipo de transação
+        transactionGeneratedTimestamp: null,            // Que ainda não foram processados
+        eventDateTime: { [Op.lte]: now },               // Cujo horário de evento já passou ou é agora
+      },
+      include: [
+        {
+          model: FinancialAccount,
+          as: 'financialAccount',
+          where: { isActive: true }, // Apenas de contas ativas
+          include: [{ model: Client, as: 'ownerClient', attributes: ['id', 'name', 'phone'] }]
+        }
+      ],
+      order: [['eventDateTime', 'ASC']],
+    });
+    
+    if (appointments.length > 0) {
+        logger.info(`[ApptService-Job] Encontrados ${appointments.length} compromissos para converter em transação.`);
+    }
+
+    return appointments; // Retorna instâncias do Sequelize para o job
+
+  } catch (error) {
+    logger.error('[ApptService-Job] Erro ao buscar compromissos para gerar transação:', { error });
+    return [];
+  }
+}
+
+
+
+async function markAsTransactionGenerated(appointmentInstance, transactionId, dbTransaction) {
+    try {
+        const updatedAppointment = await appointmentInstance.update(
+            { 
+                transactionGeneratedTimestamp: new Date(),
+                relatedTransactionId: transactionId,
+                status: 'Completed' // Muda o status do compromisso para concluído
+            },
+            { transaction: dbTransaction }
+        );
+        logger.info(`[ApptService-Job] Compromisso ID ${appointmentInstance.id} marcado como processado e vinculado à transação ID ${transactionId}.`);
+        return updatedAppointment;
+    } catch (error) {
+        logger.error(`[ApptService-Job] Erro ao marcar compromisso ID ${appointmentInstance.id} como processado:`, { error });
+        throw error; // Propaga o erro para o rollback da transação no job
+    }
+}
+
 
 module.exports = {
   scheduleAppointment,
@@ -813,4 +867,6 @@ module.exports = {
   markReminderAsSent,
   createOrUpdateAppointmentFromGoogle, 
   deleteOrCancelAppointmentByGoogleId, 
+  getAppointmentsDueForTransactionCreation,
+  markAsTransactionGenerated,
 };

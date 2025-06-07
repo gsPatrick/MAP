@@ -1,5 +1,5 @@
 // src/models/CreditCard.js
-const { DataTypes, Op } = require('sequelize'); // Op pode ser necessário para índices condicionais
+const { DataTypes, Op } = require('sequelize');
 const sequelize = require('../config/database');
 
 const CreditCard = sequelize.define('CreditCard', {
@@ -58,12 +58,12 @@ const CreditCard = sequelize.define('CreditCard', {
     type: DataTypes.STRING(4),
     allowNull: true,
     validate: { 
-      isNumeric: { msg: "Os últimos quatro dígitos devem ser numéricos." , skipNull: true }, // skipNull para permitir nulo
+      isNumeric: { msg: "Os últimos quatro dígitos devem ser numéricos." , skipNull: true },
       len: { args: [4,4], msg: "Os últimos quatro dígitos devem conter exatamente 4 números.", skipNull: true }
     }
   },
   flag: { 
-    type: DataTypes.STRING(50), // Aumentado para acomodar nomes de bandeiras
+    type: DataTypes.STRING(50),
     allowNull: true,
   },
   isActive: {
@@ -71,19 +71,29 @@ const CreditCard = sequelize.define('CreditCard', {
     allowNull: false,
     defaultValue: true,
   },
-  // NOVOS CAMPOS OPCIONAIS PARA UI
+  lastInvoiceGeneratedId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: {
+      model: 'financial_transactions',
+      key: 'id',
+    },
+    onUpdate: 'CASCADE',
+    onDelete: 'SET NULL',
+    comment: 'ID da última transação de fatura gerada para este cartão.',
+  },
   dominantColor: { 
-    type: DataTypes.STRING(20), // Ex: "#6A0DAD" ou "purple-500" ou nome da cor
+    type: DataTypes.STRING(20),
     allowNull: true,
     comment: 'Cor predominante para UI (opcional, ex: #RRGGBB ou nome)',
   },
   flagIconUrl: { 
-    type: DataTypes.STRING(2048), // URL pode ser longa
+    type: DataTypes.STRING(2048),
     allowNull: true,
     validate: {
-        isUrlOrNull(value) { // Validação customizada para aceitar null ou URL válida
+        isUrlOrNull(value) {
             if (value === null || value === '') return;
-            if (!/^https?:\/\/.+\..+/.test(value)) { // Regex simples para URL
+            if (!/^https?:\/\/.+\..+/.test(value)) {
                 throw new Error('URL do ícone da bandeira inválida.');
             }
         }
@@ -96,17 +106,6 @@ const CreditCard = sequelize.define('CreditCard', {
   comment: 'Cartões de crédito vinculados a uma FinancialAccount',
   indexes: [
     { fields: ['financialAccountId'] },
-    // Garante que apenas um cartão pode ser default por financialAccountId
-    // Esta unicidade é melhor gerenciada na lógica de serviço ao criar/atualizar,
-    // mas um índice parcial pode ajudar se o DB suportar bem.
-    // { 
-    //   unique: true, 
-    //   fields: ['financialAccountId'], 
-    //   where: { isDefault: true },
-    //   name: 'unique_default_card_per_account' 
-    // } 
-    // A lógica de um único default é mais complexa de impor via índice único se 
-    // você permite que todos sejam false. O serviço já trata isso.
     { 
       unique: true, 
       fields: ['financialAccountId', 'name'],
@@ -117,9 +116,13 @@ const CreditCard = sequelize.define('CreditCard', {
 
 CreditCard.associate = (models) => {
   CreditCard.belongsTo(models.FinancialAccount, { foreignKey: 'financialAccountId', as: 'financialAccount' });
-  // Se um cartão for deletado, as transações financeiras associadas a ele terão creditCardId = NULL.
-  // Se quiser deletar as transações junto (CASCADE), mude onDelete, mas SET NULL é mais seguro para histórico.
   CreditCard.hasMany(models.FinancialTransaction, { foreignKey: 'creditCardId', as: 'transactions', onDelete: 'SET NULL' }); 
+  
+  CreditCard.belongsTo(models.FinancialTransaction, {
+    foreignKey: 'lastInvoiceGeneratedId',
+    as: 'lastInvoiceGenerated',
+    constraints: false,
+  });
 };
 
 module.exports = CreditCard;

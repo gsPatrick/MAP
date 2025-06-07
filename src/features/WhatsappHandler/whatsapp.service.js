@@ -1438,20 +1438,45 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                              state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
                         }
                     }
+                    
+                      // <<< INÍCIO DA NOVA LÓGICA DO BOTÃO DE PAGAMENTO >>>
+            } else if (buttonId.startsWith('pay_invoice_')) {
+                if (!isOwnerContextForEditDelete) {
+                    aiMessageIntroForButton = `Ops, ${state.clientName}! 😬`;
+                    structuredDataBodyForButton = "Apenas o proprietário da conta pode realizar o pagamento de faturas.";
+                    platformLinkFooterForButton = "";
+                } else if (!state.activeFinancialAccountId) {
+                    aiMessageIntroForButton = `Quase lá, ${state.clientName}! 🚀`;
+                    structuredDataBodyForButton = `Para pagar a fatura, primeiro preciso saber *de qual conta* o dinheiro vai sair. Por favor, selecione uma das suas contas para continuarmos.`;
+                    platformLinkFooterForButton = "";
+                    state.currentAction = 'selecting_account_flow_active';
+                } else {
+                    const invoiceId = parseInt(buttonId.replace('pay_invoice_', ''), 10);
+                    try {
+                        const debitTx = await financialService.payInvoiceTransaction(state.activeFinancialAccountId, invoiceId);
+                        aiMessageIntroForButton = `Pagamento realizado com sucesso, ${state.clientName}! 🥳`;
+                        structuredDataBodyForButton = `A fatura foi quitada e a saída de ${formatCurrency(debitTx.value)} foi registrada na sua conta *${state.activeFinancialAccountName}*.`;
+                    } catch (e) {
+                        logger.error(`[WHATSAPP SERVICE] Erro ao pagar fatura ${invoiceId} com botão: ${e.message}`);
+                        aiMessageIntroForButton = `Ops! Tive um problema ao tentar pagar a fatura. 😕`;
+                        structuredDataBodyForButton = `Detalhe: ${e.message}`;
+                    }
                 }
-                else {
-                    buttonClickHandledByServiceLogic = false;
-                }
-       
-                if (buttonClickHandledByServiceLogic) {
-                    const finalMsg = `${aiMessageIntroForButton}${structuredDataBodyForButton ? `\n\n${structuredDataBodyForButton}` : ''}${platformLinkFooterForButton ? `\n\n${platformLinkFooterForButton}` : ''}`.trim();
-                    state.messageHistory.push({ role: 'assistant', content: finalMsg });
-                    await sendWhatsappMessage(senderPhone, finalMsg);
-                    conversationState.set(senderPhone, state);
-                    pushNameFromPayload = null; // Limpa após o uso
-                    return;
-                }
+            // <<< FIM DA NOVA LÓGICA DO BOTÃO DE PAGAMENTO >>>
+
+            } else {
+                buttonClickHandledByServiceLogic = false;
             }
+
+            if (buttonClickHandledByServiceLogic) {
+                const finalMsg = `${aiMessageIntroForButton}${structuredDataBodyForButton ? `\n\n${structuredDataBodyForButton}` : ''}${platformLinkFooterForButton ? `\n\n${platformLinkFooterForButton}` : ''}`.trim();
+                state.messageHistory.push({ role: 'assistant', content: finalMsg });
+                await sendWhatsappMessage(senderPhone, finalMsg);
+                conversationState.set(senderPhone, state);
+                pushNameFromPayload = null;
+                return;
+            }
+        }
        
             if (state.currentAction && state.data.onboardingStage === 'onboarding_complete') {
                  // (lógica de state.currentAction e pré-processamento mantida)
@@ -1586,7 +1611,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                         blockReasonMessage = `Sua conta "${state.activeFinancialAccountName}" é do tipo ${state.activeFinancialAccountType}. Você pode criar uma conta empresarial ou mudar para ela, se tiver uma! 😉`;
                         platformLinkFooter = ""; currentActionBlocked = true;
                     } else if (pjMeiActions.includes(actionName) && state.activeFinancialAccountType && ['PJ', 'MEI'].includes(state.activeFinancialAccountType) && !state.currentAccessLevel.startsWith('avancado') && !state.currentAccessLevel.startsWith('vitalicio_avancado') && !currentActionBlocked) {
-                        const siteUrlPjMei = process.env.PLAN_SITE_URL || "https://map-nocontrole.com.br/#planos";
+                        const siteUrlPjMei = process.env.PLAN_SITE_URL || "https://map-nocontrole.com.br/planos";
                          if (multipleActionBodiesList.length === 0 && !(aiMessageIntro && aiMessageIntro.startsWith("Ah, ")) && aiMessageIntro !== aiResponse.overall_summary_suggestion) aiMessageIntro = `Ah, ${clientNameToUse}! Para usar as funcionalidades de ${state.activeFinancialAccountType === 'PJ' ? 'Empresa (PJ)' : 'MEI'}, como "${actionName.toLowerCase().replace(/_/g, " ")}", o plano de ${state.ownerClientNameForContext} precisa ser um dos nossos Planos Avançados. 🚀`;
                         blockReasonMessage = `Eles são perfeitos para quem quer ir além! Confira em ${siteUrlPjMei} e depois me avise para continuarmos! 😉`;
                         platformLinkFooter = ""; currentActionBlocked = true;
