@@ -8,7 +8,6 @@ const startRecurringTransactionJob = require('./recurringTransactionJob');
 const startGoogleCalendarWatchRenewalJob = require('./googleCalendarWatchRenewalJob');
 // <<< NOVO IMPORT >>>
 const startHighFrequencyRecurringJob = require('./highFrequencyRecurringJob');
-const startAppointmentToTransactionJob = require('./appointmentToTransactionJob'); // O job da resposta anterior
 const startInvoiceGenerationJob = require('./invoiceGenerationJob'); // <<< NOVO IMPORT
 
 const logger = require('../utils/logger');
@@ -30,7 +29,6 @@ async function startJobs() {
     startFinancialSummaryJobs(preferences, models);
     startRecurringTransactionJob(preferences, models); // Job de baixa frequência
     startGoogleCalendarWatchRenewalJob(preferences, models);
-    startAppointmentToTransactionJob(preferences, models); // Job da resposta anterior
     // <<< INICIAR NOVO JOB >>>
     startHighFrequencyRecurringJob(preferences, models); // Job de alta frequência
         startInvoiceGenerationJob(preferences, models); // <<< INICIA O NOVO JOB DE FATURAS
