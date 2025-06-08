@@ -1,11 +1,11 @@
 // src/jobs/waterReminderJob.js
 const cron = require('node-cron');
-const { UserPreference, Client, WaterIntakeLog } = require('../database');
+const { Client, WaterIntakeLog } = require('../database');
 const { Op } = require('sequelize');
-const logger = require('../utils/logger');
+const logger =require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
-const dayjs = require('dayjs');
 
+// Array de mensagens para variar os lembretes
 const waterMessages = [
   "💧 Hora de se hidratar! Um copo d'água agora pode fazer maravilhas pelo seu dia. Já registrei aqui pra você! 😉",
   "Tem sede? Seu corpo agradece por mais um gole d'água! 💧 Já marquei como consumido, continue assim!",
@@ -17,30 +17,31 @@ function getRandomWaterMessage() { return waterMessages[Math.floor(Math.random()
 
 async function checkAndSendWaterReminder() {
   try {
-    const today = dayjs().format('YYYY-MM-DD');
     const now = new Date();
     const currentTime = now.toTimeString().split(' ')[0]; // Formato HH:MM:SS
+    const todayDateString = now.toISOString().split('T')[0];
 
-    // Busca todos os logs que estão PENDENTES para hoje,
-    // cujo horário agendado já passou ou é o minuto atual.
+    // 1. Busca todos os LOGS que estão PENDENTES para hoje,
+    //    cujo horário agendado já passou ou é o minuto atual.
     const logsToProcess = await WaterIntakeLog.findAll({
       where: {
-        intakeDate: today,
-        status: 'pending', // Apenas os que o usuário ainda não marcou
+        intakeDate: todayDateString,
+        status: 'pending',
         scheduledTime: {
           [Op.lte]: currentTime,
         },
       },
-      include: [{
+      include: [{ // 2. Inclui os dados do cliente para pegar o telefone
         model: Client,
         as: 'client',
-        attributes: ['id', 'phone'], // Pega o ID e o telefone do cliente
-        required: true // Garante que só venham logs de clientes existentes
+        where: { status: 'Ativo' },
+        attributes: ['id', 'phone', 'name'],
+        required: true // Garante que só venham logs de clientes existentes e ativos
       }]
     });
 
     if (logsToProcess.length === 0) {
-      // Nenhum log pendente para notificar no momento.
+      // Nenhum log pendente para notificar no momento. Isso é normal.
       return;
     }
 
@@ -50,21 +51,25 @@ async function checkAndSendWaterReminder() {
       if (log.client && log.client.phone) {
         const message = getRandomWaterMessage();
         
-        // Envia a notificação via WhatsApp
+        // 3. Envia a notificação via WhatsApp DIRETAMENTE PARA O CLIENTE
         const sent = await sendWhatsappMessage(log.client.phone, message);
         
         if (sent) {
-          // Se a mensagem foi enviada com sucesso, atualiza o log.
+          // 4. Se a mensagem foi enviada, atualiza o log. ISSO QUEBRA O LOOP!
           // O status muda para 'completed' e a data de conclusão é registrada.
           await log.update({ 
             status: 'completed',
             completedAt: new Date(),
-            notifiedAt: new Date() // Também registra que a notificação foi enviada
+            notifiedAt: new Date()
           });
-          logger.info(`[JOB ÁGUA] Lembrete para o horário ${log.scheduledTime} enviado para o cliente ID ${log.clientId} e log marcado como 'completed'.`);
+          logger.info(`[JOB ÁGUA] Lembrete para o horário ${log.scheduledTime} enviado para o cliente ${log.client.name} e log marcado como 'completed'.`);
         } else {
-          logger.error(`[JOB ÁGUA] Falha ao enviar lembrete para o cliente ID ${log.clientId}. O log permanece como 'pending'.`);
+          logger.error(`[JOB ÁGUA] Falha ao enviar lembrete para o cliente ${log.client.name}. O log permanece como 'pending' para nova tentativa.`);
         }
+      } else {
+          // Caso o log exista mas o cliente não tenha telefone (pouco provável com a query acima)
+          logger.warn(`[JOB ÁGUA] Log ID ${log.id} não pôde ser processado pois o cliente associado não tem telefone. Marcando como falho para evitar loops.`);
+          await log.update({ status: 'failed' });
       }
     }
   } catch (error) {
@@ -72,11 +77,10 @@ async function checkAndSendWaterReminder() {
   }
 }
 
-function startWaterReminderJob(preferences, models) {
-  // O schedule padrão é a cada 2 minutos. Pode ser ajustado nas preferências do sistema.
+function startWaterReminderJob(preferences) {
   const schedule = preferences?.waterReminderJobSchedule || '*/2 * * * *';
   
-  logger.info(`[JOB ÁGUA] Agendado para verificar a necessidade de envio (schedule: ${schedule} no fuso ${process.env.TZ || "America/Sao_Paulo"})`);
+  logger.info(`[JOB ÁGUA] Agendado para verificar lembretes individuais (schedule: ${schedule})`);
   
   cron.schedule(schedule, checkAndSendWaterReminder, {
     timezone: process.env.TZ || "America/Sao_Paulo",
