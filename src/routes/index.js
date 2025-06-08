@@ -56,6 +56,7 @@ mainApiRouter.use('/system',  systemRoutes); // Configs do sistema, categorias g
 mainApiRouter.use('/dev-tools',  devToolsRoutes); // Ferramentas de desenvolvimento
 mainApiRouter.use('/chat', InteractiveChatRoutes); // Rota de chat do site (sem token, mas com autenticação de cliente)
 mainApiRouter.use('/shared-access', authenticateClientToken, sharedAccessRoutes); // <<< NOVA ROTA
+mainApiRouter.use('/hydration', authenticateClientToken, hydrationRoutes);
 
 // --- ROTAS PARA CLIENTS LOGADOS (protegidas para Clients com token válido e assinatura ativa) ---
 
@@ -127,7 +128,6 @@ clientFinancialAccountRouter.use('/kanban', kanbanRoutes);
 // ROTAS DE BUSINESS CLIENTS ANINHADAS SOB FINANCIAL ACCOUNT
 clientFinancialAccountRouter.use('/business-clients', businessClientRoutes);
 clientFinancialAccountRouter.use('/financial-accounts/:financialAccountId', clientFinancialAccountRouter);
-clientFinancialAccountRouter.use('/hydration', hydrationRoutes);
 
 // Monta o router de conta financeira no router principal da API
 
