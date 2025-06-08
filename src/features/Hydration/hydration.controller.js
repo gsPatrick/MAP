@@ -31,7 +31,27 @@ async function updateLog(req, res, next) {
   }
 }
 
+async function getTodaysLogs(req, res) {
+    try {
+        // req.client.id é populado pelo middleware de autenticação
+        const clientId = req.client.id;
+        if (!clientId) {
+            return res.status(401).json({ message: 'Cliente não autenticado.' });
+        }
+
+        const logs = await hydrationService.getTodaysLogsByClient(clientId);
+
+        res.status(200).json(logs);
+    } catch (error) {
+        // Usa o logger se disponível, ou console.error
+        console.error('Erro ao buscar logs de hidratação do dia:', error);
+        res.status(500).json({ message: 'Erro interno ao buscar logs de hidratação.' });
+    }
+}
+
+
 module.exports = {
   getDailyLogs,
   updateLog,
+  getTodaysLogs
 };

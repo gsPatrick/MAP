@@ -115,7 +115,28 @@ async function updateLogStatus(clientId, logId, status) {
   return updatedLog.toJSON();
 }
 
+/**
+ * Busca todos os logs de hidratação (completos, pendentes, etc.) para um cliente na data de hoje.
+ * @param {number} clientId - O ID do cliente logado.
+ * @returns {Promise<WaterIntakeLog[]>} - Uma promessa que resolve para um array de logs de hidratação.
+ */
+async function getTodaysLogsByClient(clientId) {
+    const today = dayjs().format('YYYY-MM-DD');
+
+    const logs = await WaterIntakeLog.findAll({
+        where: {
+            clientId: clientId,
+            intakeDate: today,
+        },
+        order: [['scheduledTime', 'ASC']] // Ordena por hora
+    });
+
+    return logs;
+}
+
+
 module.exports = {
   getOrCreateDailyLogs,
   updateLogStatus,
+  getTodaysLogsByClient
 };
