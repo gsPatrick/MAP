@@ -63,6 +63,7 @@ async function updateSettingsAndGenerateLogs(req, res) {
 }
 
 
+
 module.exports = {
   getDailyLogs,
   updateLog,
