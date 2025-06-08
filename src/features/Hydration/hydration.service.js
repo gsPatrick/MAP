@@ -6,6 +6,84 @@ const dayjs = require('dayjs');
 
 const MIN_CUSTOM_INTERVAL_IN_MINUTES_SYSTEM = 15;
 
+
+async function createOrUpdateHydrationSettings(clientId, settings) {
+    const {
+        dailyGoalMl,
+        enableWaterReminder,
+        waterReminderFrequencyType,
+        waterReminderCustomIntervalMinutes,
+        waterReminderStartTime, // Formato 'HH:mm:ss'
+        waterReminderEndTime,   // Formato 'HH:mm:ss'
+    } = settings;
+
+    // 1. Salva as preferências na tabela UserPreference (ou em Client, se você mover para lá)
+    // Por enquanto, vamos manter em UserPreference como no seu código original.
+    const preferences = await UserPreference.findOne();
+    await preferences.update({
+        dailyGoalMl,
+        enableWaterReminder,
+        waterReminderFrequencyType,
+        waterReminderCustomIntervalMinutes,
+        waterReminderStartTime,
+        waterReminderEndTime,
+    });
+
+    const today = dayjs().format('YYYY-MM-DD');
+
+    // 2. Apaga logs PENDENTES futuros para este cliente para evitar duplicatas
+    await WaterIntakeLog.destroy({
+        where: {
+            clientId: clientId,
+            status: 'pending',
+            intakeDate: { [Op.gte]: today }
+        }
+    });
+
+    // 3. Se os lembretes estão desativados, não há mais nada a fazer.
+    if (!enableWaterReminder || waterReminderFrequencyType === 'disabled') {
+        return { message: 'Lembretes desativados. Logs futuros foram limpos.' };
+    }
+
+    // 4. Calcula os horários e gera os novos logs
+    let intervalMinutes;
+    if (waterReminderFrequencyType === '2h') intervalMinutes = 120;
+    else if (waterReminderFrequencyType === '3h') intervalMinutes = 180;
+    else if (waterReminderFrequencyType === 'custom') intervalMinutes = waterReminderCustomIntervalMinutes;
+    else return { message: 'Frequência inválida.' };
+
+    const start = dayjs(today + 'T' + waterReminderStartTime);
+    const end = dayjs(today + 'T' + waterReminderEndTime);
+    const reminders = [];
+    let current = start;
+
+    while (current.isBefore(end) || current.isSame(end)) {
+        reminders.push({ time: current.format('HH:mm:ss') });
+        current = current.add(intervalMinutes, 'minute');
+    }
+
+    if (reminders.length === 0) {
+        return { message: 'Nenhum lembrete a ser gerado com base nos horários fornecidos.' };
+    }
+
+    // Calcula a quantidade de água por lembrete
+    const amountPerReminder = Math.round(dailyGoalMl / reminders.length);
+
+    const logsToCreate = reminders.map(r => ({
+        clientId: clientId,
+        intakeDate: today,
+        scheduledTime: r.time,
+        status: 'pending',
+        amount: amountPerReminder,
+    }));
+
+    // 5. Cria todos os logs de uma vez no banco de dados
+    await WaterIntakeLog.bulkCreate(logsToCreate);
+
+    return { message: `${logsToCreate.length} logs de hidratação criados para hoje.` };
+}
+
+
 /**
  * Gera ou recupera os logs de hidratação para um cliente em um dia específico.
  * Se os logs para o dia ainda não existem, eles são criados com base nas preferências do cliente.
@@ -135,8 +213,10 @@ async function getTodaysLogsByClient(clientId) {
 }
 
 
+
 module.exports = {
   getOrCreateDailyLogs,
   updateLogStatus,
-  getTodaysLogsByClient
+  getTodaysLogsByClient,
+  createOrUpdateHydrationSettings
 };

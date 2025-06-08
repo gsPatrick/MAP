@@ -13,6 +13,7 @@ router.get('/logs/today', authenticateClientToken, hydrationController.getTodays
 
 // Rota para atualizar o status de um log específico (marcar como bebido/pendente)
 router.patch('/log/:logId', hydrationController.updateLog);
+router.put('/settings', hydrationController.updateSettingsAndGenerateLogs);
 
 
 

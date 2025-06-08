@@ -49,9 +49,23 @@ async function getTodaysLogs(req, res) {
     }
 }
 
+async function updateSettingsAndGenerateLogs(req, res) {
+    try {
+        const clientId = req.client.id;
+        const settings = req.body;
+
+        const result = await hydrationService.createOrUpdateHydrationSettings(clientId, settings);
+        res.status(200).json({ status: 'success', message: result.message });
+    } catch (error) {
+        console.error('Erro ao salvar configurações de hidratação e gerar logs:', error);
+        res.status(500).json({ message: 'Erro interno ao salvar configurações.' });
+    }
+}
+
 
 module.exports = {
   getDailyLogs,
   updateLog,
-  getTodaysLogs
+  getTodaysLogs,
+  updateSettingsAndGenerateLogs
 };
