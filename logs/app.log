@@ -2073,3 +2073,15 @@ Error
 2025-06-07T02:54:40.183Z [INFO]: Plano "Plano Webhook Teste ID 0" encontrado. Verificando/Atualizando Hotmart ID para 0...
 2025-06-07T02:54:40.183Z [INFO]: Plano "Plano Webhook Teste ID 0" já está com Hotmart ID 0 ou o novo ID é o mesmo.
 2025-06-07T02:54:40.219Z [INFO]: Conexão com o banco de dados fechada.
+2025-06-08T02:02:04.563Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
+2025-06-08T02:02:15.560Z [INFO]: Iniciando configuração e agendamento de todos os Jobs...
+2025-06-08T02:35:00.000Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
+2025-06-08T02:35:11.387Z [INFO]: Iniciando configuração e agendamento de todos os Jobs...
+2025-06-08T02:35:26.578Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
+2025-06-08T02:35:38.178Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
+2025-06-08T02:35:40.809Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
+2025-06-08T02:35:53.287Z [INFO]: Iniciando configuração e agendamento de todos os Jobs...
+2025-06-08T02:43:41.762Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
+2025-06-08T02:43:46.932Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
+2025-06-08T02:43:59.144Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
+2025-06-08T02:44:06.613Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
