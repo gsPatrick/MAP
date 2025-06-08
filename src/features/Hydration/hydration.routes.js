@@ -9,7 +9,7 @@ const router = Router();
 router.use(authenticateClientToken);
 
 // Rota para buscar os logs do dia (cria se não existirem)
-router.get('/logs/today', authenticateClient, hydrationController.getTodaysLogs);
+router.get('/logs/today', authenticateClientToken, hydrationController.getTodaysLogs);
 
 // Rota para atualizar o status de um log específico (marcar como bebido/pendente)
 router.patch('/log/:logId', hydrationController.updateLog);
