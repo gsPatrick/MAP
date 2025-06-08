@@ -126,11 +126,10 @@ clientFinancialAccountRouter.use('/categories', financialCategoryRoutes);
 clientFinancialAccountRouter.use('/kanban', kanbanRoutes);
 // ROTAS DE BUSINESS CLIENTS ANINHADAS SOB FINANCIAL ACCOUNT
 clientFinancialAccountRouter.use('/business-clients', businessClientRoutes);
-router.use('/hydration', hydrationRoutes); // <<< ADICIONE ESTA LINHA
+clientFinancialAccountRouter.use('/financial-accounts/:financialAccountId', clientFinancialAccountRouter);
 
 
 // Monta o router de conta financeira no router principal da API
-mainApiRouter.use('/financial-accounts/:financialAccountId', clientFinancialAccountRouter);
 
 
 // Rota global de estoque para Clients logados (req.client já disponível)
