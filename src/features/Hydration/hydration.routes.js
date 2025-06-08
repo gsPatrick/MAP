@@ -1,19 +1,16 @@
-// src/features/Hydration/hydration.routes.js
-const { Router } = require('express');
+const express = require('express');
+const router = express.Router();
 const hydrationController = require('./hydration.controller');
-const { authenticateClientToken } = require('../../middlewares/authMiddleware'); // Supondo que você tenha um middleware para autenticar clientes
+// Certifique-se de que o caminho para seu middleware de autenticação está correto
+const { authenticateClient } = require('../../middleware/authMiddleware'); 
 
-const router = Router();
+// ROTA QUE ESTÁ FALTANDO:
+// Define que um GET para a raiz do router de hidratação + /logs/today
+// deve chamar o controller getTodaysLogs.
+router.get('/logs/today', authenticateClient, hydrationController.getTodaysLogs);
 
-// Todas as rotas de hidratação exigem que um cliente esteja logado
-router.use(authenticateClientToken);
-
-// Rota para buscar os logs do dia (cria se não existirem)
-router.get('/logs/today', authenticateClientToken, hydrationController.getTodaysLogs);
-
-// Rota para atualizar o status de um log específico (marcar como bebido/pendente)
-router.patch('/log/:logId', hydrationController.updateLog);
-
-
+// Aqui podem existir outras rotas que você já tinha, como:
+ router.put('/preferences', authenticateClient, hydrationController.updatePreferences);
+ router.patch('/log/:id', authenticateClient, hydrationController.updateLogStatus);
 
 module.exports = router;

@@ -127,7 +127,7 @@ clientFinancialAccountRouter.use('/kanban', kanbanRoutes);
 // ROTAS DE BUSINESS CLIENTS ANINHADAS SOB FINANCIAL ACCOUNT
 clientFinancialAccountRouter.use('/business-clients', businessClientRoutes);
 clientFinancialAccountRouter.use('/financial-accounts/:financialAccountId', clientFinancialAccountRouter);
-
+clientFinancialAccountRouter.use('/hydration', hydrationRoutes);
 
 // Monta o router de conta financeira no router principal da API
 
