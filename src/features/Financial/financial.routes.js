@@ -26,4 +26,9 @@ router.put('/:transactionId', financialController.updateTransaction); // Rota fi
 router.patch('/:transactionId/settle', financialController.markAsPaidOrReceived); // Rota final: .../transactions/:transactionId/settle
 router.delete('/:transactionId', financialController.deleteTransaction); // Rota final: .../transactions/:transactionId
 
+router.get('/summary', financialController.getFinancialSummary); // Já deve existir
+router.get('/monthly-trend', financialController.getMonthlyTrend); // <<< NOVA ROTA
+router.get('/expense-category-summary', financialController.getExpenseCategorySummary); // <<< NOVA ROTA
+router.get('/income-category-summary', financialController.getIncomeCategorySummary); // <<< NOVA ROTA
+
 module.exports = router;

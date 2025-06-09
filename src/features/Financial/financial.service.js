@@ -891,6 +891,55 @@ async function getExpenseCategorySummary(financialAccountId, dateStart, dateEnd)
     }
 }
 
+async function getIncomeCategorySummary(financialAccountId, dateStart, dateEnd) {
+    try {
+        await validateAndGetFinancialAccount(financialAccountId);
+
+        const whereConditions = {
+            financialAccountId,
+            type: 'Entrada', // Apenas Receitas
+        };
+
+        if (dateStart) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.gte]: dateStart };
+        if (dateEnd) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.lte]: dateEnd };
+
+        const incomeByCategory = await FinancialTransaction.findAll({
+            attributes: [
+                'financialCategoryId',
+                [sequelize.fn('SUM', sequelize.col('value')), 'totalValue']
+            ],
+            where: whereConditions,
+            group: ['financialCategoryId'],
+            raw: true,
+        });
+        
+        const categoryIds = incomeByCategory.map(e => e.financialCategoryId).filter(id => id !== null);
+        const categories = await FinancialCategory.findAll({
+            where: { id: { [Op.in]: categoryIds } },
+            attributes: ['id', 'name'],
+            raw: true,
+        });
+        const categoryMap = categories.reduce((map, cat) => {
+            map[cat.id] = cat.name;
+            return map;
+        }, {});
+
+        const result = incomeByCategory.map(item => ({
+            type: item.financialCategoryId ? categoryMap[item.financialCategoryId] : 'Sem Categoria',
+            value: parseFloat(parseFloat(item.totalValue).toFixed(2))
+        }));
+        
+        result.sort((a, b) => b.value - a.value);
+
+        logger.info(`Resumo de categorias de receita gerado para FinancialAccount ID ${financialAccountId}.`);
+        return result;
+    } catch (error) {
+        logger.error(`Erro ao gerar resumo de categorias de receita para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error });
+        if (!error.statusCode) error.statusCode = 500;
+        throw error;
+    }
+}
+
 
 module.exports = {
   createTransaction,
@@ -906,6 +955,7 @@ module.exports = {
   updateParcelledAccountDescription,
   recreateParcelledAccount,
   getMonthlyTrend,
-  getExpenseCategorySummary
+  getExpenseCategorySummary,
+  getIncomeCategorySummary
 
 };

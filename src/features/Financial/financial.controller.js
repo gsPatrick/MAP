@@ -2,6 +2,10 @@
 const financialService = require('./financial.service');
 const logger = require('../../utils/logger'); // Para logs no controller se necessário
 
+
+
+
+
 // Helper para validar e extrair financialAccountId da rota
 function getFinancialAccountIdFromRequest(req, paramName = 'financialAccountId') {
     const id = parseInt(req.params[paramName], 10);
@@ -142,6 +146,43 @@ async function getExpenseCategorySummary(req, res, next) {
     next(error);
   }
 }
+
+
+
+// >>> INÍCIO DAS NOVAS FUNÇÕES <<<
+exports.getMonthlyTrend = async (req, res, next) => {
+    try {
+        const { financialAccountId } = req.params;
+        const { months = 6 } = req.query;
+        const data = await financialService.getMonthlyTrend(parseInt(financialAccountId, 10), parseInt(months, 10));
+        res.status(200).json({ status: 'success', data });
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.getExpenseCategorySummary = async (req, res, next) => {
+    try {
+        const { financialAccountId } = req.params;
+        const { dateStart, dateEnd } = req.query;
+        const data = await financialService.getExpenseCategorySummary(parseInt(financialAccountId, 10), dateStart, dateEnd);
+        res.status(200).json({ status: 'success', data });
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.getIncomeCategorySummary = async (req, res, next) => {
+    try {
+        const { financialAccountId } = req.params;
+        const { dateStart, dateEnd } = req.query;
+        // Reutiliza a lógica do getExpenseCategorySummary, mas com tipo 'Entrada'
+        const data = await financialService.getIncomeCategorySummary(parseInt(financialAccountId, 10), dateStart, dateEnd);
+        res.status(200).json({ status: 'success', data });
+    } catch (error) {
+        next(error);
+    }
+};
 
 // TODO: Adicionar controllers para RecurringTransactionRule e CreditCard
 
