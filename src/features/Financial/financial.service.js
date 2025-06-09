@@ -841,53 +841,55 @@ async function getMonthlyTrend(financialAccountId, numberOfMonths = 6) {
     }
   }
   
-  async function getExpenseCategorySummary(financialAccountId, dateStart, dateEnd) {
+async function getExpenseCategorySummary(financialAccountId, dateStart, dateEnd) {
     try {
-      await validateAndGetFinancialAccount(financialAccountId);
-  
-      const whereConditions = {
-        financialAccountId,
-        type: 'Saída', // Apenas despesas
-        // Considerar apenas transações efetivadas ou gastos no cartão
-        [Op.or]: [
-          { isPayableOrReceivable: false }, // Transações diretas (dinheiro, pix, débito)
-          { isPayableOrReceivable: true, isPaidOrReceived: true }, // Contas a pagar que foram pagas
-          { creditCardId: { [Op.ne]: null } } // Compras no cartão de crédito (já são "efetivadas" no cartão)
-        ]
-      };
-  
-      if (dateStart) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.gte]: dateStart };
-      if (dateEnd) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.lte]: dateEnd };
-      
-      const expensesByCategory = await FinancialTransaction.findAll({
-        attributes: [
-          // Renomeia 'category.name' para 'type' para corresponder ao formato esperado pelo gráfico Pie
-          [sequelize.col('category.name'), 'type'], 
-          [sequelize.fn('SUM', sequelize.col('FinancialTransaction.value')), 'value'] // Garante que value é da tabela FinancialTransaction
-        ],
-        where: whereConditions,
-        include: [{
-          model: FinancialCategory,
-          as: 'category',
-          attributes: [] // Não precisa dos atributos da categoria aqui, só o nome agrupado
-        }],
-        group: [sequelize.col('category.name')], // Agrupa pelo nome da categoria
-        order: [[sequelize.fn('SUM', sequelize.col('FinancialTransaction.value')), 'DESC']], // Ordena por valor
-        raw: true, // Retorna objetos simples
-      });
-  
-      logger.info(`Resumo de categorias de despesa gerado para FinancialAccount ID ${financialAccountId}.`);
-      // O resultado já vem no formato { type: 'Nome Categoria', value: SUM_VALUE } devido ao raw:true e attributes
-      return expensesByCategory.map(item => ({
-          type: item.type || 'Sem Categoria', // Nome da categoria
-          value: parseFloat(parseFloat(item.value).toFixed(2)) // Valor total
-      }));
+        await validateAndGetFinancialAccount(financialAccountId);
+
+        const whereConditions = {
+            financialAccountId,
+            type: 'Saída',
+        };
+
+        if (dateStart) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.gte]: dateStart };
+        if (dateEnd) whereConditions.transactionDate = { ...whereConditions.dateEnd, [Op.lte]: dateEnd };
+
+        const expensesByCategory = await FinancialTransaction.findAll({
+            attributes: [
+                'financialCategoryId',
+                [sequelize.fn('SUM', sequelize.col('value')), 'totalValue']
+            ],
+            where: whereConditions,
+            group: ['financialCategoryId'],
+            raw: true,
+        });
+
+        // Mapeia os IDs para nomes de categorias
+        const categoryIds = expensesByCategory.map(e => e.financialCategoryId).filter(id => id !== null);
+        const categories = await FinancialCategory.findAll({
+            where: { id: { [Op.in]: categoryIds } },
+            attributes: ['id', 'name'],
+            raw: true,
+        });
+        const categoryMap = categories.reduce((map, cat) => {
+            map[cat.id] = cat.name;
+            return map;
+        }, {});
+
+        const result = expensesByCategory.map(item => ({
+            type: item.financialCategoryId ? categoryMap[item.financialCategoryId] : 'Sem Categoria',
+            value: parseFloat(parseFloat(item.totalValue).toFixed(2))
+        }));
+        
+        result.sort((a, b) => b.value - a.value);
+
+        logger.info(`Resumo de categorias de despesa gerado para FinancialAccount ID ${financialAccountId}.`);
+        return result;
     } catch (error) {
-      logger.error(`Erro ao gerar resumo de categorias de despesa para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error });
-      if (!error.statusCode) error.statusCode = 500;
-      throw error;
+        logger.error(`Erro ao gerar resumo de categorias de despesa para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error });
+        if (!error.statusCode) error.statusCode = 500;
+        throw error;
     }
-  }
+}
 
 
 module.exports = {
