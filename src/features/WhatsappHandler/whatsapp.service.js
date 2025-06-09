@@ -2813,16 +2813,16 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             let noLinkCurrentAction = state.currentAction === 'awaiting_clarification_response' || state.currentAction === 'selecting_account_flow_active' || state.currentAction?.startsWith('awaiting_explicit_') || state.currentAction === 'awaiting_confirmation';
             let noLinkDetectedAction = false;
             if(aiResponse.detected_actions && aiResponse.detected_actions.length > 0){
-                noLinkDetectedAction = aiResponse.detected_actions.every(da => {
+                noLinkDetectedAction = aiResponse.detected_actions.some(da => {
                     const actionNameCheck = da.action || da.action_type;
                     return actionNameCheck?.startsWith("GENERAL_GREETING") || actionNameCheck?.startsWith("ACTION_CONFIRMATION_") || actionNameCheck === "SWITCH_FINANCIAL_ACCOUNT" || actionNameCheck === "CREATE_FINANCIAL_ACCOUNT" || actionNameCheck === "DELETE_FINANCIAL_ACCOUNT";
                 });
             }
-            // >>> INÍCIO DA MODIFICAÇÃO <<<
             const noLinkConditions = noLinkCurrentAction ||
+                                     (finalMessageToSend && finalMessageToSend.includes('https://map-nocontrole.com.br/')) ||
+                                     (finalMessageToSend && finalMessageToSend.includes('https://map-nocontrole.com.br/')) ||
                                      (state.data.onboardingStage === 'awaiting_plan_confirmation' && !state.hasPaidAccess) ||
                                      noLinkDetectedAction;
-            // >>> FIM DA MODIFICAÇÃO <<<
 
 
             if (platformLinkFooter && platformLinkFooter.trim() !== "" && !noLinkConditions ) {
