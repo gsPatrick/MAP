@@ -2825,9 +2825,9 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                                      noLinkDetectedAction;
 
 
-            if (platformLinkFooter && platformLinkFooter.trim() !== "" && !noLinkConditions ) {
-                 finalMessageToSend += `\n\n${platformLinkFooter.trim()}`;
-            }
+               if (platformLinkFooter && platformLinkFooter.trim() !== "" && !noLinkConditions ) {
+             finalMessageToSend += `\n\n---\n\n${platformLinkFooter.trim()}`;
+        }
             finalMessageToSend = finalMessageToSend.replace(/\n{3,}/g, '\n\n').trim();
        
             if (finalMessageToSend) {
