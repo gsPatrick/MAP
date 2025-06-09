@@ -9,13 +9,13 @@ const router = Router(); // Não precisa mais de mergeParams aqui
 // Estas rotas serão montadas sob /transactions
 
 router.post('/', financialController.createTransaction);
-router.get('/', financialController.getAllTransactions);
+router.get('/', financialController.getAllTransactions); // Este vai lidar com a listagem geral, incluindo 'dueAfter'
 router.post('/parcelled', financialController.createParcelledAccount);
 
 // Rotas para uma transação específica
 router.get('/:transactionId', financialController.getTransactionById);
-router.patch('/:transactionId', financialController.updateTransaction); // Usando PATCH para atualizações parciais
+router.patch('/:transactionId', financialController.updateTransaction);
 router.delete('/:transactionId', financialController.deleteTransaction);
-router.post('/:transactionId/settle', financialController.markAsPaidOrReceived); // Rota para marcar como paga/recebida
+router.post('/:transactionId/settle', financialController.markAsPaidOrReceived); 
 
 module.exports = router;
