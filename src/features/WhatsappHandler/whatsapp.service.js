@@ -2860,7 +2860,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 delete state.data.clarificationContext;
             }
        
-            if (finalMessageToSend) {
+                     if (finalMessageToSend) {
                 const performedConcreteAction = (aiResponse.detected_actions && aiResponse.detected_actions.length > 0 &&
                                            aiResponse.detected_actions.some(a => {
                                                const actionNameCheck = a.action || a.action_type;
@@ -2883,6 +2883,13 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 }).length === 1;
 
                 if (resourceForButtonsContext && singleConcreteNonEditAction && isOwnerActingOnOwnBehalfGlobal) { 
+                    // ***** INÍCIO DA CORREÇÃO *****
+                    // ABORDAGEM DE DUAS MENSAGENS PARA MÁXIMA COMPATIBILIDADE
+
+                    // 1. Envia a mensagem de texto principal e completa primeiro.
+                    await sendWhatsappMessage(senderPhone, finalMessageToSend);
+
+                    // 2. Prepara e envia uma segunda mensagem, curta, apenas com os botões.
                     let buttons = [];
                     let buttonItemDesc = "item";
                     if (resourceForButtonsContext.description && typeof resourceForButtonsContext.description === 'string') {
@@ -2900,11 +2907,13 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     }
        
                     if (buttons.length > 0) {
-                        await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, buttonTitle, "Ver Opções 👇");
-                    } else {
-                        await sendWhatsappMessage(senderPhone, finalMessageToSend);
+                        // Envia a mensagem de botões com um texto de corpo curto e genérico.
+                        await sendButtonListMessage(senderPhone, "O que deseja fazer em seguida?", buttons, buttonTitle, "Escolha uma opção 👇");
                     }
+                    // ***** FIM DA CORREÇÃO *****
+
                 } else {
+                    // Caminho padrão para todas as outras mensagens que não têm botões de contexto.
                     await sendWhatsappMessage(senderPhone, finalMessageToSend);
                     if(state.editingResource && !resourceForButtonsContext && !actionWasAnEdit) state.editingResource = null;
                 }
