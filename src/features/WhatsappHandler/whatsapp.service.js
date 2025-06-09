@@ -2767,17 +2767,28 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
                 if (multipleActionBodiesList.length > 0) {
                     structuredDataBody = multipleActionBodiesList.join("\n\n---\n\n");
-                    if ((typeof aiMessageIntro === 'string' && (aiMessageIntro.startsWith(`Ok, ${clientNameToUse}!`) || aiMessageIntro.startsWith(`Entendido, ${clientNameToUse}!`) || !aiMessageIntro.includes(clientNameToUse))) &&
-                        aiResponse.overall_summary_suggestion && !aiResponse.overall_summary_suggestion.startsWith(`Ok, ${clientNameToUse}!`) &&
-                        !(aiMessageIntro && (aiMessageIntro.toLowerCase().includes("ops") || aiMessageIntro.toLowerCase().includes("problema")) ) ) {
-                        aiMessageIntro = aiResponse.overall_summary_suggestion;
+
+                    // ***** INÍCIO DA CORREÇÃO *****
+                    // Se a IA deu uma sugestão geral e a introdução atual é genérica ("Ok, Fulano!"),
+                    // usamos a sugestão da IA como a introdução principal.
+                    // Isso evita que a mensagem final seja "Ok, Fulano!" seguido de um resumo,
+                    // e em vez disso usa a introdução mais contextual da IA.
+                    const isGenericIntro = typeof aiMessageIntro === 'string' &&
+                                           (aiMessageIntro.startsWith(`Ok, ${clientNameToUse}!`) ||
+                                            aiMessageIntro.startsWith(`Entendido, ${clientNameToUse}!`));
+
+                    if (aiResponse.overall_summary_suggestion && (isGenericIntro || aiMessageIntro === aiResponse.reply_to_user_suggestion)) {
+                         // Evita substituir uma mensagem de erro por uma sugestão genérica.
+                        if (!(aiMessageIntro.toLowerCase().includes("ops") || aiMessageIntro.toLowerCase().includes("problema"))) {
+                             aiMessageIntro = aiResponse.overall_summary_suggestion;
+                        }
                     }
+                    // ***** FIM DA CORREÇÃO *****
+
                 } else if (aiResponse.detected_actions.length === 0) {
                     structuredDataBody = "";
-                    if (aiResponse.reply_to_user_suggestion && (typeof aiMessageIntro !== 'string' || aiMessageIntro.startsWith(`Ok, ${clientNameToUse}!`) || aiMessageIntro.startsWith(`Entendido, ${clientNameToUse}!`) || aiMessageIntro === aiResponse.overall_summary_suggestion )) {
-                        if (aiResponse.reply_to_user_suggestion !== aiResponse.overall_summary_suggestion || aiMessageIntro.startsWith(`Ok, ${clientNameToUse}!`)) {
-                            aiMessageIntro = aiResponse.reply_to_user_suggestion;
-                        }
+                    if (aiResponse.reply_to_user_suggestion && (typeof aiMessageIntro !== 'string' || aiMessageIntro.startsWith(`Ok, ${clientNameToUse}!`) || aiMessageIntro.startsWith(`Entendido, ${clientNameToUse}!`))) {
+                        aiMessageIntro = aiResponse.reply_to_user_suggestion;
                     }
                 }
             } 
