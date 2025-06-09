@@ -147,42 +147,26 @@ async function getExpenseCategorySummary(req, res, next) {
   }
 }
 
+async function getIncomeCategorySummary(req, res, next) {
+  try {
+    const financialAccountId = getFinancialAccountIdFromRequest(req);
+    const { dateStart, dateEnd } = req.query;
 
-
-// >>> INÍCIO DAS NOVAS FUNÇÕES <<<
-exports.getMonthlyTrend = async (req, res, next) => {
-    try {
-        const { financialAccountId } = req.params;
-        const { months = 6 } = req.query;
-        const data = await financialService.getMonthlyTrend(parseInt(financialAccountId, 10), parseInt(months, 10));
-        res.status(200).json({ status: 'success', data });
-    } catch (error) {
-        next(error);
+    if ((dateStart && !/^\d{4}-\d{2}-\d{2}$/.test(dateStart)) || (dateEnd && !/^\d{4}-\d{2}-\d{2}$/.test(dateEnd))) {
+        const error = new Error("Formato de data inválido. Use YYYY-MM-DD.");
+        error.statusCode = 400; error.status = 'fail'; throw error;
     }
-};
 
-exports.getExpenseCategorySummary = async (req, res, next) => {
-    try {
-        const { financialAccountId } = req.params;
-        const { dateStart, dateEnd } = req.query;
-        const data = await financialService.getExpenseCategorySummary(parseInt(financialAccountId, 10), dateStart, dateEnd);
-        res.status(200).json({ status: 'success', data });
-    } catch (error) {
-        next(error);
-    }
-};
+    // Assumindo que você já adicionou a função no service.js conforme a instrução anterior
+    const summaryData = await financialService.getIncomeCategorySummary(financialAccountId, dateStart, dateEnd);
+    res.status(200).json({ status: 'success', data: summaryData });
+  } catch (error) {
+    next(error);
+  }
+}
 
-exports.getIncomeCategorySummary = async (req, res, next) => {
-    try {
-        const { financialAccountId } = req.params;
-        const { dateStart, dateEnd } = req.query;
-        // Reutiliza a lógica do getExpenseCategorySummary, mas com tipo 'Entrada'
-        const data = await financialService.getIncomeCategorySummary(parseInt(financialAccountId, 10), dateStart, dateEnd);
-        res.status(200).json({ status: 'success', data });
-    } catch (error) {
-        next(error);
-    }
-};
+
+
 
 // TODO: Adicionar controllers para RecurringTransactionRule e CreditCard
 
@@ -197,5 +181,6 @@ module.exports = {
   getFinancialSummary,
   getMonthlyTrend,
   getExpenseCategorySummary,
+  getIncomeCategorySummary
   // ... controllers para RecurringTransactionRule e CreditCard
 };
