@@ -2329,7 +2329,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                                 platformLinkFooter = ""; state.currentAction = null;
                                 break;
                             }
-                         case 'GET_FINANCIAL_SUMMARY': {
+   case 'GET_FINANCIAL_SUMMARY': {
     // MODIFICADO: Usa financialCategoryService
     const categoryObjectSummary = params.financialCategoryName 
         ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId)
@@ -2345,6 +2345,15 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
     };
     const summary = await financialService.getFinancialSummary(state.activeFinancialAccountId, filters);
     
+    // >>> INÍCIO DA MODIFICAÇÃO <<<
+    // Garante que valores nulos (se nenhuma transação for encontrada) sejam tratados como 0
+    summary.totalIncome = summary.totalIncome || 0;
+    summary.totalExpenses = summary.totalExpenses || 0;
+    summary.netBalance = summary.netBalance || 0;
+    // O saldo total da conta também deve ser verificado para evitar o mesmo problema
+    summary.accountTotalBalance = summary.accountTotalBalance || 0;
+    // >>> FIM DA MODIFICAÇÃO <<<
+
     // Lógica de introdução melhorada para ser mais dinâmica
     if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) {
         aiMessageIntro = aiResponse.overall_summary_suggestion || `Aqui está o resumo financeiro para o período de *${summary.periodDescription}*, ${clientNameToUse}! 📊`;
