@@ -2329,41 +2329,43 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                                 platformLinkFooter = ""; state.currentAction = null;
                                 break;
                             }
-                            case 'GET_FINANCIAL_SUMMARY': {
-                                // MODIFICADO: Usa financialCategoryService
-                                const categoryObjectSummary = params.financialCategoryName 
-                                    ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId)
-                                    : null;
-                                const categoryIdSummary = categoryObjectSummary ? categoryObjectSummary.id : null;
+                         case 'GET_FINANCIAL_SUMMARY': {
+    // MODIFICADO: Usa financialCategoryService
+    const categoryObjectSummary = params.financialCategoryName 
+        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId)
+        : null;
+    const categoryIdSummary = categoryObjectSummary ? categoryObjectSummary.id : null;
 
-                                const filters = {
-                                    period: params.period || 'este_mes',
-                                    dateStart: params.dateStart,
-                                    dateEnd: params.dateEnd,
-                                    financialCategoryId: categoryIdSummary, 
-                                    type: params.type,
-                                };
-                                const summary = await financialService.getFinancialSummary(state.activeFinancialAccountId, filters);
-                                
-                                if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) {
-                                    aiMessageIntro = aiResponse.overall_summary_suggestion || `Aqui está o resumo financeiro que você pediu, ${clientNameToUse}! 📊`;
-                                } else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) {
-                                    aiMessageIntro = `Resumo Financeiro para ${state.activeFinancialAccountName}:`;
-                                }
-                                
-                                currentActionFormattedData = `🧾 Resumo do Período (${summary.periodDescription}):\n\n` +
-                                                             `➡️ Total de Entradas: ${formatCurrency(summary.totalIncome)}\n` +
-                                                             `⬅️ Total de Saídas: ${formatCurrency(summary.totalExpenses)}\n` +
-                                                             `⚖️ Saldo do Período: ${formatCurrency(summary.netBalance)}\n\n` +
-                                                             `💰 Saldo Total da Conta (aproximado): ${formatCurrency(summary.accountTotalBalance)}`;
-                                if(summary.categoryBreakdown && summary.categoryBreakdown.length > 0){
-                                    currentActionFormattedData += "\n\n Detalhamento por Categoria (Top 5 Saídas):\n";
-                                    summary.categoryBreakdown.slice(0,5).forEach(cat => {
-                                        currentActionFormattedData += `- ${cat.categoryName || 'Outros'}: ${formatCurrency(cat.totalValue)}\n`;
-                                    });
-                                }
-                                break;
-                            }
+    const filters = {
+        period: params.period || 'este_mes',
+        dateStart: params.dateStart,
+        dateEnd: params.dateEnd,
+        financialCategoryId: categoryIdSummary, 
+        type: params.type,
+    };
+    const summary = await financialService.getFinancialSummary(state.activeFinancialAccountId, filters);
+    
+    // Lógica de introdução melhorada para ser mais dinâmica
+    if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) {
+        aiMessageIntro = aiResponse.overall_summary_suggestion || `Aqui está o resumo financeiro para o período de *${summary.periodDescription}*, ${clientNameToUse}! 📊`;
+    } else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) {
+        aiMessageIntro = `Resumo Financeiro para ${state.activeFinancialAccountName} (${summary.periodDescription}):`;
+    }
+    
+    // O corpo agora contém APENAS os dados, sem o cabeçalho "Resumo do Período"
+    currentActionFormattedData = `➡️ Total de Entradas: ${formatCurrency(summary.totalIncome)}\n` +
+                                 `⬅️ Total de Saídas: ${formatCurrency(summary.totalExpenses)}\n` +
+                                 `⚖️ Saldo do Período: ${formatCurrency(summary.netBalance)}\n\n` +
+                                 `💰 Saldo Total da Conta (aproximado): ${formatCurrency(summary.accountTotalBalance)}`;
+
+    if(summary.categoryBreakdown && summary.categoryBreakdown.length > 0){
+        currentActionFormattedData += "\n\n Detalhamento por Categoria (Top 5 Saídas):\n";
+        summary.categoryBreakdown.slice(0,5).forEach(cat => {
+            currentActionFormattedData += `- ${cat.categoryName || 'Outros'}: ${formatCurrency(cat.totalValue)}\n`;
+        });
+    }
+    break;
+}
                             case 'GET_CREDIT_CARD_INVOICE': {
                                 const cardNameForInvoice = params.creditCardName;
                                 if (!cardNameForInvoice) throw new Error("Nome do cartão é obrigatório para ver a fatura.");
