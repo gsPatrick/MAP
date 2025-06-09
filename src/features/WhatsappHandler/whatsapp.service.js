@@ -1518,6 +1518,14 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 }
             }
 
+            // ***** INÍCIO DA CORREÇÃO *****
+            // Remove qualquer URL da plataforma que a IA tenha incluído no texto de introdução.
+            // Isso garante que apenas o nosso rodapé padronizado seja usado.
+            const platformUrlRegex = /(https?:\/\/)?(www\.)?map-nocontrole\.com\.br(\/painel)?/gi;
+            if (typeof aiMessageIntro === 'string') {
+                aiMessageIntro = aiMessageIntro.replace(platformUrlRegex, '').trim();
+            }
+
 
             let structuredDataBody = "";
             let platformLinkFooter = formatPlatformLink();
