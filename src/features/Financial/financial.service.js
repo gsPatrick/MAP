@@ -560,68 +560,95 @@ async function deleteTransaction(financialAccountId, transactionId) {
 
 async function getFinancialSummary(financialAccountId, filters = {}) {
   try {
-    const account = await validateAndGetFinancialAccount(financialAccountId, null, [{model:Client, as: 'ownerClient'}]);
-    const { dateStart, dateEnd, financialCategoryId, type } = filters;
-    const whereBase = { financialAccountId };
+    const account = await validateAndGetFinancialAccount(financialAccountId, null, [{ model: Client, as: 'ownerClient' }]);
+    const { period, financialCategoryId, type } = filters;
+    let { dateStart, dateEnd } = filters;
 
-    if (financialCategoryId) whereBase.financialCategoryId = financialCategoryId;
-    if (type) whereBase.type = type;
+    let periodDescription = "Período Personalizado";
+    const now = new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" }));
+    const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
 
-    let whereTransactionDate = {};
-    if (dateStart) whereTransactionDate[Op.gte] = dateStart;
-    if (dateEnd) whereTransactionDate[Op.lte] = dateEnd;
-    if(Object.keys(whereTransactionDate).length > 0) whereBase.transactionDate = whereTransactionDate;
+    if (period) {
+      if (period === "hoje") {
+        dateStart = today.toISOString().split('T')[0];
+        dateEnd = dateStart;
+        periodDescription = `Hoje (${today.toLocaleDateString('pt-BR', { timeZone: 'UTC' })})`;
+      } else if (period === "este_mes") {
+        dateStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)).toISOString().split('T')[0];
+        dateEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0)).toISOString().split('T')[0];
+        periodDescription = `Este Mês (${new Date(dateStart + 'T00:00:00Z').toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' })})`;
+      }
+    } else if (dateStart && dateEnd) {
+      periodDescription = `De ${formatDate(dateStart)} a ${formatDate(dateEnd)}`;
+    } else if (dateStart) {
+      periodDescription = `A partir de ${formatDate(dateStart)}`;
+    } else if (dateEnd) {
+      periodDescription = `Até ${formatDate(dateEnd)}`;
+    }
 
-    const whereEffective = {
-        ...whereBase,
-        [Op.or]: [
-            { isPayableOrReceivable: false, creditCardId: null },
-            { isPayableOrReceivable: true, isPaidOrReceived: true, creditCardId: null }
-        ]
+    const baseWhere = { financialAccountId };
+    if (financialCategoryId) baseWhere.financialCategoryId = financialCategoryId;
+    if (dateStart) baseWhere.transactionDate = { [Op.gte]: dateStart };
+    if (dateEnd) baseWhere.transactionDate = { ...baseWhere.transactionDate, [Op.lte]: dateEnd };
+
+    // --- CÁLCULO DE GASTOS (SAÍDAS) ---
+    // Inclui todas as saídas: à vista, contas pagas e compras no cartão.
+    const whereExpenses = {
+      ...baseWhere,
+      type: 'Saída',
     };
-    const whereCardPayments = {
-        ...whereBase,
-        type: 'Saída',
-        description: { [Op.iLike]: '%Pagamento Fatura%' },
-        creditCardId: null
+    const totalExpenses = await FinancialTransaction.sum('value', { where: whereExpenses });
+
+    // --- CÁLCULO DE GANHOS (ENTRADAS) ---
+    // Inclui todas as entradas: à vista e contas recebidas.
+    const whereIncome = {
+      ...baseWhere,
+      type: 'Entrada',
     };
+    const totalIncome = await FinancialTransaction.sum('value', { where: whereIncome });
+    
+    // --- Saldo Total da Conta (aproximação do saldo real) ---
+    const allIncomes = await FinancialTransaction.sum('value', { where: { financialAccountId, type: 'Entrada' } });
+    const allExpenses = await FinancialTransaction.sum('value', { where: { financialAccountId, type: 'Saída' } });
+    const accountTotalBalance = (allIncomes || 0) - (allExpenses || 0);
 
-
-    const totalEntradasCaixa = await FinancialTransaction.sum('value', { where: { ...whereEffective, type: 'Entrada' } }) || 0;
-    let totalSaidasCaixa = await FinancialTransaction.sum('value', { where: { ...whereEffective, type: 'Saída' } }) || 0;
-    const totalPagamentoFaturas = await FinancialTransaction.sum('value', { where: whereCardPayments }) || 0;
-    totalSaidasCaixa += totalPagamentoFaturas;
-
-
-    const saldoEfetivado = parseFloat((totalEntradasCaixa - totalSaidasCaixa).toFixed(2));
-
-    const whereReceivables = { financialAccountId, type: 'Entrada', isPayableOrReceivable: true, isPaidOrReceived: false, creditCardId: null };
-    if (dateEnd) whereReceivables.dueDate = { [Op.lte]: dateEnd };
-    const totalAReceberPendente = await FinancialTransaction.sum('value', { where: whereReceivables }) || 0;
-
-    const wherePayables = { financialAccountId, type: 'Saída', isPayableOrReceivable: true, isPaidOrReceived: false, creditCardId: null };
-    if (dateEnd) wherePayables.dueDate = { [Op.lte]: dateEnd };
-    const totalAPagarPendente = await FinancialTransaction.sum('value', { where: wherePayables }) || 0;
+    // --- Detalhamento por categoria para as despesas do período ---
+    const expensesByCategory = await FinancialTransaction.findAll({
+        attributes: [
+            [sequelize.col('category.name'), 'categoryName'],
+            [sequelize.fn('SUM', sequelize.col('FinancialTransaction.value')), 'totalValue']
+        ],
+        where: whereExpenses,
+        include: [{ model: FinancialCategory, as: 'category', attributes: [] }],
+        group: [sequelize.col('category.name')],
+        order: [[sequelize.fn('SUM', sequelize.col('FinancialTransaction.value')), 'DESC']],
+        raw: true,
+    });
 
     const summary = {
       financialAccountId,
       accountName: account.accountName,
       accountType: account.accountType,
       ownerClientName: account.ownerClient?.name,
-      totalEntradas: parseFloat(totalEntradasCaixa.toFixed(2)),
-      totalSaidas: parseFloat(totalSaidasCaixa.toFixed(2)),
-      saldoEfetivado,
-      totalAReceberPendente: parseFloat(totalAReceberPendente.toFixed(2)),
-      totalAPagarPendente: parseFloat(totalAPagarPendente.toFixed(2)),
+      periodDescription,
+      totalIncome: totalIncome || 0,
+      totalExpenses: totalExpenses || 0,
+      netBalance: (totalIncome || 0) - (totalExpenses || 0),
+      accountTotalBalance: accountTotalBalance,
+      categoryBreakdown: expensesByCategory.map(item => ({
+        categoryName: item.categoryName || 'Sem Categoria',
+        totalValue: parseFloat(item.totalValue)
+      })),
       filtersApplied: filters
     };
+
     logger.info(`Resumo financeiro gerado para FinancialAccount ID ${financialAccountId}.`);
     return summary;
   } catch (error) {
-        logger.error(`Erro ao gerar resumo financeiro: ${error.message}`, { error });
-        if(!error.statusCode) error.statusCode = 500;
-        throw error;
-    }
+    logger.error(`Erro ao gerar resumo financeiro: ${error.message}`, { error });
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
 }
 
 async function deleteParcelledAccountGroup(financialAccountId, originalAccountId) {
