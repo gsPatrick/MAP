@@ -2811,25 +2811,19 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
            
             let noLinkCurrentAction = state.currentAction === 'awaiting_clarification_response' || state.currentAction === 'selecting_account_flow_active' || state.currentAction?.startsWith('awaiting_explicit_') || state.currentAction === 'awaiting_confirmation';
- let noLinkDetectedAction = false;
-if(aiResponse.detected_actions && aiResponse.detected_actions.length > 0){
-    // A lógica é invertida: o link só é suprimido se TODAS as ações forem do tipo conversacional/estrutural.
-    noLinkDetectedAction = aiResponse.detected_actions.every(da => {
-        const actionNameCheck = da.action || da.action_type;
-        return actionNameCheck?.startsWith("GENERAL_GREETING") ||
-               actionNameCheck?.startsWith("ACTION_CONFIRMATION_") ||
-               actionNameCheck === "SWITCH_FINANCIAL_ACCOUNT" ||
-               actionNameCheck === "CREATE_FINANCIAL_ACCOUNT" ||
-               actionNameCheck === "DELETE_FINANCIAL_ACCOUNT" ||
-               actionNameCheck === "SET_MOTIVATIONAL_MESSAGE_PREFERENCE" || // Adicionado para consistência
-               actionNameCheck === "SET_WATER_REMINDER_PREFERENCE";      // Adicionado para consistência
-    });
-}
+            let noLinkDetectedAction = false;
+            if(aiResponse.detected_actions && aiResponse.detected_actions.length > 0){
+                noLinkDetectedAction = aiResponse.detected_actions.every(da => {
+                    const actionNameCheck = da.action || da.action_type;
+                    return actionNameCheck?.startsWith("GENERAL_GREETING") || actionNameCheck?.startsWith("ACTION_CONFIRMATION_") || actionNameCheck === "SWITCH_FINANCIAL_ACCOUNT" || actionNameCheck === "CREATE_FINANCIAL_ACCOUNT" || actionNameCheck === "DELETE_FINANCIAL_ACCOUNT";
+                });
+            }
+            // >>> INÍCIO DA MODIFICAÇÃO <<<
+            const noLinkConditions = noLinkCurrentAction ||
+                                     (state.data.onboardingStage === 'awaiting_plan_confirmation' && !state.hasPaidAccess) ||
+                                     noLinkDetectedAction;
+            // >>> FIM DA MODIFICAÇÃO <<<
 
-const noLinkConditions = noLinkCurrentAction ||
-                         (finalMessageToSend && finalMessageToSend.includes('https://map-nocontrole.com.br')) || // Removida a linha duplicada
-                         (state.data.onboardingStage === 'awaiting_plan_confirmation' && !state.hasPaidAccess) ||
-                         noLinkDetectedAction;
 
             if (platformLinkFooter && platformLinkFooter.trim() !== "" && !noLinkConditions ) {
                  finalMessageToSend += `\n\n${platformLinkFooter.trim()}`;
