@@ -2880,8 +2880,10 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                         case 'parcelled_account': buttons = [ { id: `edit_parcelled_account_${resourceForButtonsContext.id}`, label: "Alterar Compra Parcelada ✍️" }, { id: `delete_parcelled_account_${resourceForButtonsContext.id}`, label: "Excluir Compra Parcelada 🗑️" }, ]; break;
                     }
        
-                    if (buttons.length > 0) {
-                        await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, buttonTitle, "Ver Opções 👇");
+                       if (buttons.length > 0) {
+                        // Adiciona o rodapé da plataforma diretamente na mensagem que será enviada com os botões
+                        const finalMessageWithFooter = `${finalMessageToSend}\n\n${platformLinkFooter}`;
+                        await sendButtonListMessage(senderPhone, finalMessageWithFooter, buttons, buttonTitle, "Ver Opções 👇");
                     } else {
                         await sendWhatsappMessage(senderPhone, finalMessageToSend);
                     }
