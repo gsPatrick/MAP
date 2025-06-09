@@ -1,34 +1,21 @@
 // src/features/Financial/financial.routes.js
 const { Router } = require('express');
 const financialController = require('./financial.controller');
-// const { authenticateToken, authorizeFinancialAccountAccess } = require('../../middlewares/authMiddleware'); // Descomente se for usar
 
-const router = Router({ mergeParams: true }); // mergeParams é importante para acessar :financialAccountId de um router pai
+const router = Router(); // Não precisa mais de mergeParams aqui
 
-// Se você for aplicar middlewares específicos para todas as rotas financeiras aqui:
-// router.use(authenticateToken); // Exemplo
-// router.use(authorizeFinancialAccountAccess); // Exemplo
+// --- ROTAS PARA TRANSAÇÕES ESPECÍFICAS ---
+// O prefixo /financial-accounts/:financialAccountId/ é adicionado no routes/index.js
+// Estas rotas serão montadas sob /transactions
 
-// Rotas para Transações (CRUD e outras)
-// Estas rotas serão prefixadas com /financial-accounts/:financialAccountId/transactions/ devido à montagem no routes/index.js
-router.post('/', financialController.createTransaction); // Rota final: .../transactions
-router.post('/parcelled', financialController.createParcelledAccount); // Rota final: .../transactions/parcelled
-router.get('/', financialController.getAllTransactions); // Rota final: .../transactions
-
-// Rotas para Resumos e Dashboards
-router.get('/summary', financialController.getFinancialSummary); // Rota final: .../transactions/summary
-router.get('/dashboard/monthly-trend', financialController.getMonthlyTrend); // Rota final: .../transactions/dashboard/monthly-trend
-router.get('/dashboard/expense-categories', financialController.getExpenseCategorySummary); // Rota final: .../transactions/dashboard/expense-categories
+router.post('/', financialController.createTransaction);
+router.get('/', financialController.getAllTransactions);
+router.post('/parcelled', financialController.createParcelledAccount);
 
 // Rotas para uma transação específica
-router.get('/:transactionId', financialController.getTransactionById); // Rota final: .../transactions/:transactionId
-router.put('/:transactionId', financialController.updateTransaction); // Rota final: .../transactions/:transactionId
-router.patch('/:transactionId/settle', financialController.markAsPaidOrReceived); // Rota final: .../transactions/:transactionId/settle
-router.delete('/:transactionId', financialController.deleteTransaction); // Rota final: .../transactions/:transactionId
-
-router.get('/summary', financialController.getFinancialSummary); // Já deve existir
-router.get('/monthly-trend', financialController.getMonthlyTrend); // <<< NOVA ROTA
-router.get('/expense-category-summary', financialController.getExpenseCategorySummary); // <<< NOVA ROTA
-router.get('/income-category-summary', financialController.getIncomeCategorySummary); // <<< NOVA ROTA
+router.get('/:transactionId', financialController.getTransactionById);
+router.patch('/:transactionId', financialController.updateTransaction); // Usando PATCH para atualizações parciais
+router.delete('/:transactionId', financialController.deleteTransaction);
+router.post('/:transactionId/settle', financialController.markAsPaidOrReceived); // Rota para marcar como paga/recebida
 
 module.exports = router;

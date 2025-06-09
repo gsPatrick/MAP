@@ -4,10 +4,10 @@ const logger = require('../utils/logger');
 const { FinancialAccount } = require('../database');
 const { authenticateToken, authenticateClientToken, authorizeRole } = require('../middlewares/authMiddleware'); // authenticateToken é para admin
 
-// Caminhos para os módulos de rotas
-const userRoutes = require('../features/User/user.routes'); // Admin users
-const clientRoutes = require('../features/Client/client.routes'); // Gerenciamento de Clients (contatos) por Admins
-const clientAuthRoutes = require('../features/ClientAuth/clientAuth.routes'); // Autenticação de Clients (usuários finais)
+// Importações dos Módulos de Rotas
+const userRoutes = require('../features/User/user.routes');
+const clientRoutes = require('../features/Client/client.routes');
+const clientAuthRoutes = require('../features/ClientAuth/clientAuth.routes');
 const financialTransactionRoutes = require('../features/Financial/financial.routes');
 const recurringTransactionRoutes = require('../features/RecurringTransaction/recurringTransaction.routes');
 const creditCardRoutes = require('../features/CreditCardManagement/creditCard.routes');
@@ -20,15 +20,16 @@ const devToolsRoutes = require('../features/DevTools/devTools.routes');
 const financialCategoryRoutes = require('../features/FinancialCategory/financialCategory.routes');
 const InteractiveChatRoutes = require('../features/InteractiveChat/interactiveChat.routes');
 const kanbanRoutes = require('../features/Kanban/kanban.routes');
-// ROTAS PARA BUSINESS CLIENTS
 const businessClientRoutes = require('../features/BusinessClient/BusinessClient.routes');
-const sharedAccessRoutes = require('../features/SharedAccess/sharedAccess.routes'); // <<< NOVA ROTA
+const sharedAccessRoutes = require('../features/SharedAccess/sharedAccess.routes');
 const hotmartWebhookRoutes = require('../features/WebhookHandler/hotmart.routes');
-const googleAuthRoutes = require('../features/GoogleAuth/googleAuth.routes'); // <<< NOVA ROTA GOOGLE AUTH
-const googleWebhookRoutes = require('../features/GoogleWebhook/googleWebhook.routes'); // <<< NOVO WEBHOOK
-const hydrationRoutes = require('../features/Hydration/hydration.routes'); // <<< ADICIONE ESTA LINHA
+const googleAuthRoutes = require('../features/GoogleAuth/googleAuth.routes');
+const googleWebhookRoutes = require('../features/GoogleWebhook/googleWebhook.routes');
+const hydrationRoutes = require('../features/Hydration/hydration.routes');
 
-
+// >>>>> INÍCIO DA MUDANÇA: Importar o Controller Financeiro <<<<<
+const financialController = require('../features/Financial/financial.controller');
+// >>>>> FIM DA MUDANÇA <<<<<
 
 const mainApiRouter = Router();
 
@@ -40,28 +41,23 @@ mainApiRouter.get('/status', (req, res) => res.status(200).json({
 }));
 
 // --- ROTAS PÚBLICAS OU SEMI-PÚBLICAS ---
-mainApiRouter.use('/webhooks', hotmartWebhookRoutes); // <<< NOVA LINHA (ou /payment-webhooks)
-mainApiRouter.use('/auth', clientAuthRoutes); // Rotas de login e set-credentials para Clients
-mainApiRouter.use('/whatsapp-zapi', whatsappWebhookRoutes); // Webhook da Z-API (sem token de app)
-mainApiRouter.use('/auth/google', googleAuthRoutes); // <<< ROTAS PARA GOOGLE AUTHENTICATION
-mainApiRouter.use('/webhooks/google-calendar', googleWebhookRoutes); // <<< ROTA PARA WEBHOOK DO GOOGLE
+mainApiRouter.use('/webhooks', hotmartWebhookRoutes);
+mainApiRouter.use('/auth', clientAuthRoutes);
+mainApiRouter.use('/whatsapp-zapi', whatsappWebhookRoutes);
+mainApiRouter.use('/auth/google', googleAuthRoutes);
+mainApiRouter.use('/webhooks/google-calendar', googleWebhookRoutes);
 
-
-
-// --- ROTAS DE ADMINISTRAÇÃO DO SISTEMA (protegidas para Users com role 'admin') ---
-// Aplicar authenticateToken (admin) e authorizeRole(['admin']) aqui
-mainApiRouter.use('/users',  userRoutes); // Gerenciamento de Users (admins)
-mainApiRouter.use('/clients',  clientRoutes); // Gerenciamento de Clients por Admins
-mainApiRouter.use('/system',  systemRoutes); // Configs do sistema, categorias globais, planos
-mainApiRouter.use('/dev-tools',  devToolsRoutes); // Ferramentas de desenvolvimento
-mainApiRouter.use('/chat', InteractiveChatRoutes); // Rota de chat do site (sem token, mas com autenticação de cliente)
-mainApiRouter.use('/shared-access', authenticateClientToken, sharedAccessRoutes); // <<< NOVA ROTA
+// --- ROTAS DE ADMINISTRAÇÃO DO SISTEMA ---
+mainApiRouter.use('/users', userRoutes);
+mainApiRouter.use('/clients', clientRoutes);
+mainApiRouter.use('/system', systemRoutes);
+mainApiRouter.use('/dev-tools', devToolsRoutes);
+mainApiRouter.use('/chat', InteractiveChatRoutes);
+mainApiRouter.use('/shared-access', authenticateClientToken, sharedAccessRoutes);
 mainApiRouter.use('/hydration', authenticateClientToken, hydrationRoutes);
 
-// --- ROTAS PARA CLIENTS LOGADOS (protegidas para Clients com token válido e assinatura ativa) ---
 
-// Middleware para verificar se o Client logado é o dono da FinancialAccount acessada via URL
-// Este middleware já está implementado
+// --- Middleware para autorização de acesso à conta financeira ---
 async function authorizeFinancialAccountOwnership(req, res, next) {
     try {
         const clientForAuth = req.sharedAccessContext ? { id: req.sharedAccessContext.ownerClientId } : req.client;
@@ -88,7 +84,6 @@ async function authorizeFinancialAccountOwnership(req, res, next) {
             return res.status(403).json({ status: 'fail', message: 'Esta conta financeira está inativa.' });
         }
         
-        // Se for um acesso compartilhado, verificar se este perfil específico está permitido
         if (req.sharedAccessContext) {
             const { canAccessPersonalProfile, canAccessBusinessProfileId } = req.sharedAccessContext;
             let isAllowedForShared = false;
@@ -112,33 +107,33 @@ async function authorizeFinancialAccountOwnership(req, res, next) {
 }
 
 
+// --- ROTAS PARA CLIENTS LOGADOS (com middleware de autorização de conta) ---
 const clientFinancialAccountRouter = Router({ mergeParams: true });
 clientFinancialAccountRouter.use(authenticateClientToken);
 clientFinancialAccountRouter.use(authorizeFinancialAccountOwnership);
+
+// >>>>> INÍCIO DA MUDANÇA: Registrar as rotas de resumo aqui <<<<<
+clientFinancialAccountRouter.get('/summary', financialController.getFinancialSummary);
+clientFinancialAccountRouter.get('/monthly-trend', financialController.getMonthlyTrend);
+clientFinancialAccountRouter.get('/expense-category-summary', financialController.getExpenseCategorySummary);
+clientFinancialAccountRouter.get('/income-category-summary', financialController.getIncomeCategorySummary);
+// >>>>> FIM DA MUDANÇA <<<<<
 
 // Monta as sub-rotas no clientFinancialAccountRouter
 clientFinancialAccountRouter.use('/transactions', financialTransactionRoutes);
 clientFinancialAccountRouter.use('/recurring-rules', recurringTransactionRoutes);
 clientFinancialAccountRouter.use('/credit-cards', creditCardRoutes);
-clientFinancialAccountRouter.use('/products', productRoutes); // productRoutes já espera :financialAccountId
-clientFinancialAccountRouter.use('/products/:productId/stock', productStockRouter); // productStockRouter lida com :productId
+clientFinancialAccountRouter.use('/products', productRoutes);
+clientFinancialAccountRouter.use('/products/:productId/stock', productStockRouter);
 clientFinancialAccountRouter.use('/appointments', appointmentRoutes);
 clientFinancialAccountRouter.use('/categories', financialCategoryRoutes);
 clientFinancialAccountRouter.use('/kanban', kanbanRoutes);
-// ROTAS DE BUSINESS CLIENTS ANINHADAS SOB FINANCIAL ACCOUNT
 clientFinancialAccountRouter.use('/business-clients', businessClientRoutes);
 
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-// >>>>> CORREÇÃO APLICADA AQUI <<<<<<<<<<<<<<<<<<<
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 // Monta o router de conta financeira no router principal da API
 mainApiRouter.use('/financial-accounts/:financialAccountId', clientFinancialAccountRouter);
 
-
-// Rota global de estoque para Clients logados (req.client já disponível)
-// O controller getStockMovements já espera financialAccountId na query, e a validação de propriedade
-// será feita dentro do serviço getStockMovements.
+// Rota global de estoque para Clients logados
 mainApiRouter.use('/stock', authenticateClientToken, globalStockRouter);
-// Exemplo: GET /api/stock/movements (o controller getStockMovements pegaria o clientId de req.client.id e usaria o financialAccountId da query para filtrar)
 
 module.exports = mainApiRouter;
