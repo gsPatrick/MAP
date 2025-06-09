@@ -2810,24 +2810,26 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 finalMessageToSend += `\n\n${structuredDataBody.trim()}`;
             }
            
-                let noLinkCurrentAction = state.currentAction === 'awaiting_clarification_response' || state.currentAction === 'selecting_account_flow_active' || state.currentAction?.startsWith('awaiting_explicit_') || state.currentAction === 'awaiting_confirmation';
-    let noLinkDetectedAction = false;
-    if(aiResponse.detected_actions && aiResponse.detected_actions.length > 0){
-        noLinkDetectedAction = aiResponse.detected_actions.some(da => {
-            const actionNameCheck = da.action || da.action_type;
-            return actionNameCheck?.startsWith("GENERAL_GREETING") ||
-                actionNameCheck?.startsWith("ACTION_CONFIRMATION_") ||
-                actionNameCheck === "SWITCH_FINANCIAL_ACCOUNT" ||
-                actionNameCheck === "CREATE_FINANCIAL_ACCOUNT" ||
-                actionNameCheck === "DELETE_FINANCIAL_ACCOUNT";
-        });
-    }
+            let noLinkCurrentAction = state.currentAction === 'awaiting_clarification_response' || state.currentAction === 'selecting_account_flow_active' || state.currentAction?.startsWith('awaiting_explicit_') || state.currentAction === 'awaiting_confirmation';
+ let noLinkDetectedAction = false;
+if(aiResponse.detected_actions && aiResponse.detected_actions.length > 0){
+    // A lógica é invertida: o link só é suprimido se TODAS as ações forem do tipo conversacional/estrutural.
+    noLinkDetectedAction = aiResponse.detected_actions.every(da => {
+        const actionNameCheck = da.action || da.action_type;
+        return actionNameCheck?.startsWith("GENERAL_GREETING") ||
+               actionNameCheck?.startsWith("ACTION_CONFIRMATION_") ||
+               actionNameCheck === "SWITCH_FINANCIAL_ACCOUNT" ||
+               actionNameCheck === "CREATE_FINANCIAL_ACCOUNT" ||
+               actionNameCheck === "DELETE_FINANCIAL_ACCOUNT" ||
+               actionNameCheck === "SET_MOTIVATIONAL_MESSAGE_PREFERENCE" || // Adicionado para consistência
+               actionNameCheck === "SET_WATER_REMINDER_PREFERENCE";      // Adicionado para consistência
+    });
+}
 
-    const noLinkConditions = noLinkCurrentAction ||
-                            (finalMessageToSend && finalMessageToSend.includes('https://map-nocontrole.com.br/')) ||
-                            (finalMessageToSend && finalMessageToSend.includes('https://map-nocontrole.com.br/')) ||
-                            (state.data.onboardingStage === 'awaiting_plan_confirmation' && !state.hasPaidAccess) ||
-                            noLinkDetectedAction;
+const noLinkConditions = noLinkCurrentAction ||
+                         (finalMessageToSend && finalMessageToSend.includes('https://map-nocontrole.com.br')) || // Removida a linha duplicada
+                         (state.data.onboardingStage === 'awaiting_plan_confirmation' && !state.hasPaidAccess) ||
+                         noLinkDetectedAction;
 
             if (platformLinkFooter && platformLinkFooter.trim() !== "" && !noLinkConditions ) {
                  finalMessageToSend += `\n\n${platformLinkFooter.trim()}`;
