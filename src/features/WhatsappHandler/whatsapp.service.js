@@ -1518,14 +1518,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 }
             }
 
-            // ***** INÍCIO DA CORREÇÃO *****
-            // Remove qualquer URL da plataforma que a IA tenha incluído no texto de introdução.
-            // Isso garante que apenas o nosso rodapé padronizado seja usado.
-            const platformUrlRegex = /(https?:\/\/)?(www\.)?map-nocontrole\.com\.br(\/painel)?/gi;
-            if (typeof aiMessageIntro === 'string') {
-                aiMessageIntro = aiMessageIntro.replace(platformUrlRegex, '').trim();
-            }
-
 
             let structuredDataBody = "";
             let platformLinkFooter = formatPlatformLink();
@@ -2767,28 +2759,17 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
                 if (multipleActionBodiesList.length > 0) {
                     structuredDataBody = multipleActionBodiesList.join("\n\n---\n\n");
-
-                    // ***** INÍCIO DA CORREÇÃO *****
-                    // Se a IA deu uma sugestão geral e a introdução atual é genérica ("Ok, Fulano!"),
-                    // usamos a sugestão da IA como a introdução principal.
-                    // Isso evita que a mensagem final seja "Ok, Fulano!" seguido de um resumo,
-                    // e em vez disso usa a introdução mais contextual da IA.
-                    const isGenericIntro = typeof aiMessageIntro === 'string' &&
-                                           (aiMessageIntro.startsWith(`Ok, ${clientNameToUse}!`) ||
-                                            aiMessageIntro.startsWith(`Entendido, ${clientNameToUse}!`));
-
-                    if (aiResponse.overall_summary_suggestion && (isGenericIntro || aiMessageIntro === aiResponse.reply_to_user_suggestion)) {
-                         // Evita substituir uma mensagem de erro por uma sugestão genérica.
-                        if (!(aiMessageIntro.toLowerCase().includes("ops") || aiMessageIntro.toLowerCase().includes("problema"))) {
-                             aiMessageIntro = aiResponse.overall_summary_suggestion;
-                        }
+                    if ((typeof aiMessageIntro === 'string' && (aiMessageIntro.startsWith(`Ok, ${clientNameToUse}!`) || aiMessageIntro.startsWith(`Entendido, ${clientNameToUse}!`) || !aiMessageIntro.includes(clientNameToUse))) &&
+                        aiResponse.overall_summary_suggestion && !aiResponse.overall_summary_suggestion.startsWith(`Ok, ${clientNameToUse}!`) &&
+                        !(aiMessageIntro && (aiMessageIntro.toLowerCase().includes("ops") || aiMessageIntro.toLowerCase().includes("problema")) ) ) {
+                        aiMessageIntro = aiResponse.overall_summary_suggestion;
                     }
-                    // ***** FIM DA CORREÇÃO *****
-
                 } else if (aiResponse.detected_actions.length === 0) {
                     structuredDataBody = "";
-                    if (aiResponse.reply_to_user_suggestion && (typeof aiMessageIntro !== 'string' || aiMessageIntro.startsWith(`Ok, ${clientNameToUse}!`) || aiMessageIntro.startsWith(`Entendido, ${clientNameToUse}!`))) {
-                        aiMessageIntro = aiResponse.reply_to_user_suggestion;
+                    if (aiResponse.reply_to_user_suggestion && (typeof aiMessageIntro !== 'string' || aiMessageIntro.startsWith(`Ok, ${clientNameToUse}!`) || aiMessageIntro.startsWith(`Entendido, ${clientNameToUse}!`) || aiMessageIntro === aiResponse.overall_summary_suggestion )) {
+                        if (aiResponse.reply_to_user_suggestion !== aiResponse.overall_summary_suggestion || aiMessageIntro.startsWith(`Ok, ${clientNameToUse}!`)) {
+                            aiMessageIntro = aiResponse.reply_to_user_suggestion;
+                        }
                     }
                 }
             } 
@@ -2829,20 +2810,24 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 finalMessageToSend += `\n\n${structuredDataBody.trim()}`;
             }
            
-            let noLinkCurrentAction = state.currentAction === 'awaiting_clarification_response' || state.currentAction === 'selecting_account_flow_active' || state.currentAction?.startsWith('awaiting_explicit_') || state.currentAction === 'awaiting_confirmation';
-            let noLinkDetectedAction = false;
-            if(aiResponse.detected_actions && aiResponse.detected_actions.length > 0){
-                noLinkDetectedAction = aiResponse.detected_actions.some(da => {
-                    const actionNameCheck = da.action || da.action_type;
-                    return actionNameCheck?.startsWith("GENERAL_GREETING") || actionNameCheck?.startsWith("ACTION_CONFIRMATION_") || actionNameCheck === "SWITCH_FINANCIAL_ACCOUNT" || actionNameCheck === "CREATE_FINANCIAL_ACCOUNT" || actionNameCheck === "DELETE_FINANCIAL_ACCOUNT";
-                });
-            }
-            const noLinkConditions = noLinkCurrentAction ||
-                                     (finalMessageToSend && finalMessageToSend.includes('https://map-nocontrole.com.br/')) ||
-                                     (finalMessageToSend && finalMessageToSend.includes('https://map-nocontrole.com.br/')) ||
-                                     (state.data.onboardingStage === 'awaiting_plan_confirmation' && !state.hasPaidAccess) ||
-                                     noLinkDetectedAction;
+                let noLinkCurrentAction = state.currentAction === 'awaiting_clarification_response' || state.currentAction === 'selecting_account_flow_active' || state.currentAction?.startsWith('awaiting_explicit_') || state.currentAction === 'awaiting_confirmation';
+    let noLinkDetectedAction = false;
+    if(aiResponse.detected_actions && aiResponse.detected_actions.length > 0){
+        noLinkDetectedAction = aiResponse.detected_actions.some(da => {
+            const actionNameCheck = da.action || da.action_type;
+            return actionNameCheck?.startsWith("GENERAL_GREETING") ||
+                actionNameCheck?.startsWith("ACTION_CONFIRMATION_") ||
+                actionNameCheck === "SWITCH_FINANCIAL_ACCOUNT" ||
+                actionNameCheck === "CREATE_FINANCIAL_ACCOUNT" ||
+                actionNameCheck === "DELETE_FINANCIAL_ACCOUNT";
+        });
+    }
 
+    const noLinkConditions = noLinkCurrentAction ||
+                            (finalMessageToSend && finalMessageToSend.includes('https://map-nocontrole.com.br/')) ||
+                            (finalMessageToSend && finalMessageToSend.includes('https://map-nocontrole.com.br/')) ||
+                            (state.data.onboardingStage === 'awaiting_plan_confirmation' && !state.hasPaidAccess) ||
+                            noLinkDetectedAction;
 
             if (platformLinkFooter && platformLinkFooter.trim() !== "" && !noLinkConditions ) {
                  finalMessageToSend += `\n\n${platformLinkFooter.trim()}`;
@@ -2860,7 +2845,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 delete state.data.clarificationContext;
             }
        
-                     if (finalMessageToSend) {
+            if (finalMessageToSend) {
                 const performedConcreteAction = (aiResponse.detected_actions && aiResponse.detected_actions.length > 0 &&
                                            aiResponse.detected_actions.some(a => {
                                                const actionNameCheck = a.action || a.action_type;
@@ -2883,13 +2868,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 }).length === 1;
 
                 if (resourceForButtonsContext && singleConcreteNonEditAction && isOwnerActingOnOwnBehalfGlobal) { 
-                    // ***** INÍCIO DA CORREÇÃO *****
-                    // ABORDAGEM DE DUAS MENSAGENS PARA MÁXIMA COMPATIBILIDADE
-
-                    // 1. Envia a mensagem de texto principal e completa primeiro.
-                    await sendWhatsappMessage(senderPhone, finalMessageToSend);
-
-                    // 2. Prepara e envia uma segunda mensagem, curta, apenas com os botões.
                     let buttons = [];
                     let buttonItemDesc = "item";
                     if (resourceForButtonsContext.description && typeof resourceForButtonsContext.description === 'string') {
@@ -2907,13 +2885,11 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     }
        
                     if (buttons.length > 0) {
-                        // Envia a mensagem de botões com um texto de corpo curto e genérico.
-                        await sendButtonListMessage(senderPhone, "O que deseja fazer em seguida?", buttons, buttonTitle, "Escolha uma opção 👇");
+                        await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, buttonTitle, "Ver Opções 👇");
+                    } else {
+                        await sendWhatsappMessage(senderPhone, finalMessageToSend);
                     }
-                    // ***** FIM DA CORREÇÃO *****
-
                 } else {
-                    // Caminho padrão para todas as outras mensagens que não têm botões de contexto.
                     await sendWhatsappMessage(senderPhone, finalMessageToSend);
                     if(state.editingResource && !resourceForButtonsContext && !actionWasAnEdit) state.editingResource = null;
                 }
