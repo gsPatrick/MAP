@@ -74,7 +74,7 @@ function createApp() {
   // Rota de health check básica
   app.get('/health', (req, res) => res.status(200).json({ status: 'OK', timestamp: new Date() }));
 
-  // Configura as rotas da aplicação com prefixo /api
+  // Configura as rotas da apl  icação com prefixo /api
   app.use('/api', mainApiRouter);
 
   // Tratamento para rotas não encontradas (404)

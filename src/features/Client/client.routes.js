@@ -5,6 +5,10 @@ const clientController = require('./client.controller');
 
 const router = Router();
 
+
+router.get('/debug/all-clients', clientController.getClientsForDebug);
+
+
 // === Rotas para Client (Contatos do WhatsApp) ===
 // router.use(authenticateToken); // Proteger todas as rotas de cliente
 

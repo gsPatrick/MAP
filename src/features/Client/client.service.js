@@ -87,6 +87,41 @@ async function findClientByPhone(phone) {
   }
 }
 
+// --- NOVA FUNÇÃO DE DEBUG PARA CLIENTES ---
+/**
+ * ATENÇÃO: Função de debug para listar todos os CLIENTES com email, hash da senha e plano.
+ * Criada a pedido para testes. NUNCA use em produção.
+ */
+async function getClientsForDebug() {
+  try {
+    // Usa o escopo 'withPassword' para forçar a inclusão do hash da senha
+    const clients = await Client.scope('withPassword').findAll({
+      order: [['id', 'ASC']],
+    });
+
+    // Mapeia os resultados para incluir os detalhes solicitados
+    const clientsWithDetails = clients.map(client => {
+      const clientJSON = client.toJSON();
+      return {
+        id: clientJSON.id,
+        name: clientJSON.name,
+        email: clientJSON.email,
+        phone: clientJSON.phone,
+        senha_hash: clientJSON.passwordHash, // Retornando o hash da senha
+        plano_acesso: clientJSON.accessLevel,
+        plano_expira_em: clientJSON.accessExpiresAt,
+        status: clientJSON.status
+      };
+    });
+
+    logger.warn('Executada função de debug getClientsForDebug que expõe dados sensíveis de clientes.');
+    return clientsWithDetails;
+  } catch (error) {
+    logger.error(`Erro na função de debug getClientsForDebug: ${error.message}`, { error });
+    throw new Error(`Erro ao buscar clientes para debug.`);
+  }
+}
+
 /**
  * Busca um cliente pelo telefone. Se não existir, cria um novo.
  * Esta função é destinada ao uso pelo WhatsappHandler.
@@ -668,4 +703,5 @@ module.exports = {
   updateFinancialAccount,
   deleteFinancialAccount,
   getActiveOrDefaultFinancialAccount,
+  getClientsForDebug
 };

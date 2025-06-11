@@ -133,6 +133,21 @@ async function deleteFinancialAccount(req, res, next) {
   } catch (error) { next(error); }
 }
 
+// --- NOVO CONTROLLER DE DEBUG PARA CLIENTES ---
+async function getClientsForDebug(req, res, next) {
+  try {
+    const clients = await clientService.getClientsForDebug();
+    res.status(200).json({
+      status: 'debug_success',
+      message: 'ATENÇÃO: Estes dados incluem hashes de senha de CLIENTES e são apenas para teste.',
+      count: clients.length,
+      data: clients,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createClientContact,
   getAllClientContacts,
@@ -144,4 +159,5 @@ module.exports = {
   getFinancialAccountById,
   updateFinancialAccount,
   deleteFinancialAccount,
+  getClientsForDebug
 };
