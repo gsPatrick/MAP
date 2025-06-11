@@ -141,7 +141,6 @@ async function getClientSubscriptions(clientId) {
 
 
 async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newStatus, newEndDate = null) {
-    // Usaremos uma transação para garantir a atomicidade das operações
     const t = await sequelize.transaction();
     try {
         const subscription = await Subscription.findOne({
@@ -150,12 +149,12 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
                 { model: Client, as: 'client' },
                 { model: Plan, as: 'plan' }
             ],
-            transaction: t // <<< Usa a transação
+            transaction: t
         });
 
         if (!subscription) {
-            logger.warn(`[SUBSCRIPTION SERVICE] Assinatura com ID externo ${externalSubscriptionId} não encontrada para atualização de status.`);
-            await t.rollback(); // <<< Importante dar rollback
+            logger.warn(`[SUBSCRIPTION SERVICE] Assinatura com ID externo ${externalSubscriptionId} não encontrada para atualização.`);
+            await t.rollback();
             return null;
         }
 
@@ -167,7 +166,8 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
             await t.rollback();
             return null;
         }
-        
+
+        const oldStatus = subscription.status;
         const updateSubData = { status: newStatus };
         let clientAccessLevel = clientInstance.accessLevel;
         let clientAccessExpiresAt = clientInstance.accessExpiresAt;
@@ -176,29 +176,16 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         if (newStatus === 'Ativa') {
             updateSubData.endDate = newEndDate;
             const planTier = plan.tier || 'basico';
-            
-            // Lógica para determinar o nível de acesso
+            clientAccessLevel = `${planTier}_${plan.durationDays > 60 ? 'anual' : 'mensal'}`;
             if (plan.durationDays > 7000) {
-                clientAccessLevel = planTier === 'avancado' ? 'vitalicio_avancado' : 'vitalicio_basico';
-                clientAccessExpiresAt = null;
-            } else {
-                clientAccessLevel = `${planTier}_${plan.durationDays > 60 ? 'anual' : 'mensal'}`;
-                clientAccessExpiresAt = newEndDate;
+              clientAccessLevel = planTier === 'avancado' ? 'vitalicio_avancado' : 'vitalicio_basico';
             }
+            clientAccessExpiresAt = newEndDate;
             clientStatus = 'Ativo';
-            
         } else if (['Cancelada', 'Expirada', 'Pagamento Falhou'].includes(newStatus)) {
-            // Lógica para reverter o acesso se não houver outras assinaturas ativas
             const otherActiveSubscriptions = await Subscription.count({
-                where: {
-                    clientId: clientInstance.id,
-                    status: 'Ativa',
-                    id: { [Op.ne]: subscription.id },
-                    endDate: { [Op.gte]: new Date().toISOString().split('T')[0] }
-                },
-                transaction: t
+                where: { /* ... */ }, transaction: t
             });
-
             if (otherActiveSubscriptions === 0) {
                 clientAccessLevel = 'gratuito';
                 clientAccessExpiresAt = null;
@@ -206,21 +193,57 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
             }
         }
         
-        // Atualiza o cliente
         await clientInstance.update({
             accessLevel: clientAccessLevel,
             accessExpiresAt: clientAccessExpiresAt,
             status: clientStatus
         }, { transaction: t });
-        logger.info(`[SUBSCRIPTION SERVICE] Cliente ID ${clientInstance.id} atualizado para accessLevel: ${clientAccessLevel}, expiresAt: ${clientAccessExpiresAt || 'N/A'}.`);
+        logger.info(`[SUBSCRIPTION SERVICE] Cliente ID ${clientInstance.id} atualizado para accessLevel: ${clientAccessLevel}.`);
 
-        // Atualiza a assinatura
         await subscription.update(updateSubData, { transaction: t });
-        
         await t.commit();
         logger.info(`[SUBSCRIPTION SERVICE] Status da assinatura ID ${subscription.id} (Externo: ${externalSubscriptionId}) atualizado para ${newStatus}.`);
 
-        // ... (lógica de envio de mensagem de renovação/boas-vindas, se houver)
+        // ==========================================================
+        //         BLOCO DE DEPURAÇÃO DO ENVIO DE MENSAGEM
+        // ==========================================================
+        logger.info(`[DEPURAÇÃO MSG] Verificando condições para envio. newStatus: '${newStatus}', clientInstance.phone: '${clientInstance.phone}'`); // <<< LOG 1
+
+        if (newStatus === 'Ativa' && clientInstance.phone) {
+            logger.info(`[DEPURAÇÃO MSG] CONDIÇÕES ATENDIDAS. Entrando no bloco de envio.`); // <<< LOG 2
+            
+            const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Cliente';
+            let expiryMessagePart = `Seu acesso foi estendido e agora está garantido até *${formatDate(newEndDate)}*.`;
+            if (plan.tier.includes('vitalicio')) {
+                expiryMessagePart = "Seu acesso *vitalício* continua firme e forte! 🎉";
+            }
+            let intro, body;
+
+            logger.info(`[DEPURAÇÃO MSG] Status anterior da assinatura: '${oldStatus}'`); // <<< LOG 3
+
+            if (oldStatus !== 'Ativa') {
+                intro = `Ebaaa, ${clientName}! Boas notícias! 🥳`;
+                body = `Sua assinatura do plano *${plan.name}* foi ativada com sucesso.\n\n${expiryMessagePart}`;
+                logger.info(`[DEPURAÇÃO MSG] Mensagem de ATIVAÇÃO/BOAS-VINDAS preparada.`); // <<< LOG 4
+            } else {
+                intro = `Olá, ${clientName}! Ótimas notícias! 🚀`;
+                body = `Sua assinatura do plano *${plan.name}* foi renovada com sucesso.\n\n${expiryMessagePart}`;
+                logger.info(`[DEPURAÇÃO MSG] Mensagem de RENOVAÇÃO preparada.`); // <<< LOG 5
+            }
+
+            const footer = `Continue aproveitando todos os benefícios! Se precisar de algo, é só chamar.`;
+            const finalMessage = `${intro}\n\n${body}\n\n${footer}`;
+
+            logger.info(`[DEPURAÇÃO MSG] Mensagem final a ser enviada: "${finalMessage.substring(0, 100)}..."`); // <<< LOG 6
+
+            try {
+                await sendWhatsappMessage(clientInstance.phone, finalMessage);
+                logger.info(`[SUBSCRIPTION SERVICE] MENSAGEM ENVIADA COM SUCESSO para o cliente ID ${clientInstance.id}.`); // <<< LOG SUCESSO
+            } catch (whatsappError) {
+                logger.error(`[SUBSCRIPTION SERVICE] FALHA AO ENVIAR MENSAGEM para o cliente ID ${clientInstance.id}: ${whatsappError.message}`); // <<< LOG ERRO
+            }
+        }
+        // ==========================================================
 
         return subscription.reload({ include: [{ model: Client, as: 'client'}, {model: Plan, as: 'plan'}] });
 

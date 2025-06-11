@@ -2259,3 +2259,4 @@ Error
 2025-06-11T14:25:36.234Z [INFO]: [SEEDER] Plano "MAP - Empresarial Anual" criado com preço R$78.00.
 2025-06-11T14:25:36.234Z [INFO]: [SEEDER] Semeadura de planos concluída.
 2025-06-11T14:25:36.234Z [INFO]: Iniciando configuração e agendamento de todos os Jobs...
+2025-06-11T14:43:16.442Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
