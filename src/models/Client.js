@@ -153,6 +153,12 @@ const Client = sequelize.define('Client', {
     allowNull: true,
     comment: 'Registra a data do último envio de mensagem motivacional para este cliente.',
   },
+    asaasCustomerId: { // <<<<<< NOVO CAMPO
+    type: DataTypes.STRING,
+    allowNull: true,
+    unique: true,
+    comment: 'ID do cliente correspondente na plataforma ASAAS',
+  },
   // --- Fim dos Campos Google Calendar ---
 }, {
   tableName: 'clients',
@@ -208,6 +214,8 @@ const Client = sequelize.define('Client', {
     { fields: ['googleChannelId'] }, // Para buscar canais para renovação
     { fields: ['googleChannelExpiryDate'] },
     { fields: ['wantsMotivationMessage'] }, // Adicionar índice para performance
+        { fields: ['asaasCustomerId'], unique: true, where: { asaasCustomerId: { [require('sequelize').Op.ne]: null } } } // <<< NOVO ÍNDICE
+
   ]
 });
 

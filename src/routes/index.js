@@ -26,6 +26,7 @@ const hotmartWebhookRoutes = require('../features/WebhookHandler/hotmart.routes'
 const googleAuthRoutes = require('../features/GoogleAuth/googleAuth.routes');
 const googleWebhookRoutes = require('../features/GoogleWebhook/googleWebhook.routes');
 const hydrationRoutes = require('../features/Hydration/hydration.routes');
+const asaasWebhookRouter = require('../features/WebhookHandler/asaas.routes'); // <<< ADICIONAR
 
 // >>>>> INÍCIO DA MUDANÇA: Importar o Controller Financeiro <<<<<
 const financialController = require('../features/Financial/financial.controller');
@@ -42,6 +43,7 @@ mainApiRouter.get('/status', (req, res) => res.status(200).json({
 
 // --- ROTAS PÚBLICAS OU SEMI-PÚBLICAS ---
 mainApiRouter.use('/webhooks', hotmartWebhookRoutes);
+mainApiRouter.use('/webhooks', asaasWebhookRouter); // <<< USAR (agora a URL será /api/webhooks/asaas)
 mainApiRouter.use('/auth', clientAuthRoutes);
 mainApiRouter.use('/whatsapp-zapi', whatsappWebhookRoutes);
 mainApiRouter.use('/auth/google', googleAuthRoutes);
