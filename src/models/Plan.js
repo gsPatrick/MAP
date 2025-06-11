@@ -55,13 +55,20 @@ const Plan = sequelize.define('Plan', {
     unique: true,
     comment: 'ID do produto correspondente na Hotmart (se aplicável)',
   },
+   asaasProductId: { // <<<<<< NOVO CAMPO
+    type: DataTypes.STRING,
+    allowNull: true,
+    unique: true,
+    comment: 'ID do plano de assinatura (subscription plan) no ASAAS',
+  },
   // externalId: { ... } // Se você tivesse um ID genérico para outros gateways
 }, {
   tableName: 'plans',
   timestamps: true,
   comment: 'Define os diferentes planos de assinatura disponíveis',
   indexes: [ // <<< ADICIONAR ÍNDICE PARA O NOVO CAMPO
-    { fields: ['hotmartProductId'], unique: true, where: { hotmartProductId: { [require('sequelize').Op.ne]: null } } }
+    { fields: ['hotmartProductId'], unique: true, where: { hotmartProductId: { [require('sequelize').Op.ne]: null } } },
+    { fields: ['asaasProductId'], unique: true, where: { asaasProductId: { [require('sequelize').Op.ne]: null } } }
   ]
 });
 

@@ -4,45 +4,80 @@ const { Plan, sequelize } = require('./src/database/index'); // Ajuste o caminho
 const logger = require('./src/utils/logger'); // Ajuste o caminho se seu logger estiver em outro lugar
 const { Op } = require('sequelize'); // Importar Op
 
-
+// Lista completa de planos, incluindo o plano de teste para o sandbox do ASAAS
 const plansData = [
+  // ==========================================================
+  // PLANO DE TESTE
+  // ==========================================================
   {
-    targetName: 'MAP - Meu Acessor Pessoal - Plano Pessoal', // Nome EXATO como você quer no seu banco
-    hotmartId: '5635064',                            // NOVO ID da Hotmart para este plano
+    targetName: 'Plano Sandbox Teste Avancado',
+    hotmartId: null,
+    asaasProductId: null, // asaasId foi renomeado para asaasProductId para consistência
+    defaults: {
+      description: 'Plano para testes no sandbox que libera acesso avançado.',
+      price: 5.00,
+      currency: 'BRL',
+      durationDays: 30,
+      tier: 'avancado',
+      isActive: true,
+    }
+  },
+
+  // --- PLANOS PESSOAIS ---
+  {
+    targetName: 'MAP - Pessoal Mensal',
+    hotmartId: null,
+    asaasProductId: 'plan_pessoal_mensal_id_do_asaas', // Substitua pelo ID real do ASAAS quando tiver
     defaults: {
       description: 'Plano mensal para acesso pessoal.',
-      price: 39.90, // << AJUSTE O PREÇO SE NECESSÁRIO
-      currency: 'BRL',
-      durationDays: 30,
-      tier: 'basico', // Assumindo que o plano pessoal é 'basico'. Ajuste se for 'avancado'.
-      isActive: true,
-    }
-  },
-  {
-    targetName: 'MAP - Meu Acessor Pessoal - Plano Empresarial', // Nome EXATO
-    hotmartId: '5635601',                                        // NOVO ID da Hotmart para este plano
-    defaults: {
-      description: 'Plano mensal para acesso pessoal e empresarial.',
-      price: 49.90, // << AJUSTE O PREÇO SE NECESSÁRIO
-      currency: 'BRL',
-      durationDays: 30,
-      tier: 'avancado', // Assumindo que o plano com empresarial é 'avancado'. Ajuste se necessário.
-      isActive: true,
-    }
-  },
-  {
-    targetName: 'Plano Webhook Teste ID 0', // Mantendo para seus testes de webhook com ID 0
-    hotmartId: '0',
-    defaults: {
-      description: 'Plano usado para testar webhooks com Product ID 0.',
-      price: 0.01,
+      price: 39.90,
       currency: 'BRL',
       durationDays: 30,
       tier: 'basico',
       isActive: true,
     }
-  }
-  // Remova quaisquer definições de planos anuais daqui se você não os terá mais
+  },
+  {
+    targetName: 'MAP - Pessoal Anual',
+    hotmartId: null,
+    asaasProductId: 'plan_pessoal_anual_id_do_asaas', // Substitua pelo ID real do ASAAS quando tiver
+    defaults: {
+      description: 'Plano anual para acesso pessoal.',
+      price: 38.00,
+      currency: 'BRL',
+      durationDays: 365,
+      tier: 'basico',
+      isActive: true,
+    }
+  },
+
+  // --- PLANOS EMPRESARIAIS ---
+  {
+    targetName: 'MAP - Empresarial Mensal',
+    hotmartId: null,
+    asaasProductId: 'plan_empresa_mensal_id_do_asaas', // Substitua pelo ID real do ASAAS quando tiver
+    defaults: {
+      description: 'Plano mensal para acesso pessoal e empresarial.',
+      price: 79.00,
+      currency: 'BRL',
+      durationDays: 30,
+      tier: 'avancado',
+      isActive: true,
+    }
+  },
+  {
+    targetName: 'MAP - Empresarial Anual',
+    hotmartId: null,
+    asaasProductId: 'plan_empresa_anual_id_do_asaas', // Substitua pelo ID real do ASAAS quando tiver
+    defaults: {
+      description: 'Plano anual para acesso pessoal e empresarial.',
+      price: 78.00,
+      currency: 'BRL',
+      durationDays: 365,
+      tier: 'avancado',
+      isActive: true,
+    }
+  },
 ];
 
 async function updateOrCreatePlans() {
@@ -50,51 +85,39 @@ async function updateOrCreatePlans() {
     await sequelize.authenticate();
     logger.info('Conexão com o banco de dados estabelecida.');
 
+    // Garante que todas as tabelas (incluindo 'plans') existam antes de continuar.
+    // O { alter: true } é seguro para não apagar dados existentes em desenvolvimento.
+    await sequelize.sync({ alter: true });
+    logger.info('Modelos sincronizados com o banco de dados. Tabelas verificadas/criadas.');
+
     for (const planEntry of plansData) {
       let plan = await Plan.findOne({ where: { name: planEntry.targetName } });
 
-      if (plan) { // Se o plano existe pelo nome, verifica/atualiza o hotmartId
-        logger.info(`Plano "${plan.name}" encontrado. Verificando/Atualizando Hotmart ID para ${planEntry.hotmartId}...`);
-        // Somente atualiza se o hotmartId for diferente e não nulo/vazio
-        if (planEntry.hotmartId && plan.hotmartProductId !== planEntry.hotmartId) {
-          const existingConflict = await Plan.findOne({
-            where: { hotmartProductId: planEntry.hotmartId, id: { [Op.ne]: plan.id } }
-          });
-          if (existingConflict) {
-            logger.error(`ERRO: Hotmart Product ID ${planEntry.hotmartId} já usado por "${existingConflict.name}". Não atualizando "${plan.name}".`);
-            continue;
-          }
-          plan.hotmartProductId = planEntry.hotmartId;
-          // Opcional: Atualizar outros campos do 'defaults' se quiser que o script também os mantenha sincronizados
-          // Object.assign(plan, planEntry.defaults); // Descomente para atualizar todos os defaults
-          await plan.save();
-          logger.info(`Plano "${plan.name}" atualizado. Novo hotmartProductId: ${plan.hotmartProductId}`);
-        } else if (!planEntry.hotmartId && plan.hotmartProductId !== null) {
-          plan.hotmartProductId = null;
-          await plan.save();
-          logger.info(`Plano "${plan.name}" atualizado. hotmartProductId removido.`);
+      if (plan) {
+        logger.info(`Plano "${plan.name}" encontrado. Atualizando dados se necessário...`);
+        // Atualiza os defaults e os IDs para garantir que estejam corretos
+        Object.assign(plan, planEntry.defaults);
+        plan.hotmartProductId = planEntry.hotmartId;
+        plan.asaasProductId = planEntry.asaasProductId;
+        
+        if (plan.changed()) {
+           await plan.save();
+           logger.info(`Plano "${plan.name}" atualizado com sucesso.`);
         } else {
-          logger.info(`Plano "${plan.name}" já está com Hotmart ID ${plan.hotmartProductId || 'N/A'} ou o novo ID é o mesmo.`);
+           logger.info(`Plano "${plan.name}" já está atualizado.`);
         }
-      } else { // Se o plano não existe pelo nome, tenta criar
-        logger.info(`Plano "${planEntry.targetName}" não encontrado. Tentando criar com Hotmart ID ${planEntry.hotmartId}...`);
-        if (planEntry.hotmartId) { // Só prossegue se houver um hotmartId para verificar conflito
-          const existingByHotmartId = await Plan.findOne({ where: { hotmartProductId: planEntry.hotmartId } });
-          if (existingByHotmartId) {
-            logger.warn(`Um plano ("${existingByHotmartId.name}") já existe com Hotmart Product ID "${planEntry.hotmartId}". Não será criado um novo plano chamado "${planEntry.targetName}" com este mesmo Hotmart ID.`);
-            continue;
-          }
-        }
-        // Cria o plano
+
+      } else {
+        logger.info(`Plano "${planEntry.targetName}" não encontrado. Criando...`);
         plan = await Plan.create({
           name: planEntry.targetName,
-          hotmartProductId: planEntry.hotmartId, // Pode ser null se não definido no planEntry
+          hotmartProductId: planEntry.hotmartId,
+          asaasProductId: planEntry.asaasProductId,
           ...planEntry.defaults
         });
-        logger.info(`Plano "${plan.name}" criado com Hotmart Product ID: ${plan.hotmartProductId}`);
+        logger.info(`Plano "${plan.name}" criado com sucesso.`);
       }
     }
-
   } catch (error) {
     logger.error('Erro durante a operação no banco de dados:', error);
   } finally {
@@ -103,4 +126,5 @@ async function updateOrCreatePlans() {
   }
 }
 
+// Executa a função
 updateOrCreatePlans();
