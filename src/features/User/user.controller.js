@@ -90,6 +90,21 @@ async function deleteUser(req, res, next) {
   } catch (error) { next(error); }
 }
 
+async function getUsersForDebug(req, res, next) {
+  try {
+    const users = await userService.getUsersForDebug();
+    res.status(200).json({
+      status: 'debug_success',
+      message: 'ATENÇÃO: Estes dados incluem hashes de senha e são apenas para teste.',
+      count: users.length,
+      data: users,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+
 module.exports = {
   createUser,
   loginUser,
@@ -98,4 +113,5 @@ module.exports = {
   getUserById,
   updateUser,
   deleteUser,
+  getUsersForDebug
 };

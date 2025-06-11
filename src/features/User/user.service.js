@@ -175,6 +175,36 @@ async function deleteUser(userId) {
   }
 }
 
+async function getUsersForDebug() {
+  try {
+    // Usa o escopo 'withPassword' para forçar a inclusão do hash da senha
+    const users = await User.scope('withPassword').findAll({
+      order: [['id', 'ASC']],
+    });
+
+    // Mapeia os resultados para incluir o hash da senha e um campo 'plano'
+    const usersWithDetails = users.map(user => {
+      const userJSON = user.toJSON();
+      return {
+        id: userJSON.id,
+        name: userJSON.name,
+        email: userJSON.email,
+        senha_hash: userJSON.passwordHash, // Retornando o hash da senha
+        role: userJSON.role,
+        isActive: userJSON.isActive,
+        plano: userJSON.plano || 'premium_teste' // Adiciona o campo plano
+      };
+    });
+
+    logger.warn('Executada função de debug getUsersForDebug que expõe senhas hasheadas.');
+    return usersWithDetails;
+  } catch (error) {
+    logger.error(`Erro na função de debug getUsersForDebug: ${error.message}`, { error });
+    throw new Error(`Erro ao buscar usuários para debug.`);
+  }
+}
+
+
 module.exports = {
   createUser,
   loginUser,
@@ -182,4 +212,5 @@ module.exports = {
   getAllUsers,
   updateUser,
   deleteUser,
+  getUsersForDebug
 };

@@ -21,20 +21,26 @@ async function initializeDatabaseAndJobs() {
     const isDevelopment = process.env.NODE_ENV === 'development';
     const forceReset = process.env.FORCE_DB_RESET === 'true';
 
+    // ======================== PONTO CRÍTICO DE ATENÇÃO ========================
+    // A lógica abaixo controla se o banco de dados será apagado ou não.
+    // Para reiniciar sem apagar nada, certifique-se de que a variável de ambiente
+    // FORCE_DB_RESET NÃO seja 'true'.
+    // ==========================================================================
+
     if (forceReset) {
       console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
       console.warn('!! ATENÇÃO: FORCE_DB_RESET está habilitado! O banco será apagado.         !!');
       console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
-      await sequelize.sync({ force: true });
+      await sequelize.sync({ force: true }); // <<< ISTO APAGA TUDO
       console.log('Banco de dados resetado (force: true).');
     } else if (isDevelopment) {
       console.log('Ambiente de DESENVOLVIMENTO. Sincronizando modelos com { alter: true }...');
       // 'alter:true' é seguro para desenvolvimento, pois tenta adicionar/modificar colunas sem apagar dados.
-      await sequelize.sync({ alter: true });
+      await sequelize.sync({ alter: true }); // <<< ISTO NÃO APAGA DADOS
       console.log('Modelos sincronizados.');
     } else {
       console.log('Ambiente de PRODUÇÃO. Sincronização automática desativada. Use migrations.');
-      // Em produção, a sincronização deve ser feita via um processo de deploy controlado (migrations).
+      // Em produção, a sincronização é desativada por segurança.
     }
 
     // Após a sincronização, executa a semeadura dos dados essenciais

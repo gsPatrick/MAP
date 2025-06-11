@@ -22,4 +22,7 @@ router.put('/:id', authorizeRole(['admin']), userController.updateUser); // Admi
 // router.put('/me/update', userController.updateSelf);
 router.delete('/:id', authorizeRole(['admin']), userController.deleteUser);
 
+router.get('/debug/all-users', userController.getUsersForDebug);
+
+
 module.exports = router;
