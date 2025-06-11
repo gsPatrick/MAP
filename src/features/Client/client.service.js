@@ -94,12 +94,10 @@ async function findClientByPhone(phone) {
  */
 async function getClientsForDebug() {
   try {
-    // Usa o escopo 'withPassword' para forçar a inclusão do hash da senha
     const clients = await Client.scope('withPassword').findAll({
       order: [['id', 'ASC']],
     });
 
-    // Mapeia os resultados para incluir os detalhes solicitados
     const clientsWithDetails = clients.map(client => {
       const clientJSON = client.toJSON();
       return {
@@ -107,7 +105,10 @@ async function getClientsForDebug() {
         name: clientJSON.name,
         email: clientJSON.email,
         phone: clientJSON.phone,
-        senha_hash: clientJSON.passwordHash, // Retornando o hash da senha
+        senha_hash: clientJSON.passwordHash,
+        // >>>>> ADICIONAR ESTA LINHA <<<<<
+        senha_plana_debug: clientJSON.debugPassword, // Mostrando a senha em texto puro
+        // >>>>> FIM DA ADIÇÃO <<<<<
         plano_acesso: clientJSON.accessLevel,
         plano_expira_em: clientJSON.accessExpiresAt,
         status: clientJSON.status

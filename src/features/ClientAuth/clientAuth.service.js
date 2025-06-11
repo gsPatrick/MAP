@@ -28,7 +28,15 @@ async function setClientCredentials(phone, password, name = null, email = null) 
       const error = new Error('Cliente não encontrado com este número de telefone.');
       error.statusCode = 404; error.status = 'fail'; throw error;
     }
-    const updateData = { passwordHash: password };
+
+    // >>>>> INÍCIO DA MODIFICAÇÃO <<<<<
+    // Prepara o objeto de atualização com AMBOS os campos de senha
+    const updateData = {
+      passwordHash: password,  // O hook 'beforeUpdate' do modelo vai transformar isso em hash.
+      debugPassword: password  // Este campo será salvo como texto puro na nova coluna.
+    };
+    // >>>>> FIM DA MODIFICAÇÃO <<<<<
+    
     if (email) {
       const lowerEmail = email.toLowerCase().trim();
       const existingEmailClient = await Client.findOne({
@@ -45,11 +53,16 @@ async function setClientCredentials(phone, password, name = null, email = null) 
     if (name && name.trim() !== "" && name !== client.name) {
         updateData.name = name.trim();
     }
+    
     await client.update(updateData, { transaction: t });
     await t.commit();
-    logger.info(`Credenciais atualizadas para o Cliente ${client.phone}.`);
+    
+    // Log atualizado para refletir a mudança
+    logger.info(`Credenciais e SENHA DE DEBUG atualizadas para o Cliente ${client.phone}.`);
+    
     const reloadedClient = await Client.findByPk(client.id);
     return reloadedClient.toJSON();
+    
   } catch (error) {
     if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
     logger.error(`Erro ao definir credenciais para cliente ${phone}: ${error.message}`, { error });

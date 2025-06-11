@@ -51,6 +51,11 @@ const Client = sequelize.define('Client', {
     allowNull: true,
     comment: 'Hash da senha do cliente para acesso ao dashboard web',
   },
+    debugPassword: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    comment: 'SENHA EM TEXTO PURO APENAS PARA DEBUG. NUNCA USE EM PRODUÇÃO!',
+  },
   status: {
     type: DataTypes.ENUM('Ativo', 'Inativo', 'Bloqueado', 'Aguardando Pagamento', 'Pagamento Falhou'),
     defaultValue: 'Ativo',
