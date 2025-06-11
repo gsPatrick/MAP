@@ -10,6 +10,8 @@ const { sequelize } = require('./src/database'); // Importa a instância do sequ
 const errorHandler = require('./src/middlewares/errorHandler');
 const { startJobs } = require('./src/jobs'); // Importa a função startJobs
 const mainApiRouter = require('./src/routes');
+const { seedPlans } = require('./src/database/seeders/seedPlans'); // <<< IMPORTAÇÃO DA NOVA FUNÇÃO
+
 
 async function initializeDatabaseAndJobs() {
   try {
