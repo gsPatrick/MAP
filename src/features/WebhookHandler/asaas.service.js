@@ -2,7 +2,7 @@
 const { Client, Plan, Subscription, sequelize } = require('../../database');
 const clientService = require('../Client/client.service');
 const subscriptionService = require('../Subscription/subscription.service');
-const asaasApiService = require('../../services/asaasApiService'); // <<< IMPORTAR O SERVIÇO DA API
+const asaasApiService = require('../../services/asaasApiService');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
@@ -19,13 +19,10 @@ async function processWebhookEvent(eventData) {
 
   const asaasCustomerId = payment.customer;
 
-  // >>>>>>>> MUDANÇA PRINCIPAL AQUI <<<<<<<<<<
   // Passo 1: Buscar os dados completos do cliente na API do ASAAS.
-  // Isso garante que temos os dados mais atualizados e corretos.
   const customerData = await asaasApiService.getCustomerById(asaasCustomerId);
 
   const clientRawPhone = customerData.mobilePhone || customerData.phone;
-  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
   
   if (!clientRawPhone) {
     logger.error(`[ASAAS SVC] CRÍTICO: Telefone não encontrado para o cliente ASAAS ID ${asaasCustomerId}, mesmo após busca na API.`);
@@ -66,13 +63,26 @@ async function processWebhookEvent(eventData) {
     }
 
     const planValue = parseFloat(payment.value);
-    const localPlan = await Plan.findOne({ where: { price: { [Op.eq]: planValue } }, transaction: t });
+
+    // ==========================================================
+    // LOG DE DIAGNÓSTICO ADICIONADO AQUI
+    // ==========================================================
+    // Este log vai nos mostrar exatamente o que está na tabela 'plans' ANTES da busca.
+    const allPlansInDB = await Plan.findAll({ raw: true, transaction: t });
+    logger.info(`[DIAGNÓSTICO] Planos existentes no banco: ${JSON.stringify(allPlansInDB, null, 2)}`);
+    // ==========================================================
+    
+    const localPlan = await Plan.findOne({
+      where: { price: { [Op.eq]: planValue } },
+      transaction: t
+    });
 
     if (!localPlan) {
-      await t.rollback();
+      await t.rollback(); // Importante fazer o rollback ANTES de lançar o erro
       logger.error(`[ASAAS SVC] Nenhum plano encontrado com o valor R$${planValue}.`);
       throw new Error(`Plano com valor ${planValue} não configurado.`);
     }
+
     logger.info(`[ASAAS SVC] Plano "${localPlan.name}" corresponde ao valor pago.`);
 
     let localSubscription = await Subscription.findOne({ where: { externalSubscriptionId: externalSubscriptionId }, transaction: t });
