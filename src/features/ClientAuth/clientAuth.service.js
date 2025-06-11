@@ -16,7 +16,13 @@ async function setClientCredentials(phone, password, name = null, email = null) 
       const error = new Error('Telefone e nova senha são obrigatórios.');
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
-    if (password.length < 6) {
+
+    // >>>>> INÍCIO DA MODIFICAÇÃO (SENHA) <<<<<
+    // 1. Remove espaços em branco do início e do fim da senha.
+    const trimmedPassword = password.trim();
+
+    if (trimmedPassword.length < 6) {
+    // >>>>> FIM DA MODIFICAÇÃO (SENHA) <<<<<
       await t.rollback();
       const error = new Error('A senha deve ter pelo menos 6 caracteres.');
       error.statusCode = 400; error.status = 'fail'; throw error;
@@ -29,14 +35,14 @@ async function setClientCredentials(phone, password, name = null, email = null) 
       error.statusCode = 404; error.status = 'fail'; throw error;
     }
 
-    // >>>>> INÍCIO DA MODIFICAÇÃO <<<<<
-    // Prepara o objeto de atualização com AMBOS os campos de senha
+    // >>>>> INÍCIO DA MODIFICAÇÃO (SENHA) <<<<<
+    // 2. Usa a senha tratada (sem espaços) para salvar no banco.
     const updateData = {
-      passwordHash: password,  // O hook 'beforeUpdate' do modelo vai transformar isso em hash.
-      debugPassword: password  // Este campo será salvo como texto puro na nova coluna.
+        passwordHash: trimmedPassword, // O hook vai hashear isso
+        debugPassword: trimmedPassword // Isso será salvo como texto puro
     };
-    // >>>>> FIM DA MODIFICAÇÃO <<<<<
-    
+    // >>>>> FIM DA MODIFICAÇÃO (SENHA) <<<<<
+
     if (email) {
       const lowerEmail = email.toLowerCase().trim();
       const existingEmailClient = await Client.findOne({
@@ -53,16 +59,11 @@ async function setClientCredentials(phone, password, name = null, email = null) 
     if (name && name.trim() !== "" && name !== client.name) {
         updateData.name = name.trim();
     }
-    
     await client.update(updateData, { transaction: t });
     await t.commit();
-    
-    // Log atualizado para refletir a mudança
-    logger.info(`Credenciais e SENHA DE DEBUG atualizadas para o Cliente ${client.phone}.`);
-    
+    logger.info(`Credenciais atualizadas para o Cliente ${client.phone}.`);
     const reloadedClient = await Client.findByPk(client.id);
     return reloadedClient.toJSON();
-    
   } catch (error) {
     if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
     logger.error(`Erro ao definir credenciais para cliente ${phone}: ${error.message}`, { error });
@@ -78,10 +79,16 @@ async function loginClient(identifier, password) {
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
 
+    // >>>>> INÍCIO DA MODIFICAÇÃO <<<<<
+    // Remove espaços em branco do início e do fim da senha fornecida no login.
+    const trimmedPassword = password.trim();
+    // >>>>> FIM DA MODIFICAÇÃO <<<<<
+
     const normalizedIdentifier = identifier.replace(/\D/g, '');
     const isEmailLogin = identifier.includes('@');
-    const loginAttemptIdentifier = isEmailLogin ? identifier.toLowerCase() : normalizedIdentifier;
+    const loginAttemptIdentifier = isEmailLogin ? identifier.toLowerCase().trim() : normalizedIdentifier; // Adicionado trim() ao email também
 
+    // Lógica para login via acesso compartilhado
     const sharedAccessLoginCondition = isEmailLogin
         ? { sharedAccessEmail: loginAttemptIdentifier }
         : { sharedAccessPhone: loginAttemptIdentifier };
@@ -95,8 +102,10 @@ async function loginClient(identifier, password) {
     });
 
     if (sharedAccessRecord && sharedAccessRecord.sharedAccessPasswordHash) {
-        const isSharedPasswordMatch = await sharedAccessRecord.isValidPassword(password);
+        // Usa a senha tratada (trimmedPassword) para a comparação
+        const isSharedPasswordMatch = await sharedAccessRecord.isValidPassword(trimmedPassword);
         if (isSharedPasswordMatch) {
+            // ... (A lógica interna de sucesso do acesso compartilhado continua aqui) ...
             if (!sharedAccessRecord.sharedWithClient || sharedAccessRecord.sharedWithClient.status === 'Bloqueado' || sharedAccessRecord.sharedWithClient.status === 'Inativo') {
                 const error = new Error('Usuário convidado associado a este acesso está inválido ou inativo.');
                 error.statusCode = 403; error.status = 'fail'; throw error;
@@ -162,6 +171,7 @@ async function loginClient(identifier, password) {
         }
     }
 
+    // Lógica para login direto do cliente
     const client = await Client.scope('withPassword').findOne({
       where: isEmailLogin ? { email: loginAttemptIdentifier } : { phone: loginAttemptIdentifier }
     });
@@ -193,7 +203,8 @@ async function loginClient(identifier, password) {
         error.statusCode = 403; error.status = 'fail_subscription'; throw error;
     }
 
-    const isPasswordMatch = await client.isValidPassword(password);
+    // Usa a senha tratada (trimmedPassword) para a comparação
+    const isPasswordMatch = await client.isValidPassword(trimmedPassword);
     if (!isPasswordMatch) {
       const error = new Error('Credenciais inválidas (senha incorreta).');
       error.statusCode = 401; error.status = 'fail'; throw error;
