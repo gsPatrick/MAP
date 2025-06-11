@@ -5,12 +5,14 @@ const logger = require('../utils/logger');
 const subscriptionService = require('../features/Subscription/subscription.service');
 
 const asaasAPI = axios.create({
-  baseURL: 'https://sandbox.asaas.com/api/v3', // Aponta para o ambiente de sandbox
+  baseURL: 'https://api.asaas.com/v3', // Aponta para o ambiente de sandbox
   headers: {
     'access_token': process.env.ASAAS_API_KEY,
     'Content-Type': 'application/json'
   }
 });
+
+
 
 /**
  * Simula o recebimento de um pagamento em dinheiro para uma cobrança específica.
