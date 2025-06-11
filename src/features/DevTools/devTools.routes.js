@@ -16,4 +16,7 @@ router.post('/simulate-subscription/:clientId', devToolsController.simulateSubsc
 // Corpo (Body) JSON: { "planId": 1 }  (ou ?planId=1 na query)
 // Opcional no corpo/query: "status": "Pendente" (se quiser simular uma não ativa)
 
+
+  router.post('/simulate-asaas-payment', devToolsController.simulateAsaasPayment);
+
 module.exports = router;

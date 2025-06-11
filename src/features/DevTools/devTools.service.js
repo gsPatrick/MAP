@@ -106,6 +106,8 @@ async function simulateCreateSubscriptionForClient(clientId, planId, status = 'A
     }
 }
 
+
+
 module.exports = {
   activateClientTestAccessLevel, // Renomeado para clareza
   simulateCreateSubscriptionForClient, // NOVA FUNÇÃO

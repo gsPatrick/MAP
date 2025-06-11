@@ -64,8 +64,33 @@ async function simulateSubscriptionController(req, res, next) {
     }
 }
 
+async function simulateAsaasPayment(req, res, next) {
+  try {
+    const { paymentId, value } = req.body;
+
+    if (!paymentId || !value) {
+      const error = new Error('Os campos "paymentId" e "value" são obrigatórios.');
+      error.statusCode = 400; error.status = 'fail';
+      return next(error);
+    }
+
+    const result = await asaasApiService.simulatePayment(paymentId, parseFloat(value));
+
+    res.status(200).json({
+      status: 'success',
+      message: `Pagamento para ${paymentId} simulado com sucesso. O webhook foi disparado.`,
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+
 
 module.exports = {
   activateTestAccessLevelController, // Renomeado
-  simulateSubscriptionController, // NOVO
+  simulateSubscriptionController, 
+  simulateAsaasPayment
+  // NOVO
 };

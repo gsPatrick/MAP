@@ -5,9 +5,47 @@ const logger = require('../utils/logger');
 const subscriptionService = require('../features/Subscription/subscription.service');
 
 const asaasAPI = axios.create({
-  baseURL: 'https://www.asaas.com/api/v3', // Ou o URL de sandbox
-  headers: { 'access_token': process.env.ASAAS_API_KEY }
+  baseURL: 'https://sandbox.asaas.com/api/v3', // Aponta para o ambiente de sandbox
+  headers: {
+    'access_token': process.env.ASAAS_API_KEY,
+    'Content-Type': 'application/json'
+  }
 });
+
+/**
+ * Simula o recebimento de um pagamento em dinheiro para uma cobrança específica.
+ * Isso força a cobrança a ser marcada como 'RECEIVED' e dispara o webhook.
+ * @param {string} paymentId - O ID da cobrança (ex: 'payment_1234567890').
+ * @param {number} value - O valor exato da cobrança.
+ * @returns {Promise<object>} A resposta da API do ASAAS.
+ */
+async function simulatePayment(paymentId, value) {
+  try {
+    if (process.env.NODE_ENV !== 'development') {
+      logger.error('[ASAAS API SVC] A simulação de pagamento só é permitida em ambiente de desenvolvimento.');
+      throw new Error('Operação não permitida em produção.');
+    }
+
+    logger.info(`[ASAAS API SVC] Simulando pagamento para a cobrança ID: ${paymentId}`);
+    
+    const endpoint = `/payments/${paymentId}/receiveInCash`;
+    const payload = {
+      paymentDate: new Date().toISOString().split('T')[0], // Data de hoje
+      value: value,
+      notifyCustomer: false
+    };
+
+    const { data } = await asaasAPI.post(endpoint, payload);
+    
+    logger.info(`[ASAAS API SVC] Pagamento para a cobrança ${paymentId} simulado com sucesso. Status agora é: ${data.status}`);
+    return data;
+
+  } catch (error) {
+    logger.error(`[ASAAS API SVC] Falha ao simular pagamento para ${paymentId}:`, error.response ? error.response.data : error.message);
+    throw new Error('Falha ao simular pagamento no ASAAS.');
+  }
+}
+
 
 /**
  * Cria ou obtém um cliente no ASAAS e armazena o ID.
@@ -78,6 +116,7 @@ async function createAsaasSubscription(clientId, planId) {
 }
 
 module.exports = {
+    simulatePayment,
   findOrCreateAsaasCustomer,
   createAsaasSubscription
 };
