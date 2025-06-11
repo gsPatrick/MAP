@@ -17,7 +17,7 @@ async function processWebhookEvent(eventData) {
   // Valida se o payload do pagamento está completo
   if (!payment || !payment.customer || !payment.subscription) {
     logger.error('[ASAAS SVC] Payload de pagamento incompleto (sem customer ou subscription ID).', eventData);
-    return; // Retorna OK para o ASAAS não reenviar um webhook malformado.
+    return;
   }
 
   const asaasCustomerId = payment.customer;
@@ -28,7 +28,6 @@ async function processWebhookEvent(eventData) {
     // ==========================================================
     // 1. VERIFICAÇÃO DE IDEMPOTÊNCIA
     // ==========================================================
-    // Se a assinatura já foi marcada como "Ativa", ignora o webhook.
     const existingActiveSubscription = await Subscription.findOne({
       where: {
         externalSubscriptionId: externalSubscriptionId,
@@ -60,20 +59,35 @@ async function processWebhookEvent(eventData) {
     const clientEmail = customerData.email || null;
 
     // ==========================================================
-    // 3. ENCONTRAR OU CRIAR O CLIENTE NO SEU BANCO
+    // 3. ENCONTRAR OU CRIAR O CLIENTE NO SEU BANCO (LÓGICA CORRIGIDA)
     // ==========================================================
-    let localClient = await Client.findOne({
-      where: { [Op.or]: [{ phone: clientPhone }, { email: clientEmail, [Op.not]: null }] },
-      transaction: t
-    });
+    let localClient;
+
+    // Prioridade 1: Tenta encontrar pelo telefone, que é o identificador principal.
+    if (clientPhone) {
+      localClient = await Client.findOne({ where: { phone: clientPhone }, transaction: t });
+    }
+
+    // Prioridade 2: Se não achou pelo telefone, mas tem e-mail, tenta pelo e-mail.
+    if (!localClient && clientEmail) {
+      localClient = await Client.findOne({ where: { email: clientEmail }, transaction: t });
+    }
 
     if (localClient) {
-      logger.info(`[ASAAS SVC] Cliente local encontrado (ID: ${localClient.id}). Verificando e vinculando ID do ASAAS...`);
-      if (!localClient.asaasCustomerId) {
-        await localClient.update({ asaasCustomerId: asaasCustomerId, name: clientName }, { transaction: t });
-        logger.info(`[ASAAS SVC] ID do cliente ASAAS (${asaasCustomerId}) vinculado com sucesso.`);
+      logger.info(`[ASAAS SVC] Cliente local encontrado (ID: ${localClient.id}). Verificando e vinculando dados...`);
+      // Garante que o ID do ASAAS e outros dados que possam ter sido atualizados sejam salvos.
+      const updates = {};
+      if (!localClient.asaasCustomerId) updates.asaasCustomerId = asaasCustomerId;
+      if (!localClient.name && clientName) updates.name = clientName;
+      if (!localClient.email && clientEmail) updates.email = clientEmail;
+      
+      if (Object.keys(updates).length > 0) {
+        await localClient.update(updates, { transaction: t });
+        logger.info(`[ASAAS SVC] Dados do cliente local atualizados.`);
       }
+
     } else {
+      // Se não encontrou de nenhuma forma, cria um novo cliente.
       logger.info(`[ASAAS SVC] Nenhum cliente existente encontrado. Criando novo cliente...`);
       const newClientData = {
         name: clientName,
@@ -105,7 +119,6 @@ async function processWebhookEvent(eventData) {
     // ==========================================================
     // 5. CRIAR OU ATUALIZAR A ASSINATURA LOCAL
     // ==========================================================
-    // Neste ponto, a assinatura só pode ser nova ou estar pendente, pois já filtramos as "Ativas".
     const [subscription, created] = await Subscription.findOrCreate({
       where: { externalSubscriptionId: externalSubscriptionId },
       defaults: {
@@ -121,8 +134,6 @@ async function processWebhookEvent(eventData) {
 
     if (created) {
       logger.info(`[ASAAS SVC] Nova assinatura local (ID: ${subscription.id}) criada para o cliente ${localClient.id}.`);
-      // A lógica de atualizar o accessLevel do cliente já está dentro do subscriptionService.createSubscription (ou deveria estar)
-      // Mas podemos chamar aqui explicitamente para garantir.
       await subscriptionService.updateSubscriptionStatusByExternalId(externalSubscriptionId, 'Ativa', subscription.endDate);
     } else {
       logger.info(`[ASAAS SVC] Assinatura local ${subscription.id} encontrada. Atualizando status para 'Ativa'.`);
@@ -137,7 +148,6 @@ async function processWebhookEvent(eventData) {
       await t.rollback();
     }
     logger.error(`[ASAAS SVC] Erro CRÍTICO ao processar webhook de pagamento: ${error.message}`, { stack: error.stack, eventData });
-    // Lança o erro para que o controller responda com 500 e o ASAAS tente reenviar.
     throw error;
   }
 }
