@@ -2,6 +2,7 @@
 const { Client, Plan, Subscription, sequelize } = require('../../database');
 const clientService = require('../Client/client.service');
 const subscriptionService = require('../Subscription/subscription.service');
+const asaasApiService = require('../../services/asaasApiService'); // <<< IMPORTAR O SERVIÇO DA API
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
@@ -9,27 +10,31 @@ const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 async function processWebhookEvent(eventData) {
   const { event, payment } = eventData;
   if (event !== 'PAYMENT_RECEIVED' && event !== 'PAYMENT_CONFIRMED') {
-    return; // Ignora eventos que não são de confirmação
+    return;
   }
-
   if (!payment || !payment.customer) {
-    logger.error('[ASAAS SVC] Payload de pagamento incompleto ou sem ID de cliente.', eventData);
-    return; // Retorna OK para o ASAAS não reenviar
+    logger.error('[ASAAS SVC] Payload de pagamento incompleto.', eventData);
+    return;
   }
 
-  // Extração dos dados com foco no telefone
   const asaasCustomerId = payment.customer;
-  const clientRawPhone = payment.customer.mobilePhone || payment.customer.phone;
 
-  // Validação CRÍTICA: Se nem com o campo obrigatório o telefone veio, algo está muito errado.
+  // >>>>>>>> MUDANÇA PRINCIPAL AQUI <<<<<<<<<<
+  // Passo 1: Buscar os dados completos do cliente na API do ASAAS.
+  // Isso garante que temos os dados mais atualizados e corretos.
+  const customerData = await asaasApiService.getCustomerById(asaasCustomerId);
+
+  const clientRawPhone = customerData.mobilePhone || customerData.phone;
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+  
   if (!clientRawPhone) {
-    logger.error(`[ASAAS SVC] CRÍTICO: Webhook recebido SEM TELEFONE, mesmo sendo um campo obrigatório no checkout. Cliente ASAAS ID: ${asaasCustomerId}. Payload:`, payment.customer);
-    return; // Não podemos prosseguir.
+    logger.error(`[ASAAS SVC] CRÍTICO: Telefone não encontrado para o cliente ASAAS ID ${asaasCustomerId}, mesmo após busca na API.`);
+    return;
   }
 
   const clientPhone = normalizePhoneNumberToCanonical(clientRawPhone);
-  const clientName = payment.customer.name || `Cliente ${clientPhone}`; // Usa o telefone para criar um nome padrão
-  const clientEmail = payment.customer.email || null; // E-mail continua opcional
+  const clientName = customerData.name || `Cliente ${clientPhone}`;
+  const clientEmail = customerData.email || null;
   const externalSubscriptionId = payment.subscription;
 
   if (!externalSubscriptionId) {
@@ -39,38 +44,29 @@ async function processWebhookEvent(eventData) {
 
   const t = await sequelize.transaction();
   try {
-    // Busca o cliente prioritariamente pelo telefone, que é nosso identificador único
     let localClient = await Client.findOne({ where: { phone: clientPhone }, transaction: t });
 
     if (localClient) {
       logger.info(`[ASAAS SVC] Cliente local encontrado pelo telefone ${clientPhone} (ID: ${localClient.id}).`);
-      // Se o cliente já existia mas não tinha o ID do ASAAS, atualiza.
       if (!localClient.asaasCustomerId) {
         await localClient.update({ asaasCustomerId: asaasCustomerId }, { transaction: t });
         logger.info(`[ASAAS SVC] ID do cliente ASAAS (${asaasCustomerId}) vinculado ao cliente local existente.`);
       }
     } else {
-      // Se não encontrou pelo telefone, significa que é um cliente 100% novo.
       logger.info(`[ASAAS SVC] Nenhum cliente encontrado com o telefone ${clientPhone}. Criando novo cliente...`);
-      
       const newClientData = {
         name: clientName,
-        email: clientEmail,       // null se não fornecido
-        phone: clientPhone,       // O identificador principal
+        email: clientEmail,
+        phone: clientPhone,
         asaasCustomerId: asaasCustomerId,
         status: 'Ativo'
       };
-      
       localClient = await clientService.createClientContact(newClientData, { transaction: t });
       logger.info(`[ASAAS SVC] Novo cliente criado no sistema local. ID: ${localClient.id}`);
     }
 
-    // Identificação do plano pelo valor (continua igual)
     const planValue = parseFloat(payment.value);
-    const localPlan = await Plan.findOne({
-      where: { price: { [Op.eq]: planValue } },
-      transaction: t
-    });
+    const localPlan = await Plan.findOne({ where: { price: { [Op.eq]: planValue } }, transaction: t });
 
     if (!localPlan) {
       await t.rollback();
@@ -79,7 +75,6 @@ async function processWebhookEvent(eventData) {
     }
     logger.info(`[ASAAS SVC] Plano "${localPlan.name}" corresponde ao valor pago.`);
 
-    // Criação/Atualização da assinatura (continua igual)
     let localSubscription = await Subscription.findOne({ where: { externalSubscriptionId: externalSubscriptionId }, transaction: t });
 
     if (localSubscription) {

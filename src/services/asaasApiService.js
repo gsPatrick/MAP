@@ -115,8 +115,52 @@ async function createAsaasSubscription(clientId, planId) {
     return newAsaasSubscription; // Retorne isso para o seu controller/frontend
 }
 
+/**
+ * Busca os dados completos de um cliente no ASAAS usando seu ID.
+ * @param {string} customerId - O ID do cliente no ASAAS (ex: 'cus_123').
+ * @returns {Promise<object>} Os dados do cliente.
+ */
+async function getCustomerById(customerId) {
+  try {
+    logger.info(`[ASAAS API SVC] Buscando dados do cliente ASAAS ID: ${customerId}`);
+    const { data } = await asaasAPI.get(`/customers/${customerId}`);
+    return data;
+  } catch (error) {
+    logger.error(`[ASAAS API SVC] Falha ao buscar cliente ${customerId}:`, error.response ? error.response.data : error.message);
+    throw new Error(`Falha ao buscar dados do cliente ${customerId} no ASAAS.`);
+  }
+}
+
+/**
+ * Simula o recebimento de um pagamento em dinheiro para uma cobrança específica.
+ * (Esta função continua a mesma)
+ */
+async function simulatePayment(paymentId, value) {
+  // ... (código da função simulatePayment continua aqui, sem alterações)
+  try {
+    if (process.env.NODE_ENV !== 'development') {
+      logger.error('[ASAAS API SVC] A simulação de pagamento só é permitida em ambiente de desenvolvimento.');
+      throw new Error('Operação não permitida em produção.');
+    }
+    logger.info(`[ASAAS API SVC] Simulando pagamento para a cobrança ID: ${paymentId}`);
+    const endpoint = `/payments/${paymentId}/receiveInCash`;
+    const payload = {
+      paymentDate: new Date().toISOString().split('T')[0],
+      value: value,
+      notifyCustomer: false
+    };
+    const { data } = await asaasAPI.post(endpoint, payload);
+    logger.info(`[ASAAS API SVC] Pagamento para a cobrança ${paymentId} simulado com sucesso. Status agora é: ${data.status}`);
+    return data;
+  } catch (error) {
+    logger.error(`[ASAAS API SVC] Falha ao simular pagamento para ${paymentId}:`, error.response ? error.response.data : error.message);
+    throw new Error('Falha ao simular pagamento no ASAAS.');
+  }
+}
+
 module.exports = {
     simulatePayment,
+    getCustomerById,
   findOrCreateAsaasCustomer,
   createAsaasSubscription
 };
