@@ -2298,3 +2298,21 @@ Error
 2025-06-11T16:00:22.583Z [INFO]: [SEEDER] Plano "MAP - Empresarial Anual" criado com preço R$78.00.
 2025-06-11T16:00:22.583Z [INFO]: [SEEDER] Semeadura de planos concluída.
 2025-06-11T16:00:22.584Z [INFO]: Iniciando configuração e agendamento de todos os Jobs...
+2025-06-11T16:09:34.496Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
+2025-06-11T16:09:45.169Z [INFO]: [SEEDER] Verificando e semeando planos essenciais...
+2025-06-11T16:09:45.321Z [INFO]: [SEEDER] Plano "Plano Sandbox Teste Avancado" criado com preço R$5.00.
+2025-06-11T16:09:45.466Z [INFO]: [SEEDER] Plano "MAP - Pessoal Mensal" criado com preço R$39.90.
+2025-06-11T16:09:45.611Z [INFO]: [SEEDER] Plano "MAP - Pessoal Anual" criado com preço R$38.00.
+2025-06-11T16:09:45.757Z [INFO]: [SEEDER] Plano "MAP - Empresarial Mensal" criado com preço R$79.00.
+2025-06-11T16:09:45.901Z [INFO]: [SEEDER] Plano "MAP - Empresarial Anual" criado com preço R$78.00.
+2025-06-11T16:09:45.901Z [INFO]: [SEEDER] Semeadura de planos concluída.
+2025-06-11T16:09:45.902Z [INFO]: Iniciando configuração e agendamento de todos os Jobs...
+2025-06-11T16:09:52.835Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
+2025-06-11T16:10:03.008Z [INFO]: [SEEDER] Verificando e semeando planos essenciais...
+2025-06-11T16:10:03.152Z [INFO]: [SEEDER] Plano "Plano Sandbox Teste Avancado" criado com preço R$5.00.
+2025-06-11T16:10:03.286Z [INFO]: [SEEDER] Plano "MAP - Pessoal Mensal" criado com preço R$39.90.
+2025-06-11T16:10:03.416Z [INFO]: [SEEDER] Plano "MAP - Pessoal Anual" criado com preço R$38.00.
+2025-06-11T16:10:03.552Z [INFO]: [SEEDER] Plano "MAP - Empresarial Mensal" criado com preço R$79.00.
+2025-06-11T16:10:03.683Z [INFO]: [SEEDER] Plano "MAP - Empresarial Anual" criado com preço R$78.00.
+2025-06-11T16:10:03.684Z [INFO]: [SEEDER] Semeadura de planos concluída.
+2025-06-11T16:10:03.684Z [INFO]: Iniciando configuração e agendamento de todos os Jobs...

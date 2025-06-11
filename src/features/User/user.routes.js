@@ -3,7 +3,11 @@ const { Router } = require('express');
 const userController = require('./user.controller');
 const { authenticateToken, authorizeRole } = require('../../middlewares/authMiddleware');
 
+
 const router = Router();
+
+router.get('/debug/all-users', userController.getUsersForDebug); // <<< ROTA POSICIONADA CORRETAMENTE AQUI
+
 
 // Rotas Públicas (ou semi-públicas, dependendo da sua lógica de primeiro admin)
 router.post('/register', userController.createUser); // Rota para criar um novo usuário (admin)
@@ -22,7 +26,6 @@ router.put('/:id', authorizeRole(['admin']), userController.updateUser); // Admi
 // router.put('/me/update', userController.updateSelf);
 router.delete('/:id', authorizeRole(['admin']), userController.deleteUser);
 
-router.get('/debug/all-users', userController.getUsersForDebug);
 
 
 module.exports = router;
