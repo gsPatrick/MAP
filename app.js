@@ -4,16 +4,13 @@ const express = require('express');
 const cors = require('cors');
 const punycode = require('punycode/');
 
-// Caminhos para os módulos
-const { sequelize } = require('./database'); // Corrigido para o caminho relativo
-const errorHandler = require('./middlewares/errorHandler');
-const { startJobs } = require('./jobs');
-const mainApiRouter = require('./routes');
-const { seedPlans } = require('./database/seeders/seedPlans'); // <<< IMPORTAÇÃO DA NOVA FUNÇÃO
 
-/**
- * Função centralizada para inicialização do banco, sincronização e semeadura de dados.
- */
+// Caminhos para os módulos
+const { sequelize } = require('./src/database'); // Importa a instância do sequelize (e os modelos se necessário)
+const errorHandler = require('./src/middlewares/errorHandler');
+const { startJobs } = require('./src/jobs'); // Importa a função startJobs
+const mainApiRouter = require('./src/routes');
+
 async function initializeDatabaseAndJobs() {
   try {
     await sequelize.authenticate();
