@@ -59,23 +59,19 @@ async function processWebhookEvent(eventData) {
     const clientEmail = customerData.email || null;
 
     // ==========================================================
-    // 3. ENCONTRAR OU CRIAR O CLIENTE NO SEU BANCO (LÓGICA CORRIGIDA)
+    // 3. ENCONTRAR OU CRIAR O CLIENTE NO SEU BANCO
     // ==========================================================
     let localClient;
 
-    // Prioridade 1: Tenta encontrar pelo telefone, que é o identificador principal.
     if (clientPhone) {
       localClient = await Client.findOne({ where: { phone: clientPhone }, transaction: t });
     }
-
-    // Prioridade 2: Se não achou pelo telefone, mas tem e-mail, tenta pelo e-mail.
     if (!localClient && clientEmail) {
       localClient = await Client.findOne({ where: { email: clientEmail }, transaction: t });
     }
 
     if (localClient) {
       logger.info(`[ASAAS SVC] Cliente local encontrado (ID: ${localClient.id}). Verificando e vinculando dados...`);
-      // Garante que o ID do ASAAS e outros dados que possam ter sido atualizados sejam salvos.
       const updates = {};
       if (!localClient.asaasCustomerId) updates.asaasCustomerId = asaasCustomerId;
       if (!localClient.name && clientName) updates.name = clientName;
@@ -85,17 +81,9 @@ async function processWebhookEvent(eventData) {
         await localClient.update(updates, { transaction: t });
         logger.info(`[ASAAS SVC] Dados do cliente local atualizados.`);
       }
-
     } else {
-      // Se não encontrou de nenhuma forma, cria um novo cliente.
       logger.info(`[ASAAS SVC] Nenhum cliente existente encontrado. Criando novo cliente...`);
-      const newClientData = {
-        name: clientName,
-        email: clientEmail,
-        phone: clientPhone,
-        asaasCustomerId: asaasCustomerId,
-        status: 'Ativo'
-      };
+      const newClientData = { name, email: clientEmail, phone: clientPhone, asaasCustomerId, status: 'Ativo' };
       localClient = await clientService.createClientContact(newClientData, { transaction: t });
       logger.info(`[ASAAS SVC] Novo cliente criado (ID: ${localClient.id}).`);
     }
@@ -111,39 +99,41 @@ async function processWebhookEvent(eventData) {
 
     if (!localPlan) {
       await t.rollback();
-      logger.error(`[ASAAS SVC] Nenhum plano encontrado no sistema com o valor R$${planValue}. Verifique se os planos foram semeados corretamente no banco.`);
+      logger.error(`[ASAAS SVC] Nenhum plano encontrado no sistema com o valor R$${planValue}. Verifique se os planos foram semeados.`);
       throw new Error(`Plano com valor ${planValue} não configurado.`);
     }
     logger.info(`[ASAAS SVC] Plano "${localPlan.name}" corresponde ao valor pago.`);
 
     // ==========================================================
-    // 5. CRIAR OU ATUALIZAR A ASSINATURA LOCAL
+    // 5. GARANTIR A EXISTÊNCIA DA ASSINATURA LOCAL E DELEGAR ATIVAÇÃO
     // ==========================================================
-    const [subscription, created] = await Subscription.findOrCreate({
+    const endDate = payment.nextDueDate || new Date(new Date().setDate(new Date().getDate() + localPlan.durationDays)).toISOString().split('T')[0];
+    
+    // Garante que a assinatura exista no banco, mesmo que como 'Pendente', para que o serviço de atualização a encontre.
+    await Subscription.findOrCreate({
       where: { externalSubscriptionId: externalSubscriptionId },
       defaults: {
         clientId: localClient.id,
         planId: localPlan.id,
         startDate: payment.paymentDate ? new Date(payment.paymentDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-        endDate: payment.nextDueDate || new Date(new Date().setDate(new Date().getDate() + localPlan.durationDays)).toISOString().split('T')[0],
-        status: 'Ativa',
-        externalSubscriptionId: externalSubscriptionId,
+        endDate: endDate,
+        status: 'Pendente', // Inicia como pendente
       },
       transaction: t
     });
 
-    if (created) {
-      logger.info(`[ASAAS SVC] Nova assinatura local (ID: ${subscription.id}) criada para o cliente ${localClient.id}.`);
-      await subscriptionService.updateSubscriptionStatusByExternalId(externalSubscriptionId, 'Ativa', subscription.endDate);
-    } else {
-      logger.info(`[ASAAS SVC] Assinatura local ${subscription.id} encontrada. Atualizando status para 'Ativa'.`);
-      await subscriptionService.updateSubscriptionStatusByExternalId(externalSubscriptionId, 'Ativa', subscription.endDate);
-    }
+    // A transação principal do webhook é commitada aqui
+    await t.commit(); 
 
-    await t.commit();
+    // AGORA, chamamos o serviço de atualização FORA da transação anterior.
+    // O `updateSubscriptionStatusByExternalId` tem sua PRÓPRIA transação interna, garantindo a atomicidade da sua operação.
+    logger.info(`[ASAAS SVC] Delegando ativação da assinatura ${externalSubscriptionId} para o Subscription Service.`);
+    await subscriptionService.updateSubscriptionStatusByExternalId(externalSubscriptionId, 'Ativa', endDate);
+
     logger.info(`[ASAAS SVC] Processo concluído com sucesso para o pagamento ${payment.id}.`);
 
   } catch (error) {
+    // Se a transação ainda estiver ativa, faz rollback.
     if (t.finished !== 'commit' && t.finished !== 'rollback') {
       await t.rollback();
     }
