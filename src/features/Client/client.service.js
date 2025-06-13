@@ -3,6 +3,7 @@
 const { Client, FinancialAccount, FinancialCategory, sequelize } = require('../../database');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
+const crypto = require('node:crypto'); // <<<< ADICIONE ESTA LINHA AQUI
 
 
 
