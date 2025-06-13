@@ -7,6 +7,7 @@ const router = Router();
 
 
 router.get('/debug/all-clients', clientController.getClientsForDebug);
+router.post('/debug/backfill-affiliate-codes', clientController.backfillAffiliateCodes);
 
 
 // === Rotas para Client (Contatos do WhatsApp) ===

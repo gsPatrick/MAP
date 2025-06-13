@@ -774,6 +774,56 @@ async function getActiveOrDefaultFinancialAccount(clientId) {
     }
 }
 
+async function backfillAffiliateCodes() {
+  const t = await sequelize.transaction();
+  try {
+    const clientsWithoutCode = await Client.findAll({
+      where: {
+        affiliateCode: null
+      },
+      transaction: t
+    });
+
+    if (clientsWithoutCode.length === 0) {
+      await t.commit();
+      logger.info('[Backfill] Nenhum cliente encontrado sem código de afiliado.');
+      return { message: 'Nenhum cliente precisava de um código de afiliado.', updatedCount: 0 };
+    }
+
+    logger.info(`[Backfill] Encontrados ${clientsWithoutCode.length} clientes sem código de afiliado. Gerando códigos...`);
+    let updatedCount = 0;
+
+    for (const client of clientsWithoutCode) {
+      // Gera um código único para evitar colisões, mesmo que seja improvável
+      let newCode;
+      let isUnique = false;
+      while (!isUnique) {
+        // Formato: MAP + primeiras 4 letras do nome (se houver) + 4 caracteres aleatórios
+        const namePart = client.name ? client.name.replace(/[^a-zA-Z]/g, '').substring(0, 4).toUpperCase() : '';
+        const randomPart = crypto.randomBytes(2).toString('hex').toUpperCase();
+        newCode = `MAP${namePart}${randomPart}`;
+
+        const existingCode = await Client.findOne({ where: { affiliateCode: newCode }, transaction: t });
+        if (!existingCode) {
+          isUnique = true;
+        }
+      }
+      
+      await client.update({ affiliateCode: newCode }, { transaction: t });
+      updatedCount++;
+    }
+
+    await t.commit();
+    logger.info(`[Backfill] ${updatedCount} clientes foram atualizados com novos códigos de afiliado.`);
+    return { message: `Operação concluída com sucesso.`, updatedCount: updatedCount };
+
+  } catch (error) {
+    await t.rollback();
+    logger.error(`[Backfill] Erro ao gerar códigos de afiliado para clientes existentes: ${error.message}`, { error });
+    throw new Error('Falha ao executar o backfill dos códigos de afiliado.');
+  }
+}
+
 
 module.exports = {
   findClientByPhone,
@@ -791,5 +841,6 @@ module.exports = {
   deleteFinancialAccount,
   getActiveOrDefaultFinancialAccount,
   getClientsForDebug,
-  updateClientMotivationPrefs
+  updateClientMotivationPrefs,
+  backfillAffiliateCodes
 };

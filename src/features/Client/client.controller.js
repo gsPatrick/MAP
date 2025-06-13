@@ -148,6 +148,15 @@ async function getClientsForDebug(req, res, next) {
   }
 }
 
+async function backfillAffiliateCodes(req, res, next) {
+  try {
+    const result = await clientService.backfillAffiliateCodes();
+    res.status(200).json({ status: 'success', data: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createClientContact,
   getAllClientContacts,
@@ -159,5 +168,6 @@ module.exports = {
   getFinancialAccountById,
   updateFinancialAccount,
   deleteFinancialAccount,
-  getClientsForDebug
+  getClientsForDebug,
+  backfillAffiliateCodes
 };
