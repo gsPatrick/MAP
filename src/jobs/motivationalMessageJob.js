@@ -209,11 +209,17 @@ function getRandomMotivationalPhrase() {
  */
 async function checkAndSendDailyMotivation() {
   try {
-    const now = new Date();
-    const todayDateString = now.toISOString().split('T')[0]; // Ex: "2024-06-13"
+    // <<<< INÍCIO DA MUDANÇA >>>>
+    // Obter a data e hora ATUAL no fuso horário de São Paulo
+    const timeZone = process.env.TZ || "America/Sao_Paulo";
+    const nowInSaoPaulo = new Date(new Date().toLocaleString("en-US", { timeZone }));
+    
+    const currentHour = nowInSaoPaulo.getHours();
+    const currentMinute = nowInSaoPaulo.getMinutes();
+    const todayDateString = nowInSaoPaulo.toISOString().split('T')[0];
+    // <<<< FIM DA MUDANÇA >>>>
 
     // 1. Busca TODOS os clientes que querem receber a mensagem e ainda não receberam hoje.
-    // A filtragem por horário será feita no código para maior compatibilidade.
     const potentialClients = await Client.findAll({
       where: {
         wantsMotivationMessage: true,
@@ -225,26 +231,23 @@ async function checkAndSendDailyMotivation() {
     });
 
     if (potentialClients.length === 0) {
-      // Nenhum cliente elegível hoje. Isso é normal.
       return;
     }
 
     // 2. Filtra por horário no código
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    
     const clientsToSend = potentialClients.filter(client => {
-      if (!client.motivationMessageTime) return false; // Segurança
+      if (!client.motivationMessageTime) return false;
       const [scheduledHour, scheduledMinute] = client.motivationMessageTime.split(':').map(Number);
+      
+      // Compara a hora e minuto do fuso horário de São Paulo com o agendado
       return scheduledHour === currentHour && scheduledMinute === currentMinute;
     });
 
     if (clientsToSend.length === 0) {
-      // Nenhum cliente agendado para este exato minuto. Isso também é normal.
       return;
     }
 
-    logger.info(`[JOB MOTIVAÇÃO] Encontrados ${clientsToSend.length} clientes para enviar mensagem motivacional agora.`);
+    logger.info(`[JOB MOTIVAÇÃO] Encontrados ${clientsToSend.length} clientes para enviar mensagem motivacional agora às ${currentHour}:${currentMinute}.`);
 
     // 3. Pega uma única frase para este lote de envios
     const phrase = getRandomMotivationalPhrase();
@@ -260,7 +263,6 @@ async function checkAndSendDailyMotivation() {
       try {
         const sent = await sendWhatsappMessage(client.phone, phrase);
         if (sent) {
-          // Atualiza o registro do cliente para não enviar novamente hoje
           await client.update({ lastMotivationSentDate: todayDateString });
           logger.info(`[JOB MOTIVAÇÃO] Mensagem enviada e registro atualizado para ${client.name} (${client.phone}).`);
         } else {
