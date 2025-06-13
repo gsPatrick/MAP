@@ -195,7 +195,6 @@ const motivationalPhrases = [
   "🌻 A vida é um presente. Nunca se esqueça de aproveitar e desfrutar cada momento que você tem."
 ];
 
-
 /**
  * Pega uma frase aleatória do array de frases motivacionais.
  * @returns {string} Uma frase motivacional.
@@ -211,40 +210,44 @@ function getRandomMotivationalPhrase() {
 async function checkAndSendDailyMotivation() {
   try {
     const now = new Date();
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    const todayDateString = now.toISOString().split('T')[0];
+    const todayDateString = now.toISOString().split('T')[0]; // Ex: "2024-06-13"
 
-    // Busca clientes que querem receber a mensagem, estão ativos, possuem telefone,
-    // e o horário configurado bate com a hora e minuto atuais.
-    // E que ainda não receberam a mensagem hoje.
-    const clientsToSend = await Client.findAll({
+    // 1. Busca TODOS os clientes que querem receber a mensagem e ainda não receberam hoje.
+    // A filtragem por horário será feita no código para maior compatibilidade.
+    const potentialClients = await Client.findAll({
       where: {
         wantsMotivationMessage: true,
         status: 'Ativo',
-        phone: { [Op.ne]: null },
-        [Op.and]: [
-          sequelize.where(sequelize.fn('EXTRACT', sequelize.literal('HOUR FROM "motivationMessageTime"')), currentHour),
-          sequelize.where(sequelize.fn('EXTRACT', sequelize.literal('MINUTE FROM "motivationMessageTime"')), currentMinute)
-        ],
-        [Op.or]: [
-          { lastMotivationSentDate: null },
-          { lastMotivationSentDate: { [Op.lt]: todayDateString } }
-        ]
+        phone: { [require('sequelize').Op.ne]: null },
+        lastMotivationSentDate: { [require('sequelize').Op.or]: [null, { [require('sequelize').Op.lt]: todayDateString }] }
       },
-      attributes: ['id', 'name', 'phone']
+      attributes: ['id', 'name', 'phone', 'motivationMessageTime']
     });
 
-    if (clientsToSend.length === 0) {
-      // Isso é normal e esperado na maioria das execuções do job.
+    if (potentialClients.length === 0) {
+      // Nenhum cliente elegível hoje. Isso é normal.
       return;
     }
 
-    logger.info(`[JOB MOTIVAÇÃO] Encontrados ${clientsToSend.length} clientes para enviar mensagem motivacional.`);
+    // 2. Filtra por horário no código
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    
+    const clientsToSend = potentialClients.filter(client => {
+      if (!client.motivationMessageTime) return false; // Segurança
+      const [scheduledHour, scheduledMinute] = client.motivationMessageTime.split(':').map(Number);
+      return scheduledHour === currentHour && scheduledMinute === currentMinute;
+    });
 
-    // Pega uma única frase para este lote de envios
+    if (clientsToSend.length === 0) {
+      // Nenhum cliente agendado para este exato minuto. Isso também é normal.
+      return;
+    }
+
+    logger.info(`[JOB MOTIVAÇÃO] Encontrados ${clientsToSend.length} clientes para enviar mensagem motivacional agora.`);
+
+    // 3. Pega uma única frase para este lote de envios
     const phrase = getRandomMotivationalPhrase();
-
     if (!phrase) {
       logger.warn('[JOB MOTIVAÇÃO] Nenhuma frase motivacional disponível no array. Abortando envio.');
       return;
@@ -252,7 +255,7 @@ async function checkAndSendDailyMotivation() {
     
     logger.info(`[JOB MOTIVAÇÃO] Frase do dia selecionada: "${phrase.substring(0, 50)}..."`);
 
-    // Envia a mensagem para cada cliente e atualiza seu registro individualmente
+    // 4. Envia a mensagem para cada cliente e atualiza seu registro individualmente
     for (const client of clientsToSend) {
       try {
         const sent = await sendWhatsappMessage(client.phone, phrase);
