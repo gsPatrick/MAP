@@ -205,27 +205,16 @@ function getRandomMotivationalPhrase() {
 async function checkAndSendDailyMotivation() {
   try {
     const timeZone = process.env.TZ || "America/Sao_Paulo";
-    
-    // Pega a hora atual no fuso horário correto
     const now = new Date(new Date().toLocaleString("en-US", { timeZone }));
     const todayDateString = now.toISOString().split('T')[0];
-    
-    // <<<< LÓGICA DE VERIFICAÇÃO DE HORÁRIO APRIMORADA >>>>
-    // Formata a hora atual para 'HH:MM:SS' para comparação no banco
-    const currentHour = String(now.getHours()).padStart(2, '0');
-    const currentMinute = String(now.getMinutes()).padStart(2, '0');
-    const currentTimeForQuery = `${currentHour}:${currentMinute}:00`;
 
-    // 1. Busca clientes que:
-    //    - Querem receber a mensagem e estão ativos.
-    //    - Ainda não receberam hoje.
-    //    - Cujo horário agendado é exatamente o minuto atual.
-    const clientsToSend = await Client.findAll({
+    // 1. Busca TODOS os clientes que querem receber a mensagem e ainda não receberam hoje.
+    const clientsToCheck = await Client.findAll({
       where: {
         wantsMotivationMessage: true,
         status: 'Ativo',
         phone: { [Op.ne]: null },
-        motivationMessageTime: currentTimeForQuery, // Compara diretamente com 'HH:MM:00'
+        motivationMessageTime: { [Op.ne]: null }, // Garante que o horário está definido
         lastMotivationSentDate: {
           [Op.or]: [null, { [Op.lt]: todayDateString }]
         }
@@ -233,48 +222,60 @@ async function checkAndSendDailyMotivation() {
       attributes: ['id', 'name', 'phone', 'motivationMessageTime']
     });
 
-    if (clientsToSend.length === 0) {
-      // Nenhuma tarefa para este minuto. Isso é normal.
-      return;
+    if (clientsToCheck.length === 0) {
+      return; // Nenhum cliente elegível hoje, encerra a execução.
     }
 
-    logger.info(`[JOB MOTIVAÇÃO] Encontrados ${clientsToSend.length} clientes agendados para ${currentTimeForQuery}.`);
+    // 2. Filtra no código para ver quem deve receber a mensagem AGORA.
+    const clientsToSend = clientsToCheck.filter(client => {
+      const [scheduledHour, scheduledMinute] = client.motivationMessageTime.split(':').map(Number);
+      const scheduledTimeToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), scheduledHour, scheduledMinute, 0);
+      
+      // A condição é: a hora agendada já passou ou é agora?
+      return now >= scheduledTimeToday;
+    });
 
-    // 2. Pega uma única frase para este lote de envios
+    if (clientsToSend.length === 0) {
+      return; // Nenhum cliente com horário vencido neste minuto.
+    }
+
+    logger.info(`[JOB MOTIVAÇÃO] Encontrados ${clientsToSend.length} clientes com horário de motivação vencido/atual.`);
+
+    // 3. Pega uma única frase para este lote de envios
     const phrase = getRandomMotivationalPhrase();
     if (!phrase) {
-      logger.warn('[JOB MOTIVAÇÃO] Nenhuma frase motivacional disponível no array. Abortando envio.');
+      logger.warn('[JOB MOTIVAÇÃO] Nenhuma frase motivacional disponível. Abortando.');
       return;
     }
     
     logger.info(`[JOB MOTIVAÇÃO] Frase do dia selecionada: "${phrase.substring(0, 50)}..."`);
 
-    // 3. Envia a mensagem para cada cliente e atualiza seu registro
+    // 4. Envia a mensagem e marca como enviado para não repetir no mesmo dia.
     for (const client of clientsToSend) {
       try {
         const sent = await sendWhatsappMessage(client.phone, phrase);
         if (sent) {
+          // Marca que a mensagem de HOJE foi enviada.
           await client.update({ lastMotivationSentDate: todayDateString });
           logger.info(`[JOB MOTIVAÇÃO] Mensagem enviada e registro atualizado para ${client.name} (${client.phone}).`);
         } else {
-          logger.error(`[JOB MOTIVAÇÃO] Falha ao enviar para ${client.name} (${client.phone}). O envio será tentado novamente amanhã.`);
+          logger.error(`[JOB MOTIVAÇÃO] Falha ao enviar para ${client.name} (${client.phone}).`);
         }
       } catch (clientError) {
          logger.error(`[JOB MOTIVAÇÃO] Erro no loop de cliente para ${client.name} (${client.phone}): ${clientError.message}`);
       }
     }
   } catch (error) {
-    logger.error('[JOB MOTIVAÇÃO] Erro ao verificar e enviar mensagem motivacional:', { message: error.message, stack: error.stack });
+    logger.error('[JOB MOTIVAÇÃO] Erro geral ao verificar e enviar mensagens:', { message: error.message, stack: error.stack });
   }
 }
 
 /**
- * Inicia o agendamento do job de mensagem motivacional.
+ * Inicia o agendamento do job.
  */
 function startMotivationalMessageJob() {
-  // Roda a cada minuto para verificar se há agendamentos para aquele minuto.
-  const schedule = '*/1 * * * *';
-  logger.info(`[JOB MOTIVAÇÃO] Agendado para verificar envios individuais a cada minuto (schedule: ${schedule})`);
+  const schedule = '*/1 * * * *'; // Roda a cada minuto
+  logger.info(`[JOB MOTIVAÇÃO] Agendado para rodar a cada minuto (schedule: ${schedule})`);
   
   cron.schedule(schedule, checkAndSendDailyMotivation, {
     timezone: process.env.TZ || "America/Sao_Paulo",
