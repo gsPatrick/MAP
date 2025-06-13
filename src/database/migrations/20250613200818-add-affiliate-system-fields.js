@@ -1,13 +1,9 @@
-// src/database/migrations/[timestamp]-add-affiliate-system-fields.js
-
 'use strict';
 
-// Importe DataTypes para usar os tipos de dados do Sequelize
 const { DataTypes } = require('sequelize');
 
 module.exports = {
   async up (queryInterface, Sequelize) {
-    // Usamos uma transação para garantir que todas as alterações aconteçam ou nenhuma aconteça.
     const transaction = await queryInterface.sequelize.transaction();
     try {
       // Adicionar colunas na tabela 'clients'
@@ -21,7 +17,7 @@ module.exports = {
         type: DataTypes.INTEGER,
         allowNull: true,
         references: {
-          model: 'clients', // Nome da tabela referenciada
+          model: 'clients',
           key: 'id',
         },
         onUpdate: 'CASCADE',
@@ -34,15 +30,20 @@ module.exports = {
         defaultValue: 0.00,
       }, { transaction });
 
+      // <<<< COLUNA FALTANTE ADICIONADA AQUI >>>>
+      await queryInterface.addColumn('clients', 'asaasPayoutPixKey', {
+        type: DataTypes.STRING,
+        allowNull: true,
+        comment: 'Chave PIX do cliente para receber pagamentos de comissão.',
+      }, { transaction });
+      // <<<< FIM DA ADIÇÃO >>>>
+
       // Adicionar coluna na tabela 'plans'
       await queryInterface.addColumn('plans', 'affiliateCommissionValue', {
         type: DataTypes.DECIMAL(10, 2),
         allowNull: false,
         defaultValue: 0.00,
       }, { transaction });
-
-      // Criar as novas tabelas (se você decidir usar a versão complexa no futuro)
-      // Por enquanto, vamos manter simples como você pediu.
 
       await transaction.commit();
     } catch (err) {
@@ -52,12 +53,12 @@ module.exports = {
   },
 
   async down (queryInterface, Sequelize) {
-    // O 'down' reverte o que o 'up' fez. É importante para rollbacks.
     const transaction = await queryInterface.sequelize.transaction();
     try {
       await queryInterface.removeColumn('clients', 'affiliateCode', { transaction });
       await queryInterface.removeColumn('clients', 'referredByClientId', { transaction });
       await queryInterface.removeColumn('clients', 'balance', { transaction });
+      await queryInterface.removeColumn('clients', 'asaasPayoutPixKey', { transaction }); // <<<< Adicionado ao 'down' também
       await queryInterface.removeColumn('plans', 'affiliateCommissionValue', { transaction });
       
       await transaction.commit();
