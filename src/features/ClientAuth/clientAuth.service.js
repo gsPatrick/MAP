@@ -91,7 +91,7 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
         }
 
         const updateData = {
-            passwordHash: password.trim(), // O hook vai hashear
+            passwordHash: password.trim(),
             debugPassword: password.trim(),
             name: name.trim(),
         };
@@ -106,26 +106,47 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
         }
         updateData.email = lowerEmail;
         
-        // Lógica do Código de Afiliado
+        // === LÓGICA DE AFILIADO E COMISSÃO IMEDIATA ===
         if (affiliateCode && !client.referredByClientId) {
             const referrer = await Client.findOne({ 
                 where: { 
                     affiliateCode: affiliateCode.toUpperCase(),
-                    id: { [Op.ne]: client.id } // Garante que não possa se auto-indicar
+                    id: { [Op.ne]: client.id }
                 }, 
                 transaction: t 
             });
+
             if (referrer) {
                 updateData.referredByClientId = referrer.id;
                 logger.info(`[ClientAuthService] Cliente ID ${client.id} será vinculado ao afiliado ID ${referrer.id}.`);
+
+                // Busca a assinatura ativa do cliente que está se cadastrando
+                const activeSubscription = await subscriptionService.getActiveSubscription(client.id);
+
+                if (activeSubscription && activeSubscription.plan) {
+                    const plan = activeSubscription.plan;
+                    if (plan.affiliateCommissionValue > 0) {
+                        // Credita o saldo diretamente no afiliado
+                        await referrer.increment('balance', { 
+                            by: plan.affiliateCommissionValue, 
+                            transaction: t 
+                        });
+                        logger.info(`COMISSÃO IMEDIATA: Valor de R$${plan.affiliateCommissionValue} creditado ao afiliado ID ${referrer.id} pelo plano "${plan.name}" do cliente ID ${client.id}.`);
+                    } else {
+                        logger.warn(`[ClientAuthService] Cliente indicado (ID: ${client.id}) tem um plano ativo ("${plan.name}"), mas o plano não tem valor de comissão.`);
+                    }
+                } else {
+                    logger.warn(`[ClientAuthService] Cliente indicado (ID: ${client.id}) não possui uma assinatura ativa no momento do cadastro. Nenhuma comissão será creditada.`);
+                }
             } else {
                 logger.warn(`[ClientAuthService] Código de afiliado "${affiliateCode}" fornecido mas não encontrado. Cliente será atualizado sem indicador.`);
             }
         }
+        // === FIM DA LÓGICA DE AFILIADO ===
 
         await client.update(updateData, { transaction: t });
         await t.commit();
-        logger.info(`Credenciais e indicação atualizadas para o Cliente ${client.phone}.`);
+        logger.info(`Credenciais e indicação (se houver) atualizadas para o Cliente ${client.phone}.`);
         const reloadedClient = await Client.findByPk(client.id);
         return reloadedClient.toJSON();
 
@@ -135,6 +156,7 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
         throw error;
     }
 }
+
 
 async function loginClient(identifier, password) {
   try {
