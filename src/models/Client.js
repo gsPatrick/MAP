@@ -2,7 +2,7 @@
 const { DataTypes, Op } = require('sequelize');
 const sequelize = require('../config/database');
 const bcrypt = require('bcryptjs');
-const crypto = require('node:crypto'); // <<< MUDANÇA APLICADA AQUI
+const crypto = require('node:crypto'); // Correção para usar o módulo nativo do Node.js
 
 // Mock do validator para o exemplo (ou use `npm install validator`)
 const validator = {
@@ -122,22 +122,22 @@ const Client = sequelize.define('Client', {
     comment: 'ID da cor padrão para eventos de Pessoa Jurídica no Google Calendar',
   },
   // --- Campos para Webhook (Push Notifications) do Google Calendar ---
-  googleChannelId: { // ID do canal de notificação retornado pelo Google
+  googleChannelId: {
     type: DataTypes.STRING(255),
     allowNull: true,
     comment: 'ID do canal de notificação do Google Calendar',
   },
-  googleChannelResourceId: { // ID do recurso que está sendo observado (geralmente o calendarId)
+  googleChannelResourceId: {
     type: DataTypes.STRING(255),
     allowNull: true,
     comment: 'ID do recurso (calendário) que está sendo observado pelo Google',
   },
-  googleChannelExpiryDate: { // Data de expiração do canal de notificação
+  googleChannelExpiryDate: {
     type: DataTypes.DATE,
     allowNull: true,
     comment: 'Data de expiração do canal de notificação do Google Calendar',
   },
-  googleLastSyncToken: { // Para sincronização incremental futura (não usado com webhook inicialmente)
+  googleLastSyncToken: {
     type: DataTypes.STRING(255),
     allowNull: true,
     comment: 'Último syncToken do Google Calendar para este cliente',
@@ -145,17 +145,17 @@ const Client = sequelize.define('Client', {
    wantsMotivationMessage: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
-    defaultValue: true, // Começa como desabilitado por padrão
+    defaultValue: true,
     comment: 'Indica se o cliente deseja receber a mensagem motivacional diária.',
   },
     motivationMessageTime: {
-    type: DataTypes.TIME, // Formato 'HH:MM:SS'
+    type: DataTypes.TIME,
     allowNull: false,
-    defaultValue: '13:00:00', // <-- Horário padrão que você pediu
+    defaultValue: '13:00:00',
     comment: 'Horário preferencial do cliente para receber a mensagem motivacional.',
   },
    lastMotivationSentDate: {
-    type: DataTypes.DATEONLY, // Apenas a data YYYY-MM-DD
+    type: DataTypes.DATEONLY,
     allowNull: true,
     comment: 'Registra a data do último envio de mensagem motivacional para este cliente.',
   },
@@ -172,7 +172,7 @@ const Client = sequelize.define('Client', {
   // ===============================================
   affiliateCode: {
     type: DataTypes.STRING(12),
-    allowNull: true, // Será preenchido por um hook
+    allowNull: true,
     unique: true,
     comment: 'Código único de afiliado deste cliente.',
   },
@@ -184,7 +184,7 @@ const Client = sequelize.define('Client', {
       key: 'id',
     },
     onUpdate: 'CASCADE',
-    onDelete: 'SET NULL', // Mantém o cliente mesmo se o afiliado for deletado
+    onDelete: 'SET NULL',
     comment: 'ID do cliente afiliado que indicou este cliente.',
   },
   balance: {
@@ -219,19 +219,21 @@ const Client = sequelize.define('Client', {
   },
   hooks: {
     beforeCreate: async (client) => {
-      // Gera o código de afiliado
+      // Gera o código de afiliado para o novo cliente
       if (!client.affiliateCode) {
         client.affiliateCode = crypto.randomBytes(4).toString('hex').toUpperCase();
       }
       
       if (client.email) client.email = client.email.toLowerCase();
       if (client.passwordHash) client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
+      
       if (client.accessLevel && !client.accessExpiresAt) {
         const now = new Date();
         if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
         else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
         else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
-            client.accessExpiresAt = null; return;
+            client.accessExpiresAt = null;
+            return;
         }
         client.accessExpiresAt = now.toISOString().split('T')[0];
       }
@@ -246,7 +248,8 @@ const Client = sequelize.define('Client', {
         if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
         else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
         else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
-             client.accessExpiresAt = null; return;
+             client.accessExpiresAt = null;
+             return;
         }
         client.accessExpiresAt = now.toISOString().split('T')[0];
       }
