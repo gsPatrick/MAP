@@ -195,61 +195,52 @@ const motivationalPhrases = [
   "🌻 A vida é um presente. Nunca se esqueça de aproveitar e desfrutar cada momento que você tem."
 ];
 
-/**
- * Pega uma frase aleatória do array de frases motivacionais.
- * @returns {string} Uma frase motivacional.
- */
 function getRandomMotivationalPhrase() {
   return motivationalPhrases[Math.floor(Math.random() * motivationalPhrases.length)];
 }
 
 /**
- * Função principal do Job. Verifica clientes que precisam receber a mensagem motivacional
- * com base no horário configurado e envia a mensagem.
+ * Função principal do Job. Verifica clientes que precisam receber a mensagem motivacional.
  */
 async function checkAndSendDailyMotivation() {
   try {
-    // <<<< INÍCIO DA MUDANÇA >>>>
-    // Obter a data e hora ATUAL no fuso horário de São Paulo
     const timeZone = process.env.TZ || "America/Sao_Paulo";
-    const nowInSaoPaulo = new Date(new Date().toLocaleString("en-US", { timeZone }));
     
-    const currentHour = nowInSaoPaulo.getHours();
-    const currentMinute = nowInSaoPaulo.getMinutes();
-    const todayDateString = nowInSaoPaulo.toISOString().split('T')[0];
-    // <<<< FIM DA MUDANÇA >>>>
+    // Pega a hora atual no fuso horário correto
+    const now = new Date(new Date().toLocaleString("en-US", { timeZone }));
+    const todayDateString = now.toISOString().split('T')[0];
+    
+    // <<<< LÓGICA DE VERIFICAÇÃO DE HORÁRIO APRIMORADA >>>>
+    // Formata a hora atual para 'HH:MM:SS' para comparação no banco
+    const currentHour = String(now.getHours()).padStart(2, '0');
+    const currentMinute = String(now.getMinutes()).padStart(2, '0');
+    const currentTimeForQuery = `${currentHour}:${currentMinute}:00`;
 
-    // 1. Busca TODOS os clientes que querem receber a mensagem e ainda não receberam hoje.
-    const potentialClients = await Client.findAll({
+    // 1. Busca clientes que:
+    //    - Querem receber a mensagem e estão ativos.
+    //    - Ainda não receberam hoje.
+    //    - Cujo horário agendado é exatamente o minuto atual.
+    const clientsToSend = await Client.findAll({
       where: {
         wantsMotivationMessage: true,
         status: 'Ativo',
-        phone: { [require('sequelize').Op.ne]: null },
-        lastMotivationSentDate: { [require('sequelize').Op.or]: [null, { [require('sequelize').Op.lt]: todayDateString }] }
+        phone: { [Op.ne]: null },
+        motivationMessageTime: currentTimeForQuery, // Compara diretamente com 'HH:MM:00'
+        lastMotivationSentDate: {
+          [Op.or]: [null, { [Op.lt]: todayDateString }]
+        }
       },
       attributes: ['id', 'name', 'phone', 'motivationMessageTime']
     });
 
-    if (potentialClients.length === 0) {
-      return;
-    }
-
-    // 2. Filtra por horário no código
-    const clientsToSend = potentialClients.filter(client => {
-      if (!client.motivationMessageTime) return false;
-      const [scheduledHour, scheduledMinute] = client.motivationMessageTime.split(':').map(Number);
-      
-      // Compara a hora e minuto do fuso horário de São Paulo com o agendado
-      return scheduledHour === currentHour && scheduledMinute === currentMinute;
-    });
-
     if (clientsToSend.length === 0) {
+      // Nenhuma tarefa para este minuto. Isso é normal.
       return;
     }
 
-    logger.info(`[JOB MOTIVAÇÃO] Encontrados ${clientsToSend.length} clientes para enviar mensagem motivacional agora às ${currentHour}:${currentMinute}.`);
+    logger.info(`[JOB MOTIVAÇÃO] Encontrados ${clientsToSend.length} clientes agendados para ${currentTimeForQuery}.`);
 
-    // 3. Pega uma única frase para este lote de envios
+    // 2. Pega uma única frase para este lote de envios
     const phrase = getRandomMotivationalPhrase();
     if (!phrase) {
       logger.warn('[JOB MOTIVAÇÃO] Nenhuma frase motivacional disponível no array. Abortando envio.');
@@ -258,7 +249,7 @@ async function checkAndSendDailyMotivation() {
     
     logger.info(`[JOB MOTIVAÇÃO] Frase do dia selecionada: "${phrase.substring(0, 50)}..."`);
 
-    // 4. Envia a mensagem para cada cliente e atualiza seu registro individualmente
+    // 3. Envia a mensagem para cada cliente e atualiza seu registro
     for (const client of clientsToSend) {
       try {
         const sent = await sendWhatsappMessage(client.phone, phrase);
