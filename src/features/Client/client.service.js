@@ -238,7 +238,8 @@ async function createClient(clientData) {
 
 /**
  * Cria um novo Client (contato do WhatsApp) - Usado por admin ou sistema interno.
- * @param {object} clientData - { phone, name (opcional), status (opcional), email (opcional) }
+ * MODIFICADO para aceitar um código de afiliado.
+ * @param {object} clientData - { phone, name, status, email, affiliateCode (opcional) }
  * @returns {Promise<object>} O Client criado.
  */
 async function createClientContact(clientData) {
@@ -257,23 +258,46 @@ async function createClientContact(clientData) {
       return existingClient.toJSON();
     }
 
-    const newClient = await Client.create({
+    const newClientPayload = {
         phone: normalizedPhone,
-        name: clientData.name, // Pode ser null
+        name: clientData.name,
         email: clientData.email || null,
         status: clientData.status || 'Ativo',
+    };
+
+    // === NOVA LÓGICA DE AFILIADO ===
+    if (clientData.affiliateCode) {
+        const referrer = await Client.findOne({ 
+            where: { affiliateCode: clientData.affiliateCode.toUpperCase() }, // Busca pelo código em maiúsculas
+            transaction: t 
+        });
+        if (referrer) {
+            newClientPayload.referredByClientId = referrer.id;
+            logger.info(`Novo cliente ${normalizedPhone} será vinculado ao afiliado ID ${referrer.id}.`);
+        } else {
+            logger.warn(`Código de afiliado "${clientData.affiliateCode}" fornecido mas não encontrado. Cliente será criado sem indicador.`);
+        }
+    }
+    // === FIM DA LÓGICA DE AFILIADO ===
+
+    const newClient = await Client.create(newClientPayload, { transaction: t });
+    
+    // Supondo que você tem a função para criar contas PF e categorias...
+    const pfAccount = await FinancialAccount.create({
+        clientId: newClient.id,
+        accountName: 'Pessoal',
+        accountType: 'PF',
+        isDefault: true,
     }, { transaction: t });
+    await createDefaultCategoriesForAccount(pfAccount.id, 'PF', t);
+    
     await t.commit();
-    logger.info(`Novo Contato Cliente criado (manual/admin): ID ${newClient.id}, Telefone: ${newClient.phone}`);
+    logger.info(`Novo Contato Cliente criado: ID ${newClient.id}, Telefone: ${newClient.phone}`);
     return newClient.toJSON();
+
   } catch (error) {
     await t.rollback();
-    logger.error(`Erro ao criar contato cliente (manual/admin): ${error.message}`, { error, clientData });
-     if (error.name === 'SequelizeValidationError') {
-        const valError = new Error(error.errors.map(e => e.message).join(', '));
-        valError.statusCode = 400; valError.status = 'fail';
-        throw valError;
-    }
+    logger.error(`Erro ao criar contato cliente: ${error.message}`, { error, clientData });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }

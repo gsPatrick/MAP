@@ -37,6 +37,13 @@ const Plan = sequelize.define('Plan', {
     validate: { min: 1 },
     comment: 'Duração do plano em dias (ex: 30 para mensal, 365 para anual)',
   },
+   affiliateCommissionValue: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    defaultValue: 0.00,
+    validate: { min: 0 },
+    comment: 'Valor da comissão paga ao afiliado pela venda deste plano.',
+  },
   tier: {
     type: DataTypes.ENUM('basico', 'avancado', 'gratuito', 'vitalicio'),
     allowNull: false,
