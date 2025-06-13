@@ -6,8 +6,6 @@ const { Op } = require('sequelize');
 const subscriptionService = require('../Subscription/subscription.service');
 const googleCalendarService = require('../GoogleCalendar/googleCalendarService');
 
-
-// ... (setClientCredentials e loginClient permanecem os mesmos)
 async function setClientCredentials(phone, password, name = null, email = null) {
   const t = await sequelize.transaction();
   try {
@@ -17,12 +15,9 @@ async function setClientCredentials(phone, password, name = null, email = null) 
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
 
-    // >>>>> INÍCIO DA MODIFICAÇÃO (SENHA) <<<<<
-    // 1. Remove espaços em branco do início e do fim da senha.
     const trimmedPassword = password.trim();
 
     if (trimmedPassword.length < 6) {
-    // >>>>> FIM DA MODIFICAÇÃO (SENHA) <<<<<
       await t.rollback();
       const error = new Error('A senha deve ter pelo menos 6 caracteres.');
       error.statusCode = 400; error.status = 'fail'; throw error;
@@ -35,13 +30,10 @@ async function setClientCredentials(phone, password, name = null, email = null) 
       error.statusCode = 404; error.status = 'fail'; throw error;
     }
 
-    // >>>>> INÍCIO DA MODIFICAÇÃO (SENHA) <<<<<
-    // 2. Usa a senha tratada (sem espaços) para salvar no banco.
     const updateData = {
-        passwordHash: trimmedPassword, // O hook vai hashear isso
-        debugPassword: trimmedPassword // Isso será salvo como texto puro
+        passwordHash: trimmedPassword,
+        debugPassword: trimmedPassword
     };
-    // >>>>> FIM DA MODIFICAÇÃO (SENHA) <<<<<
 
     if (email) {
       const lowerEmail = email.toLowerCase().trim();
@@ -72,6 +64,78 @@ async function setClientCredentials(phone, password, name = null, email = null) 
   }
 }
 
+/**
+ * Define credenciais (senha, nome, email) e o código de afiliado de uma só vez.
+ * Usado no onboarding do WhatsApp.
+ * @param {string} phone - Telefone do cliente.
+ * @param {string} password - Senha (texto puro).
+ * @param {string} name - Nome completo.
+ * @param {string} email - Email.
+ * @param {string|null} affiliateCode - Código de afiliado que indicou.
+ * @returns {Promise<object>} O objeto Client atualizado.
+ */
+async function setClientCredentialsAndAffiliate(phone, password, name, email, affiliateCode) {
+    const t = await sequelize.transaction();
+    try {
+        if (!phone || !password || !name || !email) {
+            throw { statusCode: 400, message: 'Telefone, senha, nome e email são obrigatórios.' };
+        }
+        if (password.trim().length < 6) {
+            throw { statusCode: 400, message: 'A senha deve ter pelo menos 6 caracteres.' };
+        }
+
+        const normalizedPhone = phone.replace(/\D/g, '');
+        let client = await Client.findOne({ where: { phone: normalizedPhone }, transaction: t });
+        if (!client) {
+            throw { statusCode: 404, message: 'Cliente não encontrado com este número de telefone.' };
+        }
+
+        const updateData = {
+            passwordHash: password.trim(), // O hook vai hashear
+            debugPassword: password.trim(),
+            name: name.trim(),
+        };
+
+        const lowerEmail = email.toLowerCase().trim();
+        const existingEmailClient = await Client.findOne({
+            where: { email: lowerEmail, id: { [Op.ne]: client.id } },
+            transaction: t
+        });
+        if (existingEmailClient) {
+            throw { statusCode: 409, message: 'Este endereço de email já está em uso por outro cliente.' };
+        }
+        updateData.email = lowerEmail;
+        
+        // Lógica do Código de Afiliado
+        if (affiliateCode && !client.referredByClientId) {
+            const referrer = await Client.findOne({ 
+                where: { 
+                    affiliateCode: affiliateCode.toUpperCase(),
+                    id: { [Op.ne]: client.id } // Garante que não possa se auto-indicar
+                }, 
+                transaction: t 
+            });
+            if (referrer) {
+                updateData.referredByClientId = referrer.id;
+                logger.info(`[ClientAuthService] Cliente ID ${client.id} será vinculado ao afiliado ID ${referrer.id}.`);
+            } else {
+                logger.warn(`[ClientAuthService] Código de afiliado "${affiliateCode}" fornecido mas não encontrado. Cliente será atualizado sem indicador.`);
+            }
+        }
+
+        await client.update(updateData, { transaction: t });
+        await t.commit();
+        logger.info(`Credenciais e indicação atualizadas para o Cliente ${client.phone}.`);
+        const reloadedClient = await Client.findByPk(client.id);
+        return reloadedClient.toJSON();
+
+    } catch (error) {
+        if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
+        logger.error(`Erro ao definir credenciais e afiliado para cliente ${phone}: ${error.message}`, { error });
+        throw error;
+    }
+}
+
 async function loginClient(identifier, password) {
   try {
     if (!identifier || !password) {
@@ -79,16 +143,11 @@ async function loginClient(identifier, password) {
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
 
-    // >>>>> INÍCIO DA MODIFICAÇÃO <<<<<
-    // Remove espaços em branco do início e do fim da senha fornecida no login.
     const trimmedPassword = password.trim();
-    // >>>>> FIM DA MODIFICAÇÃO <<<<<
-
     const normalizedIdentifier = identifier.replace(/\D/g, '');
     const isEmailLogin = identifier.includes('@');
-    const loginAttemptIdentifier = isEmailLogin ? identifier.toLowerCase().trim() : normalizedIdentifier; // Adicionado trim() ao email também
+    const loginAttemptIdentifier = isEmailLogin ? identifier.toLowerCase().trim() : normalizedIdentifier;
 
-    // Lógica para login via acesso compartilhado
     const sharedAccessLoginCondition = isEmailLogin
         ? { sharedAccessEmail: loginAttemptIdentifier }
         : { sharedAccessPhone: loginAttemptIdentifier };
@@ -102,10 +161,8 @@ async function loginClient(identifier, password) {
     });
 
     if (sharedAccessRecord && sharedAccessRecord.sharedAccessPasswordHash) {
-        // Usa a senha tratada (trimmedPassword) para a comparação
         const isSharedPasswordMatch = await sharedAccessRecord.isValidPassword(trimmedPassword);
         if (isSharedPasswordMatch) {
-            // ... (A lógica interna de sucesso do acesso compartilhado continua aqui) ...
             if (!sharedAccessRecord.sharedWithClient || sharedAccessRecord.sharedWithClient.status === 'Bloqueado' || sharedAccessRecord.sharedWithClient.status === 'Inativo') {
                 const error = new Error('Usuário convidado associado a este acesso está inválido ou inativo.');
                 error.statusCode = 403; error.status = 'fail'; throw error;
@@ -171,7 +228,6 @@ async function loginClient(identifier, password) {
         }
     }
 
-    // Lógica para login direto do cliente
     const client = await Client.scope('withPassword').findOne({
       where: isEmailLogin ? { email: loginAttemptIdentifier } : { phone: loginAttemptIdentifier }
     });
@@ -203,7 +259,6 @@ async function loginClient(identifier, password) {
         error.statusCode = 403; error.status = 'fail_subscription'; throw error;
     }
 
-    // Usa a senha tratada (trimmedPassword) para a comparação
     const isPasswordMatch = await client.isValidPassword(trimmedPassword);
     if (!isPasswordMatch) {
       const error = new Error('Credenciais inválidas (senha incorreta).');
@@ -236,19 +291,16 @@ async function loginClient(identifier, password) {
   }
 }
 
-// Modificada para aceitar loggedInClientData (que é o req.client do controller)
 async function getClientProfile(loggedInClientData, sharedAccessContext = null) {
     try {
-        let clientToFetchIdForAccountsAndSubscription = loggedInClientData.id; // Por padrão, o próprio cliente logado
-        let ownerClientDataForPlan = null; // Para buscar dados do plano do dono, se for acesso compartilhado
+        let clientToFetchIdForAccountsAndSubscription = loggedInClientData.id;
+        let ownerClientDataForPlan = null;
 
-        // Este é o objeto client que será retornado na resposta, representando quem está logado.
         let clientDataForFinalResponse = {
             id: loggedInClientData.id,
             name: loggedInClientData.name,
             email: loggedInClientData.email,
             phone: loggedInClientData.phone,
-            // status, accessLevel, accessExpiresAt virão do owner se for compartilhado, ou do próprio se não for
         };
 
         if (sharedAccessContext) {
@@ -259,15 +311,12 @@ async function getClientProfile(loggedInClientData, sharedAccessContext = null) 
                  error.statusCode = 404; error.status = 'fail'; throw error;
             }
             ownerClientDataForPlan = ownerClientInstance.toJSON();
-
-            // Adiciona/sobrescreve informações de plano e acesso com as do DONO
             clientDataForFinalResponse.effectiveAccessLevel = ownerClientDataForPlan.accessLevel;
             clientDataForFinalResponse.effectiveAccessExpiresAt = ownerClientDataForPlan.accessExpiresAt;
-            clientDataForFinalResponse.ownerClientIdForContext = ownerClientDataForPlan.id; // Para UI saber que é um contexto de dono
+            clientDataForFinalResponse.ownerClientIdForContext = ownerClientDataForPlan.id;
         } else {
-            // Se não é compartilhado, as informações de acesso são do próprio cliente logado
             const selfClientInstance = await Client.findByPk(loggedInClientData.id);
-             if (!selfClientInstance) { // Segurança, embora improvável se chegou até aqui
+             if (!selfClientInstance) {
                  const error = new Error('Cliente logado não encontrado ao buscar próprio perfil.');
                  error.statusCode = 404; error.status = 'fail'; throw error;
             }
@@ -276,7 +325,6 @@ async function getClientProfile(loggedInClientData, sharedAccessContext = null) 
             clientDataForFinalResponse.accessLevel = selfClientData.accessLevel;
             clientDataForFinalResponse.accessExpiresAt = selfClientData.accessExpiresAt;
         }
-
 
         const allOwnerOrOwnAccounts = await FinancialAccount.findAll({
             where: { clientId: clientToFetchIdForAccountsAndSubscription, isActive: true },
@@ -305,14 +353,12 @@ async function getClientProfile(loggedInClientData, sharedAccessContext = null) 
     } catch (error) {
         const baseClientId = loggedInClientData ? loggedInClientData.id : 'N/A';
         logger.error(`Erro ao buscar perfil para cliente logado ID ${baseClientId} (contexto compartilhado: ${!!sharedAccessContext}): ${error.message}`, { error });
-        // Não relança o erro diretamente, mas o controller tratará
         throw new Error(`Erro ao buscar perfil do cliente.`);
     }
 }
 
-
 async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
-  const t = await sequelize.transaction(); // Iniciar transação para a atualização do cliente
+  const t = await sequelize.transaction();
   try {
     const client = await Client.findByPk(clientId, { transaction: t });
     if (!client) {
@@ -344,17 +390,15 @@ async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
     }
 
     if (Object.keys(updateData).length === 0) {
-        await t.commit(); // Comita mesmo se nada mudou nos dados do cliente
+        await t.commit();
         logger.info(`[ClientAuthService] Nenhuma preferência de cor de calendário para atualizar para Cliente ID ${clientId}.`);
         return client.toJSON();
     }
 
     await client.update(updateData, { transaction: t });
-    await t.commit(); // Comita a atualização das preferências do cliente
+    await t.commit();
     logger.info(`Preferências de cor de calendário atualizadas para Cliente ID ${clientId}. PF: ${client.googleCalendarColorIdPF}, PJ: ${client.googleCalendarColorIdPJ}`);
 
-    // Disparar ressincronização de cores de forma assíncrona (fire-and-forget)
-    // para não bloquear a resposta da requisição.
     if ((pfColorChanged || pjColorChanged) && client.isGoogleCalendarSynced && client.googleCalendarIdPrincipal) {
         logger.info(`[ClientAuthService] Disparando ressincronização de cores para Cliente ID ${clientId}...`);
         resyncGoogleEventColorsForClient(clientId, pfColorChanged ? client.googleCalendarColorIdPF : undefined, pjColorChanged ? client.googleCalendarColorIdPJ : undefined)
@@ -362,7 +406,7 @@ async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
             .catch(err => logger.error(`[ClientAuthService] Erro na ressincronização de cores para Cliente ID ${clientId}: ${err.message}`));
     }
     
-    const reloadedClient = await Client.findByPk(clientId); // Busca fora da transação para pegar o estado mais recente
+    const reloadedClient = await Client.findByPk(clientId);
     return reloadedClient.toJSON();
 
   } catch (error) {
@@ -373,13 +417,6 @@ async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
   }
 }
 
-/**
- * Função assíncrona para buscar todos os appointments sincronizados de um cliente
- * e atualizar a cor de seus respectivos eventos no Google Agenda.
- * @param {number} clientId
- * @param {string|undefined} newPfColorId - Nova cor para PF, ou undefined se não mudou
- * @param {string|undefined} newPjColorId - Nova cor para PJ, ou undefined se não mudou
- */
 async function resyncGoogleEventColorsForClient(clientId, newPfColorId, newPjColorId) {
     try {
         const client = await Client.findByPk(clientId, {
@@ -392,18 +429,18 @@ async function resyncGoogleEventColorsForClient(clientId, newPfColorId, newPjCol
 
         const appointmentsToResync = await Appointment.findAll({
             where: {
-                googleEventId: { [Op.ne]: null }, // Apenas os que estão no Google
+                googleEventId: { [Op.ne]: null },
                 '$financialAccount.clientId$': clientId
             },
             include: [
                 {
                     model: FinancialAccount,
                     as: 'financialAccount',
-                    required: true, // Garante que só pegamos appointments com FA válida
-                    include: [{ model: Client, as: 'ownerClient' }] // ownerClient terá as novas cores
+                    required: true,
+                    include: [{ model: Client, as: 'ownerClient' }]
                 },
                 {
-                    model: BusinessClient, // Para passar para mapToGoogleEvent
+                    model: BusinessClient,
                     as: 'businessClients',
                     through: { attributes: [] },
                     required: false
@@ -423,7 +460,7 @@ async function resyncGoogleEventColorsForClient(clientId, newPfColorId, newPjCol
             const faType = appt.financialAccount.accountType;
             let needsGoogleUpdate = false;
 
-            if (faType === 'PF' && newPfColorId !== undefined) { // newPfColorId pode ser null se o usuário limpou a preferência
+            if (faType === 'PF' && newPfColorId !== undefined) {
                 needsGoogleUpdate = true;
             } else if ((faType === 'PJ' || faType === 'MEI') && newPjColorId !== undefined) {
                 needsGoogleUpdate = true;
@@ -431,29 +468,18 @@ async function resyncGoogleEventColorsForClient(clientId, newPfColorId, newPjCol
 
             if (needsGoogleUpdate && appt.googleEventId) {
                 try {
-                    // mapToGoogleEvent usará as cores atualizadas do appt.financialAccount.ownerClient
-                    // que é o mesmo 'client' que buscamos no início desta função já com as novas cores.
-                    // Precisamos garantir que o `financialAccount` dentro do `appt` tenha o `ownerClient` com as cores atualizadas.
-                    // A forma mais simples é passar o objeto `client` (com as novas cores) para `updateGoogleEvent`
-                    // e deixar `mapToGoogleEvent` usá-lo.
-
-                    // O `appt.financialAccount.ownerClient` no `appt` buscado pode não ter as cores mais recentes
-                    // se o `client.update` não recarregar associações.
-                    // Então, é mais seguro construir o `appointmentSystem` para `updateGoogleEvent`
-                    // com o `client` que *já tem* as cores atualizadas.
-
                     const appointmentSystemData = {
-                        ...appt.toJSON(), // Pega todos os dados do appointment
-                        financialAccount: { // Sobrescreve a financialAccount para garantir que o ownerClient dentro dela tenha as novas cores
+                        ...appt.toJSON(),
+                        financialAccount: {
                             ...appt.financialAccount.toJSON(),
-                            ownerClient: client.toJSON() // Usa o 'client' que já tem as cores atualizadas
+                            ownerClient: client.toJSON()
                         }
                     };
                     
                     const googleEvent = await googleCalendarService.updateGoogleEvent(
                         clientId,
                         appt.googleEventId,
-                        appointmentSystemData // Passa o objeto completo do sistema
+                        appointmentSystemData
                     );
                     if (googleEvent && googleEvent.id) {
                         await appt.update({ googleEventLastUpdated: new Date(googleEvent.updated) });
@@ -475,6 +501,7 @@ async function resyncGoogleEventColorsForClient(clientId, newPfColorId, newPjCol
 
 module.exports = {
   setClientCredentials,
+  setClientCredentialsAndAffiliate, // <<< MUDANÇA APLICADA AQUI
   loginClient,
   getClientProfile,
   updateClientCalendarPreferences

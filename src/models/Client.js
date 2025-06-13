@@ -2,6 +2,7 @@
 const { DataTypes, Op } = require('sequelize');
 const sequelize = require('../config/database');
 const bcrypt = require('bcryptjs');
+const crypto = require('node:crypto'); // <<< MUDANÇA APLICADA AQUI
 
 // Mock do validator para o exemplo (ou use `npm install validator`)
 const validator = {
@@ -158,13 +159,15 @@ const Client = sequelize.define('Client', {
     allowNull: true,
     comment: 'Registra a data do último envio de mensagem motivacional para este cliente.',
   },
-    asaasCustomerId: { // <<<<<< NOVO CAMPO
+    asaasCustomerId: {
     type: DataTypes.STRING,
     allowNull: true,
     unique: true,
     comment: 'ID do cliente correspondente na plataforma ASAAS',
   },
- // ===============================================
+  // --- Fim dos Campos Google Calendar ---
+
+  // ===============================================
   // === INÍCIO DOS NOVOS CAMPOS PARA AFILIADOS ===
   // ===============================================
   affiliateCode: {
@@ -190,12 +193,15 @@ const Client = sequelize.define('Client', {
     defaultValue: 0.00,
     comment: 'Saldo de comissões disponível para saque.',
   },
+  asaasPayoutPixKey: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    comment: 'Chave PIX do cliente para receber pagamentos de comissão.',
+  },
   // ===============================================
   // === FIM DOS NOVOS CAMPOS PARA AFILIADOS ===
   // ===============================================
-  
-  // Seus outros campos (google, etc) permanecem aqui...
-  // ...
+
 }, {
   tableName: 'clients',
   timestamps: true,
@@ -204,33 +210,33 @@ const Client = sequelize.define('Client', {
     attributes: { exclude: ['passwordHash', 'googleAccessToken', 'googleRefreshToken'] },
   },
   scopes: {
-    withPassword: { attributes: { include: ['passwordHash'] } },
-    withGoogleTokens: { attributes: { include: ['googleAccessToken', 'googleRefreshToken'] } }
+    withPassword: {
+      attributes: { include: ['passwordHash'] },
+    },
+    withGoogleTokens: {
+        attributes: { include: ['googleAccessToken', 'googleRefreshToken'] },
+    }
   },
   hooks: {
     beforeCreate: async (client) => {
-      // Gera o código de afiliado para o novo cliente
+      // Gera o código de afiliado
       if (!client.affiliateCode) {
         client.affiliateCode = crypto.randomBytes(4).toString('hex').toUpperCase();
       }
       
       if (client.email) client.email = client.email.toLowerCase();
       if (client.passwordHash) client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
-      
-      // Lógica de expiração do plano (mantida)
       if (client.accessLevel && !client.accessExpiresAt) {
         const now = new Date();
         if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
         else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
         else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
-            client.accessExpiresAt = null; // Mantém nulo
-        } else {
-            client.accessExpiresAt = now.toISOString().split('T')[0];
+            client.accessExpiresAt = null; return;
         }
+        client.accessExpiresAt = now.toISOString().split('T')[0];
       }
     },
     beforeUpdate: async (client) => {
-      // Lógica existente de beforeUpdate (mantida)
       if (client.changed('email') && client.email) client.email = client.email.toLowerCase();
       if (client.changed('passwordHash') && client.passwordHash && client.passwordHash.length < 60) {
         client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
@@ -240,18 +246,22 @@ const Client = sequelize.define('Client', {
         if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
         else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
         else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
-             client.accessExpiresAt = null;
-        } else {
-            client.accessExpiresAt = now.toISOString().split('T')[0];
+             client.accessExpiresAt = null; return;
         }
+        client.accessExpiresAt = now.toISOString().split('T')[0];
       }
     }
   },
   indexes: [
-    // Seus índices existentes...
     { unique: true, fields: ['phone'] },
     { unique: true, fields: ['email'], where: { email: { [Op.ne]: null } } },
-    // === NOVOS ÍNDICES PARA AFILIADOS ===
+    { fields: ['accessLevel'] },
+    { fields: ['accessExpiresAt'] },
+    { fields: ['isGoogleCalendarSynced'] },
+    { fields: ['googleChannelId'] },
+    { fields: ['googleChannelExpiryDate'] },
+    { fields: ['wantsMotivationMessage'] },
+    { fields: ['asaasCustomerId'], unique: true, where: { asaasCustomerId: { [Op.ne]: null } } },
     { fields: ['affiliateCode'], unique: true, where: { affiliateCode: { [Op.ne]: null } } },
     { fields: ['referredByClientId'] },
   ]
@@ -263,10 +273,11 @@ Client.prototype.isValidPassword = async function(password) {
 };
 
 Client.associate = (models) => {
-  // Suas associações existentes...
   Client.hasMany(models.FinancialAccount, { foreignKey: 'clientId', as: 'financialAccounts', onDelete: 'CASCADE' });
+  Client.hasMany(models.ClientInteractionLog, { foreignKey: 'clientId', as: 'interactionLogs', onDelete: 'CASCADE' });
   Client.hasMany(models.Subscription, { foreignKey: 'clientId', as: 'subscriptions', onDelete: 'CASCADE' });
-  // === NOVA ASSOCIAÇÃO PARA AFILIADOS ===
+  Client.hasMany(models.SharedAccess, { foreignKey: 'ownerClientId', as: 'ownedSharedAccesses', onDelete: 'CASCADE' });
+  Client.hasMany(models.SharedAccess, { foreignKey: 'sharedWithClientId', as: 'receivedSharedAccesses', onDelete: 'CASCADE' });
   Client.belongsTo(models.Client, { as: 'referrer', foreignKey: 'referredByClientId' });
 };
 
