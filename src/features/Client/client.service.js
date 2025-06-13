@@ -87,14 +87,22 @@ async function findClientByPhone(phone) {
   }
 }
 
-// --- NOVA FUNÇÃO DE DEBUG PARA CLIENTES ---
+// --- FUNÇÃO DE DEBUG MODIFICADA ---
 /**
- * ATENÇÃO: Função de debug para listar todos os CLIENTES com email, hash da senha e plano.
- * Criada a pedido para testes. NUNCA use em produção.
+ * ATENÇÃO: Função de debug para listar todos os CLIENTES com dados de afiliado.
+ * @returns {Promise<Array<object>>} Lista de clientes com detalhes.
  */
 async function getClientsForDebug() {
   try {
     const clients = await Client.scope('withPassword').findAll({
+      include: [
+        {
+          model: Client,
+          as: 'referrer', // Inclui o modelo Client novamente, usando o alias 'referrer'
+          attributes: ['name', 'affiliateCode'], // Pega apenas o nome e o código de afiliado do indicador
+          required: false // Usa LEFT JOIN para não excluir clientes que não foram indicados
+        }
+      ],
       order: [['id', 'ASC']],
     });
 
@@ -106,12 +114,15 @@ async function getClientsForDebug() {
         email: clientJSON.email,
         phone: clientJSON.phone,
         senha_hash: clientJSON.passwordHash,
-        // >>>>> ADICIONAR ESTA LINHA <<<<<
-        senha_plana_debug: clientJSON.debugPassword, // Mostrando a senha em texto puro
-        // >>>>> FIM DA ADIÇÃO <<<<<
+        senha_plana_debug: clientJSON.debugPassword,
         plano_acesso: clientJSON.accessLevel,
         plano_expira_em: clientJSON.accessExpiresAt,
-        status: clientJSON.status
+        status: clientJSON.status,
+        meu_codigo_afiliado: clientJSON.affiliateCode, // O código do próprio cliente
+        saldo_comissao: clientJSON.balance,
+        indicado_por_id: clientJSON.referredByClientId,
+        indicado_por_nome: clientJSON.referrer ? clientJSON.referrer.name : null, // Nome do indicador
+        codigo_do_indicador: clientJSON.referrer ? clientJSON.referrer.affiliateCode : null, // Código do indicador
       };
     });
 
