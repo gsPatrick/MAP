@@ -423,6 +423,57 @@ async function updateClientContact(clientId, updateData) {
 }
 
 /**
+ * Atualiza as preferências de mensagem motivacional para um cliente específico.
+ * @param {number} clientId - O ID do cliente a ser atualizado.
+ * @param {object} prefs - { enable: boolean, time: 'HH:MM' }
+ * @returns {Promise<object>} O cliente atualizado.
+ */
+async function updateClientMotivationPrefs(clientId, prefs) {
+  try {
+    const client = await Client.findByPk(clientId);
+    if (!client) {
+      throw { statusCode: 404, message: 'Cliente não encontrado.' };
+    }
+
+    const updateData = {
+      wantsMotivationMessage: prefs.enable,
+    };
+
+    // <<<< INÍCIO DA LÓGICA DE RESET >>>>
+    // Verifica se o horário está sendo ativado ou alterado para um novo valor.
+    if (prefs.enable && prefs.time) {
+      // Compara o novo horário com o horário salvo no banco.
+      // Se forem diferentes, significa que o usuário está mudando o horário.
+      if (client.motivationMessageTime !== prefs.time) {
+        updateData.motivationMessageTime = prefs.time;
+        // Reseta a data do último envio para permitir que a mensagem seja enviada novamente hoje no novo horário.
+        updateData.lastMotivationSentDate = null; 
+        logger.info(`Horário de motivação para Cliente ID ${clientId} alterado para ${prefs.time}. Resetando lastMotivationSentDate.`);
+      }
+    } else if (!prefs.enable) {
+      // Se o usuário está desativando, não precisamos mexer no horário ou na data.
+      // A verificação `wantsMotivationMessage: true` no job já vai impedi-lo de receber.
+    }
+    // <<<< FIM DA LÓGICA DE RESET >>>>
+
+    // Se não houver nada para atualizar (ex: o usuário pediu para ativar no mesmo horário que já estava), não faz nada.
+    if (Object.keys(updateData).length === 0) {
+        logger.info(`Nenhuma alteração nas preferências de motivação para Cliente ID ${clientId}.`);
+        return client.toJSON();
+    }
+
+    await client.update(updateData);
+    logger.info(`Preferências de motivação atualizadas para Cliente ID ${clientId}. Ativo: ${prefs.enable}, Horário: ${prefs.time || client.motivationMessageTime}`);
+    return client.toJSON();
+
+  } catch (error) {
+    logger.error(`Erro ao atualizar preferências de motivação para cliente ID ${clientId}: ${error.message}`, error);
+    throw error;
+  }
+}
+
+
+/**
  * Exclui um Client (contato) e todas as suas FinancialAccounts e dados relacionados.
  * @param {number} clientId - ID do Client.
  * @returns {Promise<boolean>} True se excluído, false se não encontrado.
@@ -728,5 +779,6 @@ module.exports = {
   updateFinancialAccount,
   deleteFinancialAccount,
   getActiveOrDefaultFinancialAccount,
-  getClientsForDebug
+  getClientsForDebug,
+  updateClientMotivationPrefs
 };

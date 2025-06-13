@@ -2395,18 +2395,36 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                                 if (paymentTransaction.category) currentActionFormattedData += `\nCategoria: ${paymentTransaction.category.name}.`;
                                 break;
                             }
-                            case 'SET_MOTIVATIONAL_MESSAGE_PREFERENCE': {
-                                if (params.enable === undefined || (params.enable && !params.time)) throw new Error("Preciso saber se quer ativar/desativar e, se ativar, o horário (HH:MM).");
-                                await systemService.updateSystemPreferences({
-                                    enableMotivationMessage: params.enable,
-                                    motivationMessageTime: params.enable ? params.time : null
-                                });
-                                const updatedPrefsMotiv = await systemService.getSystemPreferences();
-                                if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) aiMessageIntro = aiResponse.overall_summary_suggestion || `Preferências de mensagem motivacional atualizadas, ${clientNameToUse}!`;
-                                else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) aiMessageIntro = `Sobre as mensagens motivacionais, ${clientNameToUse}:`;
-                                currentActionFormattedData = formatMotivationalMessagePreferenceDataStructure(updatedPrefsMotiv);
-                                break;
+                                               case 'SET_MOTIVATIONAL_MESSAGE_PREFERENCE': {
+                            if (params.enable === undefined || (params.enable && !params.time)) {
+                                throw new Error("Preciso saber se quer ativar/desativar e, se ativar, o horário (HH:MM).");
                             }
+                            
+                            // <<<< PONTO CRÍTICO DE VERIFICAÇÃO >>>>
+                            // Garanta que esta linha está chamando a nova função do client.service
+                            const updatedClientPrefs = await clientService.updateClientMotivationPrefs(actorClient.id, {
+                                enable: params.enable,
+                                time: params.enable ? params.time : null
+                            });
+                            // <<<< FIM DA VERIFICAÇÃO >>>>
+
+                            if (aiResponse.detected_actions.length === 1 && (!aiMessageIntro || aiMessageIntro.startsWith("Ok,"))) {
+                                aiMessageIntro = aiResponse.overall_summary_suggestion || `Preferências de mensagem motivacional atualizadas, ${clientNameToUse}!`;
+                            } else if (multipleActionBodiesList.length === 0 && !aiResponse.overall_summary_suggestion) {
+                                aiMessageIntro = `Sobre as mensagens motivacionais, ${clientNameToUse}:`;
+                            }
+                            
+                            // Formata a resposta com base nos dados ATUALIZADOS do cliente
+                            let data = `💬 Preferências de Mensagem Motivacional:\n\n`;
+                            data += `🚦 Status: ${updatedClientPrefs.wantsMotivationMessage ? 'Ativada ✅' : 'Desativada ❌'}\n`;
+                            if (updatedClientPrefs.wantsMotivationMessage && updatedClientPrefs.motivationMessageTime) {
+                                data += `🕒 Horário Programado: ${updatedClientPrefs.motivationMessageTime.substring(0,5)}\n`;
+                            }
+                            currentActionFormattedData = data.trim();
+                            break;
+                        }
+
+                            
                             case 'SET_WATER_REMINDER_PREFERENCE': {
                                 if (params.enable === undefined || (params.enable && (!params.frequencyType || !params.startTime || !params.endTime))) {
                                     throw new Error("Preciso saber se quer ativar/desativar e, se ativar, a frequência, horário de início e fim.");
