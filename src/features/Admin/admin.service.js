@@ -207,72 +207,94 @@ async function sendBroadcastMessage(message) {
  */
 async function getAffiliatesDashboard() {
   try {
-    const affiliates = await Client.findAll({
-      where: {
-        // Consideramos afiliado quem tem saldo ou já indicou alguém
-        [Op.or]: [
-          { balance: { [Op.gt]: 0 } },
-          { id: { [Op.in]: sequelize.literal(`(SELECT "referredByClientId" FROM "clients" WHERE "referredByClientId" IS NOT NULL)`) } }
-        ]
-      },
-      attributes: ['id', 'name', 'email', 'phone', 'balance', 'affiliateCode'],
-      include: [
-        {
-          model: Client,
-          as: 'referrals', // Precisamos definir essa associação no modelo Client
-          attributes: [[sequelize.fn('COUNT', sequelize.col('referrals.id')), 'totalReferrals']],
-        }
-      ],
-      group: ['Client.id'],
-      order: [[sequelize.col('balance'), 'DESC']],
-      raw: true,
-      subQuery: false,
-    });
-
-    // O count acima não funciona bem com `group`. Vamos fazer em duas etapas.
     const allAffiliates = await Client.findAll({
       where: {
         [Op.or]: [
           { balance: { [Op.gt]: 0 } },
-          { id: { [Op.in]: sequelize.literal(`(SELECT "referredByClientId" FROM "clients" WHERE "referredByClientId" IS NOT NULL)`) } }
+          { id: { [Op.in]: sequelize.literal(`(SELECT DISTINCT "referredByClientId" FROM "clients" WHERE "referredByClientId" IS NOT NULL)`) } }
         ]
       },
       attributes: ['id', 'name', 'email', 'phone', 'balance', 'affiliateCode'],
       order: [['balance', 'DESC']],
     });
 
+    if (allAffiliates.length === 0) {
+      return [];
+    }
+
     const affiliateIds = allAffiliates.map(a => a.id);
 
-    const referralsCount = await Client.findAll({
-        attributes: ['referredByClientId', [sequelize.fn('COUNT', sequelize.col('id')), 'count']],
-        where: { referredByClientId: { [Op.in]: affiliateIds } },
-        group: ['referredByClientId'],
-        raw: true,
+    // Busca todo o histórico de comissões de uma vez
+    const allLedgerEntries = await AffiliateLedger.findAll({
+        where: { affiliateClientId: { [Op.in]: affiliateIds } },
+        include: [
+            { model: Client, as: 'referred', attributes: ['name'] },
+            { model: Plan, as: 'plan', attributes: ['name'] }
+        ],
+        order: [['createdAt', 'DESC']]
     });
-    const referralsMap = referralsCount.reduce((acc, item) => {
-        acc[item.referredByClientId] = parseInt(item.count, 10);
+
+    // Agrupa o histórico por afiliado
+    const ledgerByAffiliate = allLedgerEntries.reduce((acc, entry) => {
+        const affiliateId = entry.affiliateClientId;
+        if (!acc[affiliateId]) {
+            acc[affiliateId] = [];
+        }
+        acc[affiliateId].push(entry.toJSON());
         return acc;
     }, {});
 
-    const totalCommissionsPaid = await sequelize.query(
-        `SELECT "affiliateClientId", SUM("commissionAmount") as "totalEarned" FROM "affiliate_ledger" WHERE "affiliateClientId" IN (:affiliateIds) GROUP BY "affiliateClientId"`,
-        { replacements: { affiliateIds }, type: sequelize.QueryTypes.SELECT }
-    );
-    const commissionsMap = totalCommissionsPaid.reduce((acc, item) => {
-        acc[item.affiliateClientId] = parseFloat(item.totalEarned);
-        return acc;
-    }, {});
+    const dashboardData = allAffiliates.map(affiliate => {
+        const affiliateJSON = affiliate.toJSON();
+        const ledger = ledgerByAffiliate[affiliate.id] || [];
+        const totalReferrals = new Set(ledger.map(l => l.referredClientId)).size;
+        const totalEarned = ledger.reduce((sum, entry) => sum + parseFloat(entry.commissionAmount), 0);
 
-    const dashboardData = allAffiliates.map(affiliate => ({
-        ...affiliate.toJSON(),
-        totalReferrals: referralsMap[affiliate.id] || 0,
-        totalEarned: commissionsMap[affiliate.id] || 0,
-    }));
+        return {
+            ...affiliateJSON,
+            totalReferrals: totalReferrals,
+            totalEarned: totalEarned,
+            ledger: ledger, // Adiciona o extrato completo
+        };
+    });
 
     return dashboardData;
   } catch (error) {
     logger.error(`[AdminService] Erro ao gerar dashboard de afiliados: ${error.message}`, error);
     throw new Error('Falha ao gerar dashboard de afiliados.');
+  }
+}
+
+
+async function updatePlan(planId, updateData) {
+  try {
+    const plan = await Plan.findByPk(planId);
+    if (!plan) {
+      throw { statusCode: 404, message: 'Plano não encontrado.' };
+    }
+
+    // Filtra os campos que podem ser atualizados pelo admin
+    const allowedUpdates = ['name', 'price', 'durationDays', 'tier', 'isActive', 'affiliateCommissionValue'];
+    const filteredData = {};
+    for (const key of allowedUpdates) {
+      if (updateData[key] !== undefined) {
+        filteredData[key] = updateData[key];
+      }
+    }
+
+    if (Object.keys(filteredData).length === 0) {
+      return plan.toJSON(); // Retorna o plano sem alterações se nada foi enviado
+    }
+
+    await plan.update(filteredData);
+    logger.info(`[AdminService] Plano ID ${planId} atualizado com sucesso.`);
+    return plan.toJSON();
+  } catch (error) {
+    logger.error(`[AdminService] Erro ao atualizar plano ID ${planId}: ${error.message}`, error);
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      throw { statusCode: 409, message: `Um plano com o nome "${updateData.name}" já existe.` };
+    }
+    throw error;
   }
 }
 
@@ -283,5 +305,6 @@ module.exports = {
   changeUserPlan,
   sendBroadcastMessage,
   getAffiliatesDashboard,
-  getAllPlans
+  getAllPlans,
+  updatePlan
 };

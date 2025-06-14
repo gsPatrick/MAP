@@ -53,6 +53,18 @@ const getAffiliatesDashboard = (req, res, next) => adminService.getAffiliatesDas
     .then(dashboard => res.status(200).json({ status: 'success', data: dashboard }))
     .catch(next);
 
+
+const updatePlan = (req, res, next) => {
+    const planId = parseInt(req.params.planId, 10);
+    if (isNaN(planId)) {
+        return res.status(400).json({ status: 'fail', message: 'ID do plano inválido.' });
+    }
+    adminService.updatePlan(planId, req.body)
+        .then(updatedPlan => res.status(200).json({ status: 'success', data: updatedPlan }))
+        .catch(next);
+};
+
+
 module.exports = {
   getAllClients,
   createClient,
@@ -63,5 +75,6 @@ module.exports = {
   changeUserPlan,
   sendBroadcastMessage,
   getAffiliatesDashboard,
-  getAllPlans
+  getAllPlans,
+  updatePlan
 };
