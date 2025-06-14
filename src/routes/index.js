@@ -28,6 +28,7 @@ const googleWebhookRoutes = require('../features/GoogleWebhook/googleWebhook.rou
 const hydrationRoutes = require('../features/Hydration/hydration.routes');
 const asaasWebhookRouter = require('../features/WebhookHandler/asaas.routes'); // <<< ADICIONAR
 const adminRoutes = require('../features/Admin/admin.routes');
+const affiliateRoutes = require('../features/Affiliate/affiliate.routes');
 
 
 // >>>>> INÍCIO DA MUDANÇA: Importar o Controller Financeiro <<<<<
@@ -60,6 +61,7 @@ mainApiRouter.use('/chat', InteractiveChatRoutes);
 mainApiRouter.use('/shared-access', authenticateClientToken, sharedAccessRoutes);
 mainApiRouter.use('/hydration', authenticateClientToken, hydrationRoutes);
 mainApiRouter.use('/', adminRoutes); // Adiciona as rotas de admin
+mainApiRouter.use('/affiliate', authenticateClientToken, affiliateRoutes);
 
 
 
