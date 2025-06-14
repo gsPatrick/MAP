@@ -1,5 +1,5 @@
-// src/features/Affiliate/affiliate.service.js
-const { Client, AffiliateLedger, sequelize } = require('../../database');
+// <<<< CORREÇÃO: Removida a importação do AffiliateLedger >>>>
+const { Client, sequelize } = require('../../database');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
 
@@ -10,7 +10,7 @@ const { Op } = require('sequelize');
  */
 async function getAffiliateDashboard(affiliateClientId) {
   try {
-    // 1. Busca os dados principais do afiliado
+    // 1. Busca os dados principais do afiliado, incluindo o saldo
     const affiliate = await Client.findByPk(affiliateClientId, {
       attributes: ['id', 'name', 'balance', 'affiliateCode', 'asaasPayoutPixKey']
     });
@@ -24,23 +24,15 @@ async function getAffiliateDashboard(affiliateClientId) {
       where: { referredByClientId: affiliateClientId }
     });
 
-    // 3. Soma o total de comissões ganhas (histórico completo)
-    const totalEarnedResult = await AffiliateLedger.findOne({
-      attributes: [[sequelize.fn('SUM', sequelize.col('commissionAmount')), 'total']],
-      where: { affiliateClientId: affiliateClientId },
-      raw: true,
-    });
-
-    // <<<< CORREÇÃO APLICADA AQUI >>>>
-    // Verifica se o resultado da soma não é nulo antes de tentar acessar a propriedade 'total'.
-    const totalEarned = totalEarnedResult && totalEarnedResult.total ? parseFloat(totalEarnedResult.total) : 0;
-    // <<<< FIM DA CORREÇÃO >>>>
+    // 3. O total ganho é simplesmente o saldo atual, na abordagem simples.
+    // Não precisamos somar de um extrato.
+    const totalEarned = parseFloat(affiliate.balance) || 0;
 
     // 4. Monta o objeto de resposta do dashboard
     const dashboardData = {
       summary: affiliate.toJSON(),
       totalReferrals: totalReferrals,
-      totalEarned: totalEarned,
+      totalEarned: totalEarned, // O total ganho é o saldo atual
     };
 
     logger.info(`[AffiliateService] Dashboard para afiliado ID ${affiliateClientId} gerado com sucesso.`);
@@ -52,6 +44,10 @@ async function getAffiliateDashboard(affiliateClientId) {
     throw error;
   }
 }
+
+// ... (outras funções que você possa ter, como updatePayoutInfo e requestWithdrawal) ...
+
 module.exports = {
   getAffiliateDashboard,
+  // ... outros exports ...
 };
