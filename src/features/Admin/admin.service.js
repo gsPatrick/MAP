@@ -207,63 +207,47 @@ async function sendBroadcastMessage(message) {
  */
 async function getAffiliatesDashboard() {
   try {
-    const allAffiliates = await Client.findAll({
+    // 1. Encontra todos os clientes que são afiliados (ou seja, que já indicaram alguém)
+    const affiliates = await Client.findAll({
       where: {
-        [Op.or]: [
-          { balance: { [Op.gt]: 0 } },
-          { id: { [Op.in]: sequelize.literal(`(SELECT DISTINCT "referredByClientId" FROM "clients" WHERE "referredByClientId" IS NOT NULL)`) } }
-        ]
+        id: {
+          [Op.in]: sequelize.literal(`(SELECT DISTINCT "referredByClientId" FROM "clients" WHERE "referredByClientId" IS NOT NULL)`)
+        }
       },
       attributes: ['id', 'name', 'email', 'phone', 'balance', 'affiliateCode'],
-      order: [['balance', 'DESC']],
+      order: [['name', 'ASC']],
     });
 
-    if (allAffiliates.length === 0) {
+    if (affiliates.length === 0) {
       return [];
     }
 
-    const affiliateIds = allAffiliates.map(a => a.id);
+    // 2. Para cada afiliado, busca a lista de clientes que ele indicou.
+    const dashboardData = [];
+    for (const affiliate of affiliates) {
+      const referrals = await Client.findAll({
+        where: {
+          referredByClientId: affiliate.id
+        },
+        attributes: ['id', 'name', 'email', 'phone', 'accessLevel', 'createdAt'],
+        order: [['createdAt', 'DESC']],
+      });
 
-    // Busca todo o histórico de comissões de uma vez
-    const allLedgerEntries = await AffiliateLedger.findAll({
-        where: { affiliateClientId: { [Op.in]: affiliateIds } },
-        include: [
-            { model: Client, as: 'referred', attributes: ['name'] },
-            { model: Plan, as: 'plan', attributes: ['name'] }
-        ],
-        order: [['createdAt', 'DESC']]
-    });
-
-    // Agrupa o histórico por afiliado
-    const ledgerByAffiliate = allLedgerEntries.reduce((acc, entry) => {
-        const affiliateId = entry.affiliateClientId;
-        if (!acc[affiliateId]) {
-            acc[affiliateId] = [];
-        }
-        acc[affiliateId].push(entry.toJSON());
-        return acc;
-    }, {});
-
-    const dashboardData = allAffiliates.map(affiliate => {
-        const affiliateJSON = affiliate.toJSON();
-        const ledger = ledgerByAffiliate[affiliate.id] || [];
-        const totalReferrals = new Set(ledger.map(l => l.referredClientId)).size;
-        const totalEarned = ledger.reduce((sum, entry) => sum + parseFloat(entry.commissionAmount), 0);
-
-        return {
-            ...affiliateJSON,
-            totalReferrals: totalReferrals,
-            totalEarned: totalEarned,
-            ledger: ledger, // Adiciona o extrato completo
-        };
-    });
-
+      dashboardData.push({
+        ...affiliate.toJSON(),
+        referrals: referrals.map(r => r.toJSON()) // Adiciona a lista de indicados
+      });
+    }
+    
+    logger.info(`[AdminService] Dashboard de afiliados gerado com ${dashboardData.length} afiliados.`);
     return dashboardData;
+
   } catch (error) {
     logger.error(`[AdminService] Erro ao gerar dashboard de afiliados: ${error.message}`, error);
     throw new Error('Falha ao gerar dashboard de afiliados.');
   }
 }
+
 
 
 async function updatePlan(planId, updateData) {
