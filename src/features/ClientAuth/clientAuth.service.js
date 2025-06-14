@@ -141,16 +141,16 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
                         logger.info(`[DEPURAÇÃO COMISSÃO] Plano encontrado: "${plan.name}", Valor da comissão: ${plan.affiliateCommissionValue}`);
                         if (plan.affiliateCommissionValue > 0) {
                             
-                            // <<<< MUDANÇA CRÍTICA APLICADA AQUI >>>>
-                            // Usando o método estático do modelo Client para garantir a atualização.
-                            await Client.increment('balance', {
-                                by: plan.affiliateCommissionValue,
-                                where: { id: referrer.id }, // Especifica qual cliente atualizar
-                                transaction: t
-                            });
+                            // <<<< MUDANÇA CRÍTICA E FINAL APLICADA AQUI >>>>
+                            // Em vez de 'increment', calculamos e atualizamos manualmente para garantir a persistência.
+                            const currentBalance = parseFloat(referrer.balance);
+                            const commission = parseFloat(plan.affiliateCommissionValue);
+                            const newBalance = currentBalance + commission;
+
+                            await referrer.update({ balance: newBalance }, { transaction: t });
                             // <<<< FIM DA MUDANÇA >>>>
 
-                            logger.info(`COMISSÃO IMEDIATA: Valor de R$${plan.affiliateCommissionValue} creditado ao afiliado ID ${referrer.id}.`);
+                            logger.info(`COMISSÃO IMEDIATA: Saldo do afiliado ID ${referrer.id} atualizado para R$${newBalance.toFixed(2)}.`);
                         } else {
                             logger.warn(`[ClientAuthService] O plano "${plan.name}" foi encontrado, mas seu valor de comissão é zero ou nulo.`);
                         }
