@@ -30,14 +30,17 @@ async function getAffiliateDashboard(affiliateClientId) {
       where: { affiliateClientId: affiliateClientId },
       raw: true,
     });
-    const totalEarned = parseFloat(totalEarnedResult.total) || 0;
+
+    // <<<< CORREÇÃO APLICADA AQUI >>>>
+    // Verifica se o resultado da soma não é nulo antes de tentar acessar a propriedade 'total'.
+    const totalEarned = totalEarnedResult && totalEarnedResult.total ? parseFloat(totalEarnedResult.total) : 0;
+    // <<<< FIM DA CORREÇÃO >>>>
 
     // 4. Monta o objeto de resposta do dashboard
     const dashboardData = {
       summary: affiliate.toJSON(),
       totalReferrals: totalReferrals,
       totalEarned: totalEarned,
-      // Você pode adicionar mais dados aqui no futuro, como o extrato (ledger)
     };
 
     logger.info(`[AffiliateService] Dashboard para afiliado ID ${affiliateClientId} gerado com sucesso.`);
@@ -49,7 +52,6 @@ async function getAffiliateDashboard(affiliateClientId) {
     throw error;
   }
 }
-
 module.exports = {
   getAffiliateDashboard,
 };
