@@ -2,90 +2,96 @@
 const { Plan } = require('../index');
 const logger = require('../../utils/logger');
 
-// Lista de planos com foco no NOME e no PREÇO, que são os dados que usamos.
 const plansData = [
   {
-    name: 'Plano Sandbox Teste Avancado',
-    defaults: {
-      description: 'Plano para testes no sandbox que libera acesso avançado.',
-      price: 5.00,
-      currency: 'BRL',
-      durationDays: 30,
-      tier: 'avancado',
-      isActive: true,
-    }
+    id: 1,
+    name: 'Básico Mensal',
+    price: 49.90,
+    durationDays: 30,
+    tier: 'basico',
+    affiliateCommissionValue: 15.00, // << VALOR DA COMISSÃO AQUI
+    isActive: true,
   },
   {
-    name: 'MAP - Pessoal Mensal',
-    defaults: {
-      description: 'Plano mensal para acesso pessoal.',
-      price: 39.90,
-      currency: 'BRL',
-      durationDays: 30,
-      tier: 'basico',
-      isActive: true,
-    }
+    id: 2,
+    name: 'Básico Anual',
+    price: 499.90,
+    durationDays: 365,
+    tier: 'basico',
+    affiliateCommissionValue: 100.00, // << VALOR DA COMISSÃO AQUI
+    isActive: true,
   },
   {
-    name: 'MAP - Pessoal Anual',
-    defaults: {
-      description: 'Plano anual para acesso pessoal.',
-      price: 38.00,
-      currency: 'BRL',
-      durationDays: 365,
-      tier: 'basico',
-      isActive: true,
-    }
+    id: 3,
+    name: 'Avançado Mensal',
+    price: 89.90,
+    durationDays: 30,
+    tier: 'avancado',
+    affiliateCommissionValue: 25.00, // << VALOR DA COMISSÃO AQUI
+    isActive: true,
   },
   {
-    name: 'MAP - Empresarial Mensal',
-    defaults: {
-      description: 'Plano mensal para acesso pessoal e empresarial.',
-      price: 79.00,
-      currency: 'BRL',
-      durationDays: 30,
-      tier: 'avancado',
-      isActive: true,
-    }
+    id: 4,
+    name: 'Avançado Anual',
+    price: 899.90,
+    durationDays: 365,
+    tier: 'avancado',
+    affiliateCommissionValue: 200.00, // << VALOR DA COMISSÃO AQUI
+    isActive: true,
   },
   {
-    name: 'MAP - Empresarial Anual',
-    defaults: {
-      description: 'Plano anual para acesso pessoal e empresarial.',
-      price: 78.00,
-      currency: 'BRL',
-      durationDays: 365,
-      tier: 'avancado',
-      isActive: true,
-    }
+    id: 5,
+    name: 'Vitalício Básico',
+    price: 999.90,
+    durationDays: 36500, // ~100 anos
+    tier: 'vitalicio',
+    affiliateCommissionValue: 250.00, // << VALOR DA COMISSÃO AQUI
+    isActive: false, // Exemplo de plano inativo para novas vendas
+  },
+  {
+    id: 6,
+    name: 'Vitalício Avançado',
+    price: 1499.90,
+    durationDays: 36500, // ~100 anos
+    tier: 'vitalicio',
+    affiliateCommissionValue: 350.00, // << VALOR DA COMISSÃO AQUI
+    isActive: true,
   },
 ];
 
-/**
- * Função que garante que os planos essenciais existam no banco.
- */
 async function seedPlans() {
   try {
-    logger.info('[SEEDER] Verificando e semeando planos essenciais...');
+    logger.info('Semeando planos essenciais...');
     for (const planData of plansData) {
-      // Tenta encontrar um plano com o mesmo nome
       const [plan, created] = await Plan.findOrCreate({
-        where: { name: planData.name },
-        // Se não encontrar, cria com estes dados. O 'price' está aqui.
-        defaults: {
-          name: planData.name,
-          ...planData.defaults,
-        }
+        where: { id: planData.id },
+        defaults: planData,
       });
 
       if (created) {
-        logger.info(`[SEEDER] Plano "${plan.name}" criado com preço R$${plan.price}.`);
+        logger.info(`Plano "${plan.name}" criado.`);
+      } else {
+        // Se o plano já existe, verifica se precisa ser atualizado
+        const updates = {};
+        if (plan.price !== planData.price) updates.price = planData.price;
+        if (plan.name !== planData.name) updates.name = planData.name;
+        if (plan.durationDays !== planData.durationDays) updates.durationDays = planData.durationDays;
+        if (plan.tier !== planData.tier) updates.tier = planData.tier;
+        if (plan.isActive !== planData.isActive) updates.isActive = planData.isActive;
+        // Verifica e atualiza o valor da comissão
+        if (plan.affiliateCommissionValue !== planData.affiliateCommissionValue) {
+          updates.affiliateCommissionValue = planData.affiliateCommissionValue;
+        }
+
+        if (Object.keys(updates).length > 0) {
+          await plan.update(updates);
+          logger.info(`Plano "${plan.name}" atualizado com novos valores.`);
+        }
       }
     }
-    logger.info('[SEEDER] Semeadura de planos concluída.');
+    logger.info('Semeadura de planos concluída.');
   } catch (error) {
-    logger.error('[SEEDER] Erro ao semear os planos:', error);
-    throw new Error('Falha na semeadura de planos essenciais.');
+    logger.error('Erro ao semear os planos:', error);
   }
 }
 

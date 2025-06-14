@@ -77,6 +77,7 @@ async function setClientCredentials(phone, password, name = null, email = null) 
 async function setClientCredentialsAndAffiliate(phone, password, name, email, affiliateCode) {
     const t = await sequelize.transaction();
     try {
+        // ... (validações iniciais de senha, etc. - sem alterações) ...
         if (!phone || !password || !name || !email) {
             throw { statusCode: 400, message: 'Telefone, senha, nome e email são obrigatórios.' };
         }
@@ -106,7 +107,7 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
         }
         updateData.email = lowerEmail;
         
-        // === LÓGICA DE AFILIADO E COMISSÃO IMEDIATA ===
+        // === LÓGICA DE AFILIADO E COMISSÃO CORRIGIDA ===
         if (affiliateCode && !client.referredByClientId) {
             const referrer = await Client.findOne({ 
                 where: { 
@@ -120,29 +121,49 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
                 updateData.referredByClientId = referrer.id;
                 logger.info(`[ClientAuthService] Cliente ID ${client.id} será vinculado ao afiliado ID ${referrer.id}.`);
 
-                // Busca a assinatura ativa do cliente que está se cadastrando
-                const activeSubscription = await subscriptionService.getActiveSubscription(client.id);
+                // <<<< MUDANÇA PRINCIPAL AQUI >>>>
+                // Em vez de buscar a assinatura, vamos buscar o plano correspondente ao accessLevel do cliente.
+                // O accessLevel é a fonte da verdade sobre o que o cliente pagou.
+                const clientAccessLevel = client.accessLevel;
+                if (clientAccessLevel && clientAccessLevel !== 'gratuito') {
+                    
+                    // Converte 'avancado_mensal' para um nome de plano que possa ser encontrado, como 'Empresarial Mensal'
+                    // Esta lógica precisa corresponder aos nomes dos seus planos.
+                    let planNameToFind;
+                    if (clientAccessLevel.includes('avancado') && clientAccessLevel.includes('mensal')) {
+                        planNameToFind = 'MAP - Empresarial Mensal';
+                    } else if (clientAccessLevel.includes('avancado') && clientAccessLevel.includes('anual')) {
+                        planNameToFind = 'MAP - Empresarial Anual';
+                    } else if (clientAccessLevel.includes('basico') && clientAccessLevel.includes('mensal')) {
+                        planNameToFind = 'MAP - Pessoal Mensal';
+                    } else if (clientAccessLevel.includes('basico') && clientAccessLevel.includes('anual')) {
+                        planNameToFind = 'MAP - Pessoal Anual';
+                    }
+                    // Adicione mais 'else if' para planos vitalícios se necessário.
 
-                if (activeSubscription && activeSubscription.plan) {
-                    const plan = activeSubscription.plan;
-                    if (plan.affiliateCommissionValue > 0) {
-                        // Credita o saldo diretamente no afiliado
-                        await referrer.increment('balance', { 
-                            by: plan.affiliateCommissionValue, 
-                            transaction: t 
-                        });
-                        logger.info(`COMISSÃO IMEDIATA: Valor de R$${plan.affiliateCommissionValue} creditado ao afiliado ID ${referrer.id} pelo plano "${plan.name}" do cliente ID ${client.id}.`);
+                    if (planNameToFind) {
+                        const plan = await Plan.findOne({ where: { name: planNameToFind }, transaction: t });
+
+                        if (plan && plan.affiliateCommissionValue > 0) {
+                            await referrer.increment('balance', { 
+                                by: plan.affiliateCommissionValue, 
+                                transaction: t 
+                            });
+                            logger.info(`COMISSÃO IMEDIATA: Valor de R$${plan.affiliateCommissionValue} creditado ao afiliado ID ${referrer.id} pelo plano "${plan.name}" do cliente ID ${client.id}.`);
+                        } else {
+                            logger.warn(`[ClientAuthService] Plano "${planNameToFind}" não encontrado ou não tem valor de comissão. accessLevel do cliente: ${clientAccessLevel}`);
+                        }
                     } else {
-                        logger.warn(`[ClientAuthService] Cliente indicado (ID: ${client.id}) tem um plano ativo ("${plan.name}"), mas o plano não tem valor de comissão.`);
+                        logger.warn(`[ClientAuthService] Não foi possível mapear o accessLevel "${clientAccessLevel}" para um nome de plano conhecido.`);
                     }
                 } else {
-                    logger.warn(`[ClientAuthService] Cliente indicado (ID: ${client.id}) não possui uma assinatura ativa no momento do cadastro. Nenhuma comissão será creditada.`);
+                    logger.warn(`[ClientAuthService] Cliente indicado (ID: ${client.id}) não possui um plano pago ativo (accessLevel: ${clientAccessLevel}). Nenhuma comissão será creditada.`);
                 }
             } else {
-                logger.warn(`[ClientAuthService] Código de afiliado "${affiliateCode}" fornecido mas não encontrado. Cliente será atualizado sem indicador.`);
+                logger.warn(`[ClientAuthService] Código de afiliado "${affiliateCode}" fornecido mas não encontrado.`);
             }
         }
-        // === FIM DA LÓGICA DE AFILIADO ===
+        // === FIM DA LÓGICA CORRIGIDA ===
 
         await client.update(updateData, { transaction: t });
         await t.commit();
@@ -151,12 +172,11 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
         return reloadedClient.toJSON();
 
     } catch (error) {
-        if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
+        if (t && !t.finished) await t.rollback();
         logger.error(`Erro ao definir credenciais e afiliado para cliente ${phone}: ${error.message}`, { error });
         throw error;
     }
 }
-
 
 async function loginClient(identifier, password) {
   try {

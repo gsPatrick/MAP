@@ -4,7 +4,6 @@ const { Plan, sequelize } = require('./src/database/index'); // Ajuste o caminho
 const logger = require('./src/utils/logger'); // Ajuste o caminho se seu logger estiver em outro lugar
 const { Op } = require('sequelize'); // Importar Op
 
-// Lista completa de planos, incluindo o plano de teste para o sandbox do ASAAS
 const plansData = [
   // ==========================================================
   // PLANO DE TESTE
@@ -12,7 +11,7 @@ const plansData = [
   {
     targetName: 'Plano Sandbox Teste Avancado',
     hotmartId: null,
-    asaasProductId: null, // asaasId foi renomeado para asaasProductId para consistência
+    asaasProductId: null,
     defaults: {
       description: 'Plano para testes no sandbox que libera acesso avançado.',
       price: 5.00,
@@ -20,6 +19,7 @@ const plansData = [
       durationDays: 30,
       tier: 'avancado',
       isActive: true,
+      affiliateCommissionValue: 1.00, // << COMISSÃO DE TESTE
     }
   },
 
@@ -27,7 +27,7 @@ const plansData = [
   {
     targetName: 'MAP - Pessoal Mensal',
     hotmartId: null,
-    asaasProductId: 'plan_pessoal_mensal_id_do_asaas', // Substitua pelo ID real do ASAAS quando tiver
+    asaasProductId: 'plan_pessoal_mensal_id_do_asaas',
     defaults: {
       description: 'Plano mensal para acesso pessoal.',
       price: 39.90,
@@ -35,19 +35,21 @@ const plansData = [
       durationDays: 30,
       tier: 'basico',
       isActive: true,
+      affiliateCommissionValue: 10.00, // << DEFINA O VALOR DA COMISSÃO
     }
   },
   {
     targetName: 'MAP - Pessoal Anual',
     hotmartId: null,
-    asaasProductId: 'plan_pessoal_anual_id_do_asaas', // Substitua pelo ID real do ASAAS quando tiver
+    asaasProductId: 'plan_pessoal_anual_id_do_asaas',
     defaults: {
       description: 'Plano anual para acesso pessoal.',
-      price: 38.00,
+      price: 38.00, // Este preço parece menor que o mensal, talvez 380.00?
       currency: 'BRL',
       durationDays: 365,
       tier: 'basico',
       isActive: true,
+      affiliateCommissionValue: 80.00, // << DEFINA O VALOR DA COMISSÃO
     }
   },
 
@@ -55,7 +57,7 @@ const plansData = [
   {
     targetName: 'MAP - Empresarial Mensal',
     hotmartId: null,
-    asaasProductId: 'plan_empresa_mensal_id_do_asaas', // Substitua pelo ID real do ASAAS quando tiver
+    asaasProductId: 'plan_empresa_mensal_id_do_asaas',
     defaults: {
       description: 'Plano mensal para acesso pessoal e empresarial.',
       price: 79.00,
@@ -63,19 +65,21 @@ const plansData = [
       durationDays: 30,
       tier: 'avancado',
       isActive: true,
+      affiliateCommissionValue: 20.00, // << DEFINA O VALOR DA COMISSÃO
     }
   },
   {
     targetName: 'MAP - Empresarial Anual',
     hotmartId: null,
-    asaasProductId: 'plan_empresa_anual_id_do_asaas', // Substitua pelo ID real do ASAAS quando tiver
+    asaasProductId: 'plan_empresa_anual_id_do_asaas',
     defaults: {
       description: 'Plano anual para acesso pessoal e empresarial.',
-      price: 78.00,
+      price: 78.00, // Este preço parece menor que o mensal, talvez 780.00?
       currency: 'BRL',
       durationDays: 365,
       tier: 'avancado',
       isActive: true,
+      affiliateCommissionValue: 150.00, // << DEFINA O VALOR DA COMISSÃO
     }
   },
 ];
@@ -85,27 +89,22 @@ async function updateOrCreatePlans() {
     await sequelize.authenticate();
     logger.info('Conexão com o banco de dados estabelecida.');
 
-    // Garante que todas as tabelas (incluindo 'plans') existam antes de continuar.
-    // O { alter: true } é seguro para não apagar dados existentes em desenvolvimento.
-    await sequelize.sync({ alter: true });
-    logger.info('Modelos sincronizados com o banco de dados. Tabelas verificadas/criadas.');
+    // Não precisa mais do sync aqui, pois as migrations cuidam da estrutura
+    // await sequelize.sync({ alter: true });
 
     for (const planEntry of plansData) {
       let plan = await Plan.findOne({ where: { name: planEntry.targetName } });
 
       if (plan) {
-        logger.info(`Plano "${plan.name}" encontrado. Atualizando dados se necessário...`);
+        logger.info(`Plano "${plan.name}" encontrado. Atualizando dados...`);
         // Atualiza os defaults e os IDs para garantir que estejam corretos
-        Object.assign(plan, planEntry.defaults);
-        plan.hotmartProductId = planEntry.hotmartId;
-        plan.asaasProductId = planEntry.asaasProductId;
-        
-        if (plan.changed()) {
-           await plan.save();
-           logger.info(`Plano "${plan.name}" atualizado com sucesso.`);
-        } else {
-           logger.info(`Plano "${plan.name}" já está atualizado.`);
-        }
+        // A lógica de `plan.changed()` já detecta as mudanças
+        await plan.update({
+            ...planEntry.defaults,
+            hotmartProductId: planEntry.hotmartId,
+            asaasProductId: planEntry.asaasProductId,
+        });
+        logger.info(`Plano "${plan.name}" verificado/atualizado.`);
 
       } else {
         logger.info(`Plano "${planEntry.targetName}" não encontrado. Criando...`);
