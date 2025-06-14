@@ -282,6 +282,8 @@ Client.associate = (models) => {
   Client.hasMany(models.SharedAccess, { foreignKey: 'ownerClientId', as: 'ownedSharedAccesses', onDelete: 'CASCADE' });
   Client.hasMany(models.SharedAccess, { foreignKey: 'sharedWithClientId', as: 'receivedSharedAccesses', onDelete: 'CASCADE' });
   Client.belongsTo(models.Client, { as: 'referrer', foreignKey: 'referredByClientId' });
+  Client.hasMany(models.Client, { as: 'referrals', foreignKey: 'referredByClientId' });
+
 };
 
 module.exports = Client;

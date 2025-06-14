@@ -27,6 +27,8 @@ const googleAuthRoutes = require('../features/GoogleAuth/googleAuth.routes');
 const googleWebhookRoutes = require('../features/GoogleWebhook/googleWebhook.routes');
 const hydrationRoutes = require('../features/Hydration/hydration.routes');
 const asaasWebhookRouter = require('../features/WebhookHandler/asaas.routes'); // <<< ADICIONAR
+const adminRoutes = require('../features/Admin/admin.routes');
+
 
 // >>>>> INÍCIO DA MUDANÇA: Importar o Controller Financeiro <<<<<
 const financialController = require('../features/Financial/financial.controller');
@@ -57,6 +59,8 @@ mainApiRouter.use('/dev-tools', devToolsRoutes);
 mainApiRouter.use('/chat', InteractiveChatRoutes);
 mainApiRouter.use('/shared-access', authenticateClientToken, sharedAccessRoutes);
 mainApiRouter.use('/hydration', authenticateClientToken, hydrationRoutes);
+mainApiRouter.use('/', adminRoutes); // Adiciona as rotas de admin
+
 
 
 // --- Middleware para autorização de acesso à conta financeira ---
