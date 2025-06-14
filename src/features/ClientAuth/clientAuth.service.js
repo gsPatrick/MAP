@@ -107,7 +107,6 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
         }
         updateData.email = lowerEmail;
         
-        // === LÓGICA DE AFILIADO E COMISSÃO CORRIGIDA ===
         if (affiliateCode && !client.referredByClientId) {
             const referrer = await Client.findOne({ 
                 where: { 
@@ -121,49 +120,49 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
                 updateData.referredByClientId = referrer.id;
                 logger.info(`[ClientAuthService] Cliente ID ${client.id} será vinculado ao afiliado ID ${referrer.id}.`);
 
-                // <<<< MUDANÇA PRINCIPAL AQUI >>>>
-                // Em vez de buscar a assinatura, vamos buscar o plano correspondente ao accessLevel do cliente.
-                // O accessLevel é a fonte da verdade sobre o que o cliente pagou.
                 const clientAccessLevel = client.accessLevel;
+                logger.info(`[DEPURAÇÃO COMISSÃO] Nível de acesso do cliente indicado: ${clientAccessLevel}`);
+
                 if (clientAccessLevel && clientAccessLevel !== 'gratuito') {
                     
-                    // Converte 'avancado_mensal' para um nome de plano que possa ser encontrado, como 'Empresarial Mensal'
-                    // Esta lógica precisa corresponder aos nomes dos seus planos.
-                    let planNameToFind;
-                    if (clientAccessLevel.includes('avancado') && clientAccessLevel.includes('mensal')) {
-                        planNameToFind = 'MAP - Empresarial Mensal';
-                    } else if (clientAccessLevel.includes('avancado') && clientAccessLevel.includes('anual')) {
-                        planNameToFind = 'MAP - Empresarial Anual';
-                    } else if (clientAccessLevel.includes('basico') && clientAccessLevel.includes('mensal')) {
-                        planNameToFind = 'MAP - Pessoal Mensal';
-                    } else if (clientAccessLevel.includes('basico') && clientAccessLevel.includes('anual')) {
-                        planNameToFind = 'MAP - Pessoal Anual';
-                    }
-                    // Adicione mais 'else if' para planos vitalícios se necessário.
+                    // <<<< LÓGICA DE BUSCA CORRIGIDA E ROBUSTA >>>>
+                    const parts = clientAccessLevel.split('_'); // Ex: 'avancado_mensal' -> ['avancado', 'mensal']
+                    const tier = parts[0]; // 'avancado' ou 'basico'
+                    const duration = parts[1]; // 'mensal' ou 'anual'
 
-                    if (planNameToFind) {
-                        const plan = await Plan.findOne({ where: { name: planNameToFind }, transaction: t });
+                    // Constrói uma condição de busca que seja mais resiliente
+                    const planWhereCondition = {
+                        tier: tier,
+                        durationDays: duration === 'mensal' ? 30 : 365,
+                        isActive: true
+                    };
+                    
+                    logger.info(`[DEPURAÇÃO COMISSÃO] Buscando plano com a condição: ${JSON.stringify(planWhereCondition)}`);
+                    const plan = await Plan.findOne({ where: planWhereCondition, transaction: t });
 
-                        if (plan && plan.affiliateCommissionValue > 0) {
+                    if (plan) {
+                        logger.info(`[DEPURAÇÃO COMISSÃO] Plano encontrado: "${plan.name}", Valor da comissão: ${plan.affiliateCommissionValue}`);
+                        if (plan.affiliateCommissionValue > 0) {
                             await referrer.increment('balance', { 
                                 by: plan.affiliateCommissionValue, 
                                 transaction: t 
                             });
-                            logger.info(`COMISSÃO IMEDIATA: Valor de R$${plan.affiliateCommissionValue} creditado ao afiliado ID ${referrer.id} pelo plano "${plan.name}" do cliente ID ${client.id}.`);
+                            logger.info(`COMISSÃO IMEDIATA: Valor de R$${plan.affiliateCommissionValue} creditado ao afiliado ID ${referrer.id}.`);
                         } else {
-                            logger.warn(`[ClientAuthService] Plano "${planNameToFind}" não encontrado ou não tem valor de comissão. accessLevel do cliente: ${clientAccessLevel}`);
+                            logger.warn(`[ClientAuthService] O plano "${plan.name}" foi encontrado, mas seu valor de comissão é zero ou nulo.`);
                         }
                     } else {
-                        logger.warn(`[ClientAuthService] Não foi possível mapear o accessLevel "${clientAccessLevel}" para um nome de plano conhecido.`);
+                        logger.error(`[ClientAuthService] CRÍTICO: Nenhum plano ATIVO correspondente à condição ${JSON.stringify(planWhereCondition)} foi encontrado no banco de dados. A comissão não pôde ser paga.`);
                     }
+                    // <<<< FIM DA LÓGICA CORRIGIDA >>>>
+
                 } else {
-                    logger.warn(`[ClientAuthService] Cliente indicado (ID: ${client.id}) não possui um plano pago ativo (accessLevel: ${clientAccessLevel}). Nenhuma comissão será creditada.`);
+                    logger.warn(`[ClientAuthService] Cliente indicado (ID: ${client.id}) não possui um plano pago ativo.`);
                 }
             } else {
                 logger.warn(`[ClientAuthService] Código de afiliado "${affiliateCode}" fornecido mas não encontrado.`);
             }
         }
-        // === FIM DA LÓGICA CORRIGIDA ===
 
         await client.update(updateData, { transaction: t });
         await t.commit();
