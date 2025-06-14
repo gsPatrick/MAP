@@ -207,12 +207,12 @@ async function sendBroadcastMessage(message) {
  */
 async function getAffiliatesDashboard() {
   try {
-    // 1. Encontra todos os clientes que são afiliados (ou seja, que já indicaram alguém)
     const affiliates = await Client.findAll({
       where: {
-        id: {
-          [Op.in]: sequelize.literal(`(SELECT DISTINCT "referredByClientId" FROM "clients" WHERE "referredByClientId" IS NOT NULL)`)
-        }
+        [Op.or]: [
+          { balance: { [Op.gt]: 0 } },
+          { id: { [Op.in]: sequelize.literal(`(SELECT DISTINCT "referredByClientId" FROM "clients" WHERE "referredByClientId" IS NOT NULL)`) } }
+        ]
       },
       attributes: ['id', 'name', 'email', 'phone', 'balance', 'affiliateCode'],
       order: [['name', 'ASC']],
@@ -222,26 +222,50 @@ async function getAffiliatesDashboard() {
       return [];
     }
 
-    // 2. Para cada afiliado, busca a lista de clientes que ele indicou.
-    const dashboardData = [];
-    for (const affiliate of affiliates) {
-      const referrals = await Client.findAll({
-        where: {
-          referredByClientId: affiliate.id
-        },
-        attributes: ['id', 'name', 'email', 'phone', 'accessLevel', 'createdAt'],
-        order: [['createdAt', 'DESC']],
-      });
+    const affiliateIds = affiliates.map(a => a.id);
 
-      dashboardData.push({
-        ...affiliate.toJSON(),
-        referrals: referrals.map(r => r.toJSON()) // Adiciona a lista de indicados
-      });
-    }
-    
-    logger.info(`[AdminService] Dashboard de afiliados gerado com ${dashboardData.length} afiliados.`);
+    const allReferrals = await Client.findAll({
+        where: { referredByClientId: { [Op.in]: affiliateIds } },
+        attributes: ['id', 'name', 'email', 'accessLevel', 'createdAt', 'referredByClientId'],
+    });
+
+    // Busca todos os planos de uma vez para mapeamento
+    const allPlans = await Plan.findAll({ raw: true });
+    const planCommissionMap = allPlans.reduce((acc, plan) => {
+        const parts = plan.name.toLowerCase().split(' - ')[1]?.split(' ') || []; // Ex: 'pessoal mensal'
+        const tier = parts[0] === 'empresarial' ? 'avancado' : 'basico';
+        const duration = parts[1];
+        const key = `${tier}_${duration}`; // ex: 'avancado_mensal'
+        acc[key] = parseFloat(plan.affiliateCommissionValue) || 0;
+        return acc;
+    }, {});
+
+    const dashboardData = affiliates.map(affiliate => {
+        const myReferrals = allReferrals.filter(r => r.referredByClientId === affiliate.id);
+        
+        let totalEarned = 0;
+        const ledger = myReferrals.map(ref => {
+            const commission = planCommissionMap[ref.accessLevel] || 0;
+            totalEarned += commission;
+            return {
+                id: ref.id,
+                createdAt: ref.createdAt,
+                referred: { name: ref.name },
+                email: ref.email, // Adicionando email
+                plan: { name: ref.accessLevel.replace(/_/g, ' ') },
+                commissionAmount: commission
+            };
+        });
+
+        return {
+            ...affiliate.toJSON(),
+            totalReferrals: myReferrals.length,
+            totalEarned: totalEarned,
+            referrals: ledger, // Renomeando para 'referrals' para consistência
+        };
+    });
+
     return dashboardData;
-
   } catch (error) {
     logger.error(`[AdminService] Erro ao gerar dashboard de afiliados: ${error.message}`, error);
     throw new Error('Falha ao gerar dashboard de afiliados.');
