@@ -77,7 +77,6 @@ async function setClientCredentials(phone, password, name = null, email = null) 
 async function setClientCredentialsAndAffiliate(phone, password, name, email, affiliateCode) {
     const t = await sequelize.transaction();
     try {
-        // ... (validações iniciais de senha, etc. - sem alterações) ...
         if (!phone || !password || !name || !email) {
             throw { statusCode: 400, message: 'Telefone, senha, nome e email são obrigatórios.' };
         }
@@ -125,12 +124,10 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
 
                 if (clientAccessLevel && clientAccessLevel !== 'gratuito') {
                     
-                    // <<<< LÓGICA DE BUSCA CORRIGIDA E ROBUSTA >>>>
-                    const parts = clientAccessLevel.split('_'); // Ex: 'avancado_mensal' -> ['avancado', 'mensal']
-                    const tier = parts[0]; // 'avancado' ou 'basico'
-                    const duration = parts[1]; // 'mensal' ou 'anual'
+                    const parts = clientAccessLevel.split('_');
+                    const tier = parts[0];
+                    const duration = parts[1];
 
-                    // Constrói uma condição de busca que seja mais resiliente
                     const planWhereCondition = {
                         tier: tier,
                         durationDays: duration === 'mensal' ? 30 : 365,
@@ -143,10 +140,16 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
                     if (plan) {
                         logger.info(`[DEPURAÇÃO COMISSÃO] Plano encontrado: "${plan.name}", Valor da comissão: ${plan.affiliateCommissionValue}`);
                         if (plan.affiliateCommissionValue > 0) {
-                            await referrer.increment('balance', { 
-                                by: plan.affiliateCommissionValue, 
-                                transaction: t 
+                            
+                            // <<<< MUDANÇA CRÍTICA APLICADA AQUI >>>>
+                            // Usando o método estático do modelo Client para garantir a atualização.
+                            await Client.increment('balance', {
+                                by: plan.affiliateCommissionValue,
+                                where: { id: referrer.id }, // Especifica qual cliente atualizar
+                                transaction: t
                             });
+                            // <<<< FIM DA MUDANÇA >>>>
+
                             logger.info(`COMISSÃO IMEDIATA: Valor de R$${plan.affiliateCommissionValue} creditado ao afiliado ID ${referrer.id}.`);
                         } else {
                             logger.warn(`[ClientAuthService] O plano "${plan.name}" foi encontrado, mas seu valor de comissão é zero ou nulo.`);
@@ -154,8 +157,6 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
                     } else {
                         logger.error(`[ClientAuthService] CRÍTICO: Nenhum plano ATIVO correspondente à condição ${JSON.stringify(planWhereCondition)} foi encontrado no banco de dados. A comissão não pôde ser paga.`);
                     }
-                    // <<<< FIM DA LÓGICA CORRIGIDA >>>>
-
                 } else {
                     logger.warn(`[ClientAuthService] Cliente indicado (ID: ${client.id}) não possui um plano pago ativo.`);
                 }
@@ -171,12 +172,11 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
         return reloadedClient.toJSON();
 
     } catch (error) {
-        if (t && !t.finished) await t.rollback();
+        if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
         logger.error(`Erro ao definir credenciais e afiliado para cliente ${phone}: ${error.message}`, { error });
         throw error;
     }
 }
-
 async function loginClient(identifier, password) {
   try {
     if (!identifier || !password) {
