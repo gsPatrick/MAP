@@ -24,5 +24,6 @@ router.post('/admin/plans/custom', adminController.createCustomPlan);
 
 // --- Rotas de Comunicação ---
 router.post('/admin/broadcast', adminController.sendBroadcastMessage);
+router.get('/admin/plans', adminController.getAllPlans);
 
 module.exports = router;

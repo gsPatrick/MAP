@@ -45,6 +45,10 @@ const sendBroadcastMessage = (req, res, next) => {
         .catch(next);
 };
 
+const getAllPlans = (req, res, next) => adminService.getAllPlans(req.query)
+    .then(plans => res.status(200).json({ status: 'success', data: plans }))
+    .catch(next);
+
 const getAffiliatesDashboard = (req, res, next) => adminService.getAffiliatesDashboard()
     .then(dashboard => res.status(200).json({ status: 'success', data: dashboard }))
     .catch(next);
@@ -59,4 +63,5 @@ module.exports = {
   changeUserPlan,
   sendBroadcastMessage,
   getAffiliatesDashboard,
+  getAllPlans
 };

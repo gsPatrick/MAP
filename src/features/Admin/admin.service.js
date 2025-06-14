@@ -9,6 +9,28 @@ const { sendWhatsappMessage } = require('../../services/whatsappService');
 /**
  * Obtém estatísticas sobre a distribuição de clientes por plano/status.
  */
+
+async function getAllPlans(queryParams = {}) {
+  try {
+    const whereConditions = {};
+    if (queryParams.isActive !== undefined) {
+      whereConditions.isActive = (queryParams.isActive === 'true' || queryParams.isActive === true);
+    }
+
+    const plans = await Plan.findAll({
+      where: whereConditions,
+      order: [['price', 'ASC']],
+    });
+
+    logger.info(`[AdminService] Listando ${plans.length} planos.`);
+    return plans.map(p => p.toJSON());
+  } catch (error) {
+    logger.error(`[AdminService] Erro ao listar planos: ${error.message}`, error);
+    throw new Error('Falha ao listar planos de assinatura.');
+  }
+}
+
+
 async function getDashboardMetrics() {
   try {
     const today = new Date().toISOString().split('T')[0];
@@ -261,4 +283,5 @@ module.exports = {
   changeUserPlan,
   sendBroadcastMessage,
   getAffiliatesDashboard,
+  getAllPlans
 };
