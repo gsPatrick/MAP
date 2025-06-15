@@ -748,48 +748,49 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
             
-       case 'LIST_RECURRING_RULES': {
+ case 'LIST_RECURRING_RULES': {
                 try {
-                    // O parâmetro 'ruleDescription' vem da IA quando o usuário é específico (ex: "histórico da netflix")
-                    const descriptionSearch = params.ruleDescription;
-
-                    // A chamada ao serviço agora é mais simples, mas pode incluir o filtro de descrição
-                    const allRulesFound = await recurringTransactionService.getAllRecurringRules(
+                    const filterParamsRules = {
+                        ...(params.isActive !== undefined && { isActive: params.isActive }),
+                        type: params.type,
+                        limit: params.limit || 10,
+                        descriptionSearch: params.ruleDescription,
+                        dateStart: params.dateStart,
+                        dateEnd: params.dateEnd,
+                        period: params.period
+                    };
+                    
+                    // =================================================================
+                    // <<< MUDANÇA PRINCIPAL AQUI >>>
+                    // Desestruturamos o objeto para pegar o array 'rules' e o 'totalItems'.
+                    const { rules: allRulesFound, totalItems } = await recurringTransactionService.getAllRecurringRules(
                         state.activeFinancialAccountId, 
-                        { 
-                            // Passa a descrição para o serviço filtrar, se houver
-                            descriptionSearch: descriptionSearch,
-                            // O serviço original já filtra por isActive se o parâmetro for passado
-                            isActive: params.isActive !== undefined ? params.isActive : true // Default para ativas
-                        }
+                        filterParamsRules
                     );
+                    // =================================================================
 
-                    if (allRulesFound.length === 0) {
+                    if (totalItems === 0) {
                         let responseMsg = "Você ainda não tem nenhuma regra de recorrência ativa.";
-                        if(descriptionSearch) {
-                            responseMsg = `Não encontrei nenhuma recorrência ativa com a descrição "${descriptionSearch}".`;
+                        if(filterParamsRules.descriptionSearch) {
+                            responseMsg = `Não encontrei nenhuma recorrência ativa com a descrição "${filterParamsRules.descriptionSearch}".`;
                         }
                         formattedData = responseMsg;
                         break;
                     }
 
-                    // <<< LÓGICA DE ENRIQUECIMENTO >>>
-                    // Para cada regra encontrada, buscamos um resumo do seu histórico.
-                    const enrichedRules = await Promise.all(allRulesFound.map(async (rule) => {
-                        // Busca o histórico para saber o status
+                    const enrichedRules = await Promise.all(allRulesFound.map(async (rule) => { // Agora 'allRulesFound' é um array
                         const history = await recurringTransactionService.getRecurringRuleHistory(state.activeFinancialAccountId, rule.id, { limit: 5 });
                         const pendingTransactions = history.transactions.filter(tx => !tx.isPaidOrReceived);
                         
                         return {
                             ...rule,
-                            // Adiciona informações contextuais para o formatador usar
                             pendingCount: pendingTransactions.length,
                             nextPendingDueDate: pendingTransactions.length > 0 ? pendingTransactions[0].dueDate : null,
                             hasPaidHistory: history.transactions.some(tx => tx.isPaidOrReceived)
                         };
                     }));
                     
-                    formattedData = formatter.formatRichRecurringRuleList(enrichedRules, clientNameToUse);
+                    formattedData = formatter.formatRichRecurringRuleList(enrichedRules, totalItems, clientNameToUse);
 
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em LIST_RECURRING_RULES: ${e.message}`, { error: e, paramsUsed: params });
