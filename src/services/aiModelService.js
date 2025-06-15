@@ -332,7 +332,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - dayOfMonth: integer (opcional, para 'monthly', 'quarterly', 'semi-annually'. Ex: 30 para dia 30)
     - dayOfWeek: integer (opcional, para 'weekly', 'bi-weekly'. 0=Dom, 1=Seg,..., 6=Sab)
     - endDate: "YYYY-MM-DD" (opcional)
-    - autoCreateTransaction: boolean (opcional, default: false. Se true, cria transação. Se false, apenas lembra)
+    - autoCreateTransaction: boolean (opcional, default: true. Se o usuário falar "me lembre de pagar", use 'false'. Se ele falar "pagar", "receber", "lançar", use 'true'.)
     - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR.)
     - notes: string (opcional)
 
@@ -586,6 +586,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     
 56. LOG_WATER_INTAKE: (Registrar consumo de água)
     - amountInMl: integer (opcional. Se não informado, registra o próximo da lista. Se informado, registra com este valor)
+    * Nota: Se o usuário disser várias coisas como "bebi água, mais 200ml, anota aí", interprete como UMA ÚNICA ação, pegando o valor mais específico (200ml).
 
 57. GET_HYDRATION_LOG: (Ver o progresso do consumo de água do dia)
     

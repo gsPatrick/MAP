@@ -557,6 +557,20 @@ function formatSubscriptionDataStructure(subscription, clientName) {
     return data.trim();
 }
 
+function formatFinancialCategoryDataStructure(category) {
+    if (!category) return "🗂️ Resumo da Categoria:\n\nDados não disponíveis.";
+    let data = `🗂️ Categoria Criada/Atualizada:\n\n`;
+    data += `🏷️ Nome: *${category.name}*\n`;
+    if (category.parentCategory) { // Se a categoria pai foi incluída no retorno do serviço
+        data += `📂 Dentro de: ${category.parentCategory.name}\n`;
+    } else if (category.parentId) {
+        data += `(É uma subcategoria, mas os detalhes da categoria pai não foram carregados)\n`;
+    } else {
+        data += `(É uma categoria principal)\n`;
+    }
+    return data.trim();
+}
+
 // Exporta todas as funções em um único objeto
 module.exports = {
     formatDate,
@@ -590,5 +604,6 @@ module.exports = {
     formatRecurringRuleHistoryDataStructure,
     formatHydrationLogDataStructure,
     formatAffiliateDashboardDataStructure,
-    formatSubscriptionDataStructure
+    formatSubscriptionDataStructure,
+    formatFinancialCategoryDataStructure
 };
