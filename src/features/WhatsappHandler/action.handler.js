@@ -12,6 +12,7 @@ const clientService = require('../Client/client.service');
 const financialCategoryService = require('../FinancialCategory/financialCategory.service');
 const logger = require('../../utils/logger');
 const formatter = require('./response.formatter'); // Importa o novo formatador
+const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
 
 // Helpers que antes estavam no whatsapp.service
 async function findCreditCardIdByName(name, financialAccountId) {
