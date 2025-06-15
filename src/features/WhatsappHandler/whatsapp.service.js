@@ -253,6 +253,10 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
 /**
  * Função principal que orquestra o processamento de mensagens recebidas.
  */
+// =========================================================================================
+// <<< SUBSTITUA SUA FUNÇÃO processIncomingMessage INTEIRA POR ESTA VERSÃO >>>
+// =========================================================================================
+
 async function processIncomingMessage(senderPhoneRaw, messageText, pushName, rawPayload) {
     const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
     if (!canonicalPhone) {
@@ -270,6 +274,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
     try {
         // ETAPA 1: Obter Cliente e Estado da Sessão
         actorClient = await clientService.findClientByPhone(senderPhone);
+        
         let sharedAccessRecord = null;
         let clientAccountsForOnboarding = [];
         let ownerAccountsIfShared = [];
@@ -331,6 +336,36 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         state = await initializeOrUpdateState(actorClient, sharedAccessRecord, existingState, clientAccountsForOnboarding, ownerAccountsIfShared);
         state.isNewUserForSessionLogic = !existingState;
 
+        // ETAPA 1.5: Tratamento de Comandos Diretos (Botões)
+        if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
+            const buttonId = rawPayload.selectedButtonId;
+            logger.info(`[MAESTRO] Botão clicado por ${senderPhone}: ID '${buttonId}'`);
+
+            // Delega para o novo handler de botões no action.handler.js
+            const buttonResult = await actionHandler.handleButtonInteraction(state, buttonId, senderPhone);
+
+            // Analisa o resultado do handler e decide o que fazer
+            if (buttonResult.stateUpdated) {
+                // Se o estado foi modificado (ex: entrou em modo de edição), salva e encerra.
+                conversationState.set(senderPhone, buttonResult.newState);
+                return; 
+            }
+            if (buttonResult.flowCompleted) {
+                // Se a ação foi finalizada (ex: item excluído), apenas encerra.
+                return;
+            }
+            if (buttonResult.repromptWith) {
+                // Se a ação deve ser tratada como uma nova mensagem do usuário, atualiza a variável e continua o fluxo.
+                logger.info(`[MAESTRO] Reprocessando clique de botão como nova mensagem: "${buttonResult.repromptWith}"`);
+                messageText = buttonResult.repromptWith;
+                // A execução continua para a Etapa 5 (IA)
+            } else {
+                // Se a ação do botão não foi reconhecida ou não requer mais processamento, encerra.
+                return;
+            }
+        }
+
+        // Salva a mensagem do usuário no histórico, SE não for um clique de botão que já foi tratado
         if (!(rawPayload && rawPayload.selectedButtonId)) {
             state.messageHistory.push({ role: 'user', content: messageText || "" }); 
             if (state.messageHistory.length > MAX_STATE_HISTORY) {
@@ -404,163 +439,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             if (!state.activeFinancialAccountId) return;
         }
 
-// ETAPA 4: Tratamento de Comandos Diretos (Botões)
-        if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
-            const buttonId = rawPayload.selectedButtonId;
-            logger.info(`[WHATSAPP SERVICE] Botão clicado por ${senderPhone} (${state.clientName}): ID '${buttonId}', Texto (label): '${messageText}'`);
-            
-            let buttonClickHandled = true; // Assumimos que vamos tratar, a menos que o ID seja desconhecido
-            let aiMessageIntroForButton = "";
-            let structuredDataBodyForButton = "";
-            let platformLinkFooterForButton = formatter.formatPlatformLink();
-            const isOwnerContextForEditDelete = !state.isSharedAccessContext;
-
-            if (buttonId.startsWith('edit_')) {
-                if (!isOwnerContextForEditDelete) {
-                    aiMessageIntroForButton = `Ops, ${state.clientName}! 😬`;
-                    structuredDataBodyForButton = "Em acessos compartilhados, apenas o proprietário pode fazer edições. Você pode visualizar os dados ou pedir para o dono da conta fazer a alteração!";
-                    platformLinkFooterForButton = "";
-                } else {
-                    let resourceTypeForEditMessage = "item";
-                    let resourceId;
-
-                    if (buttonId.startsWith('edit_transaction_')) {
-                        resourceId = buttonId.replace('edit_transaction_', '');
-                        state.editingResource = { type: 'transaction', id: resourceId };
-                        resourceTypeForEditMessage = "transação";
-                        aiMessageIntroForButton = `Claro, ${state.clientName}! 😉`;
-                        structuredDataBodyForButton = `Descreva na próxima mensagem o que você precisa que eu altere na ${resourceTypeForEditMessage} (ID: ${resourceId}). Por exemplo: "mude a descrição para X e o valor para Y".`;
-                        platformLinkFooterForButton = "";
-                        state.currentAction = 'awaiting_transaction_edit_details';
-                    } else if (buttonId.startsWith('edit_appointment_')) {
-                        resourceId = buttonId.replace('edit_appointment_', '');
-                        state.editingResource = { type: 'appointment', id: resourceId };
-                        resourceTypeForEditMessage = "compromisso";
-                        aiMessageIntroForButton = `Beleza, ${state.clientName}! ✨`;
-                        structuredDataBodyForButton = `Me diga na próxima mensagem o que você quer mudar no ${resourceTypeForEditMessage} (ID: ${resourceId}).`;
-                        platformLinkFooterForButton = "";
-                        state.currentAction = 'awaiting_appointment_edit_details';
-                    } else if (buttonId.startsWith('edit_credit_card_')) {
-                        resourceId = buttonId.replace('edit_credit_card_', '');
-                        state.editingResource = { type: 'credit_card', id: resourceId };
-                        resourceTypeForEditMessage = "cartão de crédito";
-                        aiMessageIntroForButton = `Entendido, ${state.clientName}! 💳`;
-                        structuredDataBodyForButton = `O que você gostaria de alterar no ${resourceTypeForEditMessage} (ID: ${resourceId})? Pode me dizer, por exemplo: "mudar o limite para 3000" ou "atualizar o dia de fechamento para 25".`;
-                        platformLinkFooterForButton = "";
-                        state.currentAction = 'awaiting_credit_card_edit_details';
-                    } else if (buttonId.startsWith('edit_recurring_rule_')) {
-                        resourceId = buttonId.replace('edit_recurring_rule_', '');
-                        state.editingResource = { type: 'recurring_rule', id: resourceId };
-                        resourceTypeForEditMessage = "regra de recorrência";
-                        aiMessageIntroForButton = `Certo, ${state.clientName}! 🔄`;
-                        structuredDataBodyForButton = `O que vamos ajustar na ${resourceTypeForEditMessage} (ID: ${resourceId})? Por exemplo: "mudar o valor para 60" ou "alterar a frequência para mensal".`;
-                        platformLinkFooterForButton = "";
-                        state.currentAction = 'awaiting_recurring_rule_edit_details';
-                    } else if (buttonId.startsWith('edit_product_')) {
-                        resourceId = buttonId.replace('edit_product_', '');
-                        state.editingResource = { type: 'product', id: resourceId };
-                        aiMessageIntroForButton = `Beleza, ${state.clientName}! 🛍️`;
-                        structuredDataBodyForButton = `O que você gostaria de alterar no produto (ID: ${resourceId})? Por exemplo: "mudar o preço de venda para 150" ou "atualizar o estoque mínimo para 10".`;
-                        platformLinkFooterForButton = "";
-                        state.currentAction = 'awaiting_product_edit_details';
-                    } else if (buttonId.startsWith('edit_parcelled_account_')) {
-                        resourceId = buttonId.replace('edit_parcelled_account_', '');
-                        const parcelGroupInfo = await financialService.getTransactionById(state.activeFinancialAccountId, resourceId);
-                        let originalDescriptionForEdit = "sua compra parcelada";
-                        if (parcelGroupInfo) {
-                            originalDescriptionForEdit = parcelGroupInfo.isParcel && parcelGroupInfo.originalAccountId === parcelGroupInfo.id 
-                                ? parcelGroupInfo.description.replace(/ - Parcela \d+\/\d+$/, '').trim() 
-                                : parcelGroupInfo.description;
-                        }
-                        state.editingResource = { type: 'parcelled_account', id: resourceId, originalDescription: originalDescriptionForEdit };
-                        aiMessageIntroForButton = `Ok, ${state.clientName}! Você quer editar a compra parcelada de "${originalDescriptionForEdit}".`;
-                        structuredDataBodyForButton = `O que gostaria de alterar? Você pode me dizer os novos detalhes, como por exemplo: "mudar para R$250 em 5x no cartão XP com nova descrição 'Presente Dia das Mães'".\n\nLembre-se que alterar valor, número de parcelas ou o cartão irá refazer essa compra com os novos dados. Se quiser mudar apenas a descrição, diga "mudar descrição para [nova descrição]".`;
-                        platformLinkFooterForButton = "";
-                        state.currentAction = 'awaiting_parcelled_account_full_edit_details';
-                    } else {
-                        buttonClickHandled = false;
-                    }
-                }
-            } else if (buttonId.startsWith('delete_')) {
-                 if (!isOwnerContextForEditDelete) {
-                    aiMessageIntroForButton = `Ops, ${state.clientName}! 😬`;
-                    structuredDataBodyForButton = "Em acessos compartilhados, apenas o proprietário pode excluir itens. Você pode pedir para o dono da conta fazer a remoção!";
-                    platformLinkFooterForButton = "";
-                } else {
-                     if (buttonId.startsWith('delete_transaction_')) {
-                        const transactionId = buttonId.replace('delete_transaction_', '');
-                        try {
-                            await financialService.deleteTransaction(state.activeFinancialAccountId, transactionId, actorClient.id);
-                            aiMessageIntroForButton = `Transação removida com sucesso, ${state.clientName}! 👍`;
-                            structuredDataBodyForButton = "Se precisar de mais alguma coisa, é só chamar.";
-                        } catch (e) { 
-                            logger.error(`[WHATSAPP SERVICE] Erro ao excluir transação ${transactionId} por botão: ${e.message}`);
-                            aiMessageIntroForButton = `Ops! Tive um problema ao tentar excluir a transação.`;
-                            structuredDataBodyForButton = `Detalhe: ${e.message.substring(0,70)}`;
-                         }
-                    } else if (buttonId.startsWith('delete_appointment_')) {
-                        const appointmentId = buttonId.replace('delete_appointment_', '');
-                        try {
-                            await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, appointmentId, true, actorClient.id);
-                            aiMessageIntroForButton = `Compromisso removido da sua agenda, ${state.clientName}! ✅`;
-                        } catch (e) { 
-                            logger.error(`[WHATSAPP SERVICE] Erro ao excluir compromisso ${appointmentId} por botão: ${e.message}`);
-                            aiMessageIntroForButton = `Ops! Tive um problema ao tentar excluir o compromisso.`;
-                            structuredDataBodyForButton = `Detalhe: ${e.message.substring(0,70)}`;
-                         }
-                    } else if (buttonId.startsWith('delete_credit_card_')) {
-                        const cardId = buttonId.replace('delete_credit_card_', '');
-                        try {
-                            await creditCardService.deleteCreditCard(state.activeFinancialAccountId, cardId, actorClient.id);
-                            aiMessageIntroForButton = `Cartão de crédito removido, ${state.clientName}! 🗑️`;
-                        } catch (e) { 
-                            logger.error(`[WHATSAPP SERVICE] Erro ao excluir cartão ${cardId} por botão: ${e.message}`);
-                            aiMessageIntroForButton = `Ops! Tive um problema ao tentar excluir o cartão.`;
-                            structuredDataBodyForButton = `Detalhe: ${e.message.includes("transações") ? "Ele ainda tem transações associadas." : `(${e.message.substring(0,70)})` }`;
-                        }
-                    } else if (buttonId.startsWith('delete_recurring_rule_')) {
-                        const ruleId = buttonId.replace('delete_recurring_rule_', '');
-                        try {
-                            await recurringTransactionService.deleteRecurringRule(state.activeFinancialAccountId, ruleId, actorClient.id);
-                            aiMessageIntroForButton = `Regra de recorrência removida, ${state.clientName}! 👍`;
-                        } catch (e) { 
-                            logger.error(`[WHATSAPP SERVICE] Erro ao excluir regra ${ruleId} por botão: ${e.message}`);
-                            aiMessageIntroForButton = `Ops! Tive um problema ao tentar excluir a regra.`;
-                            structuredDataBodyForButton = `Detalhe: ${e.message.substring(0,70)}`;
-                        }
-                    } else if (buttonId.startsWith('delete_parcelled_account_')) {
-                        const originalAccountId = buttonId.replace('delete_parcelled_account_', '');
-                        try {
-                            await financialService.deleteParcelledAccountGroup(state.activeFinancialAccountId, originalAccountId, actorClient.id);
-                            aiMessageIntroForButton = `Compra parcelada e todas as suas parcelas foram removidas, ${state.clientName}! 👍`;
-                        } catch (e) { 
-                            logger.error(`[WHATSAPP SERVICE] Erro ao excluir grupo de parcelas ${originalAccountId} por botão: ${e.message}`);
-                            aiMessageIntroForButton = `Ops! Tive um problema ao tentar remover essa compra parcelada.`;
-                            structuredDataBodyForButton = `Detalhe: ${e.message.substring(0,70)}`;
-                        }
-                    } else { 
-                        buttonClickHandled = false; 
-                    }
-                    if (buttonClickHandled) {
-                         state.currentAction = null; state.pendingConfirmation = null; state.editingResource = null;
-                    }
-                }
-            }
-            else {
-                buttonClickHandled = false;
-            }
-   
-            if (buttonClickHandled) {
-                const finalMsg = `${aiMessageIntroForButton}${structuredDataBodyForButton ? `\n\n${structuredDataBodyForButton}` : ''}${platformLinkFooterForButton ? `\n\n${platformLinkFooterForButton}` : ''}`.trim();
-                state.messageHistory.push({ role: 'assistant', content: finalMsg });
-                await sendWhatsappMessage(senderPhone, finalMsg);
-                conversationState.set(senderPhone, state);
-                pushNameFromPayload = null;
-                return;
-            }
-        }
-
-        // ETAPA 5: Delegar para a IA e para o Action Handler
+        // ETAPA 4: Delegar para a IA e para o Action Handler
         const availableFinancialCategoriesForAI = await financialCategoryService.getAllCategoriesForAccountAI(state.activeFinancialAccountId);
         const aiContext = {
             currentFinancialAccountId: state.activeFinancialAccountId,
@@ -585,14 +464,12 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             for (const detectedAction of aiResponse.detected_actions) {
                 const actionName = detectedAction.action || detectedAction.action_type;
                 
-                // --- Lógica de verificação de permissão (bloqueio) ---
                 const ownerOnlyActions = ['CREATE_FINANCIAL_ACCOUNT', 'UPDATE_FINANCIAL_ACCOUNT', 'DELETE_FINANCIAL_ACCOUNT', 'GRANT_ACCESS', 'LIST_GRANTED_ACCESS', 'UPDATE_GRANTED_ACCESS', 'REVOKE_ACCESS'];
                 if (ownerOnlyActions.includes(actionName) && !isOwnerActingOnOwnBehalfGlobal) {
                     multipleActionBodiesList.push(`❌ Desculpe, ${state.clientName}, mas a ação de "${actionName.toLowerCase().replace(/_/g, " ")}" só pode ser realizada pelo proprietário da conta.`);
                     continue;
                 }
                 
-                // DELEGA A EXECUÇÃO
                 const actionResult = await actionHandler.handleAction(state, detectedAction, state.clientName, isOwnerActingOnOwnBehalfGlobal, actorClient.id);
                 
                 if (actionResult.formattedData) {
@@ -613,7 +490,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
         }
         
-        // ETAPA 6: Montar e Enviar a Resposta Final
+        // ETAPA 5: Montar e Enviar a Resposta Final
         let structuredDataBody = multipleActionBodiesList.join("\n\n---\n\n");
         if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
             aiMessageIntro = aiResponse.reply_to_user_suggestion || `Opa, ${state.clientName}! Para continuarmos, preciso de um detalhe:`;
@@ -633,10 +510,8 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         }
 
         const platformLinkFooter = formatter.formatPlatformLink();
-        // Pega a URL base do ambiente para fazer a verificação.
         const platformBaseUrl = process.env.PLATFORM_URL || 'map-nocontrole.com.br/painel';
 
-        // Verifica se a mensagem final já contém o link para a plataforma para não adicionar o rodapé duas vezes.
         if (!finalMessageToSend.includes(platformBaseUrl) && resourceForButtonsContext?.type !== 'system_action') {
              finalMessageToSend += `\n\n---\n\n${platformLinkFooter.trim()}`;
         }
@@ -644,15 +519,20 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
         if (finalMessageToSend) {
             state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
-            if (resourceForButtonsContext && resourceForButtonsContext.type !== 'system_action') {
-                const buttons = [];
-                // ... sua lógica de criação de botões ...
+
+            if (resourceForButtonsContext && resourceForButtonsContext.type !== 'system_action' && resourceForButtonsContext.id) {
+                const buttons = [
+                    { id: `edit:${resourceForButtonsContext.type}:${resourceForButtonsContext.id}`, label: '✏️ Editar' },
+                    { id: `delete:${resourceForButtonsContext.type}:${resourceForButtonsContext.id}`, label: '🗑️ Excluir' }
+                ];
+                if (resourceForButtonsContext.type === 'credit_card') {
+                    buttons.push({ id: `details:${resourceForButtonsContext.type}:${resourceForButtonsContext.id}`, label: 'Ver Fatura/Detalhes' });
+                }
                 await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, "Opções:");
             } else {
                 await sendWhatsappMessage(senderPhone, finalMessageToSend);
             }
         }
-
     } catch (error) {
         logger.error(`[WHATSAPP HANDLER] Erro CRÍTICO processando msg de ${senderPhone}: ${error.message}`, { stack: error.stack?.substring(0,1000) });
         const errorMsg = `Puxa vida, ${state?.clientName || 'você'}! 😬 Tive um curto-circuito aqui... Minha equipe já foi notificada. Tente novamente em um instante.`;

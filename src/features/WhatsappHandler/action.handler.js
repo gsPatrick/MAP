@@ -2034,6 +2034,74 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
     return { formattedData, resourceForButtonsContext, wasAnEdit };
 }
 
+async function handleButtonInteraction(state, buttonId, senderPhone) {
+    try {
+        const [action, type, idStr] = buttonId.split(':');
+        const id = parseInt(idStr, 10);
+
+        if (action === 'edit') {
+            state.editingResource = { type, id };
+            const editPrompt = `Ok! Selecionei o item para edição. O que você gostaria de mudar?`;
+            await sendWhatsappMessage(senderPhone, editPrompt);
+            // Retorna o estado atualizado para ser salvo pelo maestro
+            return { stateUpdated: true, newState: state }; 
+        }
+
+        if (action === 'delete') {
+            let successMessage = `✅ Item (ID: ${id}) excluído com sucesso!`;
+            try {
+                switch (type) {
+                    case 'transaction':
+                        await financialService.deleteTransaction(state.activeFinancialAccountId, id);
+                        break;
+                    case 'appointment':
+                        await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, id, true);
+                        break;
+                    case 'product':
+                        await productService.deleteProduct(state.activeFinancialAccountId, id);
+                        break;
+                    case 'credit_card':
+                        await creditCardService.deleteCreditCard(state.activeFinancialAccountId, id);
+                        break;
+                    case 'recurring_rule':
+                        await recurringTransactionService.deleteRecurringRule(state.activeFinancialAccountId, id);
+                        break;
+                    case 'parcelled_account':
+                         await financialService.deleteParcelledAccountGroup(state.activeFinancialAccountId, id);
+                         successMessage = `✅ Compra parcelada (ID: ${id}) e todas as suas parcelas foram removidas!`;
+                         break;
+                    case 'business_client':
+                        await businessClientService.deleteBusinessClient(state.activeFinancialAccountId, id);
+                        break;
+                    default:
+                        successMessage = `Ainda não sei como excluir um item do tipo "${type}".`;
+                }
+            } catch (deleteError) {
+                logger.error(`[BUTTON HANDLER] Erro ao excluir ${type} ID ${id}: ${deleteError.message}`);
+                successMessage = `❌ Erro ao excluir: ${deleteError.message}`;
+            }
+            await sendWhatsappMessage(senderPhone, successMessage);
+            // Retorna que o fluxo foi concluído.
+            return { flowCompleted: true }; 
+        }
+
+        if (action === 'details' && type === 'credit_card') {
+            // Transforma o clique em uma "mensagem de usuário" para ser processada pela IA
+            const fakeUserInput = `ver fatura do cartão com id ${id}`;
+            return { repromptWith: fakeUserInput };
+        }
+        
+        logger.warn(`[BUTTON HANDLER] Ação de botão desconhecida: '${action}'`);
+        return { flowCompleted: true }; // Finaliza o fluxo para ações de botão não reconhecidas
+
+    } catch (error) {
+        logger.error(`[BUTTON HANDLER] Erro crítico ao tratar clique de botão '${buttonId}': ${error.message}`);
+        await sendWhatsappMessage(senderPhone, "Ops, tive um problema ao processar sua seleção. Por favor, tente novamente.");
+        return { flowCompleted: true };
+    }
+}
+
 module.exports = {
-    handleAction
+    handleAction,
+    handleButtonInteraction
 };
