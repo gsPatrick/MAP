@@ -90,18 +90,39 @@ async function createRecurringRule(financialAccountId, ruleData) {
 async function getAllRecurringRules(financialAccountId, queryParams = {}) {
   try {
     await validateOwningFinancialAccount(financialAccountId);
-    const { isActive, frequency, type, sortBy = 'nextDueDate', sortOrder = 'ASC' } = queryParams;
+    
+    // Adiciona 'descriptionSearch' à desestruturação dos parâmetros
+    const { 
+        isActive, 
+        frequency, 
+        type, 
+        descriptionSearch, 
+        sortBy = 'nextDueDate', 
+        sortOrder = 'ASC' 
+    } = queryParams;
+
     const whereConditions = { financialAccountId };
 
     if (isActive !== undefined) {
       whereConditions.isActive = (isActive === 'true' || isActive === true);
     }
-    if (frequency) whereConditions.frequency = frequency;
-    if (type) whereConditions.type = type;
+    if (frequency) {
+        whereConditions.frequency = frequency;
+    }
+    if (type) {
+        whereConditions.type = type;
+    }
+    
+    // <<< BLOCO DE CÓDIGO NOVO/MODIFICADO >>>
+    // Adiciona a condição de busca por descrição, se fornecida.
+    // Usa Op.iLike para busca case-insensitive e % para busca parcial.
+    if (descriptionSearch) {
+        whereConditions.description = { [Op.iLike]: `%${descriptionSearch}%` };
+    }
+    // <<< FIM DO BLOCO NOVO/MODIFICADO >>>
 
     const validSortOrders = ['ASC', 'DESC'];
     const order = [[sortBy, validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'ASC']];
-
 
     const rules = await RecurringTransactionRule.findAll({
       where: whereConditions,
@@ -110,9 +131,18 @@ async function getAllRecurringRules(financialAccountId, queryParams = {}) {
       ],
       order: order,
     });
+    
+    // Mapeia os resultados para JSON
+    const recurringRules = rules.map(r => r.toJSON());
 
-    logger.info(`Listadas ${rules.length} regras de recorrência para FinancialAccount ID ${financialAccountId}.`);
-    return rules.map(r => r.toJSON());
+    logger.info(`Listadas ${recurringRules.length} regras de recorrência para FinancialAccount ID ${financialAccountId}.`);
+    
+    // Retorna um objeto padronizado para consistência com outros serviços
+    return { 
+        rules: recurringRules, 
+        totalItems: recurringRules.length 
+    };
+
   } catch (error) {
     logger.error(`Erro ao listar regras de recorrência para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error });
     if (!error.statusCode) error.statusCode = 500;
