@@ -623,7 +623,7 @@ function formatFinancialCategoryDataStructure(category) {
     return data.trim();
 }
 
-function formatRichRecurringRuleList(enrichedRules, totalItems, clientName) {
+function formatRichRecurringRuleList(enrichedRules, clientName) {
     if (!enrichedRules || enrichedRules.length === 0) {
         return `Nenhuma regra de recorrência encontrada, ${clientName}.`;
     }
@@ -633,24 +633,23 @@ function formatRichRecurringRuleList(enrichedRules, totalItems, clientName) {
     enrichedRules.forEach(rule => {
         data += `\n🔄 *${rule.description}* - ${formatCurrency(rule.value)} (${rule.type})`;
         
+        let statusText = "";
         if (!rule.isActive) {
-            data += `\n   Status: Inativa ❌`;
-        } else if (rule.hasPending) {
-            data += `\n   Status: Pagamento Pendente ❗️`;
-        } else if (!rule.hasHistory) {
-            data += `\n   Próximo Lançamento: *${formatDate(rule.nextDueDate)}* 🗓️`;
+            statusText = `Status: Inativa ❌`;
+        } else if (rule.pendingCount > 0) {
+            statusText = `Status: ${rule.pendingCount} pagamento(s) pendente(s) ❗️ (Próximo vence em ${formatDate(rule.nextPendingDueDate)})`;
+        } else if (!rule.hasPaidHistory) {
+            statusText = `Próximo Lançamento: *${formatDate(rule.nextDueDate)}* 🗓️`;
         } else {
-            data += `\n   Status: Em dia ✅`;
+            statusText = `Status: Em dia ✅ (Próximo em ${formatDate(rule.nextDueDate)})`;
         }
+        data += `\n   ${statusText}`;
         data += ` (ID: ${rule.id})\n`;
     });
 
-    if (totalItems > enrichedRules.length) {
-        data += `\n... e mais ${totalItems - enrichedRules.length} regra(s).`;
-    }
-
     return data.trim();
 }
+
 
 
 // Exporta todas as funções em um único objeto

@@ -376,14 +376,10 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - includeSummary: boolean (opcional, default: true para tentar incluir limite disponível)
 
 16. LIST_RECURRING_RULES: (Listar regras de recorrência OU ver o histórico de uma regra específica)
-    - isActive: boolean (opcional, default: null para listar todas)
+    - isActive: boolean (opcional, default: true)
     - type: "Entrada" ou "Saída" (opcional)
-    - limit: integer (opcional, default: 5)
-    - ruleDescription: string (opcional. Se o usuário pedir o histórico de uma regra específica, como "histórico da netflix", preencha este campo com "netflix")
-   - period: "este_mes", "proximo_mes", "este_ano" (opcional, para filtrar por data de próximo vencimento)
-    - dateStart: "YYYY-MM-DD" (opcional)
-    - dateEnd: "YYYY-MM-DD" (opcional)
-    
+    - ruleDescription: string (opcional. Se o usuário pedir o histórico de uma regra específica, como "histórico da netflix", preencha este campo com "netflix". Se a busca for genérica, omita este campo.)
+
 17. SWITCH_FINANCIAL_ACCOUNT: (Mudar de conta financeira ativa)
     - targetAccountNameOrType: string (OBRIGATÓRIO, nome da conta ou tipo 'PF', 'PJ', 'MEI')
 
