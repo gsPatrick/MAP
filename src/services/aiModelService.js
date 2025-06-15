@@ -380,7 +380,10 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - type: "Entrada" ou "Saída" (opcional)
     - limit: integer (opcional, default: 5)
     - ruleDescription: string (opcional. Se o usuário pedir o histórico de uma regra específica, como "histórico da netflix", preencha este campo com "netflix")
-
+   - period: "este_mes", "proximo_mes", "este_ano" (opcional, para filtrar por data de próximo vencimento)
+    - dateStart: "YYYY-MM-DD" (opcional)
+    - dateEnd: "YYYY-MM-DD" (opcional)
+    
 17. SWITCH_FINANCIAL_ACCOUNT: (Mudar de conta financeira ativa)
     - targetAccountNameOrType: string (OBRIGATÓRIO, nome da conta ou tipo 'PF', 'PJ', 'MEI')
 

@@ -755,7 +755,10 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         type: params.type,
                         limit: params.limit || 5,
                         // Adicionamos a busca por descrição aqui também, para unificar
-                        descriptionSearch: params.ruleDescription 
+                        descriptionSearch: params.ruleDescription,
+                        dateStart: params.dateStart,
+                        dateEnd: params.dateEnd,
+                        period: params.period
                     };
                     
                     const { rules, totalItems } = await recurringTransactionService.getAllRecurringRules(state.activeFinancialAccountId, filterParamsRules);

@@ -91,14 +91,11 @@ async function getAllRecurringRules(financialAccountId, queryParams = {}) {
   try {
     await validateOwningFinancialAccount(financialAccountId);
     
-    // Adiciona 'descriptionSearch' à desestruturação dos parâmetros
+    // Desestruturação dos parâmetros, incluindo os novos de data e período
     const { 
-        isActive, 
-        frequency, 
-        type, 
-        descriptionSearch, 
-        sortBy = 'nextDueDate', 
-        sortOrder = 'ASC' 
+        isActive, frequency, type, descriptionSearch, 
+        dateStart, dateEnd, period,
+        sortBy = 'nextDueDate', sortOrder = 'ASC' 
     } = queryParams;
 
     const whereConditions = { financialAccountId };
@@ -112,35 +109,62 @@ async function getAllRecurringRules(financialAccountId, queryParams = {}) {
     if (type) {
         whereConditions.type = type;
     }
-    
-    // <<< BLOCO DE CÓDIGO NOVO/MODIFICADO >>>
-    // Adiciona a condição de busca por descrição, se fornecida.
-    // Usa Op.iLike para busca case-insensitive e % para busca parcial.
     if (descriptionSearch) {
         whereConditions.description = { [Op.iLike]: `%${descriptionSearch}%` };
     }
-    // <<< FIM DO BLOCO NOVO/MODIFICADO >>>
+
+    // =================================================================
+    // <<< LÓGICA DE FILTRO DE DATA PARA RECORRÊNCIAS >>>
+    // =================================================================
+    let finalDateStart = dateStart;
+    let finalDateEnd = dateEnd;
+
+    if (period) {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth(); // 0-11
+
+        if (period === "este_mes") {
+            finalDateStart = new Date(year, month, 1).toISOString().split('T')[0];
+            finalDateEnd = new Date(year, month + 1, 0).toISOString().split('T')[0];
+        } else if (period === "proximo_mes") {
+            finalDateStart = new Date(year, month + 1, 1).toISOString().split('T')[0];
+            finalDateEnd = new Date(year, month + 2, 0).toISOString().split('T')[0];
+        } else if (period === "este_ano") {
+            finalDateStart = new Date(year, 0, 1).toISOString().split('T')[0];
+            finalDateEnd = new Date(year, 11, 31).toISOString().split('T')[0];
+        }
+        // Adicione outras lógicas de período (ex: "proximos_30_dias") se desejar
+    }
+
+    // Aplica os filtros de data ao campo 'nextDueDate'
+    if (finalDateStart) {
+        whereConditions.nextDueDate = { ...whereConditions.nextDueDate, [Op.gte]: finalDateStart };
+    }
+    if (finalDateEnd) {
+        whereConditions.nextDueDate = { ...whereConditions.nextDueDate, [Op.lte]: finalDateEnd };
+    }
+    // =================================================================
+    // <<< FIM DA LÓGICA DE FILTRO DE DATA >>>
+    // =================================================================
 
     const validSortOrders = ['ASC', 'DESC'];
     const order = [[sortBy, validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'ASC']];
 
-    const rules = await RecurringTransactionRule.findAll({
+    // Usamos findAndCountAll para suportar paginação futura, se necessário
+    const { count, rows } = await RecurringTransactionRule.findAndCountAll({
       where: whereConditions,
       include: [
         { model: FinancialCategory, as: 'category', attributes: ['id', 'name'] }
       ],
       order: order,
     });
-    
-    // Mapeia os resultados para JSON
-    const recurringRules = rules.map(r => r.toJSON());
 
-    logger.info(`Listadas ${recurringRules.length} regras de recorrência para FinancialAccount ID ${financialAccountId}.`);
+    logger.info(`Listadas ${rows.length} de um total de ${count} regras de recorrência para FinancialAccount ID ${financialAccountId}.`);
     
-    // Retorna um objeto padronizado para consistência com outros serviços
-    return { 
-        rules: recurringRules, 
-        totalItems: recurringRules.length 
+    return {
+        rules: rows.map(r => r.toJSON()),
+        totalItems: count
     };
 
   } catch (error) {
