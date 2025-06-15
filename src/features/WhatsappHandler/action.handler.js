@@ -10,6 +10,9 @@ const sharedAccessService = require('../SharedAccess/sharedAccess.service');
 const systemService = require('../System/system.service');
 const clientService = require('../Client/client.service');
 const financialCategoryService = require('../FinancialCategory/financialCategory.service');
+const affiliateService = require('../Affiliate/affiliate.service'); // <<< ADICIONE ESTA LINHA
+const hydrationService = require('../Hydration/hydration.service'); // <<< ADICIONE ESTA LINHA
+const subscriptionService = require('../Subscription/subscription.service'); // <<< ADICIONE ESTA LINHA
 const logger = require('../../utils/logger');
 const formatter = require('./response.formatter'); // Importa o novo formatador
 const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
@@ -2035,69 +2038,121 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
     return { formattedData, resourceForButtonsContext, wasAnEdit };
 }
 
-async function handleButtonInteraction(state, buttonId, senderPhone) {
+async function handleButtonInteraction(state, buttonId, senderPhone, actorId) {
     try {
-        const [action, type, idStr] = buttonId.split(':');
-        const id = parseInt(idStr, 10);
+        const [action, resourceType, idStr] = buttonId.split(':');
+        const resourceId = parseInt(idStr, 10);
 
+        if (!action || !resourceType || isNaN(resourceId)) {
+            logger.warn(`[BUTTON HANDLER] ID de botão inválido recebido: '${buttonId}'`);
+            await sendWhatsappMessage(senderPhone, "Ops, parece que houve um problema com o botão que você clicou. Tente a ação novamente por texto.");
+            return { flowCompleted: true };
+        }
+
+        // --- Ação de Edição ---
         if (action === 'edit') {
-            state.editingResource = { type, id };
+            state.editingResource = { type: resourceType, id: resourceId };
             const editPrompt = `Ok! Selecionei o item para edição. O que você gostaria de mudar?`;
             await sendWhatsappMessage(senderPhone, editPrompt);
-            // Retorna o estado atualizado para ser salvo pelo maestro
-            return { stateUpdated: true, newState: state }; 
+            return { stateUpdated: true, newState: state, flowCompleted: false };
         }
 
+        // --- Ação de Exclusão (com mensagens humanizadas) ---
         if (action === 'delete') {
-            let successMessage = `✅ Item (ID: ${id}) excluído com sucesso!`;
+            let successMessage;
             try {
-                switch (type) {
-                    case 'transaction':
-                        await financialService.deleteTransaction(state.activeFinancialAccountId, id);
+                let resourceDescription = `O item`; // Descrição de fallback
+                
+                // Busca os detalhes do recurso ANTES de deletar para ter uma mensagem amigável
+                switch (resourceType) {
+                    case 'transaction': {
+                        const tx = await financialService.getTransactionById(state.activeFinancialAccountId, resourceId);
+                        if (tx) resourceDescription = `A transação "${tx.description}"`;
+                        await financialService.deleteTransaction(state.activeFinancialAccountId, resourceId);
                         break;
-                    case 'appointment':
-                        await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, id, true);
+                    }
+                    case 'appointment': {
+                        const appt = await appointmentService.getAppointmentById(state.activeFinancialAccountId, resourceId);
+                        if (appt) resourceDescription = `O compromisso "${appt.title}"`;
+                        await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, resourceId, true);
                         break;
-                    case 'product':
-                        await productService.deleteProduct(state.activeFinancialAccountId, id);
+                    }
+                    case 'product': {
+                        const prod = await productService.getProductById(state.activeFinancialAccountId, resourceId);
+                        if (prod) resourceDescription = `O produto "${prod.name}"`;
+                        await productService.deleteProduct(state.activeFinancialAccountId, resourceId);
                         break;
-                    case 'credit_card':
-                        await creditCardService.deleteCreditCard(state.activeFinancialAccountId, id);
+                    }
+                    case 'credit_card': {
+                        const card = await creditCardService.getCreditCardById(state.activeFinancialAccountId, resourceId);
+                        if (card) resourceDescription = `O cartão "${card.name}"`;
+                        await creditCardService.deleteCreditCard(state.activeFinancialAccountId, resourceId);
                         break;
-                    case 'recurring_rule':
-                        await recurringTransactionService.deleteRecurringRule(state.activeFinancialAccountId, id);
+                    }
+                    case 'recurring_rule': {
+                        const rule = await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, resourceId);
+                        if (rule) resourceDescription = `A regra recorrente "${rule.description}"`;
+                        await recurringTransactionService.deleteRecurringRule(state.activeFinancialAccountId, resourceId);
                         break;
-                    case 'parcelled_account':
-                         await financialService.deleteParcelledAccountGroup(state.activeFinancialAccountId, id);
-                         successMessage = `✅ Compra parcelada (ID: ${id}) e todas as suas parcelas foram removidas!`;
-                         break;
-                    case 'business_client':
-                        await businessClientService.deleteBusinessClient(state.activeFinancialAccountId, id);
+                    }
+                    case 'parcelled_account': {
+                        // Para contas parceladas, a descrição já é mais específica
+                        const originalTx = await financialService.getTransactionById(state.activeFinancialAccountId, resourceId);
+                        if (originalTx) resourceDescription = `A compra parcelada "${originalTx.description.replace(/ - Parcela \d+\/\d+$/, '')}"`;
+                        await financialService.deleteParcelledAccountGroup(state.activeFinancialAccountId, resourceId);
                         break;
+                    }
+                    case 'business_client': {
+                        const bc = await businessClientService.getBusinessClientById(state.activeFinancialAccountId, resourceId);
+                        if (bc) resourceDescription = `O cliente "${bc.name}"`;
+                        await businessClientService.deleteBusinessClient(state.activeFinancialAccountId, resourceId);
+                        break;
+                    }
                     default:
-                        successMessage = `Ainda não sei como excluir um item do tipo "${type}".`;
+                        throw new Error(`Tipo de recurso "${resourceType}" não suportado para exclusão via botão.`);
                 }
+                
+                successMessage = `✅ ${resourceDescription} foi excluído com sucesso!`;
+
             } catch (deleteError) {
-                logger.error(`[BUTTON HANDLER] Erro ao excluir ${type} ID ${id}: ${deleteError.message}`);
-                successMessage = `❌ Erro ao excluir: ${deleteError.message}`;
+                logger.error(`[BUTTON HANDLER] Erro ao excluir ${resourceType} ID ${resourceId}: ${deleteError.message}`);
+                successMessage = `❌ Ops! Tive um problema ao tentar excluir o item. Detalhe: ${deleteError.message}`;
             }
+            
             await sendWhatsappMessage(senderPhone, successMessage);
-            // Retorna que o fluxo foi concluído.
-            return { flowCompleted: true }; 
+            return { flowCompleted: true };
         }
 
-        if (action === 'details' && type === 'credit_card') {
-            // Transforma o clique em uma "mensagem de usuário" para ser processada pela IA
-            const fakeUserInput = `ver fatura do cartão com id ${id}`;
-            return { repromptWith: fakeUserInput };
+        // --- Ação de Detalhes (Ex: Ver Fatura) ---
+        if (action === 'details' && resourceType === 'credit_card') {
+            try {
+                const card = await creditCardService.getCreditCardById(state.activeFinancialAccountId, resourceId);
+                if (!card) {
+                    await sendWhatsappMessage(senderPhone, "Ops, não encontrei mais esse cartão para ver os detalhes.");
+                    return { flowCompleted: true };
+                }
+                // Simula uma nova mensagem do usuário para que a IA processe a ação de ver a fatura
+                const fakeUserInput = `ver a fatura aberta do cartão ${card.name}`;
+                
+                // Retorna a mensagem para o "Maestro" reprocessar
+                // O Maestro deve ser ajustado para lidar com este retorno
+                // (No seu código atual, ele já continua o fluxo se flowCompleted for false, o que é perfeito)
+                return { stateUpdated: false, newState: null, flowCompleted: false, repromptWith: fakeUserInput };
+
+            } catch (detailsError) {
+                logger.error(`[BUTTON HANDLER] Erro ao buscar detalhes de ${resourceType} ID ${resourceId}: ${detailsError.message}`);
+                await sendWhatsappMessage(senderPhone, "❌ Tive um problema ao buscar os detalhes. Por favor, tente novamente por texto.");
+                return { flowCompleted: true };
+            }
         }
         
-        logger.warn(`[BUTTON HANDLER] Ação de botão desconhecida: '${action}'`);
-        return { flowCompleted: true }; // Finaliza o fluxo para ações de botão não reconhecidas
+        logger.warn(`[BUTTON HANDLER] Ação de botão desconhecida ou não tratada: '${action}' para o tipo '${resourceType}'`);
+        await sendWhatsappMessage(senderPhone, "Essa opção ainda está em desenvolvimento. Tente a ação por texto!");
+        return { flowCompleted: true };
 
     } catch (error) {
-        logger.error(`[BUTTON HANDLER] Erro crítico ao tratar clique de botão '${buttonId}': ${error.message}`);
-        await sendWhatsappMessage(senderPhone, "Ops, tive um problema ao processar sua seleção. Por favor, tente novamente.");
+        logger.error(`[BUTTON HANDLER] Erro crítico ao tratar clique de botão '${buttonId}': ${error.message}`, { stack: error.stack });
+        await sendWhatsappMessage(senderPhone, "Ops, tive um problema interno ao processar sua seleção. Minha equipe já foi notificada.");
         return { flowCompleted: true };
     }
 }
