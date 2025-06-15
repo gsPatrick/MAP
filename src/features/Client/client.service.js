@@ -80,14 +80,17 @@ async function findClientByPhone(phone) {
   if (!phone) return null;
   const normalizedPhone = phone.replace(/\D/g, '');
   try {
-    const client = await Client.findOne({ where: { phone: normalizedPhone } });
-    return client ? client.toJSON() : null;
+    // CORREÇÃO: Usamos .scope('withPassword') para incluir o passwordHash na consulta.
+    const client = await Client.scope('withPassword').findOne({ where: { phone: normalizedPhone } });
+    
+    // Retorna o objeto completo para que a lógica de verificação de estado funcione.
+    // O toJSON() é chamado depois pelo serviço de whatsapp se necessário.
+    return client; // Retorna a instância do Sequelize diretamente
   } catch (error) {
     logger.error(`Erro ao buscar cliente por telefone ${normalizedPhone}: ${error.message}`, { error });
     throw error;
   }
 }
-
 // --- FUNÇÃO DE DEBUG MODIFICADA ---
 /**
  * ATENÇÃO: Função de debug para listar todos os CLIENTES com dados de afiliado.
