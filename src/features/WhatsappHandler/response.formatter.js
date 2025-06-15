@@ -623,29 +623,45 @@ function formatFinancialCategoryDataStructure(category) {
     return data.trim();
 }
 
-function formatRichRecurringRuleList(enrichedRules, clientName) {
+function formatRichRecurringRuleList(enrichedRules, totalItems, clientName) {
     if (!enrichedRules || enrichedRules.length === 0) {
-        return `Nenhuma regra de recorrência encontrada, ${clientName}.`;
+        return `Nenhuma regra de recorrência encontrada com os filtros aplicados, ${clientName}.`;
     }
 
     let data = `📋 Aqui estão suas recorrências, ${clientName}:\n`;
 
     enrichedRules.forEach(rule => {
-        data += `\n🔄 *${rule.description}* - ${formatCurrency(rule.value)} (${rule.type})`;
-        
-        let statusText = "";
+        let statusEmoji = '❓';
+        let statusText = '';
+        let details = `Valor: ${formatCurrency(rule.value)} (${rule.type})`;
+
         if (!rule.isActive) {
-            statusText = `Status: Inativa ❌`;
+            statusEmoji = '❌';
+            statusText = `Inativa`;
         } else if (rule.pendingCount > 0) {
-            statusText = `Status: ${rule.pendingCount} pagamento(s) pendente(s) ❗️ (Próximo vence em ${formatDate(rule.nextPendingDueDate)})`;
+            statusEmoji = '❗️';
+            statusText = `Pendente`;
+            details = `Próximo pagamento de *${formatCurrency(rule.value)}* vence em *${formatDate(rule.nextPendingDueDate)}*`;
         } else if (!rule.hasPaidHistory) {
-            statusText = `Próximo Lançamento: *${formatDate(rule.nextDueDate)}* 🗓️`;
+            statusEmoji = '🗓️';
+            statusText = `Agendada`;
+            details = `Primeiro lançamento em *${formatDate(rule.nextDueDate)}*`;
         } else {
-            statusText = `Status: Em dia ✅ (Próximo em ${formatDate(rule.nextDueDate)})`;
+            statusEmoji = '✅';
+            statusText = `Em dia`;
+            details = `Próximo lançamento em *${formatDate(rule.nextDueDate)}*`;
         }
-        data += `\n   ${statusText}`;
-        data += ` (ID: ${rule.id})\n`;
+
+        data += `\n-----------------------------------\n`;
+        data += `*${rule.description}*\n`;
+        data += `${statusEmoji} Status: *${statusText}*\n`;
+        data += `💸 ${details}\n`;
     });
+
+    if (totalItems > enrichedRules.length) {
+        data += `\n-----------------------------------\n`;
+        data += `\n... e mais ${totalItems - enrichedRules.length} regra(s).`;
+    }
 
     return data.trim();
 }

@@ -90,31 +90,69 @@ async function createRecurringRule(financialAccountId, ruleData) {
 async function getAllRecurringRules(financialAccountId, queryParams = {}) {
   try {
     await validateOwningFinancialAccount(financialAccountId);
-    const { isActive, frequency, type, sortBy = 'nextDueDate', sortOrder = 'ASC' } = queryParams;
+    
+    const { 
+        isActive, frequency, type, descriptionSearch, 
+        dateStart, dateEnd, period,
+        sortBy = 'nextDueDate', sortOrder = 'ASC' 
+    } = queryParams;
+
     const whereConditions = { financialAccountId };
 
-    if (isActive !== undefined) {
-      whereConditions.isActive = (isActive === 'true' || isActive === true);
+    if (isActive !== undefined && isActive !== null) {
+      whereConditions.isActive = (String(isActive).toLowerCase() === 'true' || isActive === true);
     }
+
     if (frequency) whereConditions.frequency = frequency;
     if (type) whereConditions.type = type;
+    
+    // Filtro por descrição (case-insensitive e parcial)
+    if (descriptionSearch) {
+        whereConditions.description = { [Op.iLike]: `%${descriptionSearch}%` };
+    }
+
+    if (period || dateStart || dateEnd) {
+        let finalDateStart = dateStart;
+        let finalDateEnd = dateEnd;
+
+        if (period) {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = now.getMonth();
+
+            if (period === "este_mes") {
+                finalDateStart = new Date(year, month, 1).toISOString().split('T')[0];
+                finalDateEnd = new Date(year, month + 1, 0).toISOString().split('T')[0];
+            }
+        }
+
+        if (finalDateStart && finalDateEnd) {
+            whereConditions.nextDueDate = { [Op.between]: [finalDateStart, finalDateEnd] };
+        } else if (finalDateStart) {
+            whereConditions.nextDueDate = { [Op.gte]: finalDateStart };
+        } else if (finalDateEnd) {
+            whereConditions.nextDueDate = { [Op.lte]: finalDateEnd };
+        }
+    }
 
     const validSortOrders = ['ASC', 'DESC'];
     const order = [[sortBy, validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'ASC']];
 
-
-    const rules = await RecurringTransactionRule.findAll({
+    const { count, rows } = await RecurringTransactionRule.findAndCountAll({
       where: whereConditions,
-      include: [
-        { model: FinancialCategory, as: 'category', attributes: ['id', 'name'] }
-      ],
+      include: [{ model: FinancialCategory, as: 'category', attributes: ['id', 'name'] }],
       order: order,
     });
 
-    logger.info(`Listadas ${rules.length} regras de recorrência para FinancialAccount ID ${financialAccountId}.`);
-    return rules.map(r => r.toJSON());
+    logger.info(`Listadas ${rows.length} de um total de ${count} regras de recorrência para FA ID ${financialAccountId}. Filtros: ${JSON.stringify(whereConditions)}`);
+    
+    return {
+        rules: rows.map(r => r.toJSON()),
+        totalItems: count
+    };
+
   } catch (error) {
-    logger.error(`Erro ao listar regras de recorrência para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error });
+    logger.error(`Erro ao listar regras de recorrência para FA ID ${financialAccountId}: ${error.message}`, { error });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
