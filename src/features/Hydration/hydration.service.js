@@ -212,11 +212,57 @@ async function getTodaysLogsByClient(clientId) {
     return logs;
 }
 
+async function logWaterIntake(clientId, amount = null) {
+    if (amount && (isNaN(amount) || amount <= 0)) {
+        throw new Error("A quantidade de água registrada deve ser um número positivo.");
+    }
+
+    if (amount) {
+        // Se uma quantidade foi especificada, criamos um novo registro já completo.
+        const now = new Date();
+        const intakeDate = now.toISOString().split('T')[0];
+        const completedAt = now;
+        const scheduledTime = now.toLocaleTimeString('pt-BR', { hour12: false, timeZone: process.env.TZ || 'America/Sao_Paulo' });
+
+        const newLog = await WaterIntakeLog.create({
+            clientId,
+            intakeDate,
+            scheduledTime,
+            amount,
+            status: 'completed',
+            completedAt,
+        });
+        logger.info(`[HydrationService] Log de água de ${amount}ml criado diretamente para cliente ${clientId}.`);
+        return newLog.toJSON();
+    } else {
+        // Se nenhuma quantidade foi especificada, encontramos o próximo log pendente e o marcamos.
+        const today = new Date().toISOString().split('T')[0];
+        const nextPendingLog = await WaterIntakeLog.findOne({
+            where: {
+                clientId,
+                status: 'pending',
+                intakeDate: today,
+            },
+            order: [['scheduledTime', 'ASC']]
+        });
+
+        if (nextPendingLog) {
+            return await updateLogStatus(clientId, nextPendingLog.id, 'completed');
+        } else {
+            // Se não há logs pendentes, podemos criar um genérico ou informar o usuário.
+            // Por simplicidade, vamos criar um log genérico de 200ml.
+            logger.info(`[HydrationService] Nenhum log pendente encontrado para cliente ${clientId}. Criando log genérico.`);
+            return await logWaterIntake(clientId, 200); // Chama a si mesmo com um valor padrão.
+        }
+    }
+}
+
 
 
 module.exports = {
   getOrCreateDailyLogs,
   updateLogStatus,
   getTodaysLogsByClient,
-  createOrUpdateHydrationSettings
+  createOrUpdateHydrationSettings,
+  logWaterIntake
 };

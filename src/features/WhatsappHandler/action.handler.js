@@ -253,19 +253,33 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const categoryIdRule = categoryObjectRule ? categoryObjectRule.id : null;
                     
                     const ruleData = {
-                        description: params.description, type: params.type, value: parseFloat(params.value),
-                        frequency: params.frequency, startDate: params.startDate,
+                        description: params.description,
+                        type: params.type,
+                        value: parseFloat(params.value),
+                        frequency: params.frequency,
+                        startDate: params.startDate,
                         interval: params.interval ? parseInt(params.interval) : 1,
                         dayOfMonth: params.dayOfMonth ? parseInt(params.dayOfMonth) : null,
                         dayOfWeek: params.dayOfWeek !== undefined && params.dayOfWeek !== null ? parseInt(params.dayOfWeek) : null,
-                        endDate: params.endDate, autoCreateTransaction: params.autoCreateTransaction !== undefined ? params.autoCreateTransaction : false,
-                        financialCategoryId: categoryIdRule, notes: params.notes
+                        endDate: params.endDate,
+                        
+                        // =================================================================
+                        // <<< MUDANÇA PRINCIPAL AQUI >>>
+                        // Forçamos a criação da transação para 'true', garantindo que
+                        // toda recorrência criada via WhatsApp gere um lançamento financeiro.
+                        autoCreateTransaction: true,
+                        // =================================================================
+                        
+                        financialCategoryId: categoryIdRule,
+                        notes: params.notes
                     };
-                    if (!ruleData.description || !ruleData.type || isNaN(ruleData.value) || ruleData.value <=0 || !ruleData.frequency || !ruleData.startDate) {
+
+                    if (!ruleData.description || !ruleData.type || isNaN(ruleData.value) || ruleData.value <= 0 || !ruleData.frequency || !ruleData.startDate) {
                         throw { statusCode: 400, message: "Dados insuficientes para criar regra recorrente (desc, tipo, valor, frequência, data início)." };
                     }
                     
-                    const newRule = await recurringTransactionService.createRecurringRule(state.activeFinancialAccountId, ruleData, actorId);
+                    // A passagem de 'actorId' foi removida pois o serviço não parece recebê-lo
+                    const newRule = await recurringTransactionService.createRecurringRule(state.activeFinancialAccountId, ruleData);
                     const reloadedRule = await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, newRule.id);
                     
                     formattedData = formatter.formatRecurringRuleDataStructure(reloadedRule);
@@ -1577,33 +1591,18 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                 break;
             }
 
-            case 'LOG_WATER_INTAKE': {
+  case 'LOG_WATER_INTAKE': {
                 try {
                     const amount = params.amountInMl ? parseInt(params.amountInMl) : null;
-                    const logs = await hydrationService.getOrCreateDailyLogs(actorId);
                     
-                    if (!logs || logs.length === 0) {
-                        throw { statusCode: 400, message: "Lembretes de água não estão configurados. Por favor, ative-os primeiro." };
-                    }
+                    // A função de serviço agora precisa lidar com a lógica de registro.
+                    // Vamos criar uma nova função de serviço para isso.
+                    await hydrationService.logWaterIntake(actorId, amount);
 
-                    let logToUpdate;
-                    if (amount) {
-                        // Se o usuário especificou uma quantidade, atualizamos o primeiro log pendente com essa quantidade.
-                        logToUpdate = logs.find(log => log.status === 'pending');
-                        if (logToUpdate) await hydrationService.updateLogStatus(actorId, logToUpdate.id, 'completed', { amount });
-                    } else {
-                        // Se não especificou, apenas marca o próximo como completo.
-                        logToUpdate = logs.find(log => log.status === 'pending');
-                        if (logToUpdate) await hydrationService.updateLogStatus(actorId, logToUpdate.id, 'completed');
-                    }
-                    
-                    if (!logToUpdate) {
-                        formattedData = `Parabéns, ${clientNameToUse}! 🥳 Parece que você já completou todos os seus registros de hidratação para hoje!`;
-                    } else {
-                        const updatedLogs = await hydrationService.getTodaysLogsByClient(actorId);
-                        const prefs = await systemService.getSystemPreferences();
-                        formattedData = formatter.formatHydrationLogDataStructure(updatedLogs, prefs, clientNameToUse);
-                    }
+                    // Após o registro, buscamos o estado atual para mostrar ao usuário.
+                    const logs = await hydrationService.getTodaysLogsByClient(actorId);
+                    const prefs = await systemService.getSystemPreferences();
+                    formattedData = formatter.formatHydrationLogDataStructure(logs, prefs, clientNameToUse);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em LOG_WATER_INTAKE: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui registrar sua água.\nDetalhe: ${e.message}`;
