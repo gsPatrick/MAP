@@ -11,7 +11,6 @@ async function sendFinancialSummariesForPeriod(period) {
   logger.info(`[JOB RESUMO FINANCEIRO] Iniciando geração de resumos (${period})...`);
   
   try {
-    const preferences = await UserPreference.findOne({ order: [['id', 'ASC']] });
     const adminPhoneNumber = process.env.ADMIN_PHONE_FOR_SUMMARIES;
 
     const activeFinancialAccounts = await FinancialAccount.findAll({
@@ -21,41 +20,6 @@ async function sendFinancialSummariesForPeriod(period) {
 
     if (activeFinancialAccounts.length === 0) {
         logger.info('[JOB RESUMO FINANCEIRO] Nenhuma conta financeira ativa para gerar resumo.');
-        return;
-    }
-
-    let dateStart, dateEndFilter;
-    const todayForCalc = new Date(new Date().toISOString().slice(0,10) + 'T00:00:00Z');
-    let titlePeriod;
-    let introMessageTemplate;
-
-    switch (period) {
-      case 'daily':
-        dateStart = new Date(todayForCalc);
-        dateStart.setUTCDate(todayForCalc.getUTCDate() - 1);
-        dateEndFilter = new Date(dateStart); 
-        dateEndFilter.setUTCHours(23,59,59,999);
-        titlePeriod = `Resumo de Ontem (${dateStart.toLocaleDateString('pt-BR', {timeZone: 'UTC'})})`;
-        introMessageTemplate = "Oi, {clientName}! ☀️ Que tal um cafezinho e o resumo do seu dia de ontem na conta *{accountName}*?";
-        break;
-      case 'weekly':
-        dateEndFilter = new Date(todayForCalc); 
-        dateEndFilter.setUTCDate(todayForCalc.getUTCDate() - 1);
-        dateEndFilter.setUTCHours(23,59,59,999);
-        dateStart = new Date(dateEndFilter);
-        dateStart.setUTCDate(dateEndFilter.getUTCDate() - 6);
-        dateStart.setUTCHours(0,0,0,0);
-        titlePeriod = `Resumo da Semana (${dateStart.toLocaleDateString('pt-BR', {timeZone: 'UTC'})} a ${dateEndFilter.toLocaleDateString('pt-BR', {timeZone: 'UTC'})})`;
-        introMessageTemplate = "E aí, {clientName}? 🚀 Fim de semana chegando! Hora de conferir o balanço da sua semana na conta *{accountName}*.";
-        break;
-      case 'monthly':
-        dateEndFilter = new Date(todayForCalc.getUTCFullYear(), todayForCalc.getUTCMonth(), 0);
-        dateStart = new Date(dateEndFilter.getUTCFullYear(), dateEndFilter.getUTCMonth(), 1);
-        titlePeriod = `Resumo de ${dateStart.toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' })}`;
-        introMessageTemplate = "Olá, {clientName}! 🗓️ Mês novo, vida nova! Vamos dar uma olhada em como foi o último mês na sua conta *{accountName}*?";
-        break;
-      default:
-        logger.error(`[JOB RESUMO FINANCEIRO] Período inválido: ${period}`);
         return;
     }
 
@@ -70,19 +34,33 @@ async function sendFinancialSummariesForPeriod(period) {
                 continue;
             }
 
-            const summary = await financialService.getFinancialSummary(account.id, {
-                dateStart: dateStart.toISOString().split('T')[0],
-                dateEnd: dateEndFilter.toISOString().split('T')[0]
-            });
+            // A lógica de data foi movida para o serviço, então passamos apenas o período.
+            const summary = await financialService.getFinancialSummary(account.id, { period });
             
+            let introMessageTemplate;
+            switch (period) {
+                case 'daily':
+                    introMessageTemplate = "Oi, {clientName}! ☀️ Que tal um cafezinho e o resumo do seu dia de ontem na conta *{accountName}*?";
+                    break;
+                case 'weekly':
+                    introMessageTemplate = "E aí, {clientName}? 🚀 Fim de semana chegando! Hora de conferir o balanço da sua semana na conta *{accountName}*.";
+                    break;
+                case 'monthly':
+                    introMessageTemplate = "Olá, {clientName}! 🗓️ Mês novo, vida nova! Vamos dar uma olhada em como foi o último mês na sua conta *{accountName}*?";
+                    break;
+                default:
+                    introMessageTemplate = "Olá, {clientName}, aqui está o resumo da sua conta *{accountName}*:"
+            }
+
             const intro = introMessageTemplate.replace('{clientName}', clientName).replace('{accountName}', account.accountName);
 
-            const body = `*${titlePeriod}*\n\n` +
-                         `✅ *Entradas:* ${formatCurrency(summary.totalEntradas)}\n` +
-                         `❌ *Saídas:* ${formatCurrency(summary.totalSaidas)}\n` +
-                         `⚖️ *Balanço do Período:* ${formatCurrency(summary.saldoEfetivado)}\n\n` +
-                         `🗓️ *A Receber (pendente):* ${formatCurrency(summary.totalAReceberPendente)}\n` +
-                         `🧾 *A Pagar (pendente):* ${formatCurrency(summary.totalAPagarPendente)}`;
+            // <<< CORREÇÃO DOS NOMES DAS PROPRIEDADES >>>
+            const body = `*${summary.periodDescription}*\n\n` +
+                         `✅ *Entradas:* ${formatCurrency(summary.totalIncome)}\n` +
+                         `❌ *Saídas:* ${formatCurrency(summary.totalExpenses)}\n` +
+                         `⚖️ *Balanço do Período:* ${formatCurrency(summary.netBalance)}\n\n` +
+                         `🗓️ *A Receber (total pendente):* ${formatCurrency(summary.totalToReceivePending)}\n` +
+                         `🧾 *A Pagar (total pendente):* ${formatCurrency(summary.totalToPayPending)}`;
 
             const footer = "Para ver mais detalhes, acesse a plataforma! 😉";
 
