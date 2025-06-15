@@ -138,6 +138,41 @@ function formatAppointmentDataStructure(appointment, forReminder = false, client
     return data.trim();
 }
 
+function formatRecurringRuleDataStructure(rule) {
+    if (!rule) return "🧾 Resumo da Transação Recorrente:\n\nDados não disponíveis.";
+    let data = `🧾 Resumo da Transação Recorrente:\n\n`;
+    data += `📜 Descrição: *${rule.description || 'N/A'}*\n`;
+    data += `💰 Valor: ${formatCurrency(rule.value)} (${rule.type})\n`;
+    if (rule.category && rule.category.name) {
+        data += `💼 Categoria: ${rule.category.name}\n`;
+    } else {
+        data += `💼 Categoria: Não especificada\n`;
+    }
+    data += `📅 Data inicial: ${formatDate(rule.startDate)}\n`;
+    if (rule.endDate) {
+        data += `📅 Data final: ${formatDate(rule.endDate)}\n`;
+    }
+    let frequencyText;
+    const freqMap = { daily: 'Diária', weekly: 'Semanal', 'bi-weekly': 'Quinzenal', monthly: 'Mensal', quarterly: 'Trimestral', 'semi-annually': 'Semestral', annually: 'Anual' };
+    frequencyText = freqMap[rule.frequency] || rule.frequency;
+    if (rule.interval && rule.interval > 1) {
+        const pluralPeriodMap = { daily: 'dias', weekly: 'semanas', 'bi-weekly': 'quinzenas', monthly: 'meses', quarterly: 'trimestres', 'semi-annually': 'semestres', annually: 'anos' };
+        frequencyText = `A cada ${rule.interval} ${pluralPeriodMap[rule.frequency] || (rule.frequency ? rule.frequency.replace('ly', 's') : 'períodos')}`;
+    }
+    data += `🔄 Frequência: ${frequencyText}\n`;
+    if (rule.dayOfWeek !== null && rule.dayOfWeek !== undefined && (rule.frequency === 'weekly' || rule.frequency === 'bi-weekly')) {
+        const days = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+        data += `🗓️ Dia da Semana: ${days[rule.dayOfWeek]}\n`;
+    }
+    if (rule.dayOfMonth && rule.frequency === 'monthly') {
+        data += `🗓️ Dia do Mês: ${rule.dayOfMonth}\n`;
+    }
+    data += `➡️ Próximo Vencimento: ${rule.nextDueDate ? formatDate(rule.nextDueDate) : 'N/A (Regra Inativa ou Concluída)'}\n`;
+    data += `⚙️ Criação Automática: ${rule.autoCreateTransaction ? 'Sim (Gera transação)' : 'Não (Apenas Lembrete)'}\n`;
+    data += `🚦 Status da Regra: ${translateStatus(rule.isActive ? 'Active' : 'Inactive')}\n`;
+    return data.trim();
+}
+
 function formatRecurringRuleHistoryDataStructure(history, rule) {
     const ruleName = rule.description || history.ruleDescription;
 
@@ -188,6 +223,7 @@ function formatRecurringRuleHistoryDataStructure(history, rule) {
 
     return data.trim();
 }
+
 
 function formatCreditCardDataStructure(card) {
     if (!card) return "💳 Resumo do Cartão:\n\nDados não disponíveis.";
@@ -617,9 +653,10 @@ module.exports = {
     formatCategorySummaryDataStructure,
     formatListFinancialCategoriesDataStructure,
     formatListProductsDataStructure,
-    formatRecurringRuleHistoryDataStructure,
     formatHydrationLogDataStructure,
     formatAffiliateDashboardDataStructure,
     formatSubscriptionDataStructure,
-    formatFinancialCategoryDataStructure
+    formatFinancialCategoryDataStructure,
+    formatRecurringRuleHistoryDataStructure,
+    formatRecurringRuleDataStructure
 };
