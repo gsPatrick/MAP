@@ -90,69 +90,20 @@ async function createRecurringRule(financialAccountId, ruleData) {
 async function getAllRecurringRules(financialAccountId, queryParams = {}) {
   try {
     await validateOwningFinancialAccount(financialAccountId);
-    
-    // Desestruturação dos parâmetros, incluindo os novos de data e período
-    const { 
-        isActive, frequency, type, descriptionSearch, 
-        dateStart, dateEnd, period,
-        sortBy = 'nextDueDate', sortOrder = 'ASC' 
-    } = queryParams;
-
+    const { isActive, frequency, type, sortBy = 'nextDueDate', sortOrder = 'ASC' } = queryParams;
     const whereConditions = { financialAccountId };
 
     if (isActive !== undefined) {
       whereConditions.isActive = (isActive === 'true' || isActive === true);
     }
-    if (frequency) {
-        whereConditions.frequency = frequency;
-    }
-    if (type) {
-        whereConditions.type = type;
-    }
-    if (descriptionSearch) {
-        whereConditions.description = { [Op.iLike]: `%${descriptionSearch}%` };
-    }
-
-    // =================================================================
-    // <<< LÓGICA DE FILTRO DE DATA PARA RECORRÊNCIAS >>>
-    // =================================================================
-    let finalDateStart = dateStart;
-    let finalDateEnd = dateEnd;
-
-    if (period) {
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = now.getMonth(); // 0-11
-
-        if (period === "este_mes") {
-            finalDateStart = new Date(year, month, 1).toISOString().split('T')[0];
-            finalDateEnd = new Date(year, month + 1, 0).toISOString().split('T')[0];
-        } else if (period === "proximo_mes") {
-            finalDateStart = new Date(year, month + 1, 1).toISOString().split('T')[0];
-            finalDateEnd = new Date(year, month + 2, 0).toISOString().split('T')[0];
-        } else if (period === "este_ano") {
-            finalDateStart = new Date(year, 0, 1).toISOString().split('T')[0];
-            finalDateEnd = new Date(year, 11, 31).toISOString().split('T')[0];
-        }
-        // Adicione outras lógicas de período (ex: "proximos_30_dias") se desejar
-    }
-
-    // Aplica os filtros de data ao campo 'nextDueDate'
-    if (finalDateStart) {
-        whereConditions.nextDueDate = { ...whereConditions.nextDueDate, [Op.gte]: finalDateStart };
-    }
-    if (finalDateEnd) {
-        whereConditions.nextDueDate = { ...whereConditions.nextDueDate, [Op.lte]: finalDateEnd };
-    }
-    // =================================================================
-    // <<< FIM DA LÓGICA DE FILTRO DE DATA >>>
-    // =================================================================
+    if (frequency) whereConditions.frequency = frequency;
+    if (type) whereConditions.type = type;
 
     const validSortOrders = ['ASC', 'DESC'];
     const order = [[sortBy, validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'ASC']];
 
-    // Usamos findAndCountAll para suportar paginação futura, se necessário
-    const { count, rows } = await RecurringTransactionRule.findAndCountAll({
+
+    const rules = await RecurringTransactionRule.findAll({
       where: whereConditions,
       include: [
         { model: FinancialCategory, as: 'category', attributes: ['id', 'name'] }
@@ -160,13 +111,8 @@ async function getAllRecurringRules(financialAccountId, queryParams = {}) {
       order: order,
     });
 
-    logger.info(`Listadas ${rows.length} de um total de ${count} regras de recorrência para FinancialAccount ID ${financialAccountId}.`);
-    
-    return {
-        rules: rows.map(r => r.toJSON()),
-        totalItems: count
-    };
-
+    logger.info(`Listadas ${rules.length} regras de recorrência para FinancialAccount ID ${financialAccountId}.`);
+    return rules.map(r => r.toJSON());
   } catch (error) {
     logger.error(`Erro ao listar regras de recorrência para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error });
     if (!error.statusCode) error.statusCode = 500;
