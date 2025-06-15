@@ -560,6 +560,7 @@ async function deleteTransaction(financialAccountId, transactionId) {
     }
 }
 
+
 async function getFinancialSummary(financialAccountId, filters = {}) {
   try {
     const account = await validateAndGetFinancialAccount(financialAccountId, null, [{ model: Client, as: 'ownerClient' }]);
@@ -571,18 +572,24 @@ async function getFinancialSummary(financialAccountId, filters = {}) {
     const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
 
     if (period) {
+        // =================================================================
+        // <<< MUDANÇA PRINCIPAL AQUI >>>
+        // =================================================================
         if (period === "hoje" || period === 'daily') {
-            const dateToUse = period === 'daily' ? new Date(today.setDate(today.getDate() - 1)) : today;
+            // Agora, 'daily' e 'hoje' se referem ao dia atual.
+            const dateToUse = today; 
             dateStart = dateToUse.toISOString().split('T')[0];
-            dateEnd = dateStart;
-            periodDescription = `Resumo de ${period === 'daily' ? 'Ontem' : 'Hoje'} (${new Date(dateStart + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' })})`;
-        } else if (period === "este_mes") {
+            dateEnd = dateStart; // O fim é o mesmo que o início para um único dia.
+            periodDescription = `Resumo de Hoje (${new Date(dateStart + 'T00:00:00Z').toLocaleDateString('pt-BR', { timeZone: 'UTC' })})`;
+        } 
+        // =================================================================
+        
+        else if (period === "este_mes") {
             dateStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)).toISOString().split('T')[0];
             dateEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0)).toISOString().split('T')[0];
             periodDescription = `Este Mês (${new Date(dateStart + 'T00:00:00Z').toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' })})`;
         } else if (period === 'weekly') {
             const endDateWeekly = new Date(today);
-            endDateWeekly.setUTCDate(today.getUTCDate() - 1);
             const startDateWeekly = new Date(endDateWeekly);
             startDateWeekly.setUTCDate(endDateWeekly.getUTCDate() - 6);
             dateStart = startDateWeekly.toISOString().split('T')[0];
@@ -593,12 +600,13 @@ async function getFinancialSummary(financialAccountId, filters = {}) {
             const startDateMonthly = new Date(endDateMonthly.getUTCFullYear(), endDateMonthly.getUTCMonth(), 1);
             dateStart = startDateMonthly.toISOString().split('T')[0];
             dateEnd = endDateMonthly.toISOString().split('T')[0];
-            periodDescription = `Mês Passado (${dateStart.toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' })})`;
+            periodDescription = `Mês Passado (${new Date(dateStart + 'T00:00:00Z').toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' })})`;
         }
     } else if (dateStart && dateEnd) {
       periodDescription = `De ${formatDate(dateStart)} a ${formatDate(dateEnd)}`;
     }
 
+    // O resto da função continua exatamente o mesmo...
     const baseWhere = { financialAccountId };
     if (financialCategoryId) baseWhere.financialCategoryId = financialCategoryId;
     
@@ -606,15 +614,12 @@ async function getFinancialSummary(financialAccountId, filters = {}) {
     if (dateStart) wherePeriod.transactionDate = { [Op.gte]: dateStart };
     if (dateEnd) wherePeriod.transactionDate = { ...wherePeriod.transactionDate, [Op.lte]: dateEnd };
 
-    // --- CÁLCULOS NO PERÍODO ---
     const totalIncome = await FinancialTransaction.sum('value', { where: { ...baseWhere, ...wherePeriod, type: 'Entrada' } });
     const totalExpenses = await FinancialTransaction.sum('value', { where: { ...baseWhere, ...wherePeriod, type: 'Saída' } });
 
-    // --- CÁLCULOS DE PENDÊNCIAS (GERAL, NÃO SÓ DO PERÍODO) ---
     const totalToReceivePending = await FinancialTransaction.sum('value', { where: { ...baseWhere, type: 'Entrada', isPayableOrReceivable: true, isPaidOrReceived: false } });
     const totalToPayPending = await FinancialTransaction.sum('value', { where: { ...baseWhere, type: 'Saída', isPayableOrReceivable: true, isPaidOrReceived: false } });
     
-    // --- Saldo Total da Conta (aproximação do saldo real) ---
     const allIncomes = await FinancialTransaction.sum('value', { where: { financialAccountId, type: 'Entrada' } });
     const allExpenses = await FinancialTransaction.sum('value', { where: { financialAccountId, type: 'Saída' } });
     const accountTotalBalance = (allIncomes || 0) - (allExpenses || 0);

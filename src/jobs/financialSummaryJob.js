@@ -40,7 +40,7 @@ async function sendFinancialSummariesForPeriod(period) {
             let introMessageTemplate;
             switch (period) {
                 case 'daily':
-                    introMessageTemplate = "Oi, {clientName}! ☀️ Que tal um cafezinho e o resumo do seu dia de ontem na conta *{accountName}*?";
+                    introMessageTemplate = "Oi, {clientName}! ☀️ Que tal um cafezinho e o resumo do seu dia na conta *{accountName}*?";
                     break;
                 case 'weekly':
                     introMessageTemplate = "E aí, {clientName}? 🚀 Fim de semana chegando! Hora de conferir o balanço da sua semana na conta *{accountName}*.";
