@@ -535,6 +535,79 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 43. DELETE_FINANCIAL_ACCOUNT (Ação do DONO da conta):
     - accountNameToDelete: string (OBRIGATÓRIO, nome da conta financeira a ser deletada. EXIGE CONFIRMAÇÃO EXPLÍCITA DO USUÁRIO NO FRONTEND/WHATSAPP SERVICE)
 
+    44. GET_MONTHLY_TREND: (Obter a tendência de receitas vs. despesas dos últimos meses)
+    - numberOfMonths: integer (opcional, default: 6)
+
+45. GET_EXPENSE_CATEGORY_SUMMARY: (Ver um resumo de gastos por categoria)
+    - dateStart: "YYYY-MM-DD" (opcional, default: início do mês atual)
+    - dateEnd: "YYYY-MM-DD" (opcional, default: fim do mês atual)
+
+46. GET_INCOME_CATEGORY_SUMMARY: (Ver um resumo de receitas por categoria)
+    - dateStart: "YYYY-MM-DD" (opcional, default: início do mês atual)
+    - dateEnd: "YYYY-MM-DD" (opcional, default: fim do mês atual)
+
+47. CREATE_FINANCIAL_CATEGORY: (Criar uma nova categoria financeira)
+    - name: string (OBRIGATÓRIO)
+    - parentCategoryName: string (opcional, nome da categoria pai para criar subcategorias)
+
+48. LIST_FINANCIAL_CATEGORIES: (Listar todas as categorias financeiras cadastradas)
+    
+49. UPDATE_FINANCIAL_CATEGORY: (Atualizar uma categoria financeira existente)
+    - categoryNameToUpdate: string (OBRIGATÓRIO, nome da categoria a ser alterada)
+    - newName: string (opcional, o novo nome para a categoria)
+    - newParentCategoryName: string (opcional, para mover a categoria para baixo de outra. Pode ser null para mover para a raiz)
+    
+50. DELETE_FINANCIAL_CATEGORY: (Excluir uma categoria financeira)
+    - categoryNameToDelete: string (OBRIGATÓRIO)
+    - actionForTransactions: 'restrict', 'set_null', 'delete' (opcional, default: 'set_null')
+    - actionForSubcategories: 'restrict', 'promote', 'delete' (opcional, default: 'restrict')
+
+51. LIST_PRODUCTS (SÓ PARA CONTAS PJ/MEI):
+    - searchTerm: string (opcional, para buscar por nome ou código)
+    - isActive: boolean (opcional, default: true)
+    - limit: integer (opcional, default: 5)
+    
+52. GET_PRODUCT_DETAILS (SÓ PARA CONTAS PJ/MEI):
+    - productNameOrCode: string (OBRIGATÓRIO)
+
+53. DELETE_PRODUCT (SÓ PARA CONTAS PJ/MEI):
+    - productNameOrCode: string (OBRIGATÓRIO)
+    
+54. DELETE_RECURRING_RULE: (Excluir uma regra de recorrência)
+    - ruleDescription: string (OBRIGATÓRIO, descrição para encontrar a regra a ser excluída)
+
+55. GET_RECURRING_RULE_HISTORY: (Ver o histórico de transações geradas por uma recorrência)
+    - ruleDescription: string (OBRIGATÓRIO)
+    - limit: integer (opcional, default: 5)
+    
+56. LOG_WATER_INTAKE: (Registrar consumo de água)
+    - amountInMl: integer (opcional. Se não informado, registra o próximo da lista. Se informado, registra com este valor)
+
+57. GET_HYDRATION_LOG: (Ver o progresso do consumo de água do dia)
+    
+58. DELETE_BUSINESS_CLIENT (SÓ PARA CONTAS PJ/MEI):
+    - clientNameToDelete: string (OBRIGATÓRIO)
+
+59. GET_ACTIVE_SUBSCRIPTION: (Consultar os detalhes do plano/assinatura atual do sistema)
+    
+60. GET_AFFILIATE_DASHBOARD: (Consultar o painel de afiliado)
+    
+61. CREATE_MOTIVATIONAL_PHRASE: (Adicionar uma nova frase motivacional pessoal)
+    - text: string (OBRIGATÓRIO)
+    - author: string (opcional)
+
+62. UPDATE_MOTIVATIONAL_PHRASE: (Editar uma frase motivacional pessoal)
+    - phraseIdToUpdate: integer (OBRIGATÓRIO, a IA deve pedir o ID se não souber)
+    - newText: string (opcional)
+    - newAuthor: string (opcional)
+    - isActive: boolean (opcional)
+    
+63. DELETE_MOTIVATIONAL_PHRASE: (Apagar uma frase motivacional pessoal)
+    - phraseIdToDelete: integer (OBRIGATÓRIO)
+
+64. DELETE_FINANCIAL_TRANSACTION: (Excluir uma transação financeira)
+    - transactionId: integer (OBRIGATÓRIO, a IA deve buscar pelo ID ou descrição se não fornecido)
+    - description: string (opcional, para buscar a transação se o ID não for conhecido)
 
 **FLUXO DE DECISÃO:**
 1.  A mensagem do usuário é uma pergunta sobre **COMO** usar o sistema? PRIORIZE o **MODO INSTRUTOR** (explicado no topo) e responda com \`GENERAL_QUESTION_OR_HELP\`.
