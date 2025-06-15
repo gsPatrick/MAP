@@ -138,38 +138,54 @@ function formatAppointmentDataStructure(appointment, forReminder = false, client
     return data.trim();
 }
 
-function formatRecurringRuleDataStructure(rule) {
-    if (!rule) return "🧾 Resumo da Transação Recorrente:\n\nDados não disponíveis.";
-    let data = `🧾 Resumo da Transação Recorrente:\n\n`;
-    data += `📜 Descrição: *${rule.description || 'N/A'}*\n`;
-    data += `💰 Valor: ${formatCurrency(rule.value)} (${rule.type})\n`;
-    if (rule.category && rule.category.name) {
-        data += `💼 Categoria: ${rule.category.name}\n`;
-    } else {
-        data += `💼 Categoria: Não especificada\n`;
+function formatRecurringRuleHistoryDataStructure(history, rule) {
+    const ruleName = rule.description || history.ruleDescription;
+
+    // Cenário 1: Nenhuma transação foi gerada ainda.
+    if (!history || !history.transactions || history.transactions.length === 0) {
+        let data = `📜 Histórico da Regra "${ruleName}":\n\n`;
+        data += `Tudo certo! Esta é uma recorrência programada. 👍\n\n`;
+        data += `O primeiro lançamento de *${formatCurrency(rule.value)}* será criado automaticamente em *${formatDate(rule.nextDueDate)}*.`;
+        return data;
     }
-    data += `📅 Data inicial: ${formatDate(rule.startDate)}\n`;
-    if (rule.endDate) {
-        data += `📅 Data final: ${formatDate(rule.endDate)}\n`;
+
+    // Se chegamos aqui, existem transações. Vamos analisá-las.
+    const pendingTransactions = history.transactions.filter(tx => !tx.isPaidOrReceived);
+    const paidTransactions = history.transactions.filter(tx => tx.isPaidOrReceived);
+
+    let data = `📜 Histórico da Regra "${ruleName}":\n\n`;
+
+    // Cenário 2: Existem transações, mas todas estão pendentes.
+    if (pendingTransactions.length > 0 && paidTransactions.length === 0) {
+        data += `Atenção! Você tem pagamentos pendentes para esta recorrência:\n`;
+        pendingTransactions.forEach((tx, index) => {
+            data += `\n${index + 1}️⃣ *${formatCurrency(tx.value)}* com vencimento em *${formatDate(tx.dueDate)}* 🗓️`;
+        });
+        data += `\n\nPara confirmar o pagamento, diga "paguei a ${ruleName}".`;
+    } 
+    // Cenário 3: Existem transações pagas (e talvez algumas pendentes também).
+    else {
+        if (paidTransactions.length > 0) {
+            data += `✅ Pagamentos já realizados:\n`;
+            paidTransactions.slice(0, 3).forEach((tx) => { // Mostra os 3 últimos pagos
+                data += `  - ${formatCurrency(tx.value)} em ${formatDate(tx.paymentDate)}\n`;
+            });
+        }
+        if (pendingTransactions.length > 0) {
+            data += `\n🗓️ Próximos pagamentos pendentes:\n`;
+            pendingTransactions.slice(0, 2).forEach((tx) => { // Mostra os 2 próximos pendentes
+                data += `  - ${formatCurrency(tx.value)} com vencimento em *${formatDate(tx.dueDate)}*\n`;
+            });
+        }
     }
-    let frequencyText;
-    const freqMap = { daily: 'Diária', weekly: 'Semanal', 'bi-weekly': 'Quinzenal', monthly: 'Mensal', quarterly: 'Trimestral', 'semi-annually': 'Semestral', annually: 'Anual' };
-    frequencyText = freqMap[rule.frequency] || rule.frequency;
-    if (rule.interval && rule.interval > 1) {
-        const pluralPeriodMap = { daily: 'dias', weekly: 'semanas', 'bi-weekly': 'quinzenas', monthly: 'meses', quarterly: 'trimestres', 'semi-annually': 'semestres', annually: 'anos' };
-        frequencyText = `A cada ${rule.interval} ${pluralPeriodMap[rule.frequency] || (rule.frequency ? rule.frequency.replace('ly', 's') : 'períodos')}`;
+
+    // Adiciona informação sobre o próximo lançamento automático, se aplicável
+    if (rule.isActive && new Date(rule.nextDueDate) > new Date()) {
+        data += `\n\n➡️ O próximo lançamento automático será em *${formatDate(rule.nextDueDate)}*.`;
+    } else if (!rule.isActive) {
+        data += `\n\n(Esta regra de recorrência está inativa e não irá gerar novos lançamentos).`;
     }
-    data += `🔄 Frequência: ${frequencyText}\n`;
-    if (rule.dayOfWeek !== null && rule.dayOfWeek !== undefined && (rule.frequency === 'weekly' || rule.frequency === 'bi-weekly')) {
-        const days = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
-        data += `🗓️ Dia da Semana: ${days[rule.dayOfWeek]}\n`;
-    }
-    if (rule.dayOfMonth && rule.frequency === 'monthly') {
-        data += `🗓️ Dia do Mês: ${rule.dayOfMonth}\n`;
-    }
-    data += `➡️ Próximo Vencimento: ${rule.nextDueDate ? formatDate(rule.nextDueDate) : 'N/A (Regra Inativa ou Concluída)'}\n`;
-    data += `⚙️ Criação Automática: ${rule.autoCreateTransaction ? 'Sim (Gera transação)' : 'Não (Apenas Lembrete)'}\n`;
-    data += `🚦 Status da Regra: ${translateStatus(rule.isActive ? 'Active' : 'Inactive')}\n`;
+
     return data.trim();
 }
 
