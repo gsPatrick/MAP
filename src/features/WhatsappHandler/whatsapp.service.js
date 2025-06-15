@@ -341,31 +341,23 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             const buttonId = rawPayload.selectedButtonId;
             logger.info(`[MAESTRO] Botão clicado por ${senderPhone}: ID '${buttonId}'`);
 
-            // Delega para o novo handler de botões no action.handler.js
             const buttonResult = await actionHandler.handleButtonInteraction(state, buttonId, senderPhone);
 
-            // Analisa o resultado do handler e decide o que fazer
             if (buttonResult.stateUpdated) {
-                // Se o estado foi modificado (ex: entrou em modo de edição), salva e encerra.
                 conversationState.set(senderPhone, buttonResult.newState);
                 return; 
             }
             if (buttonResult.flowCompleted) {
-                // Se a ação foi finalizada (ex: item excluído), apenas encerra.
                 return;
             }
             if (buttonResult.repromptWith) {
-                // Se a ação deve ser tratada como uma nova mensagem do usuário, atualiza a variável e continua o fluxo.
                 logger.info(`[MAESTRO] Reprocessando clique de botão como nova mensagem: "${buttonResult.repromptWith}"`);
                 messageText = buttonResult.repromptWith;
-                // A execução continua para a Etapa 5 (IA)
             } else {
-                // Se a ação do botão não foi reconhecida ou não requer mais processamento, encerra.
                 return;
             }
         }
 
-        // Salva a mensagem do usuário no histórico, SE não for um clique de botão que já foi tratado
         if (!(rawPayload && rawPayload.selectedButtonId)) {
             state.messageHistory.push({ role: 'user', content: messageText || "" }); 
             if (state.messageHistory.length > MAX_STATE_HISTORY) {
@@ -441,6 +433,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
         // ETAPA 4: Delegar para a IA e para o Action Handler
         const availableFinancialCategoriesForAI = await financialCategoryService.getAllCategoriesForAccountAI(state.activeFinancialAccountId);
+        
         const aiContext = {
             currentFinancialAccountId: state.activeFinancialAccountId,
             currentFinancialAccountType: state.activeFinancialAccountType,
@@ -450,17 +443,26 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             conversationHistory: state.messageHistory.slice(-MAX_HISTORY_FOR_AI * 2),
             editingResource: state.editingResource,
             availableFinancialCategories: availableFinancialCategoriesForAI,
+            // Fornece a Ação Pendente para a IA, se houver
+            pendingAction: state.currentAction === 'awaiting_clarification_response' ? state.pendingConfirmation : null
         };
+
         const aiResponse = await aiModelService.interpretUserMessage(messageText, aiContext);
         state.lastAiResponse = aiResponse;
 
-        let aiMessageIntro = aiResponse.overall_summary_suggestion || `Ok, ${state.clientName}!`;
-        let multipleActionBodiesList = [];
-        let resourceForButtonsContext = null;
         let finalMessageToSend = "";
-        const isOwnerActingOnOwnBehalfGlobal = !state.isSharedAccessContext || state.ownerClientIdForContext === actorClient.id;
 
+        // ETAPA 5: Montar e Enviar a Resposta Final (Lógica Refatorada com Continuidade de Contexto)
         if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
+            // AÇÃO FOI COMPLETADA! Limpa qualquer ação pendente.
+            state.pendingConfirmation = null;
+            state.currentAction = null;
+
+            let aiMessageIntro = aiResponse.overall_summary_suggestion || `Ok, ${state.clientName}!`;
+            let multipleActionBodiesList = [];
+            let resourceForButtonsContext = null;
+            const isOwnerActingOnOwnBehalfGlobal = !state.isSharedAccessContext || state.ownerClientIdForContext === actorClient.id;
+
             for (const detectedAction of aiResponse.detected_actions) {
                 const actionName = detectedAction.action || detectedAction.action_type;
                 
@@ -488,51 +490,71 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     state.activeFinancialAccountType = newAccount.accountType || newAccount.type;
                 }
             }
-        }
-        
-        // ETAPA 5: Montar e Enviar a Resposta Final
-        let structuredDataBody = multipleActionBodiesList.join("\n\n---\n\n");
-        if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
-            aiMessageIntro = aiResponse.reply_to_user_suggestion || `Opa, ${state.clientName}! Para continuarmos, preciso de um detalhe:`;
-            structuredDataBody = structuredDataBody ? `${structuredDataBody}\n\n---\n\n${aiResponse.clarifications_needed[0].clarification_question}` : aiResponse.clarifications_needed[0].clarification_question;
-            state.currentAction = 'awaiting_clarification_response';
-        }
 
-        finalMessageToSend = aiMessageIntro.trim();
-        if (structuredDataBody && structuredDataBody.trim() !== "") {
-            finalMessageToSend += `\n\n${structuredDataBody.trim()}`;
-        }
-        
-        if (resourceForButtonsContext?.id === 'pending_confirmation') {
-            finalMessageToSend = resourceForButtonsContext.data.message;
-            state.pendingConfirmation = resourceForButtonsContext.data;
-            state.currentAction = 'awaiting_confirmation';
-        }
-
-        const platformLinkFooter = formatter.formatPlatformLink();
-        const platformBaseUrl = process.env.PLATFORM_URL || 'map-nocontrole.com.br/painel';
-
-        if (!finalMessageToSend.includes(platformBaseUrl) && resourceForButtonsContext?.type !== 'system_action') {
-             finalMessageToSend += `\n\n---\n\n${platformLinkFooter.trim()}`;
-        }
-        finalMessageToSend = finalMessageToSend.replace(/\n{3,}/g, '\n\n').trim();
-
-        if (finalMessageToSend) {
-            state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
-
-            if (resourceForButtonsContext && resourceForButtonsContext.type !== 'system_action' && resourceForButtonsContext.id) {
-                const buttons = [
-                    { id: `edit:${resourceForButtonsContext.type}:${resourceForButtonsContext.id}`, label: '✏️ Editar' },
-                    { id: `delete:${resourceForButtonsContext.type}:${resourceForButtonsContext.id}`, label: '🗑️ Excluir' }
-                ];
-                if (resourceForButtonsContext.type === 'credit_card') {
-                    buttons.push({ id: `details:${resourceForButtonsContext.type}:${resourceForButtonsContext.id}`, label: 'Ver Fatura/Detalhes' });
-                }
-                await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, "Opções:");
-            } else {
-                await sendWhatsappMessage(senderPhone, finalMessageToSend);
+            let structuredDataBody = multipleActionBodiesList.join("\n\n---\n\n");
+            finalMessageToSend = aiMessageIntro.trim();
+            if (structuredDataBody && structuredDataBody.trim() !== "") {
+                finalMessageToSend += `\n\n${structuredDataBody.trim()}`;
             }
+
+            // Lógica para botões de confirmação (ex: exclusão)
+            if (resourceForButtonsContext?.id === 'pending_confirmation') {
+                finalMessageToSend = resourceForButtonsContext.data.message;
+                state.pendingConfirmation = resourceForButtonsContext.data;
+                state.currentAction = 'awaiting_confirmation';
+            }
+
+            // Lógica para adicionar link da plataforma e botões de ação
+            const platformLinkFooter = formatter.formatPlatformLink();
+            const platformBaseUrl = process.env.PLATFORM_URL || 'map-nocontrole.com.br/painel';
+
+            if (!finalMessageToSend.includes(platformBaseUrl) && resourceForButtonsContext?.type !== 'system_action') {
+                 finalMessageToSend += `\n\n---\n\n${platformLinkFooter.trim()}`;
+            }
+            finalMessageToSend = finalMessageToSend.replace(/\n{3,}/g, '\n\n').trim();
+
+            if (finalMessageToSend) {
+                state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
+
+                if (resourceForButtonsContext && resourceForButtonsContext.type !== 'system_action' && resourceForButtonsContext.id && resourceForButtonsContext.id !== 'pending_confirmation') {
+                    const buttons = [
+                        { id: `edit:${resourceForButtonsContext.type}:${resourceForButtonsContext.id}`, label: '✏️ Editar' },
+                        { id: `delete:${resourceForButtonsContext.type}:${resourceForButtonsContext.id}`, label: '🗑️ Excluir' }
+                    ];
+                    if (resourceForButtonsContext.type === 'credit_card') {
+                        buttons.push({ id: `details:${resourceForButtonsContext.type}:${resourceForButtonsContext.id}`, label: 'Ver Fatura/Detalhes' });
+                    }
+                    await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, "Opções:");
+                } else {
+                    await sendWhatsappMessage(senderPhone, finalMessageToSend);
+                }
+            }
+
+        } else if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
+            // AÇÃO ESTÁ INCOMPLETA, PRECISAMOS DE MAIS DADOS
+            const clarification = aiResponse.clarifications_needed[0];
+            
+            // Salva o estado pendente para a próxima mensagem
+            state.pendingConfirmation = {
+                action: clarification.original_intent_action_suggestion,
+                parameters: clarification.parameters_so_far,
+                timestamp: Date.now()
+            };
+            state.currentAction = 'awaiting_clarification_response';
+            
+            finalMessageToSend = clarification.clarification_question;
+            state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
+            await sendWhatsappMessage(senderPhone, finalMessageToSend);
+        
+        } else {
+            // Nenhuma ação detectada (saudação, etc.). Limpa qualquer estado pendente por segurança.
+            state.pendingConfirmation = null;
+            state.currentAction = null;
+            finalMessageToSend = aiResponse.reply_to_user_suggestion || `Olá, ${state.clientName}! Como posso te ajudar hoje?`;
+            state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
+            await sendWhatsappMessage(senderPhone, finalMessageToSend);
         }
+
     } catch (error) {
         logger.error(`[WHATSAPP HANDLER] Erro CRÍTICO processando msg de ${senderPhone}: ${error.message}`, { stack: error.stack?.substring(0,1000) });
         const errorMsg = `Puxa vida, ${state?.clientName || 'você'}! 😬 Tive um curto-circuito aqui... Minha equipe já foi notificada. Tente novamente em um instante.`;
