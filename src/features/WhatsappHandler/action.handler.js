@@ -748,29 +748,36 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
             
-            case 'LIST_RECURRING_RULES': {
+          case 'LIST_RECURRING_RULES': {
                 try {
                     const filterParamsRules = {
                         isActive: params.isActive !== undefined ? params.isActive : null,
                         type: params.type,
-                        limit: params.limit || 5, page: params.page || 1
+                        limit: params.limit || 5,
+                        // Adicionamos a busca por descrição aqui também, para unificar
+                        descriptionSearch: params.ruleDescription 
                     };
                     
-                    const { rules, totalItems: totalRules } = await recurringTransactionService.getAllRecurringRules(state.activeFinancialAccountId, filterParamsRules);
+                    const { rules, totalItems } = await recurringTransactionService.getAllRecurringRules(state.activeFinancialAccountId, filterParamsRules);
 
-                    if (totalRules === 0) {
-                        formattedData = "Nenhuma regra de recorrência encontrada. Que tal criar uma? Diga, por exemplo: \"criar recorrência de aluguel, saída de 1500, mensal, todo dia 5\".";
-                    } else {
-                        let listTextRules = `📋 Você tem ${totalRules} regra(s) de recorrência:\n`;
-                        for (const rule of rules) {
-                            listTextRules += `\n🔄 *${rule.description}* - ${formatter.formatCurrency(rule.value)} (${rule.type})\n    (Próx: ${formatter.formatDate(rule.nextDueDate)}, Freq: ${rule.frequency}, ID: ${rule.id})`;
-                            if(!rule.isActive) listTextRules += " (Inativa)";
-                        }
-                        formattedData = listTextRules.trim();
-                        if (totalRules > rules.length) {
-                             formattedData += `\n\nE mais ${totalRules - rules.length} regras. Peça para ver mais ou veja tudo na plataforma!`;
-                        }
+                    if (totalItems === 0) {
+                        formattedData = "Nenhuma regra de recorrência encontrada com esses critérios. Que tal criar uma?";
+                        break;
                     }
+
+                    // <<< LÓGICA DE ENRIQUECIMENTO >>>
+                    // Para cada regra encontrada, buscamos um resumo do seu histórico.
+                    const enrichedRules = await Promise.all(rules.map(async (rule) => {
+                        const history = await recurringTransactionService.getRecurringRuleHistory(state.activeFinancialAccountId, rule.id, { limit: 1 }); // Pega só o último para saber o status
+                        return {
+                            ...rule,
+                            hasPending: history.transactions.some(tx => !tx.isPaidOrReceived),
+                            hasHistory: history.transactions.length > 0
+                        };
+                    }));
+                    
+                    formattedData = formatter.formatRichRecurringRuleList(enrichedRules, totalItems, clientNameToUse);
+
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em LIST_RECURRING_RULES: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui listar as regras de recorrência.\nDetalhe: ${e.message}`;
@@ -996,29 +1003,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
             
-            case 'GET_RECURRING_RULE_HISTORY': {
-                try {
-                    const ruleDescription = params.ruleDescription;
-                    if (!ruleDescription) {
-                        throw { statusCode: 400, message: "Preciso da descrição da regra para buscar o histórico." };
-                    }
-                    const { rules } = await recurringTransactionService.getAllRecurringRules(state.activeFinancialAccountId, { descriptionSearch: ruleDescription });
-                    if (!rules || rules.length === 0) {
-                        throw { statusCode: 404, message: `Não encontrei uma regra recorrente com descrição parecida com "${ruleDescription}".` };
-                    }
-                    if (rules.length > 1) {
-                         throw { statusCode: 409, message: `Encontrei múltiplas regras com essa descrição. Por favor, seja mais específico.` };
-                    }
-                    const ruleId = rules[0].id;
-                    const history = await recurringTransactionService.getRecurringRuleHistory(state.activeFinancialAccountId, ruleId, { limit: params.limit || 5 });
-                    formattedData = formatter.formatRecurringRuleHistoryDataStructure(history);
-                } catch (e) {
-                     logger.error(`[ACTION HANDLER] Erro em GET_RECURRING_RULE_HISTORY: ${e.message}`, { error: e, paramsUsed: params });
-                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui buscar o histórico da regra.\nDetalhe: ${e.message}`;
-                }
-                break;
-            }
-
             case 'GET_HYDRATION_LOG': {
                 try {
                     const logs = await hydrationService.getTodaysLogsByClient(actorId);

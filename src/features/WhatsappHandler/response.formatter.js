@@ -623,6 +623,36 @@ function formatFinancialCategoryDataStructure(category) {
     return data.trim();
 }
 
+function formatRichRecurringRuleList(enrichedRules, totalItems, clientName) {
+    if (!enrichedRules || enrichedRules.length === 0) {
+        return `Nenhuma regra de recorrência encontrada, ${clientName}.`;
+    }
+
+    let data = `📋 Aqui estão suas recorrências, ${clientName}:\n`;
+
+    enrichedRules.forEach(rule => {
+        data += `\n🔄 *${rule.description}* - ${formatCurrency(rule.value)} (${rule.type})`;
+        
+        if (!rule.isActive) {
+            data += `\n   Status: Inativa ❌`;
+        } else if (rule.hasPending) {
+            data += `\n   Status: Pagamento Pendente ❗️`;
+        } else if (!rule.hasHistory) {
+            data += `\n   Próximo Lançamento: *${formatDate(rule.nextDueDate)}* 🗓️`;
+        } else {
+            data += `\n   Status: Em dia ✅`;
+        }
+        data += ` (ID: ${rule.id})\n`;
+    });
+
+    if (totalItems > enrichedRules.length) {
+        data += `\n... e mais ${totalItems - enrichedRules.length} regra(s).`;
+    }
+
+    return data.trim();
+}
+
+
 // Exporta todas as funções em um único objeto
 module.exports = {
     formatDate,
@@ -658,5 +688,6 @@ module.exports = {
     formatSubscriptionDataStructure,
     formatFinancialCategoryDataStructure,
     formatRecurringRuleHistoryDataStructure,
-    formatRecurringRuleDataStructure
+    formatRecurringRuleDataStructure,
+    formatRichRecurringRuleList
 };

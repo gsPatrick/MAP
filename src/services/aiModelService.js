@@ -375,10 +375,11 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     - isActive: boolean (opcional, default: true para listar apenas ativos)
     - includeSummary: boolean (opcional, default: true para tentar incluir limite disponível)
 
-16. LIST_RECURRING_RULES: (Listar regras de recorrência)
+16. LIST_RECURRING_RULES: (Listar regras de recorrência OU ver o histórico de uma regra específica)
     - isActive: boolean (opcional, default: null para listar todas)
     - type: "Entrada" ou "Saída" (opcional)
     - limit: integer (opcional, default: 5)
+    - ruleDescription: string (opcional. Se o usuário pedir o histórico de uma regra específica, como "histórico da netflix", preencha este campo com "netflix")
 
 17. SWITCH_FINANCIAL_ACCOUNT: (Mudar de conta financeira ativa)
     - targetAccountNameOrType: string (OBRIGATÓRIO, nome da conta ou tipo 'PF', 'PJ', 'MEI')
@@ -579,38 +580,34 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
     
 54. DELETE_RECURRING_RULE: (Excluir uma regra de recorrência)
     - ruleDescription: string (OBRIGATÓRIO, descrição para encontrar a regra a ser excluída)
-
-55. GET_RECURRING_RULE_HISTORY: (Ver o histórico de transações geradas por uma recorrência)
-    - ruleDescription: string (OBRIGATÓRIO)
-    - limit: integer (opcional, default: 5)
     
-56. LOG_WATER_INTAKE: (Registrar consumo de água)
+55. LOG_WATER_INTAKE: (Registrar consumo de água)
     - amountInMl: integer (opcional. Se não informado, registra o próximo da lista. Se informado, registra com este valor)
     * Nota: Se o usuário disser várias coisas como "bebi água, mais 200ml, anota aí", interprete como UMA ÚNICA ação, pegando o valor mais específico (200ml).
 
-57. GET_HYDRATION_LOG: (Ver o progresso do consumo de água do dia)
+56. GET_HYDRATION_LOG: (Ver o progresso do consumo de água do dia)
     
-58. DELETE_BUSINESS_CLIENT (SÓ PARA CONTAS PJ/MEI):
+57. DELETE_BUSINESS_CLIENT (SÓ PARA CONTAS PJ/MEI):
     - clientNameToDelete: string (OBRIGATÓRIO)
 
-59. GET_ACTIVE_SUBSCRIPTION: (Consultar os detalhes do plano/assinatura atual do sistema)
+58. GET_ACTIVE_SUBSCRIPTION: (Consultar os detalhes do plano/assinatura atual do sistema)
     
-60. GET_AFFILIATE_DASHBOARD: (Consultar o painel de afiliado)
+59. GET_AFFILIATE_DASHBOARD: (Consultar o painel de afiliado)
     
-61. CREATE_MOTIVATIONAL_PHRASE: (Adicionar uma nova frase motivacional pessoal)
+60. CREATE_MOTIVATIONAL_PHRASE: (Adicionar uma nova frase motivacional pessoal)
     - text: string (OBRIGATÓRIO)
     - author: string (opcional)
 
-62. UPDATE_MOTIVATIONAL_PHRASE: (Editar uma frase motivacional pessoal)
+61. UPDATE_MOTIVATIONAL_PHRASE: (Editar uma frase motivacional pessoal)
     - phraseIdToUpdate: integer (OBRIGATÓRIO, a IA deve pedir o ID se não souber)
     - newText: string (opcional)
     - newAuthor: string (opcional)
     - isActive: boolean (opcional)
     
-63. DELETE_MOTIVATIONAL_PHRASE: (Apagar uma frase motivacional pessoal)
+62. DELETE_MOTIVATIONAL_PHRASE: (Apagar uma frase motivacional pessoal)
     - phraseIdToDelete: integer (OBRIGATÓRIO)
 
-64. DELETE_FINANCIAL_TRANSACTION: (Excluir uma transação financeira)
+63. DELETE_FINANCIAL_TRANSACTION: (Excluir uma transação financeira)
     - transactionId: integer (OBRIGATÓRIO, a IA deve buscar pelo ID ou descrição se não fornecido)
     - description: string (opcional, para buscar a transação se o ID não for conhecido)
 
