@@ -152,35 +152,52 @@ async function findOrCreateClientByPhone(phone, defaultData = {}) {
     });
 
     if (client) {
-      // Cliente encontrado, verificar se precisa atualizar o nome
+      // ===== INÍCIO DA LÓGICA DE PROTEÇÃO =====
+      // Se o cliente já tem um nome e email definidos, consideramos ele "completo".
+      // Não faremos nenhuma atualização para evitar apagar dados. Apenas o retornamos.
+      if (client.name && client.email) {
+        logger.info(`Cliente ${normalizedPhone} (ID: ${client.id}) já está totalmente configurado. Nenhuma atualização necessária.`);
+        await t.commit();
+        return client.toJSON();
+      }
+
+      // Se chegamos aqui, o cliente existe mas é um "esqueleto" (pode não ter nome ou email).
+      // É seguro tentar preencher os dados faltantes com o que veio do WhatsApp.
       let clientNeedsUpdate = false;
-      if (defaultData.name && client.name !== defaultData.name && defaultData.name.trim() !== "") {
-        // Não atualiza se o nome existente for mais completo que o pushName (Ex: "Nome Completo" vs "Nome")
-        // Ou se o pushName for genérico como "My Contact"
+      const updatePayload = {};
+
+      // Atualiza o nome apenas se o novo nome for mais completo ou se o atual for nulo.
+      if (defaultData.name && defaultData.name.trim() !== "") {
         const existingNameWords = client.name ? client.name.split(' ').length : 0;
         const newNameWords = defaultData.name.split(' ').length;
-        // Atualiza se o novo nome tiver mais palavras ou se o existente for nulo/vazio
         if (newNameWords > existingNameWords || !client.name) {
-            client.name = defaultData.name;
-            clientNeedsUpdate = true;
+          updatePayload.name = defaultData.name;
+          clientNeedsUpdate = true;
         }
       }
-      // Adicionar outras lógicas de atualização se necessário (ex: status, email se vierem no defaultData)
-
-      if(clientNeedsUpdate) {
-        await client.save({ transaction: t });
-        logger.info(`Cliente ${normalizedPhone} encontrado e nome atualizado para "${client.name}".`);
-      } else {
-        logger.info(`Cliente ${normalizedPhone} encontrado (ID: ${client.id}). Nenhum dado para atualizar.`);
+      
+      // Atualiza o email apenas se ele não existir ainda.
+      if (defaultData.email && !client.email) {
+        updatePayload.email = defaultData.email;
+        clientNeedsUpdate = true;
       }
 
+      if (clientNeedsUpdate) {
+        await client.update(updatePayload, { transaction: t });
+        logger.info(`Cliente ${normalizedPhone} (ID: ${client.id}) encontrado e dados de perfil (nome/email) foram preenchidos.`);
+      } else {
+        logger.info(`Cliente ${normalizedPhone} (ID: ${client.id}) encontrado. Nenhum dado novo para preencher.`);
+      }
+      // ===== FIM DA LÓGICA DE PROTEÇÃO =====
+
     } else {
-      // Cliente não encontrado, criar novo
+      // Cliente não encontrado, criar novo.
+      // Esta parte já estava correta, criando um registro com o que tiver disponível.
       logger.info(`Cliente com telefone ${normalizedPhone} não encontrado. Criando novo...`);
       client = await Client.create({
         phone: normalizedPhone,
-        name: defaultData.name || null, // Usa o nome do WhatsApp se fornecido
-        email: defaultData.email || null, // Permite email se fornecido
+        name: defaultData.name || null,
+        email: defaultData.email || null,
         status: defaultData.status || 'Ativo',
       }, { transaction: t });
       logger.info(`Novo Cliente criado via findOrCreate: ID ${client.id}, Telefone: ${client.phone}, Nome: ${client.name}`);
