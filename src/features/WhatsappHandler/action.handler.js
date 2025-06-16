@@ -63,10 +63,15 @@ async function findBusinessClientIdByName(name, financialAccountId) {
 async function handleAction(state, detectedAction, clientNameToUse, isOwnerActingOnOwnBehalfGlobal, actorId) {
     const params = detectedAction.parameters || detectedAction;
     const actionName = detectedAction.action || detectedAction.action_type;
-let resourceForButtonsContext = {
-    type: 'multi_action_block',
-    resources: []
-};
+    let formattedData = "";
+    
+    // << MUDANÇA AQUI: Inicializamos o resourceForButtonsContext e wasAnEdit no escopo principal >>
+    let resourceForButtonsContext = {
+        type: 'multi_action_block',
+        resources: []
+    };
+    let wasAnEdit = false;
+
     try {
         switch (actionName) {
 // =================================================================
