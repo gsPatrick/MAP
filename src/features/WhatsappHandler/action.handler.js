@@ -63,10 +63,10 @@ async function findBusinessClientIdByName(name, financialAccountId) {
 async function handleAction(state, detectedAction, clientNameToUse, isOwnerActingOnOwnBehalfGlobal, actorId) {
     const params = detectedAction.parameters || detectedAction;
     const actionName = detectedAction.action || detectedAction.action_type;
-    let formattedData = "";
-    let resourceForButtonsContext = null;
-    let wasAnEdit = false;
-
+let resourceForButtonsContext = {
+    type: 'multi_action_block',
+    resources: []
+};
     try {
         switch (actionName) {
 // =================================================================
@@ -84,7 +84,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (params.creditCardName) {
                         cardId = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
                         if (!cardId) {
-                            // Joga um erro específico que o CATCH vai pegar e tratar de forma inteligente
                             throw { statusCode: 404, message: `Cartão de crédito "${params.creditCardName}" não encontrado.` };
                         }
                     }
@@ -110,7 +109,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     
                     formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx);
                     if (isOwnerActingOnOwnBehalfGlobal) {
-                        resourceForButtonsContext = { type: 'transaction', id: newTx.id, description: newTx.description };
+                        // << MUDANÇA APLICADA >>
+                        resourceForButtonsContext.resources.push({ type: 'transaction', id: newTx.id, description: newTx.description });
                     }
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_FINANCIAL_TRANSACTION: ${e.message}`, { error: e, paramsUsed: params });
@@ -173,7 +173,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     
                     formattedData = formatter.formatAppointmentDataStructure(reloadedAppt);
                     if (isOwnerActingOnOwnBehalfGlobal) {
-                        resourceForButtonsContext = { type: 'appointment', id: newAppt.id, description: newAppt.title };
+                        // << MUDANÇA APLICADA >>
+                        resourceForButtonsContext.resources.push({ type: 'appointment', id: newAppt.id, description: newAppt.title });
                     }
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em SCHEDULE_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
@@ -223,7 +224,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     formattedData = formatter.formatParcelledAccountDataStructure(parcelData, parcelResult);
                     if (parcelResult.parcels && parcelResult.parcels.length > 0 && isOwnerActingOnOwnBehalfGlobal) {
                         const originalTxId = parcelResult.parcels[0].originalAccountId || parcelResult.parcels[0].id;
-                        resourceForButtonsContext = { type: 'parcelled_account', id: originalTxId, description: parcelData.description };
+                        // << MUDANÇA APLICADA >>
+                        resourceForButtonsContext.resources.push({ type: 'parcelled_account', id: originalTxId, description: parcelData.description });
                     }
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_PARCELLED_ACCOUNT: ${e.message}`, { error: e, paramsUsed: params });
@@ -236,7 +238,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         if (existingCards && existingCards.length > 0) {
                             body = `Seus cartões cadastrados são: *${existingCards.map(c => c.name).join(', ')}*.\n\nVocê quis dizer um deles ou quer cadastrar um novo cartão?`;
                         } else {
-                            body = `Parece que você ainda não tem nenhum cartão cadastrado. Quer adicionar um agora? É só dizer "cadastrar cartão [nome] com limite X..."`;
+                            body = `Parece que você ainda não tem nenhum cartão cadastrado.`;
                         }
                     }
                     
@@ -262,14 +264,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         dayOfMonth: params.dayOfMonth ? parseInt(params.dayOfMonth) : null,
                         dayOfWeek: params.dayOfWeek !== undefined && params.dayOfWeek !== null ? parseInt(params.dayOfWeek) : null,
                         endDate: params.endDate,
-                        
-                        // =================================================================
-                        // <<< MUDANÇA PRINCIPAL AQUI >>>
-                        // Forçamos a criação da transação para 'true', garantindo que
-                        // toda recorrência criada via WhatsApp gere um lançamento financeiro.
                         autoCreateTransaction: true,
-                        // =================================================================
-                        
                         financialCategoryId: categoryIdRule,
                         notes: params.notes
                     };
@@ -278,13 +273,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 400, message: "Dados insuficientes para criar regra recorrente (desc, tipo, valor, frequência, data início)." };
                     }
                     
-                    // A passagem de 'actorId' foi removida pois o serviço não parece recebê-lo
                     const newRule = await recurringTransactionService.createRecurringRule(state.activeFinancialAccountId, ruleData);
                     const reloadedRule = await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, newRule.id);
                     
                     formattedData = formatter.formatRecurringRuleDataStructure(reloadedRule);
                     if (isOwnerActingOnOwnBehalfGlobal) {
-                        resourceForButtonsContext = { type: 'recurring_rule', id: newRule.id, description: newRule.description };
+                        // << MUDANÇA APLICADA >>
+                        resourceForButtonsContext.resources.push({ type: 'recurring_rule', id: newRule.id, description: newRule.description });
                     }
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_RECURRING_RULE: ${e.message}`, { error: e, paramsUsed: params });
@@ -310,7 +305,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     
                     formattedData = formatter.formatProductDataStructure(newProduct);
                     if (isOwnerActingOnOwnBehalfGlobal) {
-                        resourceForButtonsContext = { type: 'product', id: newProduct.id, description: newProduct.name };
+                        // << MUDANÇA APLICADA >>
+                        resourceForButtonsContext.resources.push({ type: 'product', id: newProduct.id, description: newProduct.name });
                     }
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_PRODUCT: ${e.message}`, { error: e, paramsUsed: params });
@@ -341,7 +337,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     
                     formattedData = formatter.formatCreditCardDataStructure(newCard);
                     if (isOwnerActingOnOwnBehalfGlobal) {
-                        resourceForButtonsContext = { type: 'credit_card', id: newCard.id, description: newCard.name };
+                        // << MUDANÇA APLICADA >>
+                        resourceForButtonsContext.resources.push({ type: 'credit_card', id: newCard.id, description: newCard.name });
                     }
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_CREDIT_CARD: ${e.message}`, { error: e, paramsUsed: params });
@@ -382,10 +379,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     
                     const newFinancialAccount = await clientService.createFinancialAccount(actorId, { accountName: newAccountName, accountType: accountTypeToCreate, documentNumber });
                     
-                    // AVISO: Esta ação muda o estado, mas o handler não deve fazer isso diretamente.
-                    // O serviço principal (whatsapp.service) precisará atualizar o estado após esta chamada.
-                    // A resposta formatada aqui serve para informar o usuário.
                     formattedData = formatter.formatFinancialAccountDataStructure(newFinancialAccount) + "\n\nEsta conta foi criada, mas a sua conta ativa continua a mesma. Diga \"mudar para " + newFinancialAccount.accountName + "\" para começar a usá-la.";
+                    // Ações de sistema não precisam de botões de edição/exclusão.
                 } catch(e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_FINANCIAL_ACCOUNT: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui criar a conta.\nDetalhe: ${e.message}`;
@@ -403,7 +398,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     
                     formattedData = formatter.formatBusinessClientDataStructure(newBc);
                     if (isOwnerActingOnOwnBehalfGlobal) {
-                        resourceForButtonsContext = { type: 'business_client', id: newBc.id, description: newBc.name };
+                        // << MUDANÇA APLICADA >>
+                        resourceForButtonsContext.resources.push({ type: 'business_client', id: newBc.id, description: newBc.name });
                     }
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_BUSINESS_CLIENT: ${e.message}`, { error: e, paramsUsed: params });
@@ -511,8 +507,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const cardIdToPay = await findCreditCardIdByName(cardNameToPay, state.activeFinancialAccountId);
                     if (!cardIdToPay) {
-                        // O erro 404 já é lançado por findCreditCardIdByName, então o catch vai pegar.
-                        // Apenas para garantir que o fluxo pare aqui.
                         return; 
                     }
 
@@ -586,7 +580,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
             case 'CREATE_MOTIVATIONAL_PHRASE': {
                 try {
-                    // Esta é uma preferência pessoal, então usa o actorId
                     const { text, author } = params;
                     if (!text) {
                         throw { statusCode: 400, message: "O texto da frase é obrigatório." };
@@ -2035,9 +2028,46 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
     return { formattedData, resourceForButtonsContext, wasAnEdit };
 }
 
-async function handleButtonInteraction(state, buttonId, senderPhone, actorId) {
+async function handleButtonInteraction(state, buttonId, senderPhone) {
     try {
         const [action, resourceType, idStr] = buttonId.split(':');
+
+        // --- LÓGICA PARA AÇÕES DE BLOCO (MÚLTIPLAS AÇÕES) ---
+        if (resourceType === 'multi_action_block') {
+            const resources = JSON.parse(Buffer.from(idStr, 'base64').toString('utf8'));
+            
+            if (action === 'edit') {
+                // Entra em modo de edição de bloco
+                state.editingResource = { type: 'multi_action_block', resources: resources };
+                let editPrompt = "Ok! Estou em modo de edição para este bloco de ações. O que você gostaria de mudar? 😉\n\nPode dizer, por exemplo: ";
+                
+                // Cria um exemplo dinâmico com base no primeiro item do bloco
+                const firstItem = resources[0];
+                editPrompt += `'mudar o ${firstItem.description} para 60 reais'.`;
+                
+                await sendWhatsappMessage(senderPhone, editPrompt);
+                return { stateUpdated: true, newState: state, flowCompleted: false };
+            }
+
+            if (action === 'delete') {
+                // Pergunta qual item excluir, incluindo a opção "todos"
+                let deletePrompt = "Entendido. Qual dos itens você gostaria de excluir?\n\n";
+                const itemDescriptions = resources.map(r => `*${r.description}*`).join(' ou ');
+                deletePrompt += `Você pode me dizer: ${itemDescriptions}.\n\nSe quiser apagar tudo de uma vez, é só dizer *"todos"*!`;
+                
+                // Entra em um estado de "aguardando escolha para exclusão"
+                state.pendingConfirmation = {
+                    action: 'AWAITING_DELETION_CHOICE',
+                    resources: resources
+                };
+                state.currentAction = 'awaiting_confirmation';
+                
+                await sendWhatsappMessage(senderPhone, deletePrompt);
+                return { stateUpdated: true, newState: state, flowCompleted: false };
+            }
+        }
+
+        // --- LÓGICA PARA AÇÕES DE ITEM ÚNICO (COMPORTAMENTO ORIGINAL) ---
         const resourceId = parseInt(idStr, 10);
 
         if (!action || !resourceType || isNaN(resourceId)) {
@@ -2046,7 +2076,7 @@ async function handleButtonInteraction(state, buttonId, senderPhone, actorId) {
             return { flowCompleted: true };
         }
 
-        // --- Ação de Edição ---
+        // --- Ação de Edição (Item Único) ---
         if (action === 'edit') {
             state.editingResource = { type: resourceType, id: resourceId };
             const editPrompt = `Ok! Selecionei o item para edição. O que você gostaria de mudar?`;
@@ -2054,13 +2084,12 @@ async function handleButtonInteraction(state, buttonId, senderPhone, actorId) {
             return { stateUpdated: true, newState: state, flowCompleted: false };
         }
 
-        // --- Ação de Exclusão (com mensagens humanizadas) ---
+        // --- Ação de Exclusão (Item Único) ---
         if (action === 'delete') {
             let successMessage;
             try {
                 let resourceDescription = `O item`; // Descrição de fallback
                 
-                // Busca os detalhes do recurso ANTES de deletar para ter uma mensagem amigável
                 switch (resourceType) {
                     case 'transaction': {
                         const tx = await financialService.getTransactionById(state.activeFinancialAccountId, resourceId);
@@ -2093,7 +2122,6 @@ async function handleButtonInteraction(state, buttonId, senderPhone, actorId) {
                         break;
                     }
                     case 'parcelled_account': {
-                        // Para contas parceladas, a descrição já é mais específica
                         const originalTx = await financialService.getTransactionById(state.activeFinancialAccountId, resourceId);
                         if (originalTx) resourceDescription = `A compra parcelada "${originalTx.description.replace(/ - Parcela \d+\/\d+$/, '')}"`;
                         await financialService.deleteParcelledAccountGroup(state.activeFinancialAccountId, resourceId);
@@ -2128,12 +2156,7 @@ async function handleButtonInteraction(state, buttonId, senderPhone, actorId) {
                     await sendWhatsappMessage(senderPhone, "Ops, não encontrei mais esse cartão para ver os detalhes.");
                     return { flowCompleted: true };
                 }
-                // Simula uma nova mensagem do usuário para que a IA processe a ação de ver a fatura
                 const fakeUserInput = `ver a fatura aberta do cartão ${card.name}`;
-                
-                // Retorna a mensagem para o "Maestro" reprocessar
-                // O Maestro deve ser ajustado para lidar com este retorno
-                // (No seu código atual, ele já continua o fluxo se flowCompleted for false, o que é perfeito)
                 return { stateUpdated: false, newState: null, flowCompleted: false, repromptWith: fakeUserInput };
 
             } catch (detailsError) {
@@ -2153,7 +2176,6 @@ async function handleButtonInteraction(state, buttonId, senderPhone, actorId) {
         return { flowCompleted: true };
     }
 }
-
 module.exports = {
     handleAction,
     handleButtonInteraction

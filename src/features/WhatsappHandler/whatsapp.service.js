@@ -443,7 +443,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             conversationHistory: state.messageHistory.slice(-MAX_HISTORY_FOR_AI * 2),
             editingResource: state.editingResource,
             availableFinancialCategories: availableFinancialCategoriesForAI,
-            // Fornece a Ação Pendente para a IA, se houver
             pendingAction: state.currentAction === 'awaiting_clarification_response' ? state.pendingConfirmation : null
         };
 
@@ -452,16 +451,20 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
         let finalMessageToSend = "";
 
-        // ETAPA 5: Montar e Enviar a Resposta Final (Lógica Refatorada com Continuidade de Contexto)
+        // ETAPA 5: Montar e Enviar a Resposta Final (Lógica Refatorada com Múltiplas Ações e Blocos)
         if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
-            // AÇÃO FOI COMPLETADA! Limpa qualquer ação pendente.
             state.pendingConfirmation = null;
             state.currentAction = null;
 
             let aiMessageIntro = aiResponse.overall_summary_suggestion || `Ok, ${state.clientName}!`;
             let multipleActionBodiesList = [];
-            let resourceForButtonsContext = null;
             const isOwnerActingOnOwnBehalfGlobal = !state.isSharedAccessContext || state.ownerClientIdForContext === actorClient.id;
+            const aihasMultipleActions = aiResponse.detected_actions.length > 1;
+
+            let multiActionBlockContext = {
+                type: 'multi_action_block',
+                resources: []
+            };
 
             for (const detectedAction of aiResponse.detected_actions) {
                 const actionName = detectedAction.action || detectedAction.action_type;
@@ -477,12 +480,14 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 if (actionResult.formattedData) {
                     multipleActionBodiesList.push(actionResult.formattedData);
                 }
-                if (actionResult.resourceForButtonsContext) {
-                    resourceForButtonsContext = actionResult.resourceForButtonsContext;
-                }
                 if (actionResult.wasAnEdit) {
                     state.editingResource = null;
                 }
+                
+                if (actionResult.resourceForButtonsContext && actionResult.resourceForButtonsContext.resources) {
+                    multiActionBlockContext.resources.push(...actionResult.resourceForButtonsContext.resources);
+                }
+
                 if (actionResult.resourceForButtonsContext?.id === 'account_switched') {
                     const newAccount = actionResult.resourceForButtonsContext.data;
                     state.activeFinancialAccountId = newAccount.id;
@@ -497,18 +502,10 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 finalMessageToSend += `\n\n${structuredDataBody.trim()}`;
             }
 
-            // Lógica para botões de confirmação (ex: exclusão)
-            if (resourceForButtonsContext?.id === 'pending_confirmation') {
-                finalMessageToSend = resourceForButtonsContext.data.message;
-                state.pendingConfirmation = resourceForButtonsContext.data;
-                state.currentAction = 'awaiting_confirmation';
-            }
-
-            // Lógica para adicionar link da plataforma e botões de ação
             const platformLinkFooter = formatter.formatPlatformLink();
             const platformBaseUrl = process.env.PLATFORM_URL || 'map-nocontrole.com.br/painel';
 
-            if (!finalMessageToSend.includes(platformBaseUrl) && resourceForButtonsContext?.type !== 'system_action') {
+            if (!finalMessageToSend.includes(platformBaseUrl)) {
                  finalMessageToSend += `\n\n---\n\n${platformLinkFooter.trim()}`;
             }
             finalMessageToSend = finalMessageToSend.replace(/\n{3,}/g, '\n\n').trim();
@@ -516,13 +513,21 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             if (finalMessageToSend) {
                 state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
 
-                if (resourceForButtonsContext && resourceForButtonsContext.type !== 'system_action' && resourceForButtonsContext.id && resourceForButtonsContext.id !== 'pending_confirmation') {
+                if (aihasMultipleActions && multiActionBlockContext.resources.length > 0) {
+                    const blockId = Buffer.from(JSON.stringify(multiActionBlockContext.resources)).toString('base64');
                     const buttons = [
-                        { id: `edit:${resourceForButtonsContext.type}:${resourceForButtonsContext.id}`, label: '✏️ Editar' },
-                        { id: `delete:${resourceForButtonsContext.type}:${resourceForButtonsContext.id}`, label: '🗑️ Excluir' }
+                        { id: `edit:multi_action_block:${blockId}`, label: '✏️ Editar este bloco' },
+                        { id: `delete:multi_action_block:${blockId}`, label: '🗑️ Excluir algo' }
                     ];
-                    if (resourceForButtonsContext.type === 'credit_card') {
-                        buttons.push({ id: `details:${resourceForButtonsContext.type}:${resourceForButtonsContext.id}`, label: 'Ver Fatura/Detalhes' });
+                    await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, "Opções:");
+                } else if (!aihasMultipleActions && multiActionBlockContext.resources.length === 1) {
+                    const singleResource = multiActionBlockContext.resources[0];
+                    const buttons = [
+                        { id: `edit:${singleResource.type}:${singleResource.id}`, label: '✏️ Editar' },
+                        { id: `delete:${singleResource.type}:${singleResource.id}`, label: '🗑️ Excluir' }
+                    ];
+                    if (singleResource.type === 'credit_card') {
+                        buttons.push({ id: `details:${singleResource.type}:${singleResource.id}`, label: 'Ver Fatura/Detalhes' });
                     }
                     await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, "Opções:");
                 } else {
@@ -531,10 +536,8 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
 
         } else if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
-            // AÇÃO ESTÁ INCOMPLETA, PRECISAMOS DE MAIS DADOS
             const clarification = aiResponse.clarifications_needed[0];
             
-            // Salva o estado pendente para a próxima mensagem
             state.pendingConfirmation = {
                 action: clarification.original_intent_action_suggestion,
                 parameters: clarification.parameters_so_far,
@@ -547,7 +550,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             await sendWhatsappMessage(senderPhone, finalMessageToSend);
         
         } else {
-            // Nenhuma ação detectada (saudação, etc.). Limpa qualquer estado pendente por segurança.
             state.pendingConfirmation = null;
             state.currentAction = null;
             finalMessageToSend = aiResponse.reply_to_user_suggestion || `Olá, ${state.clientName}! Como posso te ajudar hoje?`;
