@@ -6,6 +6,7 @@ const clientService = require('../Client/client.service');
 const clientAuthService = require('../ClientAuth/clientAuth.service');
 const sharedAccessService = require('../SharedAccess/sharedAccess.service');
 const financialCategoryService = require('../FinancialCategory/financialCategory.service');
+const financialService = require('../Financial/financial.service'); // <<< ESTA LINHA PROVAVELMENTE ESTÁ FALTANDO
 
 // --- Imports dos Novos Especialistas e Utilitários ---
 const onboardingHandler = require('./onboarding.handler');
