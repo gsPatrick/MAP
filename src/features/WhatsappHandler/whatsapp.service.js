@@ -377,7 +377,64 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             conversationState.set(senderPhone, state);
             pushNameFromPayload = null;
             return;
+      }
+
+        /// =================================================================
+        // <<< INÍCIO DA CORREÇÃO E REESTRUTURAÇÃO >>>
+        // =================================================================
+
+        // ETAPA 2.5: Tratamento de Respostas a Perguntas Diretas do Bot
+        // Este bloco agora tem prioridade MÁXIMA após o onboarding.
+        if (state.currentAction === 'awaiting_confirmation' && state.pendingConfirmation) {
+            const pendingAction = state.pendingConfirmation;
+
+            if (pendingAction.action === 'AWAITING_DELETION_CHOICE') {
+                const userChoiceText = messageText.toLowerCase();
+                let itemDeleted = false;
+
+                if (userChoiceText.includes('todos')) {
+                    let deletedCount = 0;
+                    for (const resource of pendingAction.resources) {
+                        try {
+                            if (resource.type === 'transaction') {
+                                await financialService.deleteTransaction(state.activeFinancialAccountId, resource.id);
+                                deletedCount++;
+                            }
+                        } catch (e) { logger.error(`[DELETION ALL] Erro ao deletar item ${resource.id}: ${e.message}`); }
+                    }
+                    await sendWhatsappMessage(senderPhone, `✅ Prontinho! ${deletedCount} de ${pendingAction.resources.length} itens foram excluídos.`);
+                    itemDeleted = true;
+                } else {
+                    const resourceToDelete = pendingAction.resources.find(r => r.description.toLowerCase().includes(userChoiceText));
+                    if (resourceToDelete) {
+                        try {
+                            if (resourceToDelete.type === 'transaction') {
+                                await financialService.deleteTransaction(state.activeFinancialAccountId, resourceToDelete.id);
+                            }
+                            await sendWhatsappMessage(senderPhone, `✅ Item "${resourceToDelete.description}" excluído com sucesso!`);
+                            itemDeleted = true;
+                        } catch (e) {
+                            await sendWhatsappMessage(senderPhone, `❌ Ops, tive um problema ao tentar excluir "${resourceToDelete.description}".`);
+                        }
+                    } else {
+                        await sendWhatsappMessage(senderPhone, `🤔 Humm, não entendi qual item você quer excluir. Por favor, diga o nome exato ou 'todos'.`);
+                    }
+                }
+
+                if (itemDeleted) {
+                    state.pendingConfirmation = null;
+                    state.currentAction = null;
+                }
+                conversationState.set(senderPhone, state);
+                return;
+            }
+            
+            // Adicione outros 'if (pendingAction.action === ...)' aqui para outros tipos de confirmação no futuro
         }
+        
+        // =================================================================
+        // <<< FIM DO BLOCO ADICIONADO >>>
+        // =====
 
         // ETAPA 3: Lógica de Fluxo Pós-Onboarding (Seleção de Conta)
         if (!state.activeFinancialAccountId) {
