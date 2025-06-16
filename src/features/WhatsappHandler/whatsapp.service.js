@@ -405,7 +405,14 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     await sendWhatsappMessage(senderPhone, `✅ Prontinho! ${deletedCount} de ${pendingAction.resources.length} itens foram excluídos.`);
                     itemDeleted = true;
                 } else {
-                    const resourceToDelete = pendingAction.resources.find(r => r.description.toLowerCase().includes(userChoiceText));
+                    // << INÍCIO DA MUDANÇA >>
+                        const userWords = userChoiceText.split(' ').filter(word => word.length > 1); // Quebra a busca do usuário em palavras
+                        
+                        const resourceToDelete = pendingAction.resources.find(r => {
+                            const resourceWords = r.description.toLowerCase().split(' ');
+                            // Verifica se TODAS as palavras da busca do usuário estão na descrição do recurso
+                            return userWords.every(userWord => resourceWords.includes(userWord));
+                        });                    
                     if (resourceToDelete) {
                         try {
                             if (resourceToDelete.type === 'transaction') {
