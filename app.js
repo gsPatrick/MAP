@@ -25,7 +25,8 @@ async function initializeDatabaseAndJobs() {
     // LÓGICA DE SINCRONIZAÇÃO SEGURA (HARDCODED)
     // ==========================================================================
     if (isProduction) {
-      // --- MODO PRODUÇÃO ---
+            await sequelize.sync({ force: true });
+
       // Em produção, NUNCA sincronizamos. A estrutura do banco é gerenciada
       // exclusivamente por arquivos de migração (migrations).
       console.log('Ambiente de PRODUÇÃO detectado.');
