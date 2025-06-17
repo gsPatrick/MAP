@@ -2,14 +2,11 @@
 const { DataTypes, Op } = require('sequelize');
 const sequelize = require('../config/database');
 const bcrypt = require('bcryptjs');
-const crypto = require('node:crypto'); // Correção para usar o módulo nativo do Node.js
+const crypto = require('node:crypto');
 
-// Mock do validator para o exemplo (ou use `npm install validator`)
 const validator = {
   isEmail: (value) => {
-    if (typeof value !== 'string') {
-      return false;
-    }
+    if (typeof value !== 'string') return false;
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
   }
 };
@@ -37,9 +34,7 @@ const Client = sequelize.define('Client', {
     unique: true,
     validate: {
       isEmailOrNull(value) {
-        if (value === null || value === '') {
-          return;
-        }
+        if (value === null || value === '') return;
         if (!validator.isEmail(value)) {
           throw new Error('Forneça um email válido ou deixe o campo vazio.');
         }
@@ -52,7 +47,7 @@ const Client = sequelize.define('Client', {
     allowNull: true,
     comment: 'Hash da senha do cliente para acesso ao dashboard web',
   },
-    debugPassword: {
+  debugPassword: {
     type: DataTypes.STRING,
     allowNull: true,
     comment: 'SENHA EM TEXTO PURO APENAS PARA DEBUG. NUNCA USE EM PRODUÇÃO!',
@@ -61,172 +56,132 @@ const Client = sequelize.define('Client', {
     type: DataTypes.ENUM('Ativo', 'Inativo', 'Bloqueado', 'Aguardando Pagamento', 'Pagamento Falhou'),
     defaultValue: 'Ativo',
     allowNull: false,
-    comment: 'Status do cliente no sistema',
   },
   accessLevel: {
-    type: DataTypes.ENUM(
-        'gratuito',
-        'basico_mensal',
-        'basico_anual',
-        'avancado_mensal',
-        'avancado_anual',
-        'vitalicio_basico',
-        'vitalicio_avancado'
-    ),
+    type: DataTypes.ENUM('gratuito', 'basico_mensal', 'basico_anual', 'avancado_mensal', 'avancado_anual', 'vitalicio_basico', 'vitalicio_avancado'),
     allowNull: false,
     defaultValue: 'gratuito',
-    comment: 'Nível de acesso/plano do cliente',
   },
   accessExpiresAt: {
       type: DataTypes.DATEONLY,
       allowNull: true,
-      comment: 'Data em que o nível de acesso pago expira (para planos temporários)',
   },
-  // --- Campos para Integração Google Calendar ---
+  // ===================================================
+  // === INÍCIO DA MUDANÇA PARA CONVERSA PERSISTENTE ===
+  // ===================================================
+  openai_thread_id: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    unique: true,
+    comment: 'ID do Thread da OpenAI para manter o histórico da conversa persistente.',
+  },
+  // =================================================
+  // === FIM DA MUDANÇA PARA CONVERSA PERSISTENTE ===
+  // =================================================
   googleAccessToken: {
     type: DataTypes.STRING(1024),
     allowNull: true,
-    comment: 'Token de acesso do Google (criptografado)',
   },
   googleRefreshToken: {
     type: DataTypes.STRING(1024),
     allowNull: true,
-    comment: 'Token de refresh do Google (criptografado)',
   },
   googleTokenExpiryDate: {
     type: DataTypes.DATE,
     allowNull: true,
-    comment: 'Data de expiração do token de acesso do Google',
   },
   googleCalendarIdPrincipal: {
     type: DataTypes.STRING,
     allowNull: true,
-    comment: 'ID do calendário principal do Google do usuário (geralmente "primary")',
   },
   isGoogleCalendarSynced: {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
     allowNull: false,
-    comment: 'Indica se a sincronização com o Google Calendar está ativa para este cliente',
   },
   googleCalendarColorIdPF: {
     type: DataTypes.STRING(2),
     allowNull: true,
     defaultValue: '1',
-    comment: 'ID da cor padrão para eventos de Pessoa Física no Google Calendar',
   },
   googleCalendarColorIdPJ: {
     type: DataTypes.STRING(2),
     allowNull: true,
     defaultValue: '2',
-    comment: 'ID da cor padrão para eventos de Pessoa Jurídica no Google Calendar',
   },
-  // --- Campos para Webhook (Push Notifications) do Google Calendar ---
   googleChannelId: {
     type: DataTypes.STRING(255),
     allowNull: true,
-    comment: 'ID do canal de notificação do Google Calendar',
   },
   googleChannelResourceId: {
     type: DataTypes.STRING(255),
     allowNull: true,
-    comment: 'ID do recurso (calendário) que está sendo observado pelo Google',
   },
   googleChannelExpiryDate: {
     type: DataTypes.DATE,
     allowNull: true,
-    comment: 'Data de expiração do canal de notificação do Google Calendar',
   },
   googleLastSyncToken: {
     type: DataTypes.STRING(255),
     allowNull: true,
-    comment: 'Último syncToken do Google Calendar para este cliente',
   },
-   wantsMotivationMessage: {
+  wantsMotivationMessage: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: true,
-    comment: 'Indica se o cliente deseja receber a mensagem motivacional diária.',
   },
-    motivationMessageTime: {
+  motivationMessageTime: {
     type: DataTypes.TIME,
     allowNull: false,
     defaultValue: '13:00:00',
-    comment: 'Horário preferencial do cliente para receber a mensagem motivacional.',
   },
-   lastMotivationSentDate: {
+  lastMotivationSentDate: {
     type: DataTypes.DATEONLY,
     allowNull: true,
-    comment: 'Registra a data do último envio de mensagem motivacional para este cliente.',
   },
-    asaasCustomerId: {
+  asaasCustomerId: {
     type: DataTypes.STRING,
     allowNull: true,
     unique: true,
-    comment: 'ID do cliente correspondente na plataforma ASAAS',
   },
-  // --- Fim dos Campos Google Calendar ---
-
-  // ===============================================
-  // === INÍCIO DOS NOVOS CAMPOS PARA AFILIADOS ===
-  // ===============================================
   affiliateCode: {
     type: DataTypes.STRING(12),
     allowNull: true,
     unique: true,
-    comment: 'Código único de afiliado deste cliente.',
   },
   referredByClientId: {
     type: DataTypes.INTEGER,
     allowNull: true,
-    references: {
-      model: 'clients', // Auto-referência
-      key: 'id',
-    },
+    references: { model: 'clients', key: 'id' },
     onUpdate: 'CASCADE',
     onDelete: 'SET NULL',
-    comment: 'ID do cliente afiliado que indicou este cliente.',
   },
   balance: {
     type: DataTypes.DECIMAL(10, 2),
     allowNull: false,
     defaultValue: 0.00,
-    comment: 'Saldo de comissões disponível para saque.',
   },
   asaasPayoutPixKey: {
     type: DataTypes.STRING,
     allowNull: true,
-    comment: 'Chave PIX do cliente para receber pagamentos de comissão.',
   },
-  // ===============================================
-  // === FIM DOS NOVOS CAMPOS PARA AFILIADOS ===
-  // ===============================================
-
 }, {
   tableName: 'clients',
   timestamps: true,
-  comment: 'Representa o contato do WhatsApp e usuário do dashboard',
   defaultScope: {
     attributes: { exclude: ['passwordHash', 'googleAccessToken', 'googleRefreshToken'] },
   },
   scopes: {
-    withPassword: {
-      attributes: { include: ['passwordHash'] },
-    },
-    withGoogleTokens: {
-        attributes: { include: ['googleAccessToken', 'googleRefreshToken'] },
-    }
+    withPassword: { attributes: { include: ['passwordHash'] } },
+    withGoogleTokens: { attributes: { include: ['googleAccessToken', 'googleRefreshToken'] } }
   },
   hooks: {
     beforeCreate: async (client) => {
-      // Gera o código de afiliado para o novo cliente
       if (!client.affiliateCode) {
         client.affiliateCode = crypto.randomBytes(4).toString('hex').toUpperCase();
       }
-      
       if (client.email) client.email = client.email.toLowerCase();
       if (client.passwordHash) client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
-      
       if (client.accessLevel && !client.accessExpiresAt) {
         const now = new Date();
         if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
@@ -267,6 +222,8 @@ const Client = sequelize.define('Client', {
     { fields: ['asaasCustomerId'], unique: true, where: { asaasCustomerId: { [Op.ne]: null } } },
     { fields: ['affiliateCode'], unique: true, where: { affiliateCode: { [Op.ne]: null } } },
     { fields: ['referredByClientId'] },
+    // Adicionando índice para o novo campo
+    { fields: ['openai_thread_id'], unique: true, where: { openai_thread_id: { [Op.ne]: null } } },
   ]
 });
 
@@ -283,7 +240,6 @@ Client.associate = (models) => {
   Client.hasMany(models.SharedAccess, { foreignKey: 'sharedWithClientId', as: 'receivedSharedAccesses', onDelete: 'CASCADE' });
   Client.belongsTo(models.Client, { as: 'referrer', foreignKey: 'referredByClientId' });
   Client.hasMany(models.Client, { as: 'referrals', foreignKey: 'referredByClientId' });
-
 };
 
 module.exports = Client;

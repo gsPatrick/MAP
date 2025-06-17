@@ -23,7 +23,7 @@
     "json2csv": "^6.0.0-alpha.2",
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^3.0.2",
-    "openai": "^4.98.0",
+    "openai": "^4.104.0",
     "pdfkit": "^0.17.1",
     "pg": "^8.11.3",
     "pg-hstore": "^2.3.4",
