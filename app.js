@@ -1,13 +1,15 @@
 // src/app.js
-require('dotenv').config();
+require('dotenv').config(); // Garante que as variáveis de ambiente sejam carregadas primeiro
 const express = require('express');
 const cors = require('cors');
 const punycode = require('punycode/');
 
+// Caminhos para os módulos
 const { sequelize } = require('./src/database');
 const errorHandler = require('./src/middlewares/errorHandler');
 const { startJobs } = require('./src/jobs');
 const mainApiRouter = require('./src/routes');
+const { seedPlans } = require('./src/database/seeders/seedPlans');
 
 
 async function initializeDatabaseAndJobs() {
@@ -16,24 +18,46 @@ async function initializeDatabaseAndJobs() {
     await sequelize.authenticate();
     console.log('Conexão com o banco de dados estabelecida com sucesso.');
 
-    // ==========================================================================
-    // LÓGICA DE SINCRONIZAÇÃO HARDCODED PARA RESET EM AMBIENTE DE TESTE/PROD
-    // ==========================================================================
-    
-    // <<< MUDANÇA PRINCIPAL AQUI >>>
-    // A lógica original foi substituída por um comando direto de reset.
-    // Isto irá apagar todas as tabelas e recriá-las a partir dos modelos.
-    console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
-    console.warn('!! ATENÇÃO: MODO DE RESET FORÇADO (HARDCODED) ATIVO.                      !!');
-    console.warn('!! O BANCO DE DADOS SERÁ COMPLETAMENTE APAGADO E RECRIADO.                !!');
-    console.warn('!! REMOVA ESTA LÓGICA ANTES DE USAR EM PRODUÇÃO REAL.                      !!');
-    console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
-    
-    await sequelize.sync({ force: true });
-    
-    console.log('Banco de dados resetado e recriado com sucesso via { force: true }.');
-    // <<< FIM DA MUDANÇA PRINCIPAL >>>
+    const isProduction = process.env.NODE_ENV === 'production';
+    const forceReset = process.env.FORCE_DB_RESET === 'true';
 
+    // ==========================================================================
+    // LÓGICA DE SINCRONIZAÇÃO SEGURA (HARDCODED)
+    // ==========================================================================
+    if (isProduction) {
+      // --- MODO PRODUÇÃO ---
+      // Em produção, NUNCA sincronizamos. A estrutura do banco é gerenciada
+      // exclusivamente por arquivos de migração (migrations).
+      console.log('Ambiente de PRODUÇÃO detectado.');
+      console.log('Sincronização automática (sync) do banco de dados está DESATIVADA por segurança.');
+      console.log('A estrutura do banco de dados não será alterada pela aplicação.');
+
+    } else {
+      // --- MODO DESENVOLVIMENTO ---
+      if (forceReset) {
+        // Esta opção só funciona se NODE_ENV NÃO for 'production'.
+        console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
+        console.warn('!! ATENÇÃO: MODO DESENVOLVIMENTO com FORCE_DB_RESET=true.                 !!');
+        console.warn('!! O BANCO DE DADOS SERÁ COMPLETAMENTE APAGADO E RECRIADO.                !!');
+        console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
+        await sequelize.sync({ force: true });
+        console.log('Banco de dados resetado com sucesso (force: true).');
+        
+        // Após um reset total, é essencial semear os dados básicos.
+        console.log('Executando seeder de planos...');
+        await seedPlans();
+
+      } else {
+        // Comportamento padrão para desenvolvimento: tenta alterar tabelas sem apagar.
+        console.log('Ambiente de DESENVOLVIMENTO. Sincronizando modelos com { alter: true }...');
+        await sequelize.sync({ alter: true });
+        console.log('Modelos sincronizados com o banco de dados (alter: true).');
+        
+        // Também é seguro rodar o seeder aqui, pois ele deve ser idempotente (verificar se já existe).
+        console.log('Executando seeder de planos...');
+        await seedPlans();
+      }
+    }
 
     // Inicia os jobs agendados após a confirmação da conexão com o banco.
     console.log('Iniciando agendamento de jobs...');
@@ -89,7 +113,9 @@ if (require.main === module) {
         console.log(`   Health Check: http://localhost:${PORT}/health`);
         console.log(`   API Principal: http://localhost:${PORT}/api`);
         console.log(`   Ambiente: ${process.env.NODE_ENV || 'development'}`);
-        console.warn('   AVISO: MODO RESET DO BANCO DE DADOS (HARDCODED) ESTÁ ATIVO.');
+        if (process.env.NODE_ENV !== 'production' && process.env.FORCE_DB_RESET === 'true') {
+          console.warn('   AVISO: MODO RESET DO BANCO DE DADOS ESTÁ ATIVO.');
+        }
       });
     })
     .catch(error => {
