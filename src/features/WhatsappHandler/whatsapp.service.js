@@ -1,5 +1,5 @@
 // src/features/WhatsappHandler/whatsapp.service.js
-// VERSÃO FINAL REATORADA PARA A API DE ASSISTANTS DA OPENAI (COM PERSISTÊNCIA DE THREAD)
+// VERSÃO FINAL REATORADA COM PÓS-PROCESSADOR DE FORMATAÇÃO
 
 // --- Imports ---
 const OpenAI = require('openai');
@@ -9,7 +9,7 @@ const onboardingHandler = require('./onboarding.handler');
 const formatter = require('./response.formatter');
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 const { sendWhatsappMessage } = require('../../services/whatsappService');
-const { transcribeAudioStream } = require('../../services/aiModelService'); // Apenas para transcrição
+const { transcribeAudioStream } = require('../../services/aiModelService');
 const logger = require('../../utils/logger');
 const toolFunctionMap = require('./tool.map.js');
 
@@ -17,7 +17,6 @@ const toolFunctionMap = require('./tool.map.js');
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
 
-// --- Gerenciamento de Estado (em memória, para dados de sessão rápidos) ---
 const conversationState = new Map();
 let pushNameFromPayload = null;
 
@@ -165,11 +164,6 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
             existingState.activeFinancialAccountName = null;
             existingState.activeFinancialAccountType = null;
         }
-        logger.debug(`[WHATSAPP SERVICE - UpdateState] Estado atualizado para ator ${client.id}: `, {
-            onboardingStage: existingState.data.onboardingStage, currentAction: existingState.currentAction,
-            hasPaidAccessDono: existingState.hasPaidAccess, activeAccountId: existingState.activeFinancialAccountId,
-            isShared: existingState.isSharedAccessContext, ownerIdCtx: existingState.ownerClientIdForContext,
-        });
         return existingState;
     }
 
@@ -190,10 +184,6 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
         accessLevelTextForUser: accessLevelTextForUser,
         hasPaidAccess_whenStageLastSet: hasPaidAccess,
     };
-    logger.debug(`[WHATSAPP SERVICE - InitializeState] Novo estado criado para ator ${client.id}: `, {
-        onboardingStage: newState.data.onboardingStage, hasPaidAccessDono: newState.hasPaidAccess,
-        activeAccountId: newState.activeFinancialAccountId, isShared: newState.isSharedAccessContext,
-    });
     return newState;
 }
 
@@ -205,7 +195,6 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
     }
     logger.info(`[WHATSAPP SERVICE] Processando mensagem de áudio de ${canonicalPhone}.`);
     pushNameFromPayload = pushName;
-
     try {
         await sendWhatsappMessage(canonicalPhone, `🎧 Opa, ${pushName || 'você'}! Já recebi seu áudio e tô processando... 😉`);
         const transcribedText = await transcribeAudioStream(mediaUrl, mimeType);
@@ -223,9 +212,6 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
     }
 }
 
-/**
- * Função principal que orquestra o processamento de mensagens com persistência de Thread.
- */
 async function processIncomingMessage(senderPhoneRaw, messageText, pushName) {
     const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
     if (!canonicalPhone) return;
@@ -233,7 +219,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName) {
     if (!pushNameFromPayload && pushName) pushNameFromPayload = pushName;
 
     try {
-        // ETAPA 1: Obter Cliente e Estado da Sessão
         let actorClient = await clientService.findClientByPhone(senderPhone);
         if (!actorClient) {
             actorClient = await clientService.createClientContact({ phone: senderPhone, name: pushNameFromPayload || pushName });
@@ -247,7 +232,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName) {
         let state = await initializeOrUpdateState(actorClient, sharedAccessRecord, existingState, clientAccountsForOnboarding, ownerAccountsIfShared);
         conversationState.set(senderPhone, state);
 
-        // ETAPA 2: Fluxo de Onboarding (Controlado pelo nosso código antes de passar para a IA)
         if (state.data.onboardingStage !== 'onboarding_complete') {
             const onboardingResult = await onboardingHandler.handleOnboardingStep(state, messageText, actorClient);
             conversationState.set(senderPhone, onboardingResult.updatedState);
@@ -257,7 +241,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName) {
             return;
         }
 
-        // ETAPA 3: Fluxo de Seleção de Conta (Também controlado pelo nosso código)
         if (!state.activeFinancialAccountId) {
             const accountsForSelection = state.isSharedAccessContext
                 ? ownerAccountsIfShared
@@ -269,41 +252,32 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName) {
             } else {
                  await sendWhatsappMessage(senderPhone, `Olá ${state.clientName}! Parece que não há contas financeiras acessíveis para você no momento.`);
             }
-            return; // Precisa esperar a resposta do usuário
-        }
-
-        // ETAPA 4: Orquestração com a API de Assistants
-        if (!ASSISTANT_ID) {
-            logger.error("[ASSISTANT FLOW] OPENAI_ASSISTANT_ID não está configurado no .env!");
-            await sendWhatsappMessage(senderPhone, "Desculpe, estou com um problema de configuração interna e não consigo processar seu pedido agora.");
             return;
         }
 
-        // Obtém ou cria um Thread para a conversa de forma persistente
+        if (!ASSISTANT_ID) {
+            logger.error("[ASSISTANT FLOW] OPENAI_ASSISTANT_ID não está configurado!");
+            await sendWhatsappMessage(senderPhone, "Desculpe, estou com um problema de configuração interna.");
+            return;
+        }
+
         let threadId = actorClient.openai_thread_id;
         if (!threadId) {
-            logger.info(`[ASSISTANT FLOW] Nenhum thread encontrado para ${senderPhone} no DB. Criando um novo...`);
             const thread = await openai.beta.threads.create();
             threadId = thread.id;
             await actorClient.update({ openai_thread_id: threadId });
-            logger.info(`[ASSISTANT FLOW] Novo Thread ${threadId} criado e salvo para ${senderPhone}.`);
-        } else {
-            logger.info(`[ASSISTANT FLOW] Thread ${threadId} recuperado do DB para ${senderPhone}.`);
         }
 
-        // Adiciona a mensagem do usuário ao Thread
         await openai.beta.threads.messages.create(threadId, {
             role: 'user',
             content: messageText,
         });
 
-        // Cria o Run, passando o contexto atual da sua aplicação para a IA
         const run = await openai.beta.threads.runs.create(threadId, {
             assistant_id: ASSISTANT_ID,
             instructions: `Contexto da aplicação: O nome do usuário é ${state.clientName}. A conta financeira atualmente ativa é "${state.activeFinancialAccountName}" (ID: ${state.activeFinancialAccountId}, Tipo: ${state.activeFinancialAccountType}). O usuário ${state.isSharedAccessContext ? 'ESTÁ' : 'NÃO ESTÁ'} em um contexto de acesso compartilhado.`
         });
 
-        // Inicia o processamento assíncrono do Run
         await handleRunProcessing(run.id, threadId, state, senderPhone);
 
     } catch (error) {
@@ -314,26 +288,21 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName) {
     }
 }
 
-/**
- * Orquestra o ciclo de vida de um Run da OpenAI, lidando com a execução de ferramentas.
- */
-async function handleRunProcessing(runId, threadId, state, senderPhone) {
+async function handleRunProcessing(runId, threadId, state, senderPhone, lastToolResults = {}) {
     try {
         let run = await openai.beta.threads.runs.retrieve(threadId, runId);
 
-        // Loop para esperar o Run sair do estado de 'in_progress'
         while (['queued', 'in_progress'].includes(run.status)) {
-            await new Promise(resolve => setTimeout(resolve, 1500)); // Espera 1.5 segundos
+            await new Promise(resolve => setTimeout(resolve, 1500));
             run = await openai.beta.threads.runs.retrieve(threadId, runId);
             logger.debug(`[ASSISTANT FLOW] Run status para ${senderPhone}: ${run.status}`);
         }
 
-        // Caso 1: A IA precisa que executemos uma ou mais funções (ferramentas)
         if (run.status === 'requires_action') {
             const toolCalls = run.required_action.submit_tool_outputs.tool_calls;
             const toolOutputs = [];
+            const toolResultsData = {};
 
-            // Monta o objeto de contexto para passar para as funções
             const context = {
                 activeFinancialAccountId: state.activeFinancialAccountId,
                 activeFinancialAccountName: state.activeFinancialAccountName,
@@ -348,23 +317,21 @@ async function handleRunProcessing(runId, threadId, state, senderPhone) {
             for (const toolCall of toolCalls) {
                 const functionName = toolCall.function.name;
                 const args = JSON.parse(toolCall.function.arguments);
-                
                 logger.info(`[ASSISTANT FLOW] Executando ferramenta para ${senderPhone}: ${functionName}`, { args });
-
+                
                 const functionToExecute = toolFunctionMap[functionName];
                 if (functionToExecute) {
                     try {
                         const output = await functionToExecute(args, context);
-                        
-                        // Lógica especial para troca de conta
-                        if (output && output.action === 'ACCOUNT_SWITCHED') {
-                            state.activeFinancialAccountId = output.newAccount.id;
-                            state.activeFinancialAccountName = output.newAccount.accountName || output.newAccount.name;
-                            state.activeFinancialAccountType = output.newAccount.accountType || output.newAccount.type;
-                            conversationState.set(senderPhone, state); // Atualiza o estado da sessão
-                            logger.info(`[ASSISTANT FLOW] Estado atualizado após troca de conta para ${state.activeFinancialAccountName}`);
-                        }
+                        toolResultsData[functionName] = output; 
 
+                        if (output && output.action === 'ACCOUNT_SWITCHED') {
+                           state.activeFinancialAccountId = output.newAccount.id;
+                           state.activeFinancialAccountName = output.newAccount.accountName || output.newAccount.name;
+                           state.activeFinancialAccountType = output.newAccount.accountType || output.newAccount.type;
+                           conversationState.set(senderPhone, state);
+                           logger.info(`[ASSISTANT FLOW] Estado atualizado após troca de conta para ${state.activeFinancialAccountName}`);
+                        }
                         toolOutputs.push({
                             tool_call_id: toolCall.id,
                             output: JSON.stringify(output || { success: true }),
@@ -378,31 +345,124 @@ async function handleRunProcessing(runId, threadId, state, senderPhone) {
                     }
                 }
             }
-
-            // Envia os resultados de volta para o Run continuar
+            
             await openai.beta.threads.runs.submitToolOutputs(threadId, runId, { tool_outputs: toolOutputs });
-            return await handleRunProcessing(runId, threadId, state, senderPhone); // Continua o ciclo
+            return await handleRunProcessing(runId, threadId, state, senderPhone, toolResultsData);
         }
 
-        // Caso 2: O Run foi completado com sucesso e a IA gerou uma resposta
         if (run.status === 'completed') {
             const messages = await openai.beta.threads.messages.list(threadId, { limit: 1 });
             const assistantMessage = messages.data[0].content[0].text.value;
-            logger.info(`[ASSISTANT FLOW] Run completo. Enviando resposta para ${senderPhone}`);
-            await sendWhatsappMessage(senderPhone, assistantMessage);
-        } else {
-            // Caso 3: O Run falhou
-            logger.error(`[ASSISTANT FLOW] Run para ${senderPhone} falhou com status: ${run.status}`, { details: run });
-            await sendWhatsappMessage(senderPhone, "Puxa, algo deu errado no meu processamento. Minha equipe já foi notificada. Pode tentar de novo?");
-        }
+            
+            const functionNamesExecuted = Object.keys(lastToolResults);
+            let finalMessageToSend = assistantMessage;
 
+            if (functionNamesExecuted.length > 0) {
+                let formattedDataBlock = '';
+                // Itera sobre os resultados das ferramentas para formatá-los
+                for (const funcName of functionNamesExecuted) {
+                    const resultData = lastToolResults[funcName];
+                    let formattedData = '';
+
+                    // Mapeamento manual de nomes de função para formatadores
+                    const formatterMap = {
+                        // Ações de Criação (CREATE)
+                        'CREATE_FINANCIAL_TRANSACTION': formatter.formatFinancialTransactionDataStructure,
+                        'SCHEDULE_APPOINTMENT': formatter.formatAppointmentDataStructure,
+                        'CREATE_PARCELLED_ACCOUNT': formatter.formatParcelledAccountDataStructure,
+                        'CREATE_RECURRING_RULE': formatter.formatRecurringRuleDataStructure,
+                        'CREATE_PRODUCT': formatter.formatProductDataStructure,
+                        'CREATE_CREDIT_CARD': formatter.formatCreditCardDataStructure,
+                        'CREATE_FINANCIAL_ACCOUNT': formatter.formatFinancialAccountDataStructure,
+                        'CREATE_BUSINESS_CLIENT': formatter.formatBusinessClientDataStructure,
+                        'GRANT_ACCESS': formatter.formatSharedAccessDataStructure,
+                        'RECORD_STOCK_MOVEMENT': formatter.formatStockInfoDataStructure, // Reutiliza o formatador de info
+                        'PAY_CREDIT_CARD_INVOICE': null, // A resposta é uma simples confirmação, não precisa de formatação complexa
+                        'CREATE_FINANCIAL_CATEGORY': formatter.formatFinancialCategoryDataStructure,
+                        'CREATE_MOTIVATIONAL_PHRASE': null, // Resposta simples
+
+                        // Ações de Leitura (GET / LIST)
+                        'GET_FINANCIAL_SUMMARY': null, // A resposta já é o próprio resumo, a IA deve formatar
+                        'LIST_FINANCIAL_TRANSACTIONS': null, // A IA deve montar a lista
+                        'LIST_APPOINTMENTS': null, // A IA deve montar a lista
+                        'LIST_CREDIT_CARDS': formatter.formatCreditCardListDataStructure,
+                        'LIST_RECURRING_RULES': formatter.formatRichRecurringRuleList,
+                        'GET_STOCK_INFO': formatter.formatStockInfoDataStructure,
+                        'GET_CREDIT_CARD_INVOICE': formatter.formatCreditCardInvoiceDataStructure,
+                        'GET_CREDIT_CARD_AVAILABLE_LIMIT': formatter.formatAvailableLimitDataStructure,
+                        'LIST_BUSINESS_CLIENTS': formatter.formatListBusinessClientsDataStructure,
+                        'LIST_GRANTED_ACCESS': formatter.formatListSharedAccessDataStructure,
+                        'LIST_RECEIVED_ACCESS': formatter.formatListSharedAccessDataStructure,
+                        'GET_MONTHLY_TREND': formatter.formatMonthlyTrendDataStructure,
+                        'GET_EXPENSE_CATEGORY_SUMMARY': formatter.formatCategorySummaryDataStructure,
+                        'GET_INCOME_CATEGORY_SUMMARY': formatter.formatCategorySummaryDataStructure,
+                        'LIST_FINANCIAL_CATEGORIES': formatter.formatListFinancialCategoriesDataStructure,
+                        'LIST_PRODUCTS': formatter.formatListProductsDataStructure,
+                        'GET_PRODUCT_DETAILS': formatter.formatProductDataStructure,
+                        'GET_HYDRATION_LOG': formatter.formatHydrationLogDataStructure,
+                        'GET_AFFILIATE_DASHBOARD': formatter.formatAffiliateDashboardDataStructure,
+                        'GET_ACTIVE_SUBSCRIPTION': formatter.formatSubscriptionDataStructure,
+
+                        // Ações de Atualização (UPDATE)
+                        'UPDATE_FINANCIAL_TRANSACTION': formatter.formatFinancialTransactionDataStructure,
+                        'UPDATE_APPOINTMENT': formatter.formatAppointmentDataStructure,
+                        'MARK_TRANSACTION_AS_PAID_RECEIVED': formatter.formatFinancialTransactionDataStructure,
+                        'UPDATE_RECURRING_RULE': formatter.formatRecurringRuleDataStructure,
+                        'UPDATE_PRODUCT': formatter.formatProductDataStructure,
+                        'UPDATE_PARCELLED_ACCOUNT_DESCRIPTION': null, // Resposta simples
+                        'RECREATE_PARCELLED_ACCOUNT': formatter.formatParcelledAccountDataStructure,
+                        'UPDATE_CREDIT_CARD': formatter.formatCreditCardDataStructure,
+                        'UPDATE_BUSINESS_CLIENT': formatter.formatBusinessClientDataStructure,
+                        'UPDATE_FINANCIAL_ACCOUNT': formatter.formatFinancialAccountDataStructure,
+                        'UPDATE_GRANTED_ACCESS': formatter.formatSharedAccessDataStructure,
+                        'UPDATE_FINANCIAL_CATEGORY': formatter.formatFinancialCategoryDataStructure,
+                        'UPDATE_MOTIVATIONAL_PHRASE': null, // Resposta simples
+                        'LOG_WATER_INTAKE': formatter.formatHydrationLogDataStructure,
+
+                        // Ações de Exclusão (DELETE) - Geralmente não precisam de formatação, pois a IA confirma a exclusão.
+                        'DELETE_FINANCIAL_ACCOUNT': null,
+                        'REVOKE_ACCESS': null,
+                        'DELETE_FINANCIAL_TRANSACTION': null,
+                        'DELETE_PRODUCT': null,
+                        'DELETE_RECURRING_RULE': null,
+                        'DELETE_BUSINESS_CLIENT': null,
+                        'DELETE_FINANCIAL_CATEGORY': null,
+                        'DELETE_MOTIVATIONAL_PHRASE': null,
+
+                        // Ações de Sistema e Estado
+                        'SWITCH_FINANCIAL_ACCOUNT': null, // A IA deve apenas confirmar a troca
+                        'SET_MOTIVATIONAL_MESSAGE_PREFERENCE': formatter.formatMotivationalMessagePreferenceDataStructure,
+                        'SET_WATER_REMINDER_PREFERENCE': formatter.formatWaterReminderPreferenceDataStructure,
+                        'RESPOND_TO_INVITE': formatter.formatSharedAccessDataStructure,
+                    };
+                    
+                    if (formatterMap[funcName]) {
+                        formattedData = formatterMap[funcName](resultData);
+                    }
+                    
+                    if (formattedData) {
+                        formattedDataBlock += (formattedDataBlock ? '\n\n---\n\n' : '') + formattedData;
+                    }
+                }
+
+                if (formattedDataBlock) {
+                    finalMessageToSend += `\n\n${formattedDataBlock}`;
+                }
+            }
+            
+            logger.info(`[ASSISTANT FLOW] Run completo. Enviando resposta PÓS-PROCESSADA para ${senderPhone}`);
+            await sendWhatsappMessage(senderPhone, finalMessageToSend.trim());
+
+        } else {
+            logger.error(`[ASSISTANT FLOW] Run para ${senderPhone} falhou com status: ${run.status}`, { details: run });
+            await sendWhatsappMessage(senderPhone, "Puxa, algo deu errado no meu processamento. Pode tentar de novo?");
+        }
     } catch (error) {
         logger.error(`[ASSISTANT FLOW] Erro ao processar o Run ${runId} para ${senderPhone}: ${error.message}`, { stack: error.stack });
         await sendWhatsappMessage(senderPhone, "Encontrei um erro inesperado. Já estou verificando!");
     }
 }
 
-// Exporta as funções principais que serão usadas pelo controller
 module.exports = { 
     processIncomingMessage, 
     processIncomingAudioMessage

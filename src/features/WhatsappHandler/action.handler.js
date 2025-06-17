@@ -2,12 +2,10 @@
 // VERSÃO REATORADA PARA A API DE ASSISTANTS DA OPENAI
 
 // DESCRIÇÃO:
-// Este arquivo não é mais chamado diretamente pelo whatsapp.service.
-// Em vez disso, ele contém as IMPLEMENTAÇÕES LÓGICAS para cada uma das "ferramentas" (funções)
-// que você cadastrou no seu Assistant da OpenAI.
-// Um "mapa de ferramentas" (tool.map.js) irá conectar os nomes das funções da OpenAI
-// a estas implementações. O loop principal no whatsapp.service irá executar estas
-// funções quando a IA solicitar.
+// Este arquivo contém as IMPLEMENTAÇÕES LÓGICAS para cada uma das "ferramentas" (funções)
+// que você cadastrou no seu Assistant da OpenAI. Cada função aqui executa uma lógica de
+// negócio e retorna um objeto de dados bruto (JSON) ou lança um erro. O resultado é
+// então processado pelo whatsapp.service.js.
 
 // --- Imports dos Serviços ---
 const financialService = require('../Financial/financial.service');
@@ -26,7 +24,7 @@ const hydrationService = require('../Hydration/hydration.service');
 const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
 
-// --- Funções Helper (ainda úteis) ---
+// --- Funções Helper ---
 async function findCreditCardIdByName(name, financialAccountId) {
     if (!name || typeof name !== 'string' || name.trim() === '') return null;
     const card = await creditCardService.findCreditCardByName(financialAccountId, name);
@@ -44,7 +42,7 @@ async function findProductIdByNameOrCode(nameOrCode, financialAccountId) {
 }
 
 async function findBusinessClientIdByName(name, financialAccountId) {
-    if (!name || typeof name !== 'string' || nameOrCode.trim() === '') return null;
+    if (!name || typeof name !== 'string' || name.trim() === '') return null;
     const clientsResult = await businessClientService.getAllBusinessClients(financialAccountId, { search: name, limit: 1, isActive: true });
     if (clientsResult.businessClients && clientsResult.businessClients.length > 0) {
         return clientsResult.businessClients[0].id;
@@ -204,7 +202,7 @@ async function listFinancialTransactions(params, context) {
     const categoryObject = params.financialCategoryName 
         ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, context.activeFinancialAccountId) 
         : null;
-    const creditCardId = params.creditCardName ? await findCreditCardIdByName(params.creditCardName, context.activeFinancialAccountId) : null;
+    const creditCardId = params.creditCardName ? await findCreditCardIdByName(params.creditCardName, context.activeFinancialAccountId).catch(() => null) : null;
     const filters = { ...params, financialCategoryId: categoryObject ? categoryObject.id : null, creditCardId };
     return await financialService.getAllTransactions(context.activeFinancialAccountId, filters, params.period);
 }
@@ -369,13 +367,6 @@ async function updateFinancialAccount(params, context) {
 }
 
 async function updateGrantedAccess(params, context) {
-    // Implementação complexa, mantendo a lógica original
-    // Esta função pode precisar de mais refatoração dependendo do fluxo exato
-    if (context.isSharedAccessContext) throw new Error("Ação não permitida em acesso compartilhado.");
-    // ... Lógica para encontrar sharedAccessIdToUpdate a partir de params.sharedAccessIdOrUserIdentifier
-    // ... Lógica para encontrar newBusinessProfileId a partir de params.newBusinessProfileToShareName
-    // const updatedAccess = await sharedAccessService.updateSharedAccess(context.ownerClientIdForContext, sharedAccessIdToUpdate, updateData);
-    // return updatedAccess;
     throw new Error("UPDATE_GRANTED_ACCESS precisa ser implementado com a lógica de busca de ID.");
 }
 
@@ -407,7 +398,6 @@ async function logWaterIntake(params, context) {
 
 async function deleteFinancialAccount(params, context) {
     if (context.isSharedAccessContext) throw new Error("Ação não permitida em acesso compartilhado.");
-    // Ação destrutiva. A IA deve ser instruída a pedir confirmação antes de chamar esta função.
     const ownerAccounts = await clientService.getClientFinancialAccounts(context.ownerClientIdForContext, { isActive: null });
     const accountToDelete = ownerAccounts.find(acc => acc.accountName.toLowerCase() === params.accountNameToDelete.toLowerCase());
     if (!accountToDelete) throw new Error(`Conta "${params.accountNameToDelete}" não encontrada.`);
@@ -416,11 +406,6 @@ async function deleteFinancialAccount(params, context) {
 }
 
 async function revokeAccess(params, context) {
-    if (context.isSharedAccessContext) throw new Error("Ação não permitida em acesso compartilhado.");
-    // Ação destrutiva.
-    // ... Lógica para encontrar o ID do acesso a ser revogado
-    // await sharedAccessService.revokeAccess(context.ownerClientIdForContext, sharedAccessIdToRevoke);
-    // return { success: true };
     throw new Error("REVOKE_ACCESS precisa ser implementado com a lógica de busca de ID.");
 }
 
@@ -468,12 +453,9 @@ async function deleteMotivationalPhrase(params, context) {
     return { success: true, message: `Frase (ID: ${params.phraseIdToDelete}) apagada.` };
 }
 
-
 // --- Ações de Sistema e Estado ---
 
 async function switchFinancialAccount(params, context) {
-    // Esta função não retorna dados, mas sim um sinal para o serviço principal atualizar o estado.
-    // O retorno pode ser o objeto da nova conta para facilitar.
     const ownerAccounts = await clientService.getClientFinancialAccounts(context.ownerClientIdForContext, { isActive: true });
     let accessibleAccounts = context.isSharedAccessContext
         ? ownerAccounts.filter(acc => (acc.accountType === 'PF' && context.sharedAccessPermissions.canAccessPersonalProfile) || (context.sharedAccessPermissions.canAccessBusinessProfileId === acc.id))
@@ -488,7 +470,6 @@ async function switchFinancialAccount(params, context) {
     }
     if (!foundAccount) throw new Error(`Conta "${params.targetAccountNameOrType}" não encontrada ou inacessível.`);
     
-    // O serviço principal usará este retorno para atualizar o estado da sessão.
     return { action: 'ACCOUNT_SWITCHED', newAccount: foundAccount };
 }
 
@@ -528,7 +509,6 @@ async function respondToInvite(params, context) {
     return await sharedAccessService.getSharedAccessById(updatedAccess.id);
 }
 
-
 async function generalGreetingOrSmalltalk(params, context) {
     // Esta função não faz nada, apenas confirma para a IA que a saudação foi "tratada".
     // A IA então prosseguirá para gerar sua própria resposta de texto.
@@ -554,6 +534,10 @@ async function generalQuestionOrHelp(params, context) {
 
 // --- Exporta todas as funções para serem usadas pelo tool.map.js ---
 module.exports = {
+    generalQuestionOrHelp,
+    actionConfirmationYes,
+    generalGreetingOrSmalltalk,
+    actionConfirmationNo,
     createFinancialTransaction,
     scheduleAppointment,
     createParcelledAccount,
@@ -612,9 +596,5 @@ module.exports = {
     createMotivationalPhrase,
     updateMotivationalPhrase,
     deleteMotivationalPhrase,
-    deleteFinancialTransaction,
-      generalGreetingOrSmalltalk,
-    actionConfirmationYes,
-    actionConfirmationNo,
-    generalQuestionOrHelp
+    deleteFinancialTransaction
 };
