@@ -5,9 +5,7 @@
   "main": "app.js",
   "scripts": {
     "dev": "nodemon app.js",
-    "start": "node app.js",
-    "db:migrate": "sequelize db:migrate",
-    "db:seed:all": "sequelize db:seed:all"
+    "start": "node app.js"
   },
   "keywords": [],
   "author": "",
