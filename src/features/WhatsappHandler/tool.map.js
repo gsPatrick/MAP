@@ -77,6 +77,11 @@ const toolFunctionMap = {
     'SET_MOTIVATIONAL_MESSAGE_PREFERENCE': actions.setMotivationalMessagePreference,
     'SET_WATER_REMINDER_PREFERENCE': actions.setWaterReminderPreference,
     'RESPOND_TO_INVITE': actions.respondToInvite,
+
+    'GENERAL_GREETING_OR_SMALLTALK': actions.generalGreetingOrSmalltalk,
+    'ACTION_CONFIRMATION_YES': actions.actionConfirmationYes,
+    'ACTION_CONFIRMATION_NO': actions.actionConfirmationNo,
+    'GENERAL_QUESTION_OR_HELP': actions.generalQuestionOrHelp
 };
 
 module.exports = toolFunctionMap;

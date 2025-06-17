@@ -529,6 +529,29 @@ async function respondToInvite(params, context) {
 }
 
 
+async function generalGreetingOrSmalltalk(params, context) {
+    // Esta função não faz nada, apenas confirma para a IA que a saudação foi "tratada".
+    // A IA então prosseguirá para gerar sua própria resposta de texto.
+    return { success: true, message: "Saudação reconhecida." };
+}
+
+async function actionConfirmationYes(params, context) {
+    // Reconhece um "sim" do usuário. A lógica real dependerá do estado da conversa,
+    // que a IA gerenciará.
+    return { success: true, message: "Confirmação positiva reconhecida." };
+}
+
+async function actionConfirmationNo(params, context) {
+    // Reconhece um "não" do usuário.
+    return { success: true, message: "Confirmação negativa reconhecida." };
+}
+
+async function generalQuestionOrHelp(params, context) {
+    // Reconhece um pedido de ajuda. A IA formulará a resposta instrutiva.
+    return { success: true, message: "Pedido de ajuda reconhecido." };
+}
+
+
 // --- Exporta todas as funções para serem usadas pelo tool.map.js ---
 module.exports = {
     createFinancialTransaction,
@@ -589,5 +612,9 @@ module.exports = {
     createMotivationalPhrase,
     updateMotivationalPhrase,
     deleteMotivationalPhrase,
-    deleteFinancialTransaction
+    deleteFinancialTransaction,
+      generalGreetingOrSmalltalk,
+    actionConfirmationYes,
+    actionConfirmationNo,
+    generalQuestionOrHelp
 };
