@@ -1,4 +1,4 @@
-// src/services/aiModelService.js
+// src/services/aiModelService.js teste
 const OpenAI = require('openai');
 const logger =require('../utils/logger');
 const axios = require('axios'); 
@@ -266,7 +266,7 @@ Sua missão é criar um diálogo que se sinta como um progresso contínuo, não 
 *   Se, após a combinação, a ação ainda estiver incompleta, repita a **REGRA 2** (Ação Incompleta), mostrando o progresso atualizado.
 *   Se, após a combinação, a ação estiver completa, execute a **REGRA 1** (Ação Completa).
 
-**AÇÕES E PARÂMETROS:**
+**AÇÕES E PARÂMETROS:** 
 
 1.  CREATE_FINANCIAL_TRANSACTION: (Registros financeiros IMEDIATOS/PASSADOS, NÃO PARCELADOS NO CARTÃO)
     - type: "Entrada" ou "Saída" (OBRIGATÓRIO)
