@@ -499,6 +499,8 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         // ETAPA 4: Delegar para a IA e para o Action Handler
         const availableFinancialCategoriesForAI = await financialCategoryService.getAllCategoriesForAccountAI(state.activeFinancialAccountId);
         
+        const availableCreditCardsForAI = await creditCardService.getActiveCreditCardsForAI(state.activeFinancialAccountId);
+
         const aiContext = {
             currentFinancialAccountId: state.activeFinancialAccountId,
             currentFinancialAccountType: state.activeFinancialAccountType,
@@ -508,6 +510,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             conversationHistory: state.messageHistory.slice(-MAX_HISTORY_FOR_AI * 2),
             editingResource: state.editingResource,
             availableFinancialCategories: availableFinancialCategoriesForAI,
+            availableCreditCards: availableCreditCardsForAI,
             pendingAction: state.currentAction === 'awaiting_clarification_response' ? state.pendingConfirmation : null
         };
 
@@ -542,6 +545,29 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 
                 const actionResult = await actionHandler.handleAction(state, detectedAction, state.clientName, isOwnerActingOnOwnBehalfGlobal, actorClient.id);
                 
+                    if (state.pendingChainedAction && detectedAction.action === 'CREATE_CREDIT_CARD') {
+                    // Verifica se a criação do cartão foi bem-sucedida pelo contexto do botão
+                    const newCardResource = actionResult.resourceForButtonsContext?.resources?.find(r => r.type === 'credit_card');
+                    if (newCardResource) {
+                        logger.info(`[MAESTRO] Ação principal concluída. Executando ação encadeada: ${state.pendingChainedAction.action}`);
+                        
+                        const chainedAction = state.pendingChainedAction;
+                        // Adiciona o nome do cartão recém-criado aos parâmetros da ação original
+                        chainedAction.parameters.creditCardName = newCardResource.description;
+
+                        // Executa a ação original (gasto no cartão)
+                        const chainedActionResult = await actionHandler.handleAction(state, chainedAction, state.clientName, isOwnerActingOnOwnBehalfGlobal, actorClient.id);
+                        
+                        // Anexa o resultado da ação encadeada à resposta
+                        if (chainedActionResult.formattedData) {
+                            multipleActionBodiesList.push(chainedActionResult.formattedData);
+                        }
+
+                        // Limpa a ação pendente do estado
+                        state.pendingChainedAction = null;
+                    }
+                }
+
                 if (actionResult.formattedData) {
                     multipleActionBodiesList.push(actionResult.formattedData);
                 }
@@ -603,6 +629,14 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         } else if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
             const clarification = aiResponse.clarifications_needed[0];
             
+            // <<< NOVA LÓGICA PARA ARMAZENAR A AÇÃO ENCADEADA >>>
+            if (clarification.parameters_so_far && clarification.parameters_so_far.chained_action_context) {
+                logger.info(`[MAESTRO] Ação encadeada detectada. Armazenando contexto para execução posterior.`);
+                state.pendingChainedAction = clarification.parameters_so_far.chained_action_context;
+                // Limpa o `parameters_so_far` para o fluxo normal de criação de cartão não se confundir
+                clarification.parameters_so_far = {}; 
+            }
+            
             state.pendingConfirmation = {
                 action: clarification.original_intent_action_suggestion,
                 parameters: clarification.parameters_so_far,
@@ -613,7 +647,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             finalMessageToSend = clarification.clarification_question;
             state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
             await sendWhatsappMessage(senderPhone, finalMessageToSend);
-        
+
         } else {
             state.pendingConfirmation = null;
             state.currentAction = null;

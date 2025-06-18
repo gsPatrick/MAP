@@ -205,6 +205,26 @@ async function getAllCreditCards(financialAccountId, queryParams = {}) {
   }
 }
 
+async function getActiveCreditCardsForAI(financialAccountId) {
+  try {
+    const cards = await CreditCard.findAll({
+      where: {
+        financialAccountId: financialAccountId,
+        isActive: true,
+      },
+      // Otimização chave: seleciona apenas os campos que a IA precisa!
+      attributes: ['id', 'name'],
+      order: [['isDefault', 'DESC'], ['name', 'ASC']],
+      raw: true, // Retorna objetos JSON puros, mais leve
+    });
+    return cards;
+  } catch (error) {
+    logger.error(`[SERVICE-AI] Erro ao buscar nomes de cartões para FA ID ${financialAccountId}: ${error.message}`);
+    // Para a IA, é melhor retornar um array vazio em caso de erro do que travar o fluxo.
+    return [];
+  }
+}
+
 async function getCreditCardById(financialAccountId, cardId) {
   try {
     await validateOwningFinancialAccount(financialAccountId);
@@ -836,4 +856,5 @@ module.exports = {
   getCreditCardInvoiceDetails,
   getAvailableInvoicePeriods,
   payCreditCardInvoice,
+  getActiveCreditCardsForAI
 };
