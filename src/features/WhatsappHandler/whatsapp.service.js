@@ -522,21 +522,15 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
         let finalMessageToSend = "";
 
-        // ETAPA 5: Montar e Enviar a Resposta Final (Lógica Refatorada com Múltiplas Ações e Blocos)
-        if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
+             if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
             state.pendingConfirmation = null;
             state.currentAction = null;
 
-            let aiMessageIntro = aiResponse.overall_summary_suggestion || `Ok, ${state.clientName}!`;
             let multipleActionBodiesList = [];
+            let mainActionResult = null; // Para guardar o resultado da ação principal
             const isOwnerActingOnOwnBehalfGlobal = !state.isSharedAccessContext || state.ownerClientIdForContext === actorClient.id;
-            const aihasMultipleActions = aiResponse.detected_actions.length > 1;
 
-            let multiActionBlockContext = {
-                type: 'multi_action_block',
-                resources: []
-            };
-
+            // --- PASSO 5.1: Executa as ações detectadas pela IA ---
             for (const detectedAction of aiResponse.detected_actions) {
                 const actionName = detectedAction.action || detectedAction.action_type;
                 
@@ -546,48 +540,56 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     continue;
                 }
                 
-                const actionResult = await actionHandler.handleAction(state, detectedAction, state.clientName, isOwnerActingOnOwnBehalfGlobal, actorClient.id);
+                // Executa a ação e guarda o resultado
+                mainActionResult = await actionHandler.handleAction(state, detectedAction, state.clientName, isOwnerActingOnOwnBehalfGlobal, actorClient.id);
                 
-                    if (state.pendingChainedAction && detectedAction.action === 'CREATE_CREDIT_CARD') {
-                    // Verifica se a criação do cartão foi bem-sucedida pelo contexto do botão
-                    const newCardResource = actionResult.resourceForButtonsContext?.resources?.find(r => r.type === 'credit_card');
-                    if (newCardResource) {
-                        logger.info(`[MAESTRO] Ação principal concluída. Executando ação encadeada: ${state.pendingChainedAction.action}`);
-                        
-                        const chainedAction = state.pendingChainedAction;
-                        // Adiciona o nome do cartão recém-criado aos parâmetros da ação original
-                        chainedAction.parameters.creditCardName = newCardResource.description;
-
-                        // Executa a ação original (gasto no cartão)
-                        const chainedActionResult = await actionHandler.handleAction(state, chainedAction, state.clientName, isOwnerActingOnOwnBehalfGlobal, actorClient.id);
-                        
-                        // Anexa o resultado da ação encadeada à resposta
-                        if (chainedActionResult.formattedData) {
-                            multipleActionBodiesList.push(chainedActionResult.formattedData);
-                        }
-
-                        // Limpa a ação pendente do estado
-                        state.pendingChainedAction = null;
-                    }
+                if (mainActionResult.formattedData) {
+                    multipleActionBodiesList.push(mainActionResult.formattedData);
                 }
-
-                if (actionResult.formattedData) {
-                    multipleActionBodiesList.push(actionResult.formattedData);
-                }
-                if (actionResult.wasAnEdit) {
+                if (mainActionResult.wasAnEdit) {
                     state.editingResource = null;
                 }
-                
-                if (actionResult.resourceForButtonsContext && actionResult.resourceForButtonsContext.resources) {
-                    multiActionBlockContext.resources.push(...actionResult.resourceForButtonsContext.resources);
-                }
-
-                if (actionResult.resourceForButtonsContext?.id === 'account_switched') {
-                    const newAccount = actionResult.resourceForButtonsContext.data;
+                if (mainActionResult.resourceForButtonsContext?.id === 'account_switched') {
+                    const newAccount = mainActionResult.resourceForButtonsContext.data;
                     state.activeFinancialAccountId = newAccount.id;
                     state.activeFinancialAccountName = newAccount.accountName || newAccount.name;
                     state.activeFinancialAccountType = newAccount.accountType || newAccount.type;
                 }
+            }
+
+            // --- PASSO 5.2: Verifica e executa a ação encadeada (se houver) ---
+            if (state.pendingChainedAction && mainActionResult) {
+                const primaryAction = aiResponse.detected_actions[0]; // Ação que acabou de ser executada
+                const newResource = mainActionResult.resourceForButtonsContext?.resources?.[0];
+
+                // Condição: A ação principal foi a criação de um cartão e foi bem-sucedida?
+                if (primaryAction.action === 'CREATE_CREDIT_CARD' && newResource?.type === 'credit_card') {
+                    logger.info(`[MAESTRO] Ação principal (Criação de Cartão) concluída. Executando ação encadeada: ${state.pendingChainedAction.action}`);
+                    
+                    const chainedAction = state.pendingChainedAction;
+                    chainedAction.parameters.creditCardName = newResource.description; // Adiciona o nome do cartão novo
+
+                    const chainedActionResult = await actionHandler.handleAction(state, chainedAction, state.clientName, isOwnerActingOnOwnBehalfGlobal, actorClient.id);
+                    
+                    if (chainedActionResult.formattedData) {
+                        multipleActionBodiesList.push(chainedActionResult.formattedData);
+                    }
+                    // Adiciona o recurso da ação encadeada ao contexto dos botões, se houver
+                    if (chainedActionResult.resourceForButtonsContext?.resources) {
+                         if (!mainActionResult.resourceForButtonsContext) {
+                            mainActionResult.resourceForButtonsContext = { type: 'multi_action_block', resources: [] };
+                        }
+                        mainActionResult.resourceForButtonsContext.resources.push(...chainedActionResult.resourceForButtonsContext.resources);
+                    }
+
+                    state.pendingChainedAction = null; // Limpa a ação encadeada
+                }
+            }
+
+            // --- PASSO 5.3: Monta a mensagem final e envia ---
+            let aiMessageIntro = aiResponse.overall_summary_suggestion || `Ok, ${state.clientName}!`;
+            if (state.pendingChainedAction === null && aiResponse.detected_actions[0]?.action === 'CREATE_CREDIT_CARD') {
+                 aiMessageIntro = `Cartão na mão e gasto anotado! ✅ Seu novo cartão foi criado e o gasto original já foi registrado nele. Simples assim!`;
             }
 
             let structuredDataBody = multipleActionBodiesList.join("\n\n---\n\n");
@@ -607,15 +609,18 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             if (finalMessageToSend) {
                 state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
 
-                if (aihasMultipleActions && multiActionBlockContext.resources.length > 0) {
-                    const blockId = Buffer.from(JSON.stringify(multiActionBlockContext.resources)).toString('base64');
+                const resourcesForButtons = mainActionResult?.resourceForButtonsContext?.resources || [];
+                const hasMultipleResources = resourcesForButtons.length > 1;
+
+                if (hasMultipleResources) {
+                    const blockId = Buffer.from(JSON.stringify(resourcesForButtons)).toString('base64');
                     const buttons = [
                         { id: `edit:multi_action_block:${blockId}`, label: '✏️ Editar este bloco' },
                         { id: `delete:multi_action_block:${blockId}`, label: '🗑️ Excluir algo' }
                     ];
                     await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, "Opções:");
-                } else if (!aihasMultipleActions && multiActionBlockContext.resources.length === 1) {
-                    const singleResource = multiActionBlockContext.resources[0];
+                } else if (resourcesForButtons.length === 1) {
+                    const singleResource = resourcesForButtons[0];
                     const buttons = [
                         { id: `edit:${singleResource.type}:${singleResource.id}`, label: '✏️ Editar' },
                         { id: `delete:${singleResource.type}:${singleResource.id}`, label: '🗑️ Excluir' }
@@ -632,11 +637,9 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         } else if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
             const clarification = aiResponse.clarifications_needed[0];
             
-            // <<< NOVA LÓGICA PARA ARMAZENAR A AÇÃO ENCADEADA >>>
             if (clarification.parameters_so_far && clarification.parameters_so_far.chained_action_context) {
                 logger.info(`[MAESTRO] Ação encadeada detectada. Armazenando contexto para execução posterior.`);
                 state.pendingChainedAction = clarification.parameters_so_far.chained_action_context;
-                // Limpa o `parameters_so_far` para o fluxo normal de criação de cartão não se confundir
                 clarification.parameters_so_far = {}; 
             }
             

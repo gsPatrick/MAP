@@ -25,7 +25,7 @@ async function initializeDatabaseAndJobs() {
     // LÓGICA DE SINCRONIZAÇÃO SEGURA (HARDCODED)
     // ==========================================================================
     if (isProduction) {
-            await sequelize.sync({ force: true });
+            await sequelize.sync({ force: false });
 
       // Em produção, NUNCA sincronizamos. A estrutura do banco é gerenciada
       // exclusivamente por arquivos de migração (migrations).
@@ -38,11 +38,11 @@ async function initializeDatabaseAndJobs() {
       if (forceReset) {
         // Esta opção só funciona se NODE_ENV NÃO for 'production'.
         console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
-        console.warn('!! ATENÇÃO: MODO DESENVOLVIMENTO com FORCE_DB_RESET=true.                 !!');
+        console.warn('!! ATENÇÃO: MODO DESENVOLVIMENTO com FORCE_DB_RESET=false.                 !!');
         console.warn('!! O BANCO DE DADOS SERÁ COMPLETAMENTE APAGADO E RECRIADO.                !!');
         console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
-        await sequelize.sync({ force: true });
-        console.log('Banco de dados resetado com sucesso (force: true).');
+        await sequelize.sync({ force: false });
+        console.log('Banco de dados resetado com sucesso (force: false).');
         
         // Após um reset total, é essencial semear os dados básicos.
         console.log('Executando seeder de planos...');
@@ -50,8 +50,8 @@ async function initializeDatabaseAndJobs() {
 
       } else {
         // Comportamento padrão para desenvolvimento: tenta alterar tabelas sem apagar.
-        console.log('Ambiente de DESENVOLVIMENTO. Sincronizando modelos com { alter: true }...');
-        await sequelize.sync({ alter: true });
+        console.log('Ambiente de DESENVOLVIMENTO. Sincronizando modelos com { alter: false }...');
+        await sequelize.sync({ alter: false });
         console.log('Modelos sincronizados com o banco de dados (alter: true).');
         
         // Também é seguro rodar o seeder aqui, pois ele deve ser idempotente (verificar se já existe).
