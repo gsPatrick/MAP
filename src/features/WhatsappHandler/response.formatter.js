@@ -803,6 +803,34 @@ const emojiMap = {
 }
 
 
+function formatMorningBriefing(clientName, accountName, pendingTransactions, appointments) {
+    const greeting = `Bom dia, ${clientName}! ☀️\nEspero que seu dia seja incrível!`;
+    const intro = `Passando para te dar um panorama da sua conta *${accountName}* para hoje:`;
+
+    let financialSection = `\n\n*Pagamentos/Recebimentos Pendentes:*\n`;
+    if (pendingTransactions && pendingTransactions.length > 0) {
+        pendingTransactions.forEach(tx => {
+            const emoji = tx.type === 'Entrada' ? '🟢' : '🔻';
+            financialSection += `> ${emoji} ${tx.description} - ${formatCurrency(tx.value)}\n`;
+        });
+    } else {
+        financialSection += `> Nenhuma transação pendente hoje. Ufa! 🙌\n`;
+    }
+
+    let appointmentSection = `\n*Compromissos e Afazeres:*\n`;
+    if (appointments && appointments.length > 0) {
+        appointments.forEach(appt => {
+            appointmentSection += `> ${formatTime(appt.eventDateTime, false)} - ${appt.title}\n`;
+        });
+    } else {
+        appointmentSection += `> Nenhum compromisso agendado para hoje. Dia livre! 🤸\n`;
+    }
+
+    const footer = `\nSe precisar de qualquer coisa, estou à disposição! ✌️`;
+
+    return `${greeting}\n\n${intro}${financialSection}${appointmentSection}${footer}`.trim();
+}
+
 
 
 // Exporta todas as funções em um único objeto
@@ -842,5 +870,6 @@ module.exports = {
     formatRecurringRuleHistoryDataStructure,
     formatRecurringRuleDataStructure,
     formatFinancialSummaryDataStructure,
-    formatRichRecurringRuleList
+    formatRichRecurringRuleList,
+    formatMorningBriefing
 };

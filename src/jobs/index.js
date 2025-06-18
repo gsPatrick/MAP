@@ -6,6 +6,7 @@ const startAlertsJob = require('./alertsJob');
 const startFinancialSummaryJobs = require('./financialSummaryJob');
 const startRecurringTransactionJob = require('./recurringTransactionJob');
 const startGoogleCalendarWatchRenewalJob = require('./googleCalendarWatchRenewalJob'); // <<< NOVO JOB
+const startMorningBriefingJob = require('./morningBriefingJob'); // <<< NOVO JOB IMPORTADO
 
 const logger = require('../utils/logger');
 const { sequelize, UserPreference } = require('../database');
@@ -27,6 +28,7 @@ async function startJobs() {
     startFinancialSummaryJobs(preferences, models);
     startRecurringTransactionJob(preferences, models);
     startGoogleCalendarWatchRenewalJob(preferences, models); // <<< INICIA O NOVO JOB
+    startMorningBriefingJob(preferences, models); // <<< NOVO JOB INICIADO
 
     logger.info('Todos os Jobs foram configurados e agendados.');
   } catch (error) {

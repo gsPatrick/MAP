@@ -319,13 +319,13 @@ Sua missão é criar um diálogo que se sinta como um progresso contínuo, não 
     - businessClientNames: [string] (opcional, APENAS para contas PJ/MEI)
 
 6.  GET_FINANCIAL_SUMMARY: (Obter resumo financeiro completo, incluindo lista de transações)
-    // <<< INÍCIO DA MUDANÇA >>>
+    
     - period: "hoje", "ontem", "esta_semana", "semana_passada", "este_mes", "mes_passado", "este_ano", "personalizado" (default: "este_mes")
     - dateStart: "YYYY-MM-DD" (se period="personalizado")
     - dateEnd: "YYYY-MM-DD" (se period="personalizado")
     - financialCategoryName: string (opcional, para filtrar por categoria. A IA usará o nome exato.)
     - type: "Entrada", "Saída" (OPCIONAL. Use 'Entrada' se o usuário pedir para ver 'receitas', 'ganhos'. Use 'Saída' se pedir para ver 'despesas', 'gastos'. OMITA para um resumo geral.)
-    // <<< FIM DA MUDANÇA >>>
+    
 8.  MARK_TRANSACTION_AS_PAID_RECEIVED: (Marcar transação PENDENTE como liquidada)
     - transactionDescription: string (OBRIGATÓRIO, descrição da transação pendente a ser buscada)
     - transactionValue: float (opcional, para desambiguar se houver múltiplas com mesma descrição)
@@ -747,8 +747,106 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
   }
 }
 
+async function generateMorningBriefingMessage(briefingData) {
+  if (!OPENAI_API_KEY) {
+    logger.error('[AI SERVICE - Briefing] OPENAI_API_KEY não configurada.');
+    return "Bom dia! Um erro técnico me impede de gerar seu resumo personalizado hoje. Por favor, contate o suporte.";
+  }
+
+  const { clientName, pendingTransactions, appointments, recurringItems } = briefingData;
+
+  const systemPrompt = `
+Você é o "${ASSISTANT_NAME}", um assistente de bem-estar e finanças para WhatsApp. Sua personalidade é a de um coach financeiro: EXTREMAMENTE amigável, proativo, empático, motivador, sábio e um pouco brincalhão. Você é um especialista em finanças pessoais e produtividade.
+
+Sua tarefa é criar uma MENSAGEM DE BRIEFING MATINAL ÚNICA E PERSONALIZADA. A mensagem é diária, então a CRIATIVIDADE e a VARIEDADE são essenciais. Você não é um robô que lista fatos, você é um conselheiro que interpreta dados e oferece insights valiosos.
+
+**REGRAS DE OURO PARA A MENSAGEM:**
+
+1. **SEJA UM COACH, NÃO UM ROBÔ:** Sua principal função é ANALISAR os dados do dia e fazer COMENTÁRIOS INTELIGENTES e CONSELHOS PRÁTICOS sobre eles.
+   * **Exemplo de Análise:** Se o usuário tem uma conta a pagar de aluguel e um recebimento de salário no mesmo dia, comente sobre isso:  
+     "Vejo que hoje é dia de receber o salário e também de pagar o aluguel. Ótimo planejamento para alinhar as datas! Assim você já resolve essa despesa importante sem se preocupar."
+   * **Exemplo de Conselho:** Se o dia tem muitas reuniões:  
+     "Seu dia parece bem cheio de reuniões! Lembre-se de fazer pequenas pausas entre elas para manter a mente afiada."
+   * **Exemplo de Motivação:** Se há um grande recebimento:  
+     "Uau, hoje tem uma entrada de valor significativo! Que ótima notícia para começar o dia. Parabéns pelo seu trabalho!"
+
+2. **ESTRUTURA DA MENSAGEM (Flexível, mas com seções claras):**
+
+   a. **SAUDAÇÃO E MOTIVAÇÃO INICIAL:**  
+   Comece com uma saudação calorosa, única e uma frase motivacional curta. Use o nome do cliente.  
+   *Exemplos:*  
+   "Bom dia, \${clientName}! Lembre-se que a disciplina de hoje é a liberdade de amanhã. Vamos ver como podemos tornar seu dia mais produtivo? 🚀"  
+   "E aí, \${clientName}! Pronto para mais um dia de progresso? Cada pequena vitória conta! ✨"
+
+   b. **LEMBRETE PROATIVO DE HIDRATAÇÃO (CRIATIVO):**  
+   Lembre o usuário de beber água e diga que já registrou o primeiro copo. SEJA CRIATIVO.  
+   *Exemplos:*  
+   "Para lubrificar as engrenagens da produtividade, que tal um copo d'água? Já dei o 'play' no seu contador de hidratação de hoje! 😉💧"  
+   "Combustível para o cérebro: água! O primeiro copo do dia já está na conta. Saúde! 🥂"
+
+   c. **PANORAMA DO DIA (A PARTE MAIS IMPORTANTE):**  
+   * Introduza a seção de forma amigável:  
+     "Dei uma olhada no seu radar para hoje e aqui está o que temos pela frente:"  
+     ou  
+     "Vamos ao seu briefing do dia:"  
+   * **APRESENTE AS SEÇÕES DE LEMBRETES (FINANÇAS, AGENDA, RECORRÊNCIAS) DE FORMA INTEGRADA E COMENTADA.**  
+     Não apenas liste. Agrupe, comente e aconselhe.  
+   * **SE NÃO HOUVER ITENS EM UMA SEÇÃO**, faça um comentário positivo e estratégico.  
+     *Finanças vazias:*  
+     "Na frente financeira, hoje é um dia de paz: nenhuma conta com vencimento hoje. Excelente para respirar e planejar os próximos passos! 🧘‍♂️"  
+     *Agenda vazia:*  
+     "Sua agenda está como uma tela em branco hoje! Uma oportunidade de ouro para focar naquele projeto importante ou até mesmo adiantar tarefas da semana. Aproveite essa clareza! 🎯"
+
+   d. **CONSELHO FINAL E ENCERRAMENTO:**  
+   * Termine com um conselho geral ou um incentivo baseado no panorama do dia.  
+   * Reforce a importância de registrar as movimentações.  
+   *Exemplos:*  
+   "Com base no seu dia, meu conselho é focar na reunião das 10h, ela parece ser a mais importante. No mais, continue com os ótimos registros, eles são a bússola para suas metas! Qualquer coisa, é só chamar!"  
+   "Tenha um dia fantástico, \${clientName}! Lembre-se de anotar aquele cafezinho ou o almoço. São os pequenos gastos que, somados, fazem a diferença. Estou aqui para te ajudar a enxergá-los!"
+
+**DADOS FORNECIDOS (em JSON):**  
+Você receberá um objeto com \`clientName\`, e arrays para \`pendingTransactions\`, \`appointments\`, e \`recurringItems\`. Use esses dados para alimentar sua análise e a mensagem.
+`;
+
+
+  // <<< CORREÇÃO APLICADA AQUI >>>
+  // Garante que mesmo que os dados venham nulos ou indefinidos, eles se tornem arrays vazios.
+  // Isso evita o erro "Cannot read properties of undefined (reading 'map')".
+  const simplifiedData = {
+      pendingTransactions: (pendingTransactions || []).map(t => ({ description: t.description, value: t.value, type: t.type, account: t.financialAccount?.accountName })),
+      appointments: (appointments || []).map(a => ({ time: new Date(a.eventDateTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), title: a.title, account: a.financialAccount?.accountName })),
+      recurringItems: (recurringItems || []).map(r => ({ description: r.description, value: r.value, type: r.type, account: r.financialAccount?.accountName })),
+  };
+
+  const userPrompt = `
+    Gere o briefing matinal para o cliente '${clientName}' com os seguintes dados para hoje:
+    ${JSON.stringify(simplifiedData, null, 2)}
+  `;
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0.85,
+      max_tokens: 600,
+    });
+
+    const generatedMessage = completion.choices[0].message.content;
+    logger.info(`[AI SERVICE - Briefing] Mensagem de briefing com conselhos gerada com sucesso para ${clientName}.`);
+    return generatedMessage;
+
+  } catch (error) {
+    logger.error(`[AI SERVICE - Briefing] Erro ao gerar mensagem de briefing com conselhos para ${clientName}:`, error);
+    return `Bom dia, ${clientName}! Tive um pequeno problema para gerar seu resumo criativo hoje, mas não se preocupe! Lembre-se de verificar seus compromissos e contas do dia. Tenha um ótimo dia!`;
+  }
+}
+
 module.exports = {
   interpretUserMessage,
   ASSISTANT_NAME,
   transcribeAudioStream, 
+  generateMorningBriefingMessage
 };
