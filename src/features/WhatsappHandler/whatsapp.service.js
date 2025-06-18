@@ -499,31 +499,9 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             if (!state.activeFinancialAccountId) return;
         }
 
-   // ETAPA 4: PRÉ-PROCESSAMENTO DE MENSAGEM E CHAMADA DA IA
-        let messageToSendToAI = messageText;
-        const isContinuingPreviousAction = state.currentAction === 'awaiting_clarification_response' && state.pendingConfirmation;
-
-        if (isContinuingPreviousAction) {
-            // O usuário está respondendo a uma pergunta. Vamos ajudar a IA a entender o contexto.
-            const pendingParams = state.pendingConfirmation.parameters;
-            const actionNameForContext = state.pendingConfirmation.action.toLowerCase().replace(/_/g, ' ');
-
-            // Cria uma "super-frase" combinando a intenção original com a nova informação.
-            let combinedMessage = `continuando a ação de ${actionNameForContext}`;
-            
-            const mainIdentifier = pendingParams.name || pendingParams.description || pendingParams.title;
-            if (mainIdentifier) {
-                combinedMessage += ` para "${mainIdentifier}"`;
-            }
-            
-            // Adiciona a nova informação do usuário
-            combinedMessage += `, com os seguintes dados: ${messageText}`;
-
-            messageToSendToAI = combinedMessage;
-            logger.info(`[MAESTRO] Continuando ação pendente. Mensagem combinada para IA: "${messageToSendToAI}"`);
-        }
-        
+        // ETAPA 4: Delegar para a IA e para o Action Handler
         const availableFinancialCategoriesForAI = await financialCategoryService.getAllCategoriesForAccountAI(state.activeFinancialAccountId);
+        
         const availableCreditCardsForAI = await creditCardService.getActiveCreditCardsForAI(state.activeFinancialAccountId);
 
         const aiContext = {
@@ -536,9 +514,10 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             editingResource: state.editingResource,
             availableFinancialCategories: availableFinancialCategoriesForAI,
             availableCreditCards: availableCreditCardsForAI,
+            pendingAction: state.currentAction === 'awaiting_clarification_response' ? state.pendingConfirmation : null
         };
 
-        const aiResponse = await aiModelService.interpretUserMessage(messageToSendToAI, aiContext);
+        const aiResponse = await aiModelService.interpretUserMessage(messageText, aiContext);
         state.lastAiResponse = aiResponse;
 
         let finalMessageToSend = "";
