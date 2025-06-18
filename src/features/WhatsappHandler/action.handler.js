@@ -617,28 +617,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         type: params.type,
                     };
 
+                    // O serviço agora retorna o objeto completo
                     const summary = await financialService.getFinancialSummary(state.activeFinancialAccountId, filters);
                     
-                    summary.totalIncome = summary.totalIncome || 0;
-                    summary.totalExpenses = summary.totalExpenses || 0;
-                    summary.netBalance = summary.netBalance || 0;
-                    summary.accountTotalBalance = summary.accountTotalBalance || 0;
-
-                    let summaryIntro = `Aqui está o resumo financeiro para o período de *${summary.periodDescription}*, ${clientNameToUse}! 📊`;
-                    let summaryBody = `➡️ Total de Entradas: ${formatter.formatCurrency(summary.totalIncome)}\n` +
-                                      `⬅️ Total de Saídas: ${formatter.formatCurrency(summary.totalExpenses)}\n` +
-                                      `⚖️ Saldo do Período: ${formatter.formatCurrency(summary.netBalance)}\n\n` +
-                                      `💰 Saldo Total da Conta (aproximado): ${formatter.formatCurrency(summary.accountTotalBalance)}`;
-
-                    if(summary.categoryBreakdown && summary.categoryBreakdown.length > 0){
-                        summaryBody += "\n\nDetalhamento por Categoria (Top 5 Saídas):\n";
-                        summary.categoryBreakdown.slice(0,5).forEach(cat => {
-                            summaryBody += `- ${cat.categoryName || 'Outros'}: ${formatter.formatCurrency(cat.totalValue)}\n`;
-                        });
-                    }
+                    // Monta a mensagem usando o novo formatador
+                    let summaryIntro = `Aqui está o resumo financeiro para *${summary.periodDescription}*, ${clientNameToUse}! 📊`;
+                    const summaryBody = formatter.formatFinancialSummaryDataStructure(summary);
                     
-                    // Esta ação não precisa de um "Resumo da Ação", a própria resposta já é o resumo.
-                    // Portanto, montamos a mensagem completa aqui.
                     formattedData = `${summaryIntro}\n\n${summaryBody}`;
 
                 } catch (e) {

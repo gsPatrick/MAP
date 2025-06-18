@@ -4,8 +4,7 @@ const { UserPreference, FinancialAccount, Client } = require('../database');
 const financialService = require('../features/Financial/financial.service');
 const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
-// Importando formatadores para consistência
-const { formatCurrency } = require('../utils/formatters');
+const formatter = require('../features/WhatsappHandler/response.formatter'); // Importa o formatador
 
 async function sendFinancialSummariesForPeriod(period) {
   logger.info(`[JOB RESUMO FINANCEIRO] Iniciando geração de resumos (${period})...`);
@@ -34,7 +33,7 @@ async function sendFinancialSummariesForPeriod(period) {
                 continue;
             }
 
-            // A lógica de data foi movida para o serviço, então passamos apenas o período.
+            // O serviço agora retorna o objeto completo
             const summary = await financialService.getFinancialSummary(account.id, { period });
             
             let introMessageTemplate;
@@ -54,13 +53,9 @@ async function sendFinancialSummariesForPeriod(period) {
 
             const intro = introMessageTemplate.replace('{clientName}', clientName).replace('{accountName}', account.accountName);
 
-            // <<< CORREÇÃO DOS NOMES DAS PROPRIEDADES >>>
-            const body = `*${summary.periodDescription}*\n\n` +
-                         `✅ *Entradas:* ${formatCurrency(summary.totalIncome)}\n` +
-                         `❌ *Saídas:* ${formatCurrency(summary.totalExpenses)}\n` +
-                         `⚖️ *Balanço do Período:* ${formatCurrency(summary.netBalance)}\n\n` +
-                         `🗓️ *A Receber (total pendente):* ${formatCurrency(summary.totalToReceivePending)}\n` +
-                         `🧾 *A Pagar (total pendente):* ${formatCurrency(summary.totalToPayPending)}`;
+            // <<< A MÁGICA ACONTECE AQUI >>>
+            // Usamos o novo formatador para criar o corpo da mensagem.
+            const body = formatter.formatFinancialSummaryDataStructure(summary);
 
             const footer = "Para ver mais detalhes, acesse a plataforma! 😉";
 

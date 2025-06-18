@@ -667,6 +667,60 @@ function formatRichRecurringRuleList(enrichedRules, totalItems, clientName) {
 }
 
 
+function formatFinancialSummaryDataStructure(summary) {
+    if (!summary) return "📊 Resumo Financeiro:\n\nDados não disponíveis.";
+    
+    const emojiMap = {
+        'alimentação': '🍽️', 'transporte': '🚗', 'moradia': '🏠', 'lazer': '🎉', 'saúde': '💊',
+        'educação': '📚', 'compras': '🛒', 'serviços': '💼', 'salário': '💰', 'investimentos': '📈',
+        'outros': '📂', 'freelance': '💻', 'vendas': '🛍️', 'presente': '🎁', 'viagem': '✈️'
+    };
+    const getCategoryEmoji = (categoryName) => {
+        if (!categoryName) return '📂';
+        const nameLower = categoryName.toLowerCase();
+        for (const key in emojiMap) {
+            if (nameLower.includes(key)) return emojiMap[key];
+        }
+        return '📂';
+    };
+
+    let data = `💸 *Entradas:* ${formatCurrency(summary.totalIncome)}\n` +
+               `💔 *Saídas:* ${formatCurrency(summary.totalExpenses)}\n` +
+               `⚖️ *Balanço Final:* ${formatCurrency(summary.netBalance)}\n`;
+
+    if (summary.expenseBreakdown && summary.expenseBreakdown.length > 0) {
+        data += `\n📂 *Despesas por Categoria:*\n`;
+        summary.expenseBreakdown.forEach(item => {
+            const emoji = getCategoryEmoji(item.categoryName);
+            data += `${emoji} ${item.categoryName}: ${formatCurrency(item.totalValue)}\n`;
+        });
+    }
+
+    if (summary.totalToReceivePending > 0 || summary.totalToPayPending > 0) {
+        data += `\n📬 *Valores Pendentes:*\n`;
+        data += `📥 A Receber: ${formatCurrency(summary.totalToReceivePending)}\n`;
+        data += `📤 A Pagar: ${formatCurrency(summary.totalToPayPending)}\n`;
+    }
+
+    if (summary.recentTransactions && summary.recentTransactions.length > 0) {
+        data += `\n─────────────────────\n`;
+        data += `🧾 *Movimentações do Período:*\n`;
+        summary.recentTransactions.forEach(tx => {
+            const emojiType = tx.type === 'Entrada' ? '🔺' : '🔻';
+            const categoryName = tx.category?.name || 'Geral';
+            const categoryEmoji = getCategoryEmoji(categoryName);
+            
+            data += `\n📅 ${formatDate(tx.transactionDate)} — ${emojiType} *${tx.type}*\n`;
+            data += `📌 ${categoryEmoji} ${categoryName} – ${tx.description}\n`;
+            data += `💰 Valor: ${formatCurrency(tx.value)}\n`;
+        });
+    }
+
+    return data.trim();
+}
+
+
+
 
 // Exporta todas as funções em um único objeto
 module.exports = {
@@ -704,5 +758,6 @@ module.exports = {
     formatFinancialCategoryDataStructure,
     formatRecurringRuleHistoryDataStructure,
     formatRecurringRuleDataStructure,
+    formatFinancialSummaryDataStructure,
     formatRichRecurringRuleList
 };
