@@ -91,7 +91,6 @@ async function transcribeAudioStream(audioStream, inputFilename) {
     }
   }
 }
-
 function buildSystemPrompt(conversationContext) {
   const now = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
   const today = now.toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -258,13 +257,6 @@ Sua missão é criar um diálogo que se sinta como um progresso contínuo, não 
             *   Exemplo: "Pode ser numa frase só, tipo: *'fecha dia 20 e vence dia 01'*."
     4.  Em \`parameters_so_far\`, inclua os parâmetros que você já extraiu.
     5.  Sua \`reply_to_user_suggestion\` deve ser a mesma \`clarification_question\`.
-
-**REGRA 3: CONTINUANDO A CONVERSA (CONTEXTO PENDENTE)**
-*   Se o contexto da conversa indicar que há uma ação pendente (\`conversationContext.pendingAction\`), a mensagem atual do usuário é uma resposta a essa pendência.
-*   **PRIORIDADE MÁXIMA:** Você DEVE usar a nova mensagem do usuário para tentar completar os parâmetros da ação pendente.
-*   Combine os parâmetros já conhecidos (\`pendingAction.parameters\`) com os novos extraídos da mensagem atual.
-*   Se, após a combinação, a ação ainda estiver incompleta, repita a **REGRA 2** (Ação Incompleta), mostrando o progresso atualizado.
-*   Se, após a combinação, a ação estiver completa, execute a **REGRA 1** (Ação Completa).
 
 **AÇÕES E PARÂMETROS:** 
 
