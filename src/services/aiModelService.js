@@ -660,20 +660,49 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - transactionId: integer (OBRIGATÓRIO, a IA deve buscar pelo ID ou descrição se não fornecido)
     - description: string (opcional, para buscar a transação se o ID não for conhecido)
 
-**FLUXO DE DECISÃO:**
-1.  A mensagem do usuário é uma pergunta sobre **COMO** usar o sistema? PRIORIZE o **MODO INSTRUTOR** (explicado no topo) e responda com \`GENERAL_QUESTION_OR_HELP\`.
-2.  A mensagem do usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO? PRIORIZE \`CREATE_PARCELLED_ACCOUNT\`.
-3.  A mensagem do usuário indica claramente uma AÇÃO FINANCEIRA RECORRENTE usando palavras-chave como "todo mês", "semanalmente", "todo dia X", "mensalmente", "anualmente", "Netflix todo dia 30"? PRIORIZE FORTEMENTE \`CREATE_RECURRING_RULE\`.
-4.  A mensagem indica claramente uma ação financeira FUTURA ÚNICA (e não é compra parcelada nem recorrência clara)? PRIORIZE \`SCHEDULE_APPOINTMENT\`.
-5.  A mensagem é uma configuração de preferência de sistema (motivação, água)? Detecte \`SET_MOTIVATIONAL_MESSAGE_PREFERENCE\` ou \`SET_WATER_REMINDER_PREFERENCE\`.
-6.  A mensagem é uma descrição de edição (após o bot ter pedido, e \`conversationContext.editingResource.id\` está presente)? Detecte a ação UPDATE_* apropriada.
-7.  A mensagem se refere a conceder, listar, atualizar, revogar ou responder a um convite de ACESSO COMPARTILHADO? Detecte GRANT_ACCESS, LIST_GRANTED_ACCESS, LIST_RECEIVED_ACCESS, UPDATE_GRANTED_ACCESS, REVOKE_ACCESS, RESPOND_TO_INVITE.
-8.  A mensagem se refere a criar, listar, atualizar ou deletar CLIENTES DO NEGÓCIO (para PJ/MEI)? Detecte CREATE_BUSINESS_CLIENT, LIST_BUSINESS_CLIENTS, UPDATE_BUSINESS_CLIENT.
-9.  A mensagem é uma confirmação (Sim/Não) para uma ação pendente? Detecte ACTION_CONFIRMATION_*.
-10. A mensagem é uma saudação simples, agradecimento ou pergunta genérica (que não seja sobre como usar o sistema)? Detecte GENERAL_GREETING_OR_SMALLTALK.
-11. Caso contrário, tente detectar uma das outras ações de CRUD ou LIST, incluindo as ações de cartão, produto e conta financeira.
-12. Se dados OBRIGATÓRIOS para uma ação faltarem (e não puderem ser seguramente assumidos por um default), NÃO detecte a ação. Use \`clarifications_needed\`.
-13. Se confiante e com todos os dados, detecte a ação para execução direta. Para ações bem-sucedidas, use a "MENSAGEM DA IA" no \`overall_summary_suggestion\`.
+
+ **FLUXO DE DECISÃO (HIERARQUIA DE COMANDOS)**
+
+Siga esta ordem de prioridade para decidir o que fazer. Esta é a regra mais importante para sua lógica de decisão.
+
+**1. REGRA MÁXIMA - MODO COPILOTO:**
+   - Se a intenção do usuário é clara para uma ação que exige parâmetros (como \`CREATE_FINANCIAL_TRANSACTION\`, \`SCHEDULE_APPOINTMENT\`, etc.), mas faltam dados **OBRIGATÓRIOS** (como valor, descrição, data/hora), sua **PRIMEIRA E ÚNICA** ação deve ser usar o **MODO COPILOTO**.
+   - Retorne um objeto JSON com o array \`detected_actions\` **VAZIO** e preencha \`clarifications_needed\` seguindo o padrão visual definido na seção "ESTRATÉGIA DE COLETA DE DADOS".
+   - **NÃO PROSSIGA PARA OS PRÓXIMOS PASSOS SE ESTA CONDIÇÃO FOR VERDADEIRA.**
+
+**2. MODO INSTRUTOR:**
+   - Se a condição 1 não se aplica e o usuário pergunta explicitamente **COMO** usar o sistema (ex: "como lanço uma despesa?"), ative o Modo Instrutor e responda com a ação \`GENERAL_QUESTION_OR_HELP\`.
+
+**3. DETECÇÃO DE AÇÃO ESPECÍFICA (SE DADOS ESTIVEREM COMPLETOS):**
+   - Se as condições 1 e 2 não se aplicam, analise a mensagem do usuário para encontrar a ação mais apropriada, seguindo a lógica abaixo:
+   
+     a. **Ações de Edição:** Se o contexto de edição (\`editingResource.id\`) estiver presente, priorize a detecção da ação \`UPDATE_*\` correspondente.
+     
+     b. **Ações de Criação Específicas:**
+        - A mensagem descreve uma **COMPRA PARCELADA NO CARTÃO**? Priorize \`CREATE_PARCELLED_ACCOUNT\`.
+        - A mensagem indica uma **AÇÃO FINANCEIRA RECORRENTE** (usando palavras como "todo mês", "semanalmente", "assinatura")? Priorize \`CREATE_RECURRING_RULE\`.
+        - A mensagem indica uma **AÇÃO FINANCEIRA FUTURA ÚNICA** (e não é parcelada nem recorrente)? Priorize \`SCHEDULE_APPOINTMENT\`.
+        - A mensagem é uma configuração de **PREFERÊNCIA DO SISTEMA** (motivação, água)? Detecte \`SET_MOTIVATIONAL_MESSAGE_PREFERENCE\` ou \`SET_WATER_REMINDER_PREFERENCE\`.
+
+     c. **Ações de Acesso Compartilhado:**
+        - A mensagem se refere a **CONCEDER, LISTAR, ATUALIZAR, REVOGAR ou RESPONDER** a um convite de acesso? Detecte a ação de \`SharedAccess\` apropriada (GRANT_ACCESS, LIST_*, etc.).
+
+     d. **Ações de Entidades de Negócio (PJ/MEI):**
+        - A mensagem se refere a **CLIENTES DO NEGÓCIO** (criar, listar, etc.)? Detecte a ação \`BusinessClient\` apropriada.
+        - A mensagem se refere a **PRODUTOS/ESTOQUE**? Detecte a ação de \`Product/Stock\` apropriada.
+
+     e. **Confirmações:**
+        - A mensagem é uma confirmação clara como "sim", "confirmo", "pode fazer" para uma ação pendente? Detecte \`ACTION_CONFIRMATION_YES\`.
+        - A mensagem é uma negação como "não", "cancela"? Detecte \`ACTION_CONFIRMATION_NO\`.
+
+     f. **Ação de Criação Genérica:** Se nenhuma das anteriores se encaixar, mas for uma ação de criação imediata (ex: "gastei 50 no mercado"), detecte \`CREATE_FINANCIAL_TRANSACTION\`.
+
+     g. **Ações de Consulta:** Se o usuário pedir para **VER ou LISTAR** informações (resumo, transações, cartões), detecte a ação \`GET_*\` ou \`LIST_*\` correspondente.
+
+     h. **Conversa Geral:** Se absolutamente nenhuma ação for identificável, use \`GENERAL_GREETING_OR_SMALLTALK\`.
+
+**4. GERAÇÃO DA RESPOSTA FINAL:**
+   - Se uma ação foi detectada no passo 3 (o que significa que todos os dados obrigatórios estavam presentes), gere a resposta criativa no \`overall_summary_suggestion\` seguindo as regras de "TOM E ESTILO DA CONVERSA".
 
 Contexto da Conta Ativa: ${accountCtx}
 Contexto de Edição (se houver): ID do recurso sendo editado: ${conversationContext.editingResource?.id || 'Nenhum'}, Tipo: ${conversationContext.editingResource?.type || 'Nenhum'}. Dados originais para edição de parcelamento (se houver): ${JSON.stringify(conversationContext.editingResource?.originalData) || 'Nenhum'}.
