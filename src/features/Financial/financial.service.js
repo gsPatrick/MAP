@@ -564,7 +564,7 @@ async function deleteTransaction(financialAccountId, transactionId) {
 async function getFinancialSummary(financialAccountId, filters = {}) {
   try {
     const account = await validateAndGetFinancialAccount(financialAccountId, null, [{ model: Client, as: 'ownerClient' }]);
-    const { period, financialCategoryId, type } = filters;
+    const { period, financialCategoryId, type } = filters; // <<< Pega o 'type' do filtro
     let { dateStart, dateEnd } = filters;
 
     let periodDescription = "Período Personalizado";
@@ -599,55 +599,66 @@ async function getFinancialSummary(financialAccountId, filters = {}) {
     const wherePeriod = {};
     if (dateStart) wherePeriod.transactionDate = { [Op.gte]: dateStart };
     if (dateEnd) wherePeriod.transactionDate = { ...wherePeriod.transactionDate, [Op.lte]: dateEnd };
+    
+    // <<< INÍCIO DA MUDANÇA >>>
+    // Aplica o filtro de tipo se ele for fornecido
+    if (type) {
+        wherePeriod.type = type;
+    }
 
-    // Cálculos de Totais
-    const totalIncome = await FinancialTransaction.sum('value', { where: { ...baseWhere, ...wherePeriod, type: 'Entrada' } });
-    const totalExpenses = await FinancialTransaction.sum('value', { where: { ...baseWhere, ...wherePeriod, type: 'Saída' } });
+    let totalIncome = 0;
+    let totalExpenses = 0;
+    let expenseBreakdown = [];
 
-    // Cálculos de Pendências (gerais, não do período)
+    // Calcula os totais e detalhamentos condicionalmente
+    if (type !== 'Saída') {
+        totalIncome = await FinancialTransaction.sum('value', { where: { ...baseWhere, ...wherePeriod, type: 'Entrada' } }) || 0;
+    }
+    if (type !== 'Entrada') {
+        totalExpenses = await FinancialTransaction.sum('value', { where: { ...baseWhere, ...wherePeriod, type: 'Saída' } }) || 0;
+        
+        expenseBreakdown = await FinancialTransaction.findAll({
+            where: { ...baseWhere, ...wherePeriod, type: 'Saída' },
+            attributes: [
+                'financialCategoryId',
+                [sequelize.fn('SUM', sequelize.col('value')), 'totalValue']
+            ],
+            include: [{ model: FinancialCategory, as: 'category', attributes: ['name'] }],
+            group: ['financialCategoryId', 'category.id'],
+            order: [[sequelize.fn('SUM', sequelize.col('value')), 'DESC']],
+            raw: true,
+            nest: true
+        }).then(results => results.map(r => ({
+            categoryName: r.category.name || 'Sem Categoria',
+            totalValue: parseFloat(r.totalValue)
+        })));
+    }
+    // <<< FIM DA MUDANÇA >>>
+
+    // Pendências são sempre gerais, então não aplicamos o filtro de tipo aqui
     const totalToReceivePending = await FinancialTransaction.sum('value', { where: { ...baseWhere, type: 'Entrada', isPayableOrReceivable: true, isPaidOrReceived: false } });
     const totalToPayPending = await FinancialTransaction.sum('value', { where: { ...baseWhere, type: 'Saída', isPayableOrReceivable: true, isPaidOrReceived: false } });
     
-    // Detalhamento de Despesas por Categoria no Período
-    const expenseBreakdown = await FinancialTransaction.findAll({
-        where: { ...baseWhere, ...wherePeriod, type: 'Saída' },
-        attributes: [
-            'financialCategoryId',
-            [sequelize.fn('SUM', sequelize.col('value')), 'totalValue']
-        ],
-        include: [{
-            model: FinancialCategory,
-            as: 'category',
-            attributes: ['name']
-        }],
-        group: ['financialCategoryId', 'category.id'],
-        order: [[sequelize.fn('SUM', sequelize.col('value')), 'DESC']],
-        raw: true,
-        nest: true
-    }).then(results => results.map(r => ({
-        categoryName: r.category.name || 'Sem Categoria',
-        totalValue: parseFloat(r.totalValue)
-    })));
-
-    // Lista de Transações Recentes no Período
+    // A lista de transações recentes respeitará o filtro de tipo
     const recentTransactions = await FinancialTransaction.findAll({
         where: { ...baseWhere, ...wherePeriod },
         include: [{ model: FinancialCategory, as: 'category', attributes: ['name'] }],
         order: [['transactionDate', 'ASC']],
-        limit: 15 // Limita a um número razoável para a mensagem
+        limit: 15
     });
 
     const summary = {
       financialAccountId,
       accountName: account.accountName,
       periodDescription,
-      totalIncome: totalIncome || 0,
-      totalExpenses: totalExpenses || 0,
-      netBalance: (totalIncome || 0) - (totalExpenses || 0),
+      totalIncome,
+      totalExpenses,
+      netBalance: totalIncome - totalExpenses,
       totalToReceivePending: totalToReceivePending || 0,
       totalToPayPending: totalToPayPending || 0,
       expenseBreakdown,
       recentTransactions,
+      type // Passa o tipo para o formatador saber como renderizar
     };
 
     logger.info(`Resumo financeiro completo gerado para FinancialAccount ID ${financialAccountId}.`);

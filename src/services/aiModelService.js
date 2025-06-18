@@ -318,26 +318,14 @@ Sua missão é criar um diálogo que se sinta como um progresso contínuo, não 
     - notes: string (opcional)
     - businessClientNames: [string] (opcional, APENAS para contas PJ/MEI)
 
-6.  GET_FINANCIAL_SUMMARY: (Obter resumo financeiro)
+6.  GET_FINANCIAL_SUMMARY: (Obter resumo financeiro completo, incluindo lista de transações)
+    // <<< INÍCIO DA MUDANÇA >>>
     - period: "hoje", "ontem", "esta_semana", "semana_passada", "este_mes", "mes_passado", "este_ano", "personalizado" (default: "este_mes")
     - dateStart: "YYYY-MM-DD" (se period="personalizado")
     - dateEnd: "YYYY-MM-DD" (se period="personalizado")
-    - financialCategoryName: string (opcional, para filtrar. A IA usará o nome exato da categoria se o usuário especificar.)
-    - type: "Entrada", "Saída" (opcional)
-
-7.  LIST_FINANCIAL_TRANSACTIONS: (Listar transações financeiras)
-    - period: (mesmos de GET_FINANCIAL_SUMMARY, default: "ultimos_7_dias")
-    - dateStart: "YYYY-MM-DD" (opcional)
-    - dateEnd: "YYYY-MM-DD" (opcional)
-    - financialCategoryName: string (opcional, para filtrar. A IA usará o nome exato.)
-    - creditCardName: string (opcional)
-    - type: "Entrada", "Saída" (opcional)
-    - isPaidOrReceived: boolean (opcional)
-    - searchTerm: string (opcional)
-    - sortBy: "transactionDate", "value", "description" (opcional, default: "transactionDate")
-    - sortOrder: "ASC", "DESC" (opcional, default: "DESC")
-    - limit: integer (opcional, default: 7)
-
+    - financialCategoryName: string (opcional, para filtrar por categoria. A IA usará o nome exato.)
+    - type: "Entrada", "Saída" (OPCIONAL. Use 'Entrada' se o usuário pedir para ver 'receitas', 'ganhos'. Use 'Saída' se pedir para ver 'despesas', 'gastos'. OMITA para um resumo geral.)
+    // <<< FIM DA MUDANÇA >>>
 8.  MARK_TRANSACTION_AS_PAID_RECEIVED: (Marcar transação PENDENTE como liquidada)
     - transactionDescription: string (OBRIGATÓRIO, descrição da transação pendente a ser buscada)
     - transactionValue: float (opcional, para desambiguar se houver múltiplas com mesma descrição)

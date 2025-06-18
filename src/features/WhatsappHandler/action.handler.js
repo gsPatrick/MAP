@@ -633,58 +633,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
-            case 'LIST_FINANCIAL_TRANSACTIONS': {
-                try {
-                    const categoryObjectList = params.financialCategoryName 
-                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId) 
-                        : null;
-                    const categoryIdList = categoryObjectList ? categoryObjectList.id : null;
-                    
-                    const filterParamsList = {
-                        dateStart: params.dateStart, dateEnd: params.dateEnd, type: params.type,
-                        financialCategoryId: categoryIdList,
-                        creditCardId: params.creditCardName ? await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId) : null,
-                        isPayableOrReceivable: params.isPayableOrReceivable, isPaidOrReceived: params.isPaidOrReceived,
-                        search: params.searchTerm || params.description, 
-                        limit: params.limit || 7, page: params.page || 1,
-                        sortBy: params.sortBy || 'transactionDate', sortOrder: params.sortOrder || 'DESC'
-                    };
-                    
-                    const { transactions, totalItems } = await financialService.getAllTransactions(state.activeFinancialAccountId, filterParamsList, params.period);
-
-                    if (totalItems === 0) {
-                        formattedData = "Nenhuma transação encontrada para os filtros que você pediu. 👍\nTente outros filtros ou adicione novas transações!";
-                    } else {
-                        let listText = `📜 Encontrei ${totalItems} transações. As ${transactions.length > 1 ? transactions.length + " " : ""}mais recentes são:\n`;
-                        for (const t of transactions) {
-                            const catName = t.category ? t.category.name : 'Sem Categoria';
-                            let emoji = t.type === 'Entrada' ? '🟢' : (t.creditCardId ? '💳' : '🔴');
-                            if (t.isParcel && t.originalAccount) emoji = '📦'; 
-                            const date = formatter.formatDate(t.transactionDate);
-                            let descriptionText = t.description;
-                            if (t.isParcel && t.parcelNumber && t.totalParcels && t.originalAccount) {
-                                const originalDesc = t.originalAccount.description.replace(/ - Parcela \d+\/\d+$/, '').trim();
-                                if (!descriptionText.toLowerCase().includes(`parcela ${t.parcelNumber}/${t.totalParcels}`)) { 
-                                    descriptionText = `${originalDesc} - Pcl ${t.parcelNumber}/${t.totalParcels}`;
-                                }
-                            }
-                            listText += `\n${emoji} *${descriptionText}* - ${formatter.formatCurrency(t.value)}\n    (Categoria: ${catName}, Data: ${date}, ID: ${t.id})`;
-                            if (t.isPayableOrReceivable && !t.creditCardId) { 
-                                listText += t.isPaidOrReceived ? ` (${formatter.translateStatus('Paid')} ✅)` : ` (Vence ${formatter.formatDate(t.dueDate)} 🗓️)`;
-                            }
-                        }
-                        formattedData = listText.trim();
-                        if (totalItems > transactions.length) {
-                             formattedData += `\n\nE mais ${totalItems - transactions.length} transações. Peça para ver mais ou veja tudo na plataforma!`;
-                        }
-                    }
-                } catch (e) {
-                    logger.error(`[ACTION HANDLER] Erro em LIST_FINANCIAL_TRANSACTIONS: ${e.message}`, { error: e, paramsUsed: params });
-                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui listar as transações.\nDetalhe: ${e.message}`;
-                }
-                break;
-            }
-
             case 'LIST_APPOINTMENTS': {
                 try {
                     const filterParamsAppt = {

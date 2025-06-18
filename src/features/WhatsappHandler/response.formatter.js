@@ -670,11 +670,94 @@ function formatRichRecurringRuleList(enrichedRules, totalItems, clientName) {
 function formatFinancialSummaryDataStructure(summary) {
     if (!summary) return "📊 Resumo Financeiro:\n\nDados não disponíveis.";
     
-    const emojiMap = {
-        'alimentação': '🍽️', 'transporte': '🚗', 'moradia': '🏠', 'lazer': '🎉', 'saúde': '💊',
-        'educação': '📚', 'compras': '🛒', 'serviços': '💼', 'salário': '💰', 'investimentos': '📈',
-        'outros': '📂', 'freelance': '💻', 'vendas': '🛍️', 'presente': '🎁', 'viagem': '✈️'
-    };
+const emojiMap = {
+  // Categorias Pessoais
+  'Alimentação': '🍽️',
+  'Supermercado': '🛒',
+  'Restaurantes': '🍴',
+  'Ifood': '📲',
+  'Delivery': '📦',
+  'Moradia': '🏠',
+  'Aluguel': '💵',
+  'Condomínio': '🏢',
+  'Contas': '🧾',
+  'Conta de Água': '🚰',
+  'Conta de Luz': '💡',
+  'Conta de Gás': '🔥',
+  'Internet': '🌐',
+  'Transporte': '🚗',
+  'Abastecimento': '⛽',
+  'Estacionamento': '🅿️',
+  'Uber': '🚕',
+  '99': '🚖',
+  'Transporte Público': '🚌',
+  'Manutenção Veicular': '🔧',
+  'Saúde': '💊',
+  'Farmácia': '🏥',
+  'Plano de Saúde': '🩺',
+  'Consultas': '👩‍⚕️',
+  'Exames': '🧪',
+  'Academia': '🏋️',
+  'Lazer': '🎉',
+  'Entretenimento': '🎭',
+  'Viagens': '✈️',
+  'Cinema': '🎬',
+  'Shows': '🎤',
+  'Assinaturas': '📃',
+  'Streamings': '📺',
+  'Cuidados Pessoais': '🛀',
+  'Beleza': '💄',
+  'Compras': '🛍️',
+  'Vestuário': '👗',
+  'Eletrônicos': '📱',
+  'Casa': '🏡',
+  'Presentes': '🎁',
+  'Educação': '📚',
+  'Dívidas': '📉',
+  'Empréstimos': '💸',
+  'Pagamento de Fatura': '💳',
+  'Receitas': '✅',
+  'Salário': '💰',
+  'Renda Extra': '🤑',
+  'Investimentos': '📈',
+
+  // Categorias de Negócio (PJ/MEI)
+  'Receitas Operacionais': '📊',
+  'Venda de Produtos': '📦',
+  'Prestação de Serviços': '🛠️',
+  'Outras Receitas': '💵',
+  'Custos dos Produtos/Serviços (CPV/CSV)': '💰',
+  'Matéria-prima e Insumos': '🧱',
+  'Mercadorias para Revenda': '📦',
+  'Fretes sobre Vendas': '🚚',
+  'Despesas Administrativas': '📋',
+  'Salários e Pró-labore': '👔',
+  'Aluguel (Escritório/Loja)': '🏢',
+  'Contas (Luz, Água, Internet)': '🧾',
+  'Telefonia': '📞',
+  'Honorários (Contador, Advogado)': '⚖️',
+  'Material de Escritório': '📎',
+  'Despesas de Marketing': '📢',
+  'Marketing e Publicidade': '📣',
+  'Comissões de Vendas': '💼',
+  'Despesas Financeiras': '💳',
+  'Taxas Bancárias': '🏦',
+  'Juros de Empréstimos': '📈',
+  'Taxas de Cartão': '💳',
+  'Impostos e Tributos': '🧾',
+  'Simples Nacional / DAS': '📝',
+  'Outros Impostos': '📄',
+  'Investimentos e Ativos': '📊',
+  'Compra de Equipamentos': '🛠️',
+  'Manutenção de Ativos': '🔧',
+  'Despesas com Pessoal': '👥',
+  'Benefícios (VT, VR)': '🎟️',
+  'Treinamentos': '🎓',
+  'Outras Despesas Operacionais': '📉',
+  'Viagens e Representação': '✈️',
+  'Manutenção de Software/Licenças': '💻'
+};
+
     const getCategoryEmoji = (categoryName) => {
         if (!categoryName) return '📂';
         const nameLower = categoryName.toLowerCase();
@@ -706,7 +789,7 @@ function formatFinancialSummaryDataStructure(summary) {
         data += `\n─────────────────────\n`;
         data += `🧾 *Movimentações do Período:*\n`;
         summary.recentTransactions.forEach(tx => {
-            const emojiType = tx.type === 'Entrada' ? '🔺' : '🔻';
+            const emojiType = tx.type === 'Entrada' ? '⬆️' : '⬇️';
             const categoryName = tx.category?.name || 'Geral';
             const categoryEmoji = getCategoryEmoji(categoryName);
             
