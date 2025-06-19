@@ -78,4 +78,6 @@ router.get('/send-summary', async (req, res) => {
     }
 });
 
+router.post('/create-test-client', devToolsController.createTestClient);
+
 module.exports = router;
