@@ -86,11 +86,51 @@ async function simulateAsaasPayment(req, res, next) {
   }
 }
 
+async function createTestClient(req, res, next) {
+  try {
+    const { phone, email, password, name } = req.body;
 
+    if (!phone || !email || !password || !name) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Os campos "phone", "email", "password" e "name" são obrigatórios.',
+      });
+    }
+
+    const existingClient = await clientService.findClientByPhone(phone) || await clientService.findClientByEmail(email);
+    if (existingClient) {
+        return res.status(409).json({
+            status: 'fail',
+            message: 'Um cliente com este telefone ou e-mail já existe.',
+            data: existingClient,
+        });
+    }
+
+    const clientData = {
+      phone,
+      email,
+      passwordHash: password,
+      debugPassword: password,
+      name,
+      status: 'Ativo',
+    };
+
+    const newClient = await clientService.createClientContact(clientData);
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Cliente de teste criado com sucesso.',
+      data: newClient,
+    });
+  } catch (error) {
+    logger.error(`[DevToolsController] Erro ao criar cliente de teste: ${error.message}`);
+    next(error);
+  }
+}
 
 module.exports = {
   activateTestAccessLevelController, // Renomeado
   simulateSubscriptionController, 
-  simulateAsaasPayment
-  // NOVO
+  simulateAsaasPayment,
+  createTestClient
 };

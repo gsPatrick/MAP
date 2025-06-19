@@ -106,9 +106,29 @@ async function simulateCreateSubscriptionForClient(clientId, planId, status = 'A
     }
 }
 
+/**
+ * SIMULA um pagamento recebido no Asaas, disparando o webhook correspondente.
+ * @param {string} paymentId - O ID do pagamento (ex: 'pay_123').
+ * @param {number} value - O valor do pagamento.
+ * @returns {Promise<object>} O resultado da simulação.
+ */
+async function simulatePayment(paymentId, value) {
+    // Esta função simplesmente chama o serviço do Asaas.
+    // A lógica real está no asaasApiService.
+    try {
+        const result = await asaasApiService.simulatePayment(paymentId, value);
+        logger.info(`[DEV-TOOLS] Simulação de pagamento para ${paymentId} concluída no service.`);
+        return result;
+    } catch (error) {
+        logger.error(`[DEV-TOOLS] Erro ao simular pagamento no Asaas: ${error.message}`);
+        throw error;
+    }
+}
+
 
 
 module.exports = {
   activateClientTestAccessLevel, // Renomeado para clareza
   simulateCreateSubscriptionForClient, // NOVA FUNÇÃO
+  simulatePayment
 };
