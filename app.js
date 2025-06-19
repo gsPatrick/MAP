@@ -25,7 +25,7 @@ async function initializeDatabaseAndJobs() {
     // LÓGICA DE SINCRONIZAÇÃO SEGURA (HARDCODED)
     // ==========================================================================
     if (isProduction) {
-            await sequelize.sync({ force: true });
+            await sequelize.sync({ force: false });
 
       // Em produção, NUNCA sincronizamos. A estrutura do banco é gerenciada
       // exclusivamente por arquivos de migração (migrations).
@@ -41,8 +41,8 @@ async function initializeDatabaseAndJobs() {
         console.warn('!! ATENÇÃO: MODO DESENVOLVIMENTO com FORCE_DB_RESET=false.                 !!');
         console.warn('!! O BANCO DE DADOS SERÁ COMPLETAMENTE APAGADO E RECRIADO.                !!');
         console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
-        await sequelize.sync({ force: true });
-        console.log('Banco de dados resetado com sucesso (force: true).');
+        await sequelize.sync({ force: false });
+        console.log('Banco de dados resetado com sucesso (force: false).');
         
         // Após um reset total, é essencial semear os dados básicos.
         console.log('Executando seeder de planos...');

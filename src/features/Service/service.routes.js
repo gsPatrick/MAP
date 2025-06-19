@@ -3,21 +3,24 @@ const { Router } = require('express');
 const serviceController = require('./service.controller');
 const { authenticateClientToken, checkFinancialAccountOwnership } = require('../../middlewares/authMiddleware');
 
-const router = Router();
+// Este router espera ser montado em um caminho como '/api/services'
+// e espera que o :financialAccountId seja passado na URL.
+// Usamos { mergeParams: true } para acessar parâmetros de rotas pai, se houver.
+const router = Router({ mergeParams: true });
 
-// Middleware de autenticação e verificação de propriedade para todas as rotas
-// Isso garante que apenas o dono da conta financeira pode gerenciar seus serviços.
+// O middleware será aplicado a todas as rotas abaixo.
+// Ele garante que o usuário está autenticado e tem acesso à financialAccountId.
 router.use('/:financialAccountId', authenticateClientToken, checkFinancialAccountOwnership);
 
-// --- Rotas para o CRUD de Serviços ---
-
-// Rota para listar todos os serviços de uma conta e criar um novo serviço
-router.route('/:financialAccountId/services')
+// Rota para listar todos os serviços e criar um novo.
+// O caminho completo será, por exemplo: GET /api/services/2
+router.route('/:financialAccountId')
   .get(serviceController.getAllServices)
   .post(serviceController.createService);
 
-// Rota para obter, atualizar e deletar um serviço específico
-router.route('/:financialAccountId/services/:serviceId')
+// Rota para operar em um serviço específico.
+// O caminho completo será, por exemplo: GET /api/services/2/15
+router.route('/:financialAccountId/:serviceId')
   .get(serviceController.getServiceById)
   .patch(serviceController.updateService)
   .put(serviceController.updateService) // Suporte para PUT e PATCH
