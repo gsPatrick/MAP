@@ -1,7 +1,11 @@
 // src/features/DevTools/devTools.service.js
-const { Client, Plan, FinancialAccount, sequelize } = require('../../database');const logger = require('../../utils/logger');
-const subscriptionService = require('../Subscription/subscription.service'); // IMPORTANTE
+const { Client, Plan, FinancialAccount, sequelize } = require('../../database');
+const logger = require('../../utils/logger');
 const { Op } = require('sequelize'); // <<< ESTA LINHA É A CORREÇÃO
+const subscriptionService = require('../Subscription/subscription.service');
+const asaasApiService = require('../../services/asaasApiService');
+const clientService = require('../Client/client.service');
+
 
 /**
  * Ativa um nível de acesso de teste para um cliente específico, atualizando diretamente o Client.
