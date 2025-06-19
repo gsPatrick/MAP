@@ -9,6 +9,14 @@ const { formatCurrency } = require('../../utils/formatters'); // Corrigido o cam
 
 const router = Router();
 
+// <<< ADICIONAR ESTA NOVA ROTA >>>
+/**
+ * Endpoint para criar um novo usuário completo (com conta e plano) para teste.
+ * Uso: POST /api/dev-tools/create-full-test-user
+ * Body (JSON): { "phone": "...", "email": "...", "password": "...", "name": "...", "accessLevel": "avancado_anual" (opcional) }
+ */
+router.post('/create-full-test-user', devToolsController.createFullTestUserController);
+
 // --- Rotas de Ferramentas de Desenvolvedor Existentes ---
 
 // Rota para ativar um nível de acesso de teste

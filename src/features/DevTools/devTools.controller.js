@@ -129,9 +129,30 @@ async function createTestClient(req, res, next) {
   }
 }
 
+/**
+ * Endpoint para criar um usuário de teste completo com conta e plano.
+ */
+async function createFullTestUserController(req, res, next) {
+  try {
+    const userData = req.body; // { phone, email, password, name, accessLevel (opcional) }
+    
+    const result = await devToolsService.createFullTestUser(userData);
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Usuário de teste completo criado com sucesso.',
+      data: result,
+    });
+  } catch (error) {
+    logger.error(`[DevToolsController] Erro ao criar usuário de teste completo: ${error.message}`);
+    next(error);
+  }
+}
+
 module.exports = {
   activateTestAccessLevelController, // Renomeado
   simulateSubscriptionController, 
   simulateAsaasPayment,
-  createTestClient
+  createTestClient,
+  createFullTestUserController
   };
