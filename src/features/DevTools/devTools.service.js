@@ -1,6 +1,5 @@
 // src/features/DevTools/devTools.service.js
-const { Client, Plan, sequelize } = require('../../database'); // Adicionado Plan
-const logger = require('../../utils/logger');
+const { Client, Plan, FinancialAccount, sequelize } = require('../../database');const logger = require('../../utils/logger');
 const subscriptionService = require('../Subscription/subscription.service'); // IMPORTANTE
 const { Op } = require('sequelize'); // <<< ESTA LINHA É A CORREÇÃO
 
