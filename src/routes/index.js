@@ -2,7 +2,7 @@
 const { Router } = require('express');
 const logger = require('../utils/logger');
 const { FinancialAccount } = require('../database');
-const { authenticateToken, authenticateClientToken, authorizeRole } = require('../middlewares/authMiddleware'); // authenticateToken é para admin
+const { authenticateClientToken } = require('../middlewares/authMiddleware');
 
 // Importações dos Módulos de Rotas
 const userRoutes = require('../features/User/user.routes');
@@ -35,7 +35,7 @@ const serviceRoutes = require('../features/Service/service.routes');
 const availabilityRoutes = require('../features/Availability/availability.routes');
 const publicBookingRoutes = require('../features/PublicBooking/publicBooking.routes');
 
-// Importação do Controller Financeiro
+// Importação do Controller Financeiro para rotas de resumo
 const financialController = require('../features/Financial/financial.controller');
 
 const mainApiRouter = Router();
@@ -73,7 +73,6 @@ mainApiRouter.use('/affiliate', authenticateClientToken, affiliateRoutes);
 
 
 // --- Middleware para autorização de acesso à conta financeira ---
-// (Seu middleware original, mantido intacto)
 async function authorizeFinancialAccountOwnership(req, res, next) {
     try {
         const clientForAuth = req.sharedAccessContext ? { id: req.sharedAccessContext.ownerClientId } : req.client;
@@ -126,9 +125,8 @@ async function authorizeFinancialAccountOwnership(req, res, next) {
 // --- ROTAS PARA CLIENTS LOGADOS (com middleware de autorização de conta) ---
 const clientFinancialAccountRouter = Router({ mergeParams: true });
 clientFinancialAccountRouter.use(authenticateClientToken);
-// O middleware authorizeFinancialAccountOwnership será aplicado na montagem final, como você fez.
 
-// Monta as rotas de resumo aqui
+// Monta as rotas de resumo financeiro
 clientFinancialAccountRouter.get('/summary', financialController.getFinancialSummary);
 clientFinancialAccountRouter.get('/monthly-trend', financialController.getMonthlyTrend);
 clientFinancialAccountRouter.get('/expense-category-summary', financialController.getExpenseCategorySummary);
@@ -145,15 +143,18 @@ clientFinancialAccountRouter.use('/categories', financialCategoryRoutes);
 clientFinancialAccountRouter.use('/kanban', kanbanRoutes);
 clientFinancialAccountRouter.use('/business-clients', businessClientRoutes);
 
-// <<< ADICIONADO >>> Monta as novas rotas protegidas
-clientFinancialAccountRouter.use(serviceRoutes); // service.routes já usa o /:financialAccountId/services
-clientFinancialAccountRouter.use(availabilityRoutes); // availability.routes já usa o /:financialAccountId/availability-rules
+// <<< CORREÇÃO >>> Monta as novas rotas de serviço e disponibilidade.
+// Elas serão prefixadas com a rota pai, resultando em, por exemplo:
+// /financial-accounts/:financialAccountId/services
+// /financial-accounts/:financialAccountId/availability-rules
+clientFinancialAccountRouter.use('/services', serviceRoutes);
+clientFinancialAccountRouter.use('/availability-rules', availabilityRoutes);
 
 
-// Monta o router de conta financeira no router principal da API, aplicando o middleware de propriedade
+// Monta o router de conta financeira no router principal da API, APLICANDO O MIDDLEWARE DE PROPRIEDADE
 mainApiRouter.use('/financial-accounts/:financialAccountId', authorizeFinancialAccountOwnership, clientFinancialAccountRouter);
 
-// Rota global de estoque para Clients logados
+// Rota global de estoque para Clients logados (não depende de uma financialAccount específica)
 mainApiRouter.use('/stock', authenticateClientToken, globalStockRouter);
 
 module.exports = mainApiRouter;
