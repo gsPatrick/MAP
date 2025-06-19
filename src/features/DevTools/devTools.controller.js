@@ -1,7 +1,6 @@
 // src/features/DevTools/devTools.controller.js
 const devToolsService = require('./devTools.service');
 const logger = require('../../utils/logger');
-const clientService = require('../Client/client.service'); 
 
 async function activateTestAccessLevelController(req, res, next) { // Renomeado
   try {
@@ -87,72 +86,11 @@ async function simulateAsaasPayment(req, res, next) {
   }
 }
 
-async function createTestClient(req, res, next) {
-  try {
-    const { phone, email, password, name } = req.body;
 
-    if (!phone || !email || !password || !name) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Os campos "phone", "email", "password" e "name" são obrigatórios.',
-      });
-    }
-
-    const existingClient = await clientService.findClientByPhone(phone) || await clientService.findClientByEmail(email);
-    if (existingClient) {
-        return res.status(409).json({
-            status: 'fail',
-            message: 'Um cliente com este telefone ou e-mail já existe.',
-            data: existingClient,
-        });
-    }
-
-    const clientData = {
-      phone,
-      email,
-      passwordHash: password,
-      debugPassword: password,
-      name,
-      status: 'Ativo',
-    };
-
-    const newClient = await clientService.createClientContact(clientData);
-
-    res.status(201).json({
-      status: 'success',
-      message: 'Cliente de teste criado com sucesso.',
-      data: newClient,
-    });
-  } catch (error) {
-    logger.error(`[DevToolsController] Erro ao criar cliente de teste: ${error.message}`);
-    next(error);
-  }
-}
-
-/**
- * Endpoint para criar um usuário de teste completo com conta e plano.
- */
-async function createFullTestUserController(req, res, next) {
-  try {
-    const userData = req.body; // { phone, email, password, name, accessLevel (opcional) }
-    
-    const result = await devToolsService.createFullTestUser(userData);
-
-    res.status(201).json({
-      status: 'success',
-      message: 'Usuário de teste completo criado com sucesso.',
-      data: result,
-    });
-  } catch (error) {
-    logger.error(`[DevToolsController] Erro ao criar usuário de teste completo: ${error.message}`);
-    next(error);
-  }
-}
 
 module.exports = {
   activateTestAccessLevelController, // Renomeado
   simulateSubscriptionController, 
-  simulateAsaasPayment,
-  createTestClient,
-  createFullTestUserController
-  };
+  simulateAsaasPayment
+  // NOVO
+};

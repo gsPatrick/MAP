@@ -1,11 +1,7 @@
 // src/features/DevTools/devTools.service.js
-const { Client, Plan, FinancialAccount, sequelize } = require('../../database');
+const { Client, Plan, sequelize } = require('../../database'); // Adicionado Plan
 const logger = require('../../utils/logger');
-const { Op } = require('sequelize'); // <<< ESTA LINHA É A CORREÇÃO
-const subscriptionService = require('../Subscription/subscription.service');
-const asaasApiService = require('../../services/asaasApiService');
-const clientService = require('../Client/client.service');
-
+const subscriptionService = require('../Subscription/subscription.service'); // IMPORTANTE
 
 /**
  * Ativa um nível de acesso de teste para um cliente específico, atualizando diretamente o Client.
@@ -110,112 +106,9 @@ async function simulateCreateSubscriptionForClient(clientId, planId, status = 'A
     }
 }
 
-/**
- * SIMULA um pagamento recebido no Asaas, disparando o webhook correspondente.
- * @param {string} paymentId - O ID do pagamento (ex: 'pay_123').
- * @param {number} value - O valor do pagamento.
- * @returns {Promise<object>} O resultado da simulação.
- */
-async function simulatePayment(paymentId, value) {
-    // Esta função simplesmente chama o serviço do Asaas.
-    // A lógica real está no asaasApiService.
-    try {
-        const result = await asaasApiService.simulatePayment(paymentId, value);
-        logger.info(`[DEV-TOOLS] Simulação de pagamento para ${paymentId} concluída no service.`);
-        return result;
-    } catch (error) {
-        logger.error(`[DEV-TOOLS] Erro ao simular pagamento no Asaas: ${error.message}`);
-        throw error;
-    }
-}
-
-
-/**
- * Cria um cliente de teste completo, com conta financeira e plano de acesso ativo.
- * Simula o fluxo de um usuário que acabou de se cadastrar e pagar.
- * @param {object} userData - { phone, email, password, name, accessLevel }
- * @returns {Promise<object>} Objeto com o cliente criado e sua conta financeira.
- */
-async function createFullTestUser(userData) {
-  const { phone, email, password, name, accessLevel = 'avancado_anual' } = userData;
-
-  if (!phone || !email || !password || !name) {
-    throw { statusCode: 400, message: 'Telefone, email, senha e nome são obrigatórios.' };
-  }
-
-  const t = await sequelize.transaction();
-  try {
-    // 1. Cria o contato do cliente
-    const clientData = {
-      phone,
-      email,
-      passwordHash: password,
-      debugPassword: password,
-      name,
-      status: 'Ativo',
-      accessLevel: accessLevel, // O hook do modelo Client cuidará da data de expiração
-    };
-    
-    // Usamos o service de cliente para criar o contato.
-    // O createClientContact já verifica se o telefone existe.
-    // Vamos adaptar para usar a transação e evitar a criação de contas/categorias padrão que faremos a seguir.
-    
-    const normalizedPhone = phone.replace(/\D/g, '');
-    const existingClient = await Client.findOne({ where: { [Op.or]: [{ phone: normalizedPhone }, { email }] } });
-    if(existingClient){
-        throw { statusCode: 409, message: `Cliente com telefone ${phone} ou email ${email} já existe.`};
-    }
-
-    const newClient = await Client.create(clientData, { transaction: t });
-
-    // 2. Cria a Conta Financeira Pessoal (PF) padrão
-    const pfAccount = await FinancialAccount.create({
-      clientId: newClient.id,
-      accountName: 'Minhas Contas',
-      accountType: 'PF',
-      isDefault: true,
-      isActive: true,
-    }, { transaction: t });
-    
-    // 3. Cria as categorias padrão para a conta PF
-    await clientService.createDefaultCategoriesForAccount(pfAccount.id, 'PF', t);
-    
-    // Se o plano for avançado, já cria a conta PJ também
-    let pjAccount = null;
-    if (accessLevel.includes('avancado')) {
-        pjAccount = await FinancialAccount.create({
-            clientId: newClient.id,
-            accountName: 'Minha Empresa',
-            accountType: 'PJ',
-            isDefault: false,
-            isActive: true,
-        }, { transaction: t });
-        await clientService.createDefaultCategoriesForAccount(pjAccount.id, 'PJ', t);
-    }
-    
-    await t.commit();
-    
-    const clientJSON = newClient.toJSON();
-    clientJSON.financialAccounts = [pfAccount.toJSON()];
-    if(pjAccount) {
-        clientJSON.financialAccounts.push(pjAccount.toJSON());
-    }
-
-    logger.info(`[DEV-TOOLS] Usuário de teste completo criado para ${email} com plano ${accessLevel}.`);
-    return clientJSON;
-
-  } catch (error) {
-    if (t && !t.finished) await t.rollback();
-    logger.error(`[DEV-TOOLS] Erro ao criar usuário de teste completo: ${error.message}`, { error, userData });
-    throw error;
-  }
-}
-
 
 
 module.exports = {
   activateClientTestAccessLevel, // Renomeado para clareza
   simulateCreateSubscriptionForClient, // NOVA FUNÇÃO
-  simulatePayment,
-  createFullTestUser
 };

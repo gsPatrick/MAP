@@ -9,14 +9,6 @@ const { formatCurrency } = require('../../utils/formatters'); // Corrigido o cam
 
 const router = Router();
 
-// <<< ADICIONAR ESTA NOVA ROTA >>>
-/**
- * Endpoint para criar um novo usuário completo (com conta e plano) para teste.
- * Uso: POST /api/dev-tools/create-full-test-user
- * Body (JSON): { "phone": "...", "email": "...", "password": "...", "name": "...", "accessLevel": "avancado_anual" (opcional) }
- */
-router.post('/create-full-test-user', devToolsController.createFullTestUserController);
-
 // --- Rotas de Ferramentas de Desenvolvedor Existentes ---
 
 // Rota para ativar um nível de acesso de teste
@@ -85,7 +77,5 @@ router.get('/send-summary', async (req, res) => {
         res.status(500).json({ error: 'Erro interno ao processar a solicitação.', details: error.message });
     }
 });
-
-router.post('/create-test-client', devToolsController.createTestClient);
 
 module.exports = router;
