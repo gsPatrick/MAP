@@ -2,6 +2,7 @@
 const { Client, Plan, sequelize } = require('../../database'); // Adicionado Plan
 const logger = require('../../utils/logger');
 const subscriptionService = require('../Subscription/subscription.service'); // IMPORTANTE
+const { Op } = require('sequelize'); // <<< ESTA LINHA É A CORREÇÃO
 
 /**
  * Ativa um nível de acesso de teste para um cliente específico, atualizando diretamente o Client.
