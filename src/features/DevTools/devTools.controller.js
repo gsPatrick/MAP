@@ -1,6 +1,7 @@
 // src/features/DevTools/devTools.controller.js
 const devToolsService = require('./devTools.service');
 const logger = require('../../utils/logger');
+const clientService = require('../Client/client.service'); 
 
 async function activateTestAccessLevelController(req, res, next) { // Renomeado
   try {
@@ -133,4 +134,4 @@ module.exports = {
   simulateSubscriptionController, 
   simulateAsaasPayment,
   createTestClient
-};
+  };
