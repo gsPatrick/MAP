@@ -140,25 +140,10 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
-            case 'SCHEDULE_APPOINTMENT': {
+ case 'SCHEDULE_APPOINTMENT': {
                 try {
                     if (!params.title || !params.eventDateTime) {
                         throw { statusCode: 400, message: "Título e data/hora são obrigatórios para agendar." };
-                    }
-                    if (params.associatedValue && (isNaN(parseFloat(params.associatedValue)) || parseFloat(params.associatedValue) <= 0 || !params.associatedTransactionType)) {
-                        throw { statusCode: 400, message: "Valor associado deve ser maior que zero e o tipo (entrada/saída) é obrigatório." };
-                    }
-
-                    let businessClientIds = [];
-                    if (params.businessClientNames && Array.isArray(params.businessClientNames) && ['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
-                        for (const name of params.businessClientNames) {
-                            const bcId = await findBusinessClientIdByName(name, state.activeFinancialAccountId);
-                            if (bcId) {
-                                businessClientIds.push(bcId);
-                            } else {
-                                logger.warn(`[ACTION HANDLER] Cliente de negócio "${name}" não encontrado para appointment na conta ${state.activeFinancialAccountId}.`);
-                            }
-                        }
                     }
 
                     const appointmentData = {
@@ -166,19 +151,46 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         eventDateTime: params.eventDateTime,
                         durationMinutes: params.durationMinutes ? parseInt(params.durationMinutes) : null,
                         location: params.location,
-                        reminderLeadTimeMinutes: params.reminderLeadTimeMinutes ? parseInt(params.reminderLeadTimeMinutes) : 15,
                         notes: params.notes,
-                        associatedValue: params.associatedValue ? parseFloat(params.associatedValue) : null,
-                        associatedTransactionType: params.associatedTransactionType,
-                        businessClientIds: businessClientIds.length > 0 ? businessClientIds : undefined
+                        // --- Campos PF ---
+                        reminderLeadTimeMinutes: params.reminderLeadTimeMinutes,
+                        reminderEnabled: params.reminderEnabled,
+                        // --- Campos PJ/MEI ---
+                        businessClientIds: [],
+                        serviceIds: [],
                     };
+                    
+                    // Lógica PJ/MEI: Associa BusinessClients e Services
+                    if (['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
+                        if (params.businessClientNames && Array.isArray(params.businessClientNames)) {
+                            for (const name of params.businessClientNames) {
+                                const bcId = await findBusinessClientIdByName(name, state.activeFinancialAccountId);
+                                if (bcId) appointmentData.businessClientIds.push(bcId);
+                            }
+                        }
+                        
+                        if (params.serviceNames && Array.isArray(params.serviceNames)) {
+                             for (const name of params.serviceNames) {
+                                // Reutilizando a lógica do service para encontrar IDs
+                                const { services } = await serviceService.getAllServices(state.activeFinancialAccountId, { search: name, limit: 1, isActive: true });
+                                if (services && services.length > 0) {
+                                    appointmentData.serviceIds.push(services[0].id);
+                                } else {
+                                    logger.warn(`[ACTION HANDLER] Serviço "${name}" não encontrado para agendamento na conta ${state.activeFinancialAccountId}.`);
+                                }
+                            }
+                        }
+                         if (appointmentData.serviceIds.length === 0) {
+                            throw { statusCode: 400, message: 'Para agendar um serviço, você precisa me dizer qual serviço é. Ex: "agendar corte de cabelo".' };
+                        }
+                    }
 
                     const newAppt = await appointmentService.scheduleAppointment(state.activeFinancialAccountId, appointmentData, actorId);
-                    const reloadedAppt = await appointmentService.getAppointmentById(state.activeFinancialAccountId, newAppt.id);
                     
-                    formattedData = formatter.formatAppointmentDataStructure(reloadedAppt);
+                    // O service agora retorna o objeto completo com as associações
+                    formattedData = formatter.formatAppointmentDataStructure(newAppt);
+
                     if (isOwnerActingOnOwnBehalfGlobal) {
-                        // << MUDANÇA APLICADA >>
                         resourceForButtonsContext.resources.push({ type: 'appointment', id: newAppt.id, description: newAppt.title });
                     }
                 } catch (e) {
@@ -187,6 +199,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
+
+
 
             case 'CREATE_PARCELLED_ACCOUNT': {
                 try {
@@ -1796,7 +1810,189 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
             // ... Adicione todos os outros `UPDATE_*` e `RECREATE_*` aqui, seguindo o padrão acima ...
             // Lembre-se de setar `wasAnEdit = true;` no final de cada um.
 
+            // =================================================================
+            // AÇÕES DE GESTÃO DE SERVIÇOS (CRUD)
+            // =================================================================
 
+            case 'CREATE_SERVICE': {
+                try {
+                    const serviceData = {
+                        name: params.name,
+                        description: params.description,
+                        durationMinutes: parseInt(params.durationMinutes, 10),
+                        price: parseFloat(params.price),
+                    };
+
+                    if (!serviceData.name || isNaN(serviceData.price) || isNaN(serviceData.durationMinutes)) {
+                        throw { statusCode: 400, message: "Nome, preço e duração são obrigatórios para criar um serviço." };
+                    }
+
+                    const newService = await serviceService.createService(state.activeFinancialAccountId, serviceData);
+                    formattedData = formatter.formatServiceDataStructure(newService); // Você precisará criar este formatador
+
+                    if (isOwnerActingOnOwnBehalfGlobal) {
+                        resourceForButtonsContext.resources.push({ type: 'service', id: newService.id, description: newService.name });
+                    }
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em CREATE_SERVICE: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui criar o serviço.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
+
+            case 'LIST_SERVICES': {
+                try {
+                    const { services, totalItems } = await serviceService.getAllServices(state.activeFinancialAccountId, {
+                        search: params.searchTerm,
+                        isActive: params.isActive !== undefined ? params.isActive : true,
+                        limit: params.limit || 5,
+                    });
+
+                    if (totalItems === 0) {
+                        formattedData = "Você ainda não cadastrou nenhum serviço. Diga 'criar serviço [nome] preço [valor] duração [minutos]' para começar.";
+                    } else {
+                        formattedData = formatter.formatListServicesDataStructure(services); // Você precisará criar este formatador
+                        if (totalItems > services.length) {
+                            formattedData += `\n\nE mais ${totalItems - services.length} serviço(s).`;
+                        }
+                    }
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em LIST_SERVICES: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui listar seus serviços.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
+
+            case 'UPDATE_SERVICE': {
+                try {
+                    const serviceIdToUpdate = state.editingResource?.type === 'service' && state.editingResource?.id
+                        ? parseInt(state.editingResource.id, 10)
+                        : null;
+                    
+                    if (!serviceIdToUpdate) {
+                        throw { statusCode: 400, message: "Por favor, primeiro selecione o serviço que deseja editar." };
+                    }
+                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
+                        throw { statusCode: 403, message: "Você não tem permissão para editar serviços nesta conta." };
+                    }
+
+                    const updateDataSvc = {};
+                    if (params.hasOwnProperty('name')) updateDataSvc.name = params.name;
+                    if (params.hasOwnProperty('description')) updateDataSvc.description = params.description;
+                    if (params.hasOwnProperty('durationMinutes')) updateDataSvc.durationMinutes = parseInt(params.durationMinutes, 10);
+                    if (params.hasOwnProperty('price')) updateDataSvc.price = parseFloat(params.price);
+                    if (params.hasOwnProperty('isActive')) updateDataSvc.isActive = params.isActive;
+
+                    if (Object.keys(updateDataSvc).length === 0) {
+                        throw { statusCode: 400, message: "Nenhum dado válido foi fornecido para atualizar o serviço." };
+                    }
+
+                    const updatedService = await serviceService.updateService(state.activeFinancialAccountId, serviceIdToUpdate, updateDataSvc);
+                    formattedData = formatter.formatServiceDataStructure(updatedService);
+                    wasAnEdit = true;
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em UPDATE_SERVICE: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui atualizar o serviço.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
+
+            case 'DELETE_SERVICE': {
+                try {
+                    let serviceIdToDelete = params.serviceId;
+                    if (!serviceIdToDelete && params.serviceName) {
+                        const { services } = await serviceService.getAllServices(state.activeFinancialAccountId, { search: params.serviceName, limit: 1 });
+                        if(services && services.length > 0) serviceIdToDelete = services[0].id;
+                    }
+                    if (!serviceIdToDelete) {
+                        throw { statusCode: 404, message: `Não encontrei o serviço "${params.serviceName}" para excluir.` };
+                    }
+                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
+                        throw { statusCode: 403, message: "Você não tem permissão para excluir serviços nesta conta." };
+                    }
+
+                    await serviceService.deleteService(state.activeFinancialAccountId, serviceIdToDelete);
+                    formattedData = `✅ Serviço (ID: ${serviceIdToDelete}) excluído com sucesso!`;
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em DELETE_SERVICE: ${e.message}`, { error: e, paramsUsed: params });
+                    let intro = `❌ Ops, ${clientNameToUse}! Não consegui excluir o serviço.`;
+                    let body = `\nDetalhe: ${e.message}`;
+                    if(e.statusCode === 409) {
+                        intro = `Opa, ${clientNameToUse}!`;
+                        body = `\nNão posso excluir o serviço "${params.serviceName}" porque ele já está sendo usado em agendamentos. Se você não o oferece mais, pode *desativá-lo*. Quer fazer isso?`;
+                    }
+                    formattedData = intro + body;
+                }
+                break;
+            }
+
+            // =================================================================
+            // AÇÕES DE CICLO DE VIDA DO AGENDAMENTO (PJ/MEI)
+            // =================================================================
+
+            case 'CONFIRM_APPOINTMENT': {
+                try {
+                    const appointmentId = params.appointmentId ? parseInt(params.appointmentId, 10) : null;
+                    if (!appointmentId) {
+                        throw { statusCode: 400, message: "Preciso do ID do agendamento para confirmá-lo." };
+                    }
+                    
+                    const confirmedAppointment = await appointmentService.confirmAppointment(state.activeFinancialAccountId, appointmentId);
+                    formattedData = `✅ Agendamento ID ${confirmedAppointment.id} ("${confirmedAppointment.title}") confirmado com sucesso!\n\nSeu cliente será notificado.`;
+
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em CONFIRM_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui confirmar o agendamento.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
+
+            case 'COMPLETE_APPOINTMENT': {
+                try {
+                    const appointmentId = params.appointmentId ? parseInt(params.appointmentId, 10) : null;
+                    if (!appointmentId) {
+                        throw { statusCode: 400, message: "Preciso do ID do agendamento para marcá-lo como concluído." };
+                    }
+
+                    const completedAppointment = await appointmentService.completeAppointment(state.activeFinancialAccountId, appointmentId);
+                    
+                    // O service já cria a transação. O handler apenas informa o usuário.
+                    const totalValue = completedAppointment.services.reduce((sum, service) => sum + parseFloat(service.price), 0);
+                    
+                    formattedData = `🎉 Serviço concluído com sucesso!\n\n` +
+                                    `O agendamento ID ${completedAppointment.id} ("${completedAppointment.title}") foi marcado como finalizado. ` +
+                                    `Uma transação de entrada no valor de *${formatter.formatCurrency(totalValue)}* foi registrada automaticamente no seu financeiro.`;
+
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em COMPLETE_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui finalizar o agendamento.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
+
+            case 'CANCEL_APPOINTMENT': {
+                try {
+                    const appointmentId = params.appointmentId ? parseInt(params.appointmentId, 10) : null;
+                    if (!appointmentId) {
+                        throw { statusCode: 400, message: "Preciso do ID do agendamento para cancelar." };
+                    }
+                    
+                    // Usando a função existente que agora notifica o cliente final
+                    await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, appointmentId, false);
+                    formattedData = `✅ Agendamento ID ${appointmentId} cancelado com sucesso. A outra parte será notificada.`;
+
+                } catch(e) {
+                    logger.error(`[ACTION HANDLER] Erro em CANCEL_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui cancelar o agendamento.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
+
+            // MODIFICAÇÃO NO CASE 'SCHEDULE_APPOINTMENT'
+            // O case existente precisa ser alterado para incluir a lógica de serviços
+            // A seguir, uma versão completa e modificada do case SCHEDULE_APPOINTMENT
+
+           
             
 
           // =================================================================

@@ -1,15 +1,19 @@
 // src/features/Appointment/appointment.service.js
-const { Appointment, FinancialAccount, Client, UserPreference, BusinessClient, AppointmentBusinessClient, sequelize } = require('../../database');
+const { Appointment, FinancialAccount, Client, UserPreference, BusinessClient, AppointmentBusinessClient, Service, AppointmentService, sequelize } = require('../../database');
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 const googleCalendarService = require('../../features/GoogleCalendar/googleCalendarService'); 
-const businessClientService = require('../BusinessClient/BusinessClient.service'); // Verifique este caminho
+const businessClientService = require('../BusinessClient/BusinessClient.service');
+const financialService = require('../Financial/financial.service'); // Adicionado
+const { sendWhatsappMessage } = require('../../services/whatsappService'); // Adicionado
+const formatter = require('../WhatsappHandler/response.formatter'); // Adicionado
 
 const BUSINESS_CLIENT_INCLUDE_ATTRIBUTES = ['id', 'name', 'phone', 'email', 'photoUrl', 'notes'];
+const SERVICE_INCLUDE_ATTRIBUTES = ['id', 'name', 'price', 'durationMinutes', 'description'];
 
 async function validateOwningFinancialAccount(financialAccountId, transaction = null, includeClient = true) {
   const includeOptions = [];
-  if (includeClient) includeOptions.push({ model: Client, as: 'ownerClient', attributes: ['id', 'name', 'phone', 'isGoogleCalendarSynced'] }); // Adicionado isGoogleCalendarSynced
+  if (includeClient) includeOptions.push({ model: Client, as: 'ownerClient', attributes: ['id', 'name', 'phone', 'isGoogleCalendarSynced'] });
 
   const account = await FinancialAccount.findByPk(financialAccountId, {
     include: includeOptions,
@@ -30,42 +34,62 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
   const t = await sequelize.transaction();
   let newAppointment = null;
   try {
-    const account = await validateOwningFinancialAccount(financialAccountId, t, true); // Pega o cliente para checar sync
+    const account = await validateOwningFinancialAccount(financialAccountId, t, true);
 
     if (!appointmentData.title || !appointmentData.eventDateTime) {
       const error = new Error('Título e Data/Hora do Evento são obrigatórios.');
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
-    // Removida checagem de data passada, pois o Google Calendar pode permitir e sincronizar
-    // if (new Date(appointmentData.eventDateTime) < new Date()) {
-    //   const error = new Error('Não é possível agendar compromissos para datas/horas passadas.');
-    //   error.statusCode = 400; error.status = 'fail'; throw error;
-    // }
 
-     const businessClientIds = appointmentData.businessClientIds;
-     if (businessClientIds && Array.isArray(businessClientIds) && businessClientIds.length > 0) {
-         if (!['PJ', 'MEI'].includes(account.accountType)) {
-             const error = new Error(`Associação de Clientes de Negócio a compromissos é permitida apenas para Contas Financeiras do tipo PJ ou MEI.`);
-             error.statusCode = 400; error.status = 'fail'; throw error;
-         }
-         const validClients = await BusinessClient.findAll({
-             where: { id: { [Op.in]: businessClientIds }, financialAccountId, isActive: true },
-             transaction: t
-         });
-         if (validClients.length !== businessClientIds.length) {
-             const missingIds = businessClientIds.filter(id => !validClients.some(client => client.id === id));
-             const error = new Error(`Um ou mais Clientes de Negócio (IDs: ${missingIds.join(', ')}) não foram encontrados ou não pertencem a esta conta financeira.`);
-             error.statusCode = 404; error.status = 'fail'; throw error;
-         }
-     }
-     delete appointmentData.businessClientIds; // Remove para não tentar salvar direto no Appointment
-
-    if (appointmentData.reminderEnabled !== false && appointmentData.reminderLeadTimeMinutes === undefined) {
-      const preferences = await UserPreference.findOne({ order: [['id', 'ASC']], transaction: t });
-      appointmentData.reminderLeadTimeMinutes = (preferences?.defaultAppointmentReminderLeadTimeMinutes) || 60;
-    } else if (appointmentData.reminderEnabled === false) {
+    // --- Lógica de Bifurcação PF vs PJ/MEI ---
+    if (account.accountType === 'PF') {
+        // Lógica existente para contas PF
+        if (appointmentData.reminderEnabled !== false && appointmentData.reminderLeadTimeMinutes === undefined) {
+            const preferences = await UserPreference.findOne({ order: [['id', 'ASC']], transaction: t });
+            appointmentData.reminderLeadTimeMinutes = (preferences?.defaultAppointmentReminderLeadTimeMinutes) || 60;
+        } else if (appointmentData.reminderEnabled === false) {
+            appointmentData.reminderLeadTimeMinutes = null;
+            appointmentData.reminderSentTimestamp = null;
+        }
+        appointmentData.origin = 'system_pf';
+    } else { // Lógica para PJ ou MEI
+        appointmentData.origin = 'system_pj_mei';
+        // Zera os campos de lembrete do sistema antigo
+        appointmentData.reminderEnabled = false;
         appointmentData.reminderLeadTimeMinutes = null;
         appointmentData.reminderSentTimestamp = null;
+        
+        // Validação de Clientes de Negócio (BusinessClient)
+        const businessClientIds = appointmentData.businessClientIds;
+        if (businessClientIds && Array.isArray(businessClientIds) && businessClientIds.length > 0) {
+            const validClients = await BusinessClient.findAll({
+                where: { id: { [Op.in]: businessClientIds }, financialAccountId, isActive: true },
+                transaction: t
+            });
+            if (validClients.length !== businessClientIds.length) {
+                const missingIds = businessClientIds.filter(id => !validClients.some(client => client.id === id));
+                const error = new Error(`Um ou mais Clientes de Negócio (IDs: ${missingIds.join(', ')}) não foram encontrados ou não pertencem a esta conta.`);
+                error.statusCode = 404; error.status = 'fail'; throw error;
+            }
+        }
+        delete appointmentData.businessClientIds;
+
+        // Validação de Serviços
+        const serviceIds = appointmentData.serviceIds;
+        if (!serviceIds || !Array.isArray(serviceIds) || serviceIds.length === 0) {
+            const error = new Error('Para agendamentos de contas PJ/MEI, pelo menos um serviço deve ser associado.');
+            error.statusCode = 400; error.status = 'fail'; throw error;
+        }
+        const validServices = await Service.findAll({
+            where: { id: { [Op.in]: serviceIds }, financialAccountId, isActive: true },
+            transaction: t
+        });
+        if (validServices.length !== serviceIds.length) {
+            const missingIds = serviceIds.filter(id => !validServices.some(service => service.id === id));
+            const error = new Error(`Um ou mais Serviços (IDs: ${missingIds.join(', ')}) não foram encontrados, estão inativos ou não pertencem a esta conta.`);
+            error.statusCode = 404; error.status = 'fail'; throw error;
+        }
+        delete appointmentData.serviceIds;
     }
 
     newAppointment = await Appointment.create(
@@ -73,43 +97,59 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
       { transaction: t }
     );
 
-    if (businessClientIds && Array.isArray(businessClientIds) && businessClientIds.length > 0) {
-        const associations = businessClientIds.map(bcId => ({
-            appointmentId: newAppointment.id,
-            businessClientId: bcId
-        }));
-        await AppointmentBusinessClient.bulkCreate(associations, { transaction: t });
-    }
-
-    await t.commit(); // Commit antes de tentar sincronizar com Google
-    logger.info(`Compromisso "${newAppointment.title}" (ID: ${newAppointment.id}) agendado para FA ID ${financialAccountId}.`);
-
-    // --- Sincronização com Google Calendar ---
-    if (account.ownerClient && account.ownerClient.isGoogleCalendarSynced) {
-        const reloadedApptForGoogle = await Appointment.findByPk(newAppointment.id, {
-            // Recarregar com todas as associações necessárias para mapToGoogleEvent
-            include: [
-                { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] },
-                { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES }
-            ]
-        });
-        if (reloadedApptForGoogle) {
-            const googleEvent = await googleCalendarService.createGoogleEvent(account.ownerClient.id, reloadedApptForGoogle.toJSON());
-            if (googleEvent && googleEvent.id) {
-                await newAppointment.update({ googleEventId: googleEvent.id, googleEventLastUpdated: new Date(googleEvent.updated || googleEvent.created) });
-                logger.info(`Compromisso ID ${newAppointment.id} sincronizado com Google Calendar Event ID ${googleEvent.id}.`);
-            }
+    // Criação de associações para PJ/MEI
+    if (account.accountType !== 'PF') {
+        if (appointmentData.businessClientIds && appointmentData.businessClientIds.length > 0) {
+            const clientAssociations = appointmentData.businessClientIds.map(bcId => ({
+                appointmentId: newAppointment.id, businessClientId: bcId
+            }));
+            await AppointmentBusinessClient.bulkCreate(clientAssociations, { transaction: t });
+        }
+        if (appointmentData.serviceIds && appointmentData.serviceIds.length > 0) {
+            const serviceAssociations = appointmentData.serviceIds.map(sId => ({
+                appointmentId: newAppointment.id, serviceId: sId
+            }));
+            await AppointmentService.bulkCreate(serviceAssociations, { transaction: t });
         }
     }
-    // --- Fim Sincronização ---
 
-    const finalAppointment = await Appointment.findByPk(newAppointment.id, {
+    await t.commit(); 
+    logger.info(`Compromisso "${newAppointment.title}" (ID: ${newAppointment.id}) agendado para FA ID ${financialAccountId}.`);
+
+    // --- Notificação e Sincronização (pós-commit) ---
+    const reloadedApptForSync = await Appointment.findByPk(newAppointment.id, {
         include: [
             { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] },
-            { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES }
+            { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES },
+            { model: Service, as: 'services', through: { attributes: [] }, attributes: SERVICE_INCLUDE_ATTRIBUTES }
         ]
     });
-    return finalAppointment.toJSON();
+
+    if (!reloadedApptForSync) {
+        logger.error(`Falha ao recarregar o compromisso ID ${newAppointment.id} após a criação.`);
+        throw new Error('Falha ao recarregar compromisso para notificações.');
+    }
+
+    // Notificação para o dono da conta PJ/MEI
+    if (account.accountType !== 'PF' && account.ownerClient?.phone) {
+        const ownerClient = account.ownerClient;
+        const ownerName = ownerClient.name ? ownerClient.name.split(' ')[0] : 'Você';
+        const notificationMessage = `🔔 *Novo Agendamento Recebido!*\n\nOlá, ${ownerName}! Um novo serviço foi agendado na sua conta *${account.accountName}*.\n\n` +
+                                    formatter.formatAppointmentDataStructure(reloadedApptForSync.toJSON()) +
+                                    `\n\nPara aceitar, responda: "confirmar agendamento ${reloadedApptForSync.id}".`;
+        await sendWhatsappMessage(ownerClient.phone, notificationMessage);
+    }
+
+    // Sincronização com Google Calendar
+    if (account.ownerClient && account.ownerClient.isGoogleCalendarSynced) {
+        const googleEvent = await googleCalendarService.createGoogleEvent(account.ownerClient.id, reloadedApptForSync.toJSON());
+        if (googleEvent && googleEvent.id) {
+            await newAppointment.update({ googleEventId: googleEvent.id, googleEventLastUpdated: new Date(googleEvent.updated || googleEvent.created) });
+            logger.info(`Compromisso ID ${newAppointment.id} sincronizado com Google Calendar Event ID ${googleEvent.id}.`);
+        }
+    }
+
+    return reloadedApptForSync.toJSON();
 
   } catch (error) {
     if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') {
@@ -133,13 +173,8 @@ async function getAllAppointments(financialAccountId, queryParams = {}) {
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const whereConditions = { financialAccountId };
     const includeOptions = [
-        {
-            model: BusinessClient,
-            as: 'businessClients',
-            through: { attributes: [] },
-            attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES,
-            required: false
-        }
+        { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES, required: false },
+        { model: Service, as: 'services', through: { attributes: [] }, attributes: SERVICE_INCLUDE_ATTRIBUTES, required: false }
     ];
 
     if (status) whereConditions.status = status;
@@ -192,12 +227,13 @@ async function getAllAppointments(financialAccountId, queryParams = {}) {
 
 async function getAppointmentById(financialAccountId, appointmentId) {
   try {
-    await validateOwningFinancialAccount(financialAccountId, null, true); // Pega info do cliente
+    await validateOwningFinancialAccount(financialAccountId, null, true);
     const appointment = await Appointment.findOne({
       where: { id: appointmentId, financialAccountId },
       include: [
          { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] },
-         { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES }
+         { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES },
+         { model: Service, as: 'services', through: { attributes: [] }, attributes: SERVICE_INCLUDE_ATTRIBUTES }
       ]
     });
 
@@ -222,97 +258,92 @@ async function updateAppointment(financialAccountId, appointmentId, updateData) 
       where: { id: appointmentId, financialAccountId },
       include: [
           { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] },
-          { model: BusinessClient, as: 'businessClients', through: { attributes: [] } }
+          { model: BusinessClient, as: 'businessClients', through: { attributes: [] } },
+          { model: Service, as: 'services', through: { attributes: [] } }
       ],
       transaction: t
     });
     if (!appointment) {
-      await t.rollback(); // Rollback antes de retornar ou lançar erro
-      logger.warn(`Compromisso ID ${appointmentId} não encontrado para atualização na FA ID ${financialAccountId}.`);
-      // Lançar um erro 404 aqui seria mais consistente com outros services
+      await t.rollback();
       const err404 = new Error(`Compromisso ID ${appointmentId} não encontrado.`);
-      err404.statusCode = 404; err404.status = 'fail'; throw err404;
+      err404.statusCode = 404; err4_4.status = 'fail'; throw err404;
     }
     
-    if (updateData.hasOwnProperty('businessClientIds') && Array.isArray(updateData.businessClientIds)) {
-        const businessClientIds = updateData.businessClientIds;
-
-        if (businessClientIds.length > 0 && !['PJ', 'MEI'].includes(account.accountType)) {
-             const error = new Error(`Associação de Clientes de Negócio a compromissos é permitida apenas para Contas Financeiras do tipo PJ ou MEI.`);
-             error.statusCode = 400; error.status = 'fail'; throw error;
+    // Lógica de atualização para PJ/MEI
+    if (account.accountType !== 'PF') {
+        if (updateData.hasOwnProperty('businessClientIds') && Array.isArray(updateData.businessClientIds)) {
+            const businessClientIds = updateData.businessClientIds;
+            if (businessClientIds.length > 0) {
+                 const validClients = await BusinessClient.findAll({
+                     where: { id: { [Op.in]: businessClientIds }, financialAccountId, isActive: true }, transaction: t
+                 });
+                 if (validClients.length !== businessClientIds.length) {
+                     const missingIds = businessClientIds.filter(id => !validClients.some(client => client.id === id));
+                     const error = new Error(`Um ou mais Clientes de Negócio (IDs: ${missingIds.join(', ')}) não pertencem a esta conta.`);
+                     error.statusCode = 404; error.status = 'fail'; throw error;
+                 }
+            }
+            await AppointmentBusinessClient.destroy({ where: { appointmentId: appointment.id }, transaction: t });
+            if (businessClientIds.length > 0) {
+                 const associations = businessClientIds.map(bcId => ({ appointmentId: appointment.id, businessClientId: bcId }));
+                 await AppointmentBusinessClient.bulkCreate(associations, { transaction: t });
+            }
+            delete updateData.businessClientIds;
         }
-
-        if (businessClientIds.length > 0) {
-             const validClients = await BusinessClient.findAll({
-                 where: { id: { [Op.in]: businessClientIds }, financialAccountId, isActive: true },
-                 transaction: t
+        if (updateData.hasOwnProperty('serviceIds') && Array.isArray(updateData.serviceIds)) {
+             const serviceIds = updateData.serviceIds;
+             if (serviceIds.length === 0) throw new Error("Agendamentos PJ/MEI devem ter pelo menos um serviço.");
+             const validServices = await Service.findAll({
+                where: { id: { [Op.in]: serviceIds }, financialAccountId, isActive: true }, transaction: t
              });
-             if (validClients.length !== businessClientIds.length) {
-                 const missingIds = businessClientIds.filter(id => !validClients.some(client => client.id === id));
-                 const error = new Error(`Um ou mais Clientes de Negócio (IDs: ${missingIds.join(', ')}) não foram encontrados ou não pertencem a esta conta.`);
-                 error.statusCode = 404; error.status = 'fail'; throw error;
+             if (validServices.length !== serviceIds.length) {
+                const missingIds = serviceIds.filter(id => !validServices.some(s => s.id === id));
+                const error = new Error(`Um ou mais Serviços (IDs: ${missingIds.join(', ')}) não pertencem a esta conta.`);
+                error.statusCode = 404; error.status = 'fail'; throw error;
              }
+             await AppointmentService.destroy({ where: { appointmentId: appointment.id }, transaction: t });
+             const associations = serviceIds.map(sId => ({ appointmentId: appointment.id, serviceId: sId }));
+             await AppointmentService.bulkCreate(associations, { transaction: t });
+             delete updateData.serviceIds;
         }
-        await AppointmentBusinessClient.destroy({ where: { appointmentId: appointment.id }, transaction: t });
-        if (businessClientIds.length > 0) {
-             const associations = businessClientIds.map(bcId => ({ appointmentId: appointment.id, businessClientId: bcId }));
-             await AppointmentBusinessClient.bulkCreate(associations, { transaction: t });
+    } else { // Lógica de atualização para PF
+        if (updateData.reminderEnabled === false) {
+            updateData.reminderLeadTimeMinutes = null;
+            updateData.reminderSentTimestamp = null;
+        } else if (updateData.reminderEnabled === true && updateData.reminderLeadTimeMinutes === undefined && appointment.reminderLeadTimeMinutes === null) {
+            const preferences = await UserPreference.findOne({ order: [['id', 'ASC']], transaction: t });
+            updateData.reminderLeadTimeMinutes = (preferences?.defaultAppointmentReminderLeadTimeMinutes) || 60;
+        } else if (updateData.hasOwnProperty('reminderLeadTimeMinutes') && updateData.reminderLeadTimeMinutes !== null) {
+            updateData.reminderEnabled = true;
         }
-        delete updateData.businessClientIds;
     }
 
     delete updateData.financialAccountId;
 
-    if (updateData.reminderEnabled === false) {
-        updateData.reminderLeadTimeMinutes = null;
-        updateData.reminderSentTimestamp = null;
-    } else if (updateData.reminderEnabled === true && updateData.reminderLeadTimeMinutes === undefined && appointment.reminderLeadTimeMinutes === null) {
-        const preferences = await UserPreference.findOne({ order: [['id', 'ASC']], transaction: t });
-        updateData.reminderLeadTimeMinutes = (preferences?.defaultAppointmentReminderLeadTimeMinutes) || 60;
-    } else if (updateData.hasOwnProperty('reminderLeadTimeMinutes') && updateData.reminderLeadTimeMinutes !== null) {
-        updateData.reminderEnabled = true;
-    }
-
-    // Verifica se há dados válidos para atualizar além de businessClientIds que já foi tratado
     const hasOtherUpdates = Object.keys(updateData).length > 0;
-
-    if (!hasOtherUpdates && !(updateData.hasOwnProperty('businessClientIds') && Array.isArray(updateData.businessClientIds))) { // A condição original estava !hasOtherUpdates && !updateData.businessClientIds (o que daria true se businessClientIds fosse um array vazio e não houvesse outros updates)
-                                                                                                                            // A checagem de businessClientIds já foi feita e ele foi deletado de updateData.
-                                                                                                                            // Se Object.keys(updateData) está vazio significa que businessClientIds era a única chave ou não havia nada.
-        await t.commit();
-        const reloadedNoChange = await Appointment.findByPk(appointmentId, {
-            include: [
-                { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] },
-                { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES }
-            ]
-        });
-        return reloadedNoChange.toJSON();
-    }
-
-    if(hasOtherUpdates){ // Só atualiza o appointment se houver outros campos em updateData
+    if(hasOtherUpdates){
         await appointment.update(updateData, { transaction: t });
     }
+    
     await t.commit();
     logger.info(`Compromisso ID ${appointmentId} ("${appointment.title}") atualizado para FA ID ${financialAccountId}.`);
 
     const updatedAppointmentFull = await appointment.reload({
         include: [
             { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] },
-            { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES }
+            { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES },
+            { model: Service, as: 'services', through: { attributes: [] }, attributes: SERVICE_INCLUDE_ATTRIBUTES }
         ]
     });
 
     if (account.ownerClient && account.ownerClient.isGoogleCalendarSynced) {
         const googleEvent = await googleCalendarService.updateGoogleEvent(account.ownerClient.id, appointment.googleEventId, updatedAppointmentFull.toJSON());
         if (googleEvent && googleEvent.id) {
-            // Usar o modelo Appointment para atualizar, para garantir hooks e validações se houver
             const apptInstanceToUpdateGoogleFields = await Appointment.findByPk(appointment.id);
             if (apptInstanceToUpdateGoogleFields) {
                 await apptInstanceToUpdateGoogleFields.update({ googleEventId: googleEvent.id, googleEventLastUpdated: new Date(googleEvent.updated) });
             }
             logger.info(`Compromisso ID ${appointmentId} atualizado e sincronizado com Google Calendar Event ID ${googleEvent.id}.`);
-        } else if (appointment.googleEventId && !googleEvent) {
-             logger.warn(`Falha ao atualizar evento Google para Appointment ID ${appointmentId}. O evento pode ter sido removido do Google.`);
         }
     }
     return updatedAppointmentFull.toJSON();
@@ -321,7 +352,6 @@ async function updateAppointment(financialAccountId, appointmentId, updateData) 
     if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') {
         try { await t.rollback(); } catch (rbError) { logger.error("Erro no rollback após falha em updateAppointment:", rbError); }
     }
-    // Log mais detalhado do erro, incluindo o updateData
     logger.error(`Erro ao atualizar compromisso ID ${appointmentId}: ${error.message}`, { errorJson: JSON.stringify(error, Object.getOwnPropertyNames(error)), updateDataSent: updateData });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
@@ -335,6 +365,7 @@ async function deleteOrCancelAppointment(financialAccountId, appointmentId, actu
     const account = await validateOwningFinancialAccount(financialAccountId, t, true);
     appointment = await Appointment.findOne({
       where: { id: appointmentId, financialAccountId },
+      include: [ { model: BusinessClient, as: 'businessClients' } ],
       transaction: t
     });
     if (!appointment) {
@@ -343,38 +374,48 @@ async function deleteOrCancelAppointment(financialAccountId, appointmentId, actu
       return false;
     }
 
-    const googleEventIdToDelete = appointment.googleEventId; // Pega antes de modificar/deletar
+    const googleEventIdToDelete = appointment.googleEventId;
 
     if (actuallyDelete) {
       await appointment.destroy({ transaction: t });
       logger.info(`Compromisso ID ${appointmentId} ("${appointment.title}") EXCLUÍDO da FA ID ${financialAccountId}.`);
     } else {
-      await appointment.update({ status: 'Cancelled' }, { transaction: t }); // Apenas cancela
+      await appointment.update({ status: 'Cancelled' }, { transaction: t });
       logger.info(`Compromisso ID ${appointmentId} ("${appointment.title}") CANCELADO na FA ID ${financialAccountId}.`);
     }
     await t.commit();
+    
+    const reloadedApptForNotify = await Appointment.findByPk(appointmentId, {
+        include: [
+            { model: FinancialAccount, as: 'financialAccount', include: [{ model: Client, as: 'ownerClient' }] },
+            { model: BusinessClient, as: 'businessClients', attributes: ['name', 'phone'] }
+        ]
+    });
 
-    // --- Sincronização com Google Calendar ---
-    // Se foi cancelado, atualiza no Google. Se foi deletado, deleta no Google.
+    // Notificação para o BusinessClient em caso de cancelamento
+    if (!actuallyDelete && reloadedApptForNotify && account.accountType !== 'PF' && reloadedApptForNotify.businessClients.length > 0) {
+        for (const bClient of reloadedApptForNotify.businessClients) {
+            if (bClient.phone) {
+                const ownerName = reloadedApptForNotify.financialAccount.ownerClient.name;
+                const message = `❌ *Agendamento Cancelado*\n\nOlá, ${bClient.name}! O seu agendamento "${reloadedApptForNotify.title}" com ${ownerName} para ${formatter.formatDate(reloadedApptForNotify.eventDateTime)} foi cancelado. Para mais detalhes, por favor, entre em contato.`;
+                await sendWhatsappMessage(bClient.phone, message);
+            }
+        }
+    }
+
+    // Sincronização com Google Calendar
     if (account.ownerClient && account.ownerClient.isGoogleCalendarSynced && googleEventIdToDelete) {
         if (actuallyDelete) {
             await googleCalendarService.deleteGoogleEvent(account.ownerClient.id, googleEventIdToDelete);
-        } else { // Se foi cancelado, precisamos recarregar o appointment para pegar o status 'Cancelled'
-            const cancelledAppointmentForGoogle = await Appointment.findByPk(appointmentId, {
-                include: [
-                    { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] },
-                    { model: BusinessClient, as: 'businessClients', through: { attributes: [] } }
-                ]
-            });
-            if(cancelledAppointmentForGoogle) {
-                const googleEvent = await googleCalendarService.updateGoogleEvent(account.ownerClient.id, googleEventIdToDelete, cancelledAppointmentForGoogle.toJSON());
+        } else {
+            if(reloadedApptForNotify) {
+                const googleEvent = await googleCalendarService.updateGoogleEvent(account.ownerClient.id, googleEventIdToDelete, reloadedApptForNotify.toJSON());
                  if (googleEvent && googleEvent.id) {
                     await Appointment.update({ googleEventLastUpdated: new Date(googleEvent.updated) }, { where: { id: appointmentId } });
                 }
             }
         }
     }
-    // --- Fim Sincronização ---
     return true;
   } catch (error) {
     if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') {
@@ -386,7 +427,119 @@ async function deleteOrCancelAppointment(financialAccountId, appointmentId, actu
   }
 }
 
-async function getAppointmentsNeedingReminder(forFinancialAccountId = null) {
+// --- Funções do Ciclo de Vida do Agendamento PJ/MEI ---
+
+async function confirmAppointment(financialAccountId, appointmentId) {
+    const t = await sequelize.transaction();
+    try {
+        const account = await validateOwningFinancialAccount(financialAccountId, t, true);
+        if (account.accountType === 'PF') {
+            throw { statusCode: 400, message: 'A confirmação de agendamentos é uma funcionalidade para contas PJ/MEI.' };
+        }
+        const appointment = await Appointment.findOne({ where: { id: appointmentId, financialAccountId }, transaction: t });
+        if (!appointment) {
+            throw { statusCode: 404, message: `Agendamento ID ${appointmentId} não encontrado.` };
+        }
+        if (appointment.status !== 'Scheduled') {
+            throw { statusCode: 409, message: `Este agendamento não está no estado 'Agendado' e não pode ser confirmado. Status atual: ${appointment.status}` };
+        }
+
+        await appointment.update({ status: 'Confirmed' }, { transaction: t });
+        await t.commit();
+
+        const confirmedAppointment = await getAppointmentById(financialAccountId, appointmentId);
+        if (!confirmedAppointment) {
+            logger.error(`Falha ao recarregar o agendamento ${appointmentId} após confirmação.`);
+            return null;
+        }
+
+        // Notificar BusinessClient
+        if (confirmedAppointment.businessClients && confirmedAppointment.businessClients.length > 0) {
+            for (const bClient of confirmedAppointment.businessClients) {
+                if (bClient.phone) {
+                    const ownerName = account.ownerClient.name;
+                    const message = `✅ *Agendamento Confirmado!*\n\nOlá, ${bClient.name}! O seu agendamento "${confirmedAppointment.title}" com ${ownerName} para ${formatter.formatDate(confirmedAppointment.eventDateTime)} às ${formatter.formatTime(confirmedAppointment.eventDateTime)} foi confirmado. Até lá!`;
+                    await sendWhatsappMessage(bClient.phone, message);
+                }
+            }
+        }
+        
+        // Sincronizar com Google
+        if (account.ownerClient && account.ownerClient.isGoogleCalendarSynced && confirmedAppointment.googleEventId) {
+             await googleCalendarService.updateGoogleEvent(account.ownerClient.id, confirmedAppointment.googleEventId, confirmedAppointment);
+        }
+
+        return confirmedAppointment;
+
+    } catch(error) {
+        if (t && !t.finished) await t.rollback();
+        logger.error(`Erro ao confirmar agendamento ${appointmentId}: ${error.message}`, { error });
+        if (!error.statusCode) error.statusCode = 500;
+        throw error;
+    }
+}
+
+async function completeAppointment(financialAccountId, appointmentId) {
+    const t = await sequelize.transaction();
+    try {
+        const account = await validateOwningFinancialAccount(financialAccountId, t, true);
+        if (account.accountType === 'PF') {
+            throw { statusCode: 400, message: 'A conclusão de agendamentos é uma funcionalidade para contas PJ/MEI.' };
+        }
+        const appointment = await Appointment.findOne({ 
+            where: { id: appointmentId, financialAccountId },
+            include: [ { model: Service, as: 'services' }, { model: BusinessClient, as: 'businessClients' } ],
+            transaction: t 
+        });
+
+        if (!appointment) {
+            throw { statusCode: 404, message: `Agendamento ID ${appointmentId} não encontrado.` };
+        }
+        if (appointment.status !== 'Confirmed' && appointment.status !== 'Scheduled') {
+            throw { statusCode: 409, message: `Este agendamento não pode ser concluído. Status atual: ${appointment.status}` };
+        }
+        if (!appointment.services || appointment.services.length === 0) {
+            throw { statusCode: 400, message: 'Não é possível concluir o agendamento pois não há serviços associados para gerar a transação financeira.' };
+        }
+        
+        // Criação da Transação Financeira
+        const totalValue = appointment.services.reduce((sum, service) => sum + parseFloat(service.price), 0);
+        const serviceNames = appointment.services.map(s => s.name).join(', ');
+        const clientName = appointment.businessClients.length > 0 ? appointment.businessClients[0].name : 'Cliente';
+        const transactionDescription = `Serviço: ${serviceNames} para ${clientName}`;
+
+        await financialService.createTransaction(financialAccountId, {
+            description: transactionDescription,
+            type: 'Entrada',
+            value: totalValue,
+            transactionDate: new Date().toISOString().split('T')[0],
+            isPayableOrReceivable: false,
+            isPaidOrReceived: true,
+        }, { transaction: t });
+
+        await appointment.update({ status: 'Completed' }, { transaction: t });
+        await t.commit();
+
+        const completedAppointment = await getAppointmentById(financialAccountId, appointmentId);
+        
+        // Sincronizar com Google
+        if (account.ownerClient && account.ownerClient.isGoogleCalendarSynced && completedAppointment.googleEventId) {
+             await googleCalendarService.updateGoogleEvent(account.ownerClient.id, completedAppointment.googleEventId, completedAppointment);
+        }
+
+        return completedAppointment;
+    } catch (error) {
+        if (t && !t.finished) await t.rollback();
+        logger.error(`Erro ao completar agendamento ${appointmentId}: ${error.message}`, { error });
+        if (!error.statusCode) error.statusCode = 500;
+        throw error;
+    }
+}
+
+// --- Funções de Lembrete (Bifurcadas) ---
+
+// Para contas PF (sistema antigo)
+async function getPFAppointmentsNeedingReminder(forFinancialAccountId = null) {
   try {
     const now = new Date();
     const whereConditions = {
@@ -394,6 +547,7 @@ async function getAppointmentsNeedingReminder(forFinancialAccountId = null) {
       reminderEnabled: true,
       reminderSentTimestamp: null,
       eventDateTime: { [Op.gt]: now },
+      origin: 'system_pf', // Filtro crucial
     };
 
     if (forFinancialAccountId !== null) {
@@ -403,13 +557,8 @@ async function getAppointmentsNeedingReminder(forFinancialAccountId = null) {
     const appointments = await Appointment.findAll({
       where: whereConditions,
       include: [
-        {
-          model: FinancialAccount,
-          as: 'financialAccount',
-          attributes: ['id', 'accountName', 'accountType'],
-          include: [{ model: Client, as: 'ownerClient', attributes: ['id', 'name', 'phone'] }]
-        },
-         { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES }
+        { model: FinancialAccount, as: 'financialAccount', attributes: ['id', 'accountName', 'accountType'], include: [{ model: Client, as: 'ownerClient', attributes: ['id', 'name', 'phone'] }] },
+        { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES }
       ],
       order: [['eventDateTime', 'ASC']],
     });
@@ -421,33 +570,71 @@ async function getAppointmentsNeedingReminder(forFinancialAccountId = null) {
     });
 
     if (needingReminder.length > 0) {
-      logger.info(`${needingReminder.length} compromissos encontrados precisando de lembrete (Conta: ${forFinancialAccountId || 'Todas'}).`);
+      logger.info(`${needingReminder.length} compromissos de PF encontrados precisando de lembrete.`);
     }
     return needingReminder.map(app => app.toJSON());
 
   } catch (error) {
-    logger.error('Erro ao buscar compromissos para lembrete:', { error });
+    logger.error('Erro ao buscar compromissos de PF para lembrete:', { error });
     return [];
   }
 }
 
 async function markReminderAsSent(appointmentId) {
     try {
-        const [updatedCount] = await Appointment.update(
-            { reminderSentTimestamp: new Date() },
-            { where: { id: appointmentId, reminderSentTimestamp: null } }
-        );
-        if (updatedCount > 0) {
-            logger.info(`Lembrete para compromisso ID ${appointmentId} marcado como enviado.`);
-            return true;
-        }
-        return false;
+        const [updatedCount] = await Appointment.update( { reminderSentTimestamp: new Date() }, { where: { id: appointmentId } });
+        if (updatedCount > 0) logger.info(`Lembrete (PF) para compromisso ID ${appointmentId} marcado como enviado.`);
+        return updatedCount > 0;
     } catch (error) {
-        logger.error(`Erro ao marcar lembrete como enviado para compromisso ID ${appointmentId}:`, { error });
+        logger.error(`Erro ao marcar lembrete (PF) como enviado para compromisso ID ${appointmentId}:`, { error });
         return false;
     }
 }
 
+// Para contas PJ/MEI (sistema novo)
+async function getPJAppointmentsNeeding24hReminder() {
+    const now = new Date();
+    const threshold = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    return Appointment.findAll({
+        where: {
+            status: 'Confirmed',
+            origin: 'system_pj_mei',
+            reminder24hSentAt: null,
+            eventDateTime: { [Op.lte]: threshold, [Op.gt]: now }
+        },
+        include: [
+            { model: FinancialAccount, as: 'financialAccount', include: [{ model: Client, as: 'ownerClient' }] },
+            { model: BusinessClient, as: 'businessClients', attributes: ['name', 'phone'], required: true }
+        ]
+    });
+}
+
+async function getPJAppointmentsNeeding30minReminder() {
+    const now = new Date();
+    const threshold = new Date(now.getTime() + 30 * 60 * 1000);
+     return Appointment.findAll({
+        where: {
+            status: 'Confirmed',
+            origin: 'system_pj_mei',
+            reminder30minSentAt: null,
+            eventDateTime: { [Op.lte]: threshold, [Op.gt]: now }
+        },
+        include: [
+            { model: FinancialAccount, as: 'financialAccount', include: [{ model: Client, as: 'ownerClient' }] },
+            { model: BusinessClient, as: 'businessClients', attributes: ['name', 'phone'], required: true }
+        ]
+    });
+}
+
+async function mark24hReminderAsSent(appointmentId) {
+    return Appointment.update({ reminder24hSentAt: new Date() }, { where: { id: appointmentId } });
+}
+
+async function mark30minReminderAsSent(appointmentId) {
+    return Appointment.update({ reminder30minSentAt: new Date() }, { where: { id: appointmentId } });
+}
+
+// Funções de Sincronização com Google (mantidas, com pequenas adaptações se necessário)
 async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, defaultFinancialAccountIdPF, clientPjAccounts = []) {
   const t = await sequelize.transaction();
   try {
@@ -500,14 +687,20 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
         if (eventEndDateTime > eventStartDateTime) { // Garante que end é depois de start
             durationMinutes = Math.round((eventEndDateTime.getTime() - eventStartDateTime.getTime()) / 60000);
         }
-        // Se for evento de dia inteiro (só date), durationMinutes permanece null
-        // Se for evento com hora e a duração é zero ou negativa, mapToGoogleEvent no googleCalendarService define um default
     }
 
-
     let systemStatus = 'Scheduled'; // Default
-    if (googleEvent.status === 'cancelled') systemStatus = 'Cancelled';
-    else if (googleEvent.status === 'confirmed') systemStatus = 'Confirmed';
+    if (googleEvent.status === 'cancelled') {
+        systemStatus = 'Cancelled';
+    } else if (googleEvent.status === 'confirmed') {
+        // No novo fluxo, 'confirmed' do Google pode mapear para nosso 'Confirmed' ou 'Scheduled'
+        // Dependendo se já foi confirmado no nosso sistema. Vamos manter 'Confirmed' por ora.
+        systemStatus = 'Confirmed';
+    }
+    // Adicionamos a verificação para o nosso status 'Completed'
+    if (googleEvent.extendedProperties?.private?.systemStatus === 'Completed') {
+        systemStatus = 'Completed';
+    }
 
 
     let systemTitle = googleEvent.summary || 'Compromisso do Google';
@@ -518,20 +711,18 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
     let identifiedAccountType = appointmentLocal
         ? appointmentLocal.financialAccount.accountType
         : (googleEvent.extendedProperties?.private?.systemAccountType);
-    let googleEventNeedsCosmeticUpdate = false; // Flag para saber se precisamos atualizar o evento Google (cor/título/props)
+    let googleEventNeedsCosmeticUpdate = false;
 
     // 1. Tenta identificar FA e Tipo pelas props do Google Event se já sincronizado antes
     if (identifiedAccountType && !identifiedFinancialAccountId) {
         if (identifiedAccountType === 'PF') identifiedFinancialAccountId = defaultFinancialAccountIdPF;
         else if ((identifiedAccountType === 'PJ' || identifiedAccountType === 'MEI') && clientPjAccounts.length > 0) {
-            // Se o tipo é PJ/MEI e só há uma conta desse tipo, podemos assumir.
             const specificTypeAccounts = clientPjAccounts.filter(acc => acc.accountType === identifiedAccountType);
             if (specificTypeAccounts.length === 1) {
                 identifiedFinancialAccountId = specificTypeAccounts[0].id;
             } else if (clientPjAccounts.length === 1 && (clientPjAccounts[0].accountType === 'PJ' || clientPjAccounts[0].accountType === 'MEI')) {
-                // Se só existe UMA conta empresarial no total, e o tipo da prop é PJ ou MEI
                 identifiedFinancialAccountId = clientPjAccounts[0].id;
-                identifiedAccountType = clientPjAccounts[0].accountType; // Garante que o tipo seja o da conta encontrada
+                identifiedAccountType = clientPjAccounts[0].accountType;
             }
         }
     }
@@ -542,7 +733,7 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
 
     if (currentGoogleSummary.toLowerCase().startsWith(pfPrefixLower)) {
         systemTitle = currentGoogleSummary.substring(pfPrefix.length);
-        if (!identifiedAccountType) identifiedAccountType = 'PF'; // Define se não estava nas props
+        if (!identifiedAccountType) identifiedAccountType = 'PF';
         if (identifiedAccountType === 'PF' && !identifiedFinancialAccountId) identifiedFinancialAccountId = defaultFinancialAccountIdPF;
         if (identifiedAccountType === 'PF' && !currentGoogleSummary.startsWith(pfPrefix)) googleEventNeedsCosmeticUpdate = true;
     } else {
@@ -551,10 +742,10 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
         const extractedNameOrType = pjMeiMatch[1];
         systemTitle = currentGoogleSummary.substring(pjMeiMatch[0].length);
 
-        if (!identifiedAccountType) { // Se as props não definiram o tipo
+        if (!identifiedAccountType) {
             if (extractedNameOrType.toUpperCase() === 'PJ') identifiedAccountType = 'PJ';
             else if (extractedNameOrType.toUpperCase() === 'MEI') identifiedAccountType = 'MEI';
-            else identifiedAccountType = 'PJ'; // Assume PJ se for um nome de empresa não específico
+            else identifiedAccountType = 'PJ';
         }
 
         if (identifiedAccountType === 'PJ' || identifiedAccountType === 'MEI') {
@@ -562,14 +753,12 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
                 const matchedPjAccountByName = clientPjAccounts.find(acc => acc.accountName.toLowerCase() === extractedNameOrType.toLowerCase());
                 if (matchedPjAccountByName) {
                     identifiedFinancialAccountId = matchedPjAccountByName.id;
-                    identifiedAccountType = matchedPjAccountByName.accountType; // Pega o tipo exato da conta
+                    identifiedAccountType = matchedPjAccountByName.accountType;
                 } else {
-                    // Se não achou pelo nome exato, e só tem uma conta do tipo identificado, usa ela
                     const specificTypeAccounts = clientPjAccounts.filter(acc => acc.accountType === identifiedAccountType);
                     if (specificTypeAccounts.length === 1) {
                         identifiedFinancialAccountId = specificTypeAccounts[0].id;
                     } else if (clientPjAccounts.length === 1 && (clientPjAccounts[0].accountType === 'PJ' || clientPjAccounts[0].accountType === 'MEI')) {
-                        // Se só tem uma conta empresarial no total E o título indica algo empresarial
                         identifiedFinancialAccountId = clientPjAccounts[0].id;
                         identifiedAccountType = clientPjAccounts[0].accountType;
                     }
@@ -585,14 +774,13 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
 
     // 3. Tenta pela cor se ainda sem FA e se for um evento novo para o sistema
     if (!appointmentLocal && !identifiedFinancialAccountId && googleEvent.colorId) {
-        const clientFull = await Client.findByPk(systemClientId, { transaction: t }); // Para pegar as googleCalendarColorIdPF/PJ
+        const clientFull = await Client.findByPk(systemClientId, { transaction: t });
         if (clientFull) {
             if (googleEvent.colorId === clientFull.googleCalendarColorIdPF) {
                 identifiedFinancialAccountId = defaultFinancialAccountIdPF;
                 if (!identifiedAccountType && defaultFinancialAccountIdPF) identifiedAccountType = 'PF';
                 if (!currentGoogleSummary.startsWith(pfPrefix)) googleEventNeedsCosmeticUpdate = true;
             } else if (googleEvent.colorId === clientFull.googleCalendarColorIdPJ) {
-                // Se a cor é PJ, tenta associar à conta PJ (se houver apenas uma, ou se o título ajudar)
                 const pjOrMeiAccounts = clientPjAccounts.filter(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
                 if (pjOrMeiAccounts.length === 1) {
                      identifiedFinancialAccountId = pjOrMeiAccounts[0].id;
@@ -617,7 +805,6 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
         }
     }
 
-
     if (!identifiedFinancialAccountId) {
       await t.rollback();
       logger.warn(`[ApptServiceFromGoogle] Não foi possível determinar FinancialAccount para Google Event ID ${googleEvent.id} (Cliente ${systemClientId}). Título: "${currentGoogleSummary}", Cor: ${googleEvent.colorId}. Ignorando.`);
@@ -627,6 +814,7 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
     let systemDescription = googleEvent.description || '';
     systemDescription = systemDescription.replace(/\n\n--- Participantes do Negócio ---\n(- .+\n?)+/, '').trim();
     systemDescription = systemDescription.replace(/\n\n--- Observações Internas ---\n.*/, '').trim();
+    systemDescription = systemDescription.replace(/\n\n--- Serviços Prestados ---.*/s, '').trim(); // Remove a seção de serviços também
 
     const appointmentData = {
       title: systemTitle.substring(0, 255),
@@ -638,6 +826,7 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
       financialAccountId: identifiedFinancialAccountId,
       googleEventId: googleEvent.id,
       googleEventLastUpdated: googleEvent.updated ? new Date(googleEvent.updated) : new Date(),
+      origin: identifiedAccountType === 'PF' ? 'system_pf' : 'system_pj_mei',
     };
 
     let currentAssociatedBusinessClientIds = [];
@@ -658,26 +847,20 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
                     transaction: t
                 });
                 if (!businessClient) {
-                    let nameForNewBC = attendee.displayName;
-                    if (!nameForNewBC && attendeeEmailLower) nameForNewBC = attendeeEmailLower.split('@')[0];
-                    if (!nameForNewBC || nameForNewBC.trim() === '') nameForNewBC = "Convidado Google";
+                    let nameForNewBC = attendee.displayName || attendeeEmailLower.split('@')[0];
                     nameForNewBC = nameForNewBC.trim().substring(0, 255);
-                    logger.info(`[ApptServiceFromGoogle] Attendee "${nameForNewBC}" (Email: ${attendeeEmailLower}) não encontrado. Criando BusinessClient para FA ${identifiedFinancialAccountId}.`);
+                    logger.info(`[ApptServiceFromGoogle] Attendee "${nameForNewBC}" não encontrado. Criando BusinessClient para FA ${identifiedFinancialAccountId}.`);
                     try {
                         businessClient = await businessClientService.createBusinessClient(
-                            identifiedFinancialAccountId, {
-                                name: nameForNewBC, email: attendeeEmailLower, phone: null,
-                                photoUrl: null, notes: '', isActive: true,
-                            }, { transaction: t }
+                            identifiedFinancialAccountId, { name: nameForNewBC, email: attendeeEmailLower }, { transaction: t }
                         );
                     } catch (createBcError) {
-                        logger.error(`[ApptServiceFromGoogle] Erro ao criar BC para ${attendeeEmailLower} ("${nameForNewBC}"): ${createBcError.message}. Verificando se já existe...`);
                         if (createBcError.message.includes('Já existe um cliente com o email') || createBcError.message.includes('unique_business_client_email_per_account')) {
                              businessClient = await BusinessClient.findOne({ where: { email: attendeeEmailLower, financialAccountId: identifiedFinancialAccountId }, transaction: t });
-                        } else if (createBcError.message.includes('Já existe um cliente com o nome') || createBcError.message.includes('unique_business_client_name_per_account')) {
-                             businessClient = await BusinessClient.findOne({ where: { name: nameForNewBC, financialAccountId: identifiedFinancialAccountId }, transaction: t });
+                        } else {
+                            logger.warn(`[ApptServiceFromGoogle] Impossível criar/encontrar BC para ${attendeeEmailLower}. Erro: ${createBcError.message}`);
+                            continue;
                         }
-                        if (!businessClient) { logger.warn(`[ApptServiceFromGoogle] Impossível criar/encontrar BC para ${attendeeEmailLower}.`); continue; }
                     }
                 }
                 if (businessClient) newBusinessClientIdsToAssociate.push(businessClient.id);
@@ -690,60 +873,41 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
         const localLastSyncTime = appointmentLocal.googleEventLastUpdated ? new Date(appointmentLocal.googleEventLastUpdated).getTime() : 0;
         const googleUpdateTime = googleEvent.updated ? new Date(googleEvent.updated).getTime() : new Date().getTime();
         let dataFieldsChanged = googleUpdateTime > localLastSyncTime;
-        if (!dataFieldsChanged && systemAppointmentIdFromGoogle) {
-             if (appointmentLocal.title !== appointmentData.title ||
-                (appointmentLocal.description || null) !== (appointmentData.description || null) ||
-                new Date(appointmentLocal.eventDateTime).toISOString() !== appointmentData.eventDateTime.toISOString() ||
-                (appointmentLocal.durationMinutes || null) !== (appointmentData.durationMinutes || null) ||
-                (appointmentLocal.location || null) !== (appointmentData.location || null) ||
-                appointmentLocal.status !== appointmentData.status ||
-                appointmentLocal.financialAccountId !== appointmentData.financialAccountId) {
-                dataFieldsChanged = true;
-            }
-        }
+
         const attendeesActuallyChanged = JSON.stringify(currentAssociatedBusinessClientIds.sort()) !== JSON.stringify(newBusinessClientIdsToAssociate.sort());
-        if (!dataFieldsChanged && !attendeesActuallyChanged && systemAppointmentIdFromGoogle && !googleEventNeedsCosmeticUpdate) { // Adicionado !googleEventNeedsCosmeticUpdate
+        if (!dataFieldsChanged && !attendeesActuallyChanged && !googleEventNeedsCosmeticUpdate) {
             await t.commit();
-            logger.info(`[ApptServiceFromGoogle] Appointment local ID ${appointmentLocal.id} (Google ${googleEvent.id}) e participantes já atualizados. Nenhuma ação.`);
+            logger.info(`[ApptServiceFromGoogle] Appointment local ID ${appointmentLocal.id} (Google ${googleEvent.id}) e participantes já atualizados.`);
             return appointmentLocal.toJSON();
         }
         if(dataFieldsChanged){
-            logger.info(`[ApptServiceFromGoogle] Atualizando Appointment local ID ${appointmentLocal.id} com dados do Google Event ${googleEvent.id}.`);
             await appointmentLocal.update(appointmentData, { transaction: t });
-        } else {
-            logger.info(`[ApptServiceFromGoogle] Dados principais do Appt ${appointmentLocal.id} não mudaram, verificando participantes/cosmética.`);
         }
     } else {
         operation = 'created';
         appointmentLocal = await Appointment.create(appointmentData, { transaction: t });
-        googleEventNeedsCosmeticUpdate = true; // Sempre precisa adicionar props para novos e garantir cor/título
+        googleEventNeedsCosmeticUpdate = true;
     }
 
     if (appointmentLocal && (identifiedAccountType === 'PJ' || identifiedAccountType === 'MEI')) {
-        const toRemove = currentAssociatedBusinessClientIds.filter(id => !newBusinessClientIdsToAssociate.includes(id));
-        if (toRemove.length > 0) await AppointmentBusinessClient.destroy({ where: { appointmentId: appointmentLocal.id, businessClientId: { [Op.in]: toRemove } }, transaction: t });
-        const toAdd = newBusinessClientIdsToAssociate.filter(id => !currentAssociatedBusinessClientIds.includes(id));
-        if (toAdd.length > 0) await AppointmentBusinessClient.bulkCreate(toAdd.map(bcId => ({ appointmentId: appointmentLocal.id, businessClientId: bcId })), { transaction: t });
+        await AppointmentBusinessClient.destroy({ where: { appointmentId: appointmentLocal.id }, transaction: t });
+        if (newBusinessClientIdsToAssociate.length > 0) {
+            await AppointmentBusinessClient.bulkCreate(newBusinessClientIdsToAssociate.map(bcId => ({ appointmentId: appointmentLocal.id, businessClientId: bcId })), { transaction: t });
+        }
     }
 
     if (googleEventNeedsCosmeticUpdate && appointmentLocal) {
-        const clientOwner = await Client.findByPk(systemClientId, { transaction: t });
-        const faForGoogleMap = await FinancialAccount.findByPk(identifiedFinancialAccountId, { include: [{ model: Client, as: 'ownerClient' }], transaction: t });
-        let bcForGoogleMap = [];
-        if (newBusinessClientIdsToAssociate.length > 0) {
-            bcForGoogleMap = await BusinessClient.findAll({ where: { id: { [Op.in]: newBusinessClientIdsToAssociate } }, transaction: t });
-        }
-        if (clientOwner && faForGoogleMap && faForGoogleMap.ownerClient) { // Garante que ownerClient está carregado para as cores
-            // Atualiza o ownerClient na FA com as cores mais recentes do clientOwner
-            faForGoogleMap.ownerClient = clientOwner;
-
-            const tempAppointmentForGoogleMap = {
-                ...appointmentLocal.toJSON(),
-                financialAccount: faForGoogleMap.toJSON(),
-                businessClients: bcForGoogleMap.map(bc => bc.toJSON())
-            };
+        const reloadedApptForGoogleMap = await Appointment.findByPk(appointmentLocal.id, {
+            include: [
+                { model: FinancialAccount, as: 'financialAccount', include: [{ model: Client, as: 'ownerClient' }] },
+                { model: BusinessClient, as: 'businessClients' },
+                { model: Service, as: 'services' } // Inclui serviços para o mapeamento
+            ],
+            transaction: t
+        });
+        if (reloadedApptForGoogleMap) {
             logger.info(`[ApptServiceFromGoogle] Appt ${appointmentLocal.id}. Evento Google ${googleEvent.id} precisa de atualização de props/cosmética.`);
-            googleCalendarService.updateGoogleEvent(systemClientId, googleEvent.id, tempAppointmentForGoogleMap) // Async fire-and-forget
+            googleCalendarService.updateGoogleEvent(systemClientId, googleEvent.id, reloadedApptForGoogleMap.toJSON())
                 .then(updatedGE => { if(updatedGE) logger.info(`[ApptServiceFromGoogle] Evento Google ${googleEvent.id} atualizado (cosmética/props) async.`);})
                 .catch(err => logger.error(`[ApptServiceFromGoogle] Erro na atualização cosmética async do evento Google ${googleEvent.id}: ${err.message}`));
         }
@@ -751,10 +915,14 @@ async function createOrUpdateAppointmentFromGoogle(googleEvent, systemClientId, 
 
     await t.commit();
     logger.info(`[ApptServiceFromGoogle] Appointment ${operation} (ID: ${appointmentLocal.id}) para Cliente ${systemClientId} a partir do Google Event ID ${googleEvent.id}.`);
-    const reloadedAppt = await Appointment.findByPk(appointmentLocal.id, {
-        include: [ { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] }, { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES }]
+    const finalReloadedAppt = await Appointment.findByPk(appointmentLocal.id, {
+        include: [ 
+            { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] }, 
+            { model: BusinessClient, as: 'businessClients', through: { attributes: [] }, attributes: BUSINESS_CLIENT_INCLUDE_ATTRIBUTES },
+            { model: Service, as: 'services', through: { attributes: [] }, attributes: SERVICE_INCLUDE_ATTRIBUTES }
+        ]
     });
-    return reloadedAppt.toJSON();
+    return finalReloadedAppt.toJSON();
 
   } catch (error) {
     if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') {
@@ -773,44 +941,155 @@ async function deleteOrCancelAppointmentByGoogleId(googleEventId, systemClientId
       include: [{ model: FinancialAccount, as: 'financialAccount', required: true }],
       transaction: t
     });
-
     if (!appointmentLocal) {
       await t.commit();
-      logger.info(`[ApptServiceFromGoogleDelete] Appointment local não encontrado para Google Event ID ${googleEventId} (Cliente ${systemClientId}). Nenhuma ação local.`);
       return true;
     }
-
-    if (appointmentLocal.status !== 'Cancelled' || appointmentLocal.googleEventId !== null) {
-        logger.info(`[ApptServiceFromGoogleDelete] Marcando Appointment ID ${appointmentLocal.id} (Google ID ${googleEventId}) como Cancelado e desvinculando...`);
-        await appointmentLocal.update({
-            status: 'Cancelled',
-            googleEventId: null, 
-            googleEventLastUpdated: new Date() 
-        }, { transaction: t });
-    } else {
-        logger.info(`[ApptServiceFromGoogleDelete] Appointment ID ${appointmentLocal.id} (Google ID ${googleEventId}) já estava Cancelado/desvinculado.`);
-    }
-
+    await appointmentLocal.update({
+        status: 'Cancelled',
+        googleEventId: null, 
+        googleEventLastUpdated: new Date() 
+    }, { transaction: t });
     await t.commit();
     return true;
   } catch (error) {
-    if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') {
-        try { await t.rollback(); } catch (rbErr) { logger.error(`[ApptServiceFromGoogleDelete] Erro no rollback: ${rbErr.message}`); }
-    }
-    logger.error(`[ApptServiceFromGoogleDelete] Erro ao cancelar/desvincular Appointment (Google ID ${googleEventId}, Cliente ${systemClientId}): ${error.message}`);
+    if (t && !t.finished) await t.rollback();
+    logger.error(`[ApptServiceFromGoogleDelete] Erro ao cancelar/desvincular Appointment (Google ID ${googleEventId}): ${error.message}`);
     return false;
   }
 }
 
+/**
+ * Agrega agendamentos e regras de disponibilidade para uma visualização de calendário.
+ * @param {number} financialAccountId - O ID da conta financeira.
+ * @param {string} startDate - Data de início do período (YYYY-MM-DD).
+ * @param {string} endDate - Data de fim do período (YYYY-MM-DD).
+ * @returns {Promise<Array>} Uma lista de eventos formatados para um calendário de frontend.
+ */
+async function getAgendaView(financialAccountId, startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00.000Z`);
+  const end = new Date(`${endDate}T23:59:59.999Z`);
+  const agendaEvents = [];
+
+  // 1. Buscar Agendamentos no Período
+  const appointments = await Appointment.findAll({
+    where: {
+      financialAccountId,
+      status: { [Op.in]: ['Scheduled', 'Confirmed', 'Completed'] },
+      eventDateTime: {
+        [Op.between]: [start, end],
+      },
+    },
+    include: [{
+      model: BusinessClient,
+      as: 'businessClients',
+      attributes: ['name'],
+      through: { attributes: [] }
+    }]
+  });
+
+  for (const appt of appointments) {
+    const apptEnd = new Date(new Date(appt.eventDateTime).getTime() + (appt.durationMinutes || 60) * 60000);
+    let backgroundColor = '#3788d8'; // Azul padrão para 'Scheduled'/'Confirmed'
+    let title = appt.title;
+    if (appt.businessClients && appt.businessClients.length > 0) {
+      title = `${appt.businessClients[0].name} - ${appt.title}`;
+    }
+
+    if (appt.status === 'Completed') {
+      backgroundColor = '#6c757d'; // Cinza para 'Completed'
+      title = `✅ ${title}`;
+    }
+
+    agendaEvents.push({
+      id: `appt_${appt.id}`,
+      type: 'appointment',
+      appointmentId: appt.id, // ID original para navegação
+      title,
+      start: appt.eventDateTime,
+      end: apptEnd.toISOString(),
+      status: appt.status,
+      backgroundColor,
+      borderColor: backgroundColor,
+    });
+  }
+
+  // 2. Buscar Regras de Disponibilidade e gerar eventos de bloqueio
+  const availabilityRules = await AvailabilityRule.findAll({ where: { financialAccountId } });
+
+  // Itera por cada dia no período solicitado
+  for (let day = new Date(start); day <= end; day.setDate(day.getDate() + 1)) {
+    const currentDayStr = day.toISOString().split('T')[0];
+    const dayOfWeek = day.getDay(); // 0=Dom, 1=Seg, ...
+
+    for (const rule of availabilityRules) {
+      // Verifica se a regra se aplica a este dia
+      let ruleApplies = false;
+      if (rule.type === 'day_off' && rule.specificDate === currentDayStr) {
+        ruleApplies = true;
+      } else if (rule.rrule) {
+        try {
+            const rrule = RRule.fromString(rule.rrule);
+            const occurrences = rrule.between(new Date(currentDayStr), new Date(currentDayStr), true);
+            if(occurrences.length > 0) {
+                ruleApplies = true;
+            }
+        } catch(e) {
+            logger.error(`Erro ao processar RRULE ID ${rule.id}: ${e.message}`);
+        }
+      }
+
+      if (ruleApplies) {
+        let eventStart, eventEnd;
+        // Dia de folga inteiro
+        if (rule.type === 'day_off') {
+          eventStart = new Date(`${currentDayStr}T00:00:00`);
+          eventEnd = new Date(`${currentDayStr}T23:59:59`);
+        }
+        // Pausa/Intervalo com horário definido
+        else if (rule.type === 'break' && rule.startTime && rule.endTime) {
+          eventStart = new Date(`${currentDayStr}T${rule.startTime}`);
+          eventEnd = new Date(`${currentDayStr}T${rule.endTime}`);
+        } else {
+            continue; // Pula regras de 'work' ou sem horário
+        }
+
+        agendaEvents.push({
+          id: `break_${rule.id}_${currentDayStr}`,
+          type: 'break',
+          title: rule.title,
+          start: eventStart.toISOString(),
+          end: eventEnd.toISOString(),
+          backgroundColor: '#6c757d', // Cinza
+          borderColor: '#6c757d',
+          display: 'background', // Renderiza como um fundo, indicando bloqueio
+        });
+      }
+    }
+  }
+  
+  logger.info(`[AgendaView] Retornando ${agendaEvents.length} eventos para FA ID ${financialAccountId}.`);
+  return agendaEvents;
+}
 
 module.exports = {
+  // CRUD e Ciclo de Vida
   scheduleAppointment,
   getAllAppointments,
   getAppointmentById,
   updateAppointment,
   deleteOrCancelAppointment,
-  getAppointmentsNeedingReminder,
+  confirmAppointment,
+  completeAppointment,
+  // Lembretes
+  getPFAppointmentsNeedingReminder,
   markReminderAsSent,
+  getPJAppointmentsNeeding24hReminder,
+  getPJAppointmentsNeeding30minReminder,
+  mark24hReminderAsSent,
+  mark30minReminderAsSent,
+  // Sincronização Google
   createOrUpdateAppointmentFromGoogle, 
   deleteOrCancelAppointmentByGoogleId, 
+  getAgendaView
 };

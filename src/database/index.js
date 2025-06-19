@@ -24,6 +24,9 @@ require('../models/MotivationalPhrase');
 require('../models/UserPreference');
 require('../models/SharedAccess');
 require ('../models/WaterIntakeLog') // <<< SharedAccess está aqui
+require('../models/AppointmentService')
+require('../models/Service');
+require('../models/AvailabilityRule')
 
 const models = sequelize.models;
 

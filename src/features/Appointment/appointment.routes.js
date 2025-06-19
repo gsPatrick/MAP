@@ -4,7 +4,7 @@ const appointmentController = require('./appointment.controller');
 // const { authenticateToken, authorizeFinancialAccountAccess } = require('../../middlewares/authMiddleware');
 
 const router = Router({ mergeParams: true }); // mergeParams para acessar :financialAccountId
-
+router.get('/agenda-view', appointmentController.getAgendaView);
 // router.use(authenticateToken);
 // router.use(authorizeFinancialAccountAccess); // Middleware para checar acesso à financialAccountId
 

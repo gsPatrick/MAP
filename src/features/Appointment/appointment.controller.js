@@ -116,6 +116,31 @@ async function deleteAppointment(req, res, next) {
   }
 }
 
+async function getAgendaView(req, res, next) {
+  try {
+    const { financialAccountId } = req.params;
+    const { start, end } = req.query; // Ex: ?start=2024-10-01&end=2024-10-31
+
+    if (!start || !end) {
+      const error = new Error("Parâmetros 'start' e 'end' (YYYY-MM-DD) são obrigatórios.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const agendaEvents = await appointmentService.getAgendaView(parseInt(financialAccountId, 10), start, end);
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Visão da agenda obtida com sucesso.',
+      data: agendaEvents,
+    });
+  } catch (error) {
+    logger.error(`[AppointmentController] Erro ao obter visão da agenda: ${error.message}`);
+    next(error);
+  }
+}
+
+
 module.exports = {
   scheduleAppointment,
   getAllAppointments,
@@ -123,4 +148,5 @@ module.exports = {
   updateAppointment,
   cancelAppointment,
   deleteAppointment,
+  getAgendaView
 };

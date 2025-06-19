@@ -18,4 +18,9 @@ router.get('/:businessClientId', businessClientController.getBusinessClientById)
 router.put('/:businessClientId', businessClientController.updateBusinessClient);
 router.delete('/:businessClientId', businessClientController.deleteBusinessClient);
 
+router.get('/:financialAccountId/business-clients/:businessClientId/appointments', businessClientController.getAppointmentHistory);
+
+// Rota para obter o "dashboard" de um cliente (detalhes + faturamento)
+router.get('/:financialAccountId/business-clients/:businessClientId/details', businessClientController.getDetails);
+
 module.exports = router;

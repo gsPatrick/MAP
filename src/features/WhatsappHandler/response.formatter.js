@@ -224,6 +224,33 @@ function formatRecurringRuleHistoryDataStructure(history, rule) {
     return data.trim();
 }
 
+// *** NOVA FUNÇÃO ***
+function formatServiceDataStructure(service) {
+    if (!service) return "🛠️ Resumo do Serviço:\n\nDados do serviço não disponíveis.";
+    let data = `🛠️ Resumo do Serviço:\n\n`;
+    data += `🏷️ Nome: *${service.name}*\n`;
+    data += `💰 Preço: ${formatCurrency(service.price)}\n`;
+    data += `⏰ Duração: ${service.durationMinutes} minutos\n`;
+    if (service.description) {
+        data += `📄 Descrição: ${service.description}\n`;
+    }
+    data += `🚦 Status: ${translateStatus(service.isActive ? 'Active' : 'Inactive')}\n`;
+    return data.trim();
+}
+
+// *** NOVA FUNÇÃO ***
+function formatListServicesDataStructure(services) {
+    if (!services || services.length === 0) return "🛠️ Catálogo de Serviços:\n\nNenhum serviço cadastrado.";
+    let data = "🛠️ Seu Catálogo de Serviços:\n";
+    services.forEach((service, index) => {
+        data += `\n${index + 1}️⃣ *${service.name}*\n`;
+        data += `   - Preço: ${formatCurrency(service.price)}\n`;
+        data += `   - Duração: ${service.durationMinutes} min\n`;
+        data += `   - Status: ${translateStatus(service.isActive ? 'Active' : 'Inactive')}\n`;
+    });
+    return data.trim();
+}
+
 
 function formatCreditCardDataStructure(card) {
     if (!card) return "💳 Resumo do Cartão:\n\nDados não disponíveis.";
@@ -871,5 +898,7 @@ module.exports = {
     formatRecurringRuleDataStructure,
     formatFinancialSummaryDataStructure,
     formatRichRecurringRuleList,
+        formatServiceDataStructure, // <-- NOVA FUNÇÃO
+    formatListServicesDataStructure, // <-- NOVA FUNÇÃO
     formatMorningBriefing
 };

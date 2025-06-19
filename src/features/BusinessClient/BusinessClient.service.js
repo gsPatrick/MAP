@@ -373,6 +373,107 @@ async function findBusinessClientsByIdentifiers(financialAccountId, identifiers,
     return clients.map(c => c.toJSON());
 }
 
+
+/**
+ * Busca o histórico de agendamentos de um cliente de negócio específico.
+ * @param {number} financialAccountId - ID da conta financeira do proprietário.
+ * @param {number} businessClientId - ID do cliente de negócio.
+ * @returns {Promise<Array>} Um array de objetos de agendamento.
+ */
+async function getAppointmentHistoryForClient(financialAccountId, businessClientId) {
+  // Valida se o businessClient pertence à financialAccount
+  const client = await BusinessClient.findOne({ where: { id: businessClientId, financialAccountId } });
+  if (!client) {
+    const error = new Error('Cliente de negócio não encontrado ou não pertence a esta conta.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const appointments = await Appointment.findAll({
+    include: [
+      {
+        model: BusinessClient,
+        as: 'businessClients',
+        where: { id: businessClientId },
+        attributes: [], // Não precisa dos atributos do cliente aqui, já temos o ID
+        through: { attributes: [] }
+      },
+      {
+        model: Service,
+        as: 'services',
+        attributes: ['name', 'price'],
+        through: { attributes: [] }
+      }
+    ],
+    where: {
+      financialAccountId: financialAccountId
+    },
+    order: [['eventDateTime', 'DESC']],
+  });
+
+  logger.info(`Histórico de ${appointments.length} agendamentos encontrado para BusinessClient ID ${businessClientId}.`);
+  return appointments.map(app => app.toJSON());
+}
+
+/**
+ * Obtém detalhes completos de um cliente de negócio, incluindo faturamento total.
+ * @param {number} financialAccountId - ID da conta financeira do proprietário.
+ * @param {number} businessClientId - ID do cliente de negócio.
+ * @returns {Promise<object>} Um objeto com os detalhes do cliente e dados agregados.
+ */
+async function getBusinessClientDetails(financialAccountId, businessClientId) {
+  const client = await BusinessClient.findOne({ where: { id: businessClientId, financialAccountId } });
+  if (!client) {
+    const error = new Error('Cliente de negócio não encontrado ou não pertence a esta conta.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  // Subquery para encontrar os IDs dos agendamentos concluídos para este cliente
+  const completedAppointmentIds = await Appointment.findAll({
+    attributes: ['id'],
+    where: {
+      financialAccountId: financialAccountId,
+      status: 'Completed'
+    },
+    include: [{
+      model: BusinessClient,
+      as: 'businessClients',
+      where: { id: businessClientId },
+      attributes: []
+    }]
+  }).then(apps => apps.map(app => app.id));
+
+  let totalFaturado = 0;
+  if (completedAppointmentIds.length > 0) {
+    // Soma os preços dos serviços associados a esses agendamentos concluídos
+    const result = await AppointmentService.findOne({
+        attributes: [
+            [sequelize.fn('SUM', sequelize.col('service.price')), 'totalValue']
+        ],
+        include: [{
+            model: Service,
+            as: 'service',
+            attributes: []
+        }],
+        where: {
+            appointmentId: { [Op.in]: completedAppointmentIds }
+        },
+        raw: true
+    });
+    totalFaturado = parseFloat(result.totalValue) || 0;
+  }
+
+  const history = await getAppointmentHistoryForClient(financialAccountId, businessClientId);
+
+  logger.info(`Detalhes e faturamento total calculados para BusinessClient ID ${businessClientId}.`);
+  return {
+    ...client.toJSON(),
+    totalFaturado,
+    appointmentHistory: history
+  };
+}
+
 module.exports = {
   createBusinessClient,
   getAllBusinessClients,
@@ -380,4 +481,6 @@ module.exports = {
   updateBusinessClient,
   deleteBusinessClient,
   findBusinessClientsByIdentifiers,
+   getAppointmentHistoryForClient,
+  getBusinessClientDetails,
 };

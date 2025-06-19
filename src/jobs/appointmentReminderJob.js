@@ -3,101 +3,150 @@ const cron = require('node-cron');
 const appointmentService = require('../features/Appointment/appointment.service');
 const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
-const { sequelize } = require('../database');
-// Importando formatadores para consistência
-const { formatDate, formatTime, formatCurrency } = require('../utils/formatters');
+const formatter = require('../features/WhatsappHandler/response.formatter'); // Corrigido o caminho para o formatter
 
-// Helper de formatação local para evitar dependência circular com whatsapp.service
-function formatAppointmentReminder(appointment, clientName) {
-    if (!appointment) return "Dados do compromisso não disponíveis.";
-    
-    let data = `💼 *Título:* ${appointment.title || 'N/A'}\n`;
-    data += `🗓️ *Data:* ${formatDate(appointment.eventDateTime)}\n`;
-    data += `⏰ *Horário:* ${formatTime(appointment.eventDateTime)}\n`;
-
-    if (appointment.durationMinutes) {
-        const endTime = new Date(new Date(appointment.eventDateTime).getTime() + appointment.durationMinutes * 60000);
-        data += `🏁 *Término Estimado:* ${formatTime(endTime)}\n`;
-    }
-    if (appointment.location) {
-        data += `📍 *Local:* ${appointment.location}\n`;
-    }
-    if (appointment.associatedValue && appointment.associatedTransactionType) {
-        data += `💰 *Valor Associado:* ${formatCurrency(appointment.associatedValue)} (${appointment.associatedTransactionType})\n`;
-    }
-    if (appointment.businessClients && appointment.businessClients.length > 0) {
-        data += `👥 *Com:* ${appointment.businessClients.map(c => c.name).join(', ')}\n`;
-    }
-    if (appointment.notes) {
-        data += `🗒️ *Observações:* ${appointment.notes}\n`;
-    }
-    return data.trim();
-}
-
-async function sendAppointmentReminders() {
-  logger.info('[JOB LEMBRETE COMPROMISSO] Verificando compromissos...');
+/**
+ * Envia lembretes para compromissos de contas de Pessoa Física (PF).
+ * Usa a lógica de reminderLeadTimeMinutes.
+ */
+async function sendPersonalAccountReminders() {
+  logger.info('[JOB LEMBRETE - PF] Verificando compromissos de contas pessoais...');
   try {
-    const appointmentsToRemind = await appointmentService.getAppointmentsNeedingReminder(null);
+    const appointmentsToRemind = await appointmentService.getPFAppointmentsNeedingReminder(null);
 
     if (appointmentsToRemind.length === 0) {
+      // logger.info('[JOB LEMBRETE - PF] Nenhum compromisso de PF precisando de lembrete.');
       return;
     }
-    logger.info(`[JOB LEMBRETE COMPROMISSO] ${appointmentsToRemind.length} compromissos encontrados para lembrar.`);
+    logger.info(`[JOB LEMBRETE - PF] ${appointmentsToRemind.length} compromissos de PF encontrados para lembrar.`);
 
     for (const app of appointmentsToRemind) {
       try {
-        const currentAppointmentCheck = await appointmentService.getAppointmentById(app.financialAccount?.id, app.id);
-        if(!currentAppointmentCheck || currentAppointmentCheck.reminderSentTimestamp || !currentAppointmentCheck.reminderEnabled ||
-           (currentAppointmentCheck.status !== 'Scheduled' && currentAppointmentCheck.status !== 'Confirmed')){
-            logger.info(`[JOB LEMBRETE COMPROMISSO] Compromisso ID ${app.id} não precisa mais de lembrete (status: ${currentAppointmentCheck?.status}, sent: ${currentAppointmentCheck?.reminderSentTimestamp}). Pulando.`);
-            continue;
-        }
-
         const clientPhone = app.financialAccount?.ownerClient?.phone;
         const clientFirstName = app.financialAccount?.ownerClient?.name?.split(' ')[0] || 'Você';
         const accountName = app.financialAccount?.accountName || 'Sua Conta';
 
         if (!clientPhone) {
-          logger.warn(`[JOB LEMBRETE COMPROMISSO] Compromisso ID ${app.id} (Conta: ${accountName}) não possui cliente com telefone. Marcando como enviado.`);
+          logger.warn(`[JOB LEMBRETE - PF] Compromisso ID ${app.id} (Conta: ${accountName}) não possui cliente com telefone. Marcando como enviado.`);
           await appointmentService.markReminderAsSent(app.id);
           continue;
         }
 
-        // Construção da nova mensagem
         const intro = `Oi, ${clientFirstName}! Passando para te dar um toque sobre seu compromisso na conta *${accountName}* que está chegando! 😉`;
-        const body = formatAppointmentReminder(app, clientFirstName);
+        const body = formatter.formatAppointmentDataStructure(app, true, clientFirstName);
         const footer = `Qualquer coisa, me avise! Tenha um ótimo compromisso! ✨`;
         const message = `${intro}\n\n${body}\n\n${footer}`;
 
         const sentSuccessfully = await sendWhatsappMessage(clientPhone, message);
         if (sentSuccessfully) {
-            logger.info(`[JOB LEMBRETE COMPROMISSO] Lembrete para "${app.title}" (Conta: ${accountName}) enviado para Cliente ${clientFirstName} (${clientPhone})`);
+            logger.info(`[JOB LEMBRETE - PF] Lembrete para "${app.title}" (Conta: ${accountName}) enviado para Cliente ${clientFirstName} (${clientPhone})`);
             await appointmentService.markReminderAsSent(app.id);
         } else {
-            logger.error(`[JOB LEMBRETE COMPROMISSO] Falha ao enviar lembrete via WhatsApp para compromisso ID ${app.id}.`);
+            logger.error(`[JOB LEMBRETE - PF] Falha ao enviar lembrete via WhatsApp para compromisso ID ${app.id}.`);
         }
       } catch (sendError) {
-        logger.error(`[JOB LEMBRETE COMPROMISSO] Erro ao processar/enviar lembrete para compromisso ID ${app.id}:`, { message: sendError.message, stack: sendError.stack });
+        logger.error(`[JOB LEMBRETE - PF] Erro ao processar/enviar lembrete para compromisso ID ${app.id}:`, { message: sendError.message, stack: sendError.stack });
       }
     }
-     logger.info('[JOB LEMBRETE COMPROMISSO] Verificação de compromissos concluída.');
+     logger.info('[JOB LEMBRETE - PF] Verificação de compromissos pessoais concluída.');
   } catch (error) {
-    logger.error('[JOB LEMBRETE COMPROMISSO] Erro geral:', { message: error.message, stack: error.stack });
+    logger.error('[JOB LEMBRETE - PF] Erro geral:', { message: error.message, stack: error.stack });
   }
 }
 
+/**
+ * Envia lembretes para compromissos de contas de Negócio (PJ/MEI).
+ * Usa a lógica de 24h e 30min antes do evento.
+ */
+async function sendBusinessAccountReminders() {
+    logger.info('[JOB LEMBRETE - PJ/MEI] Verificando compromissos de contas de negócio...');
 
+    // Lembretes de 24 horas
+    try {
+        const appointments24h = await appointmentService.getPJAppointmentsNeeding24hReminder();
+        if (appointments24h.length > 0) {
+            logger.info(`[JOB LEMBRETE - PJ/MEI] ${appointments24h.length} compromissos encontrados para lembrete de 24h.`);
+            for (const app of appointments24h) {
+                const ownerName = app.financialAccount.ownerClient.name;
+                const message = `👋 *Lembrete de Agendamento (24h)*\n\nOlá! Este é um lembrete do seu compromisso com *${ownerName}* amanhã.\n\n` +
+                                `*Serviço:* ${app.title}\n` +
+                                `*Data:* ${formatter.formatDate(app.eventDateTime)}\n` +
+                                `*Horário:* ${formatter.formatTime(app.eventDateTime)}\n\n` +
+                                `Caso precise reagendar, por favor, entre em contato. Até breve!`;
+
+                for (const bClient of app.businessClients) {
+                    if (bClient.phone) {
+                        const sent = await sendWhatsappMessage(bClient.phone, message);
+                        if (sent) {
+                            logger.info(`[JOB LEMBRETE - PJ/MEI] Lembrete de 24h para Appt ID ${app.id} enviado para BusinessClient ${bClient.name} (${bClient.phone}).`);
+                        }
+                    }
+                }
+                await appointmentService.mark24hReminderAsSent(app.id);
+            }
+        }
+    } catch (error) {
+        logger.error('[JOB LEMBRETE - PJ/MEI] Erro ao processar lembretes de 24h:', error);
+    }
+
+    // Lembretes de 30 minutos
+    try {
+        const appointments30min = await appointmentService.getPJAppointmentsNeeding30minReminder();
+        if (appointments30min.length > 0) {
+            logger.info(`[JOB LEMBRETE - PJ/MEI] ${appointments30min.length} compromissos encontrados para lembrete de 30min.`);
+            for (const app of appointments30min) {
+                const ownerName = app.financialAccount.ownerClient.name;
+                const message = `⏰ *Seu Agendamento é em 30 Minutos!*\n\nOlá! Passando para lembrar que seu compromisso com *${ownerName}* está chegando.\n\n` +
+                                `*Serviço:* ${app.title}\n` +
+                                `*Horário:* ${formatter.formatTime(app.eventDateTime)}\n\n` +
+                                `Nos vemos em breve!`;
+
+                for (const bClient of app.businessClients) {
+                    if (bClient.phone) {
+                        const sent = await sendWhatsappMessage(bClient.phone, message);
+                         if (sent) {
+                            logger.info(`[JOB LEMBRETE - PJ/MEI] Lembrete de 30min para Appt ID ${app.id} enviado para BusinessClient ${bClient.name} (${bClient.phone}).`);
+                        }
+                    }
+                }
+                await appointmentService.mark30minReminderAsSent(app.id);
+            }
+        }
+    } catch (error) {
+        logger.error('[JOB LEMBRETE - PJ/MEI] Erro ao processar lembretes de 30min:', error);
+    }
+    
+    logger.info('[JOB LEMBRETE - PJ/MEI] Verificação de compromissos de negócio concluída.');
+}
+
+/**
+ * Função principal do Job, que chama as duas lógicas de lembrete.
+ */
+async function sendAllAppointmentReminders() {
+    logger.info('[JOB LEMBRETE - MASTER] Iniciando ciclo de verificação de lembretes...');
+    await sendPersonalAccountReminders();
+    await sendBusinessAccountReminders();
+    logger.info('[JOB LEMBRETE - MASTER] Ciclo de verificação de lembretes finalizado.');
+}
+
+
+/**
+ * Inicia o cron job para enviar os lembretes de compromisso.
+ * @param {object} preferences - Objeto de preferências do sistema.
+ * @param {object} models - Objeto com os modelos do Sequelize (não utilizado diretamente aqui).
+ */
 function startAppointmentReminderJob(preferences, models) {
+  // Roda a cada 5 minutos por padrão, para capturar as janelas de 30min com precisão.
   const schedule = preferences?.appointmentReminderJobSchedule || '*/5 * * * *';
 
   if (cron.validate(schedule)) {
-    logger.info(`[JOB LEMBRETE COMPROMISSO] Agendado para rodar: ${schedule}`);
-    cron.schedule(schedule, sendAppointmentReminders, {
+    logger.info(`[JOB LEMBRETE - MASTER] Agendado para rodar: ${schedule}`);
+    cron.schedule(schedule, sendAllAppointmentReminders, {
       timezone: process.env.TZ || "America/Sao_Paulo",
     });
   } else {
-    logger.error(`[JOB LEMBRETE COMPROMISSO] Schedule cron inválido nas preferências: ${schedule}. Usando default '*/5 * * * *'.`);
-    cron.schedule('*/5 * * * *', sendAppointmentReminders, { timezone: process.env.TZ || "America/Sao_Paulo" });
+    logger.error(`[JOB LEMBRETE - MASTER] Schedule cron inválido nas preferências: ${schedule}. Usando default '*/5 * * * *'.`);
+    cron.schedule('*/5 * * * *', sendAllAppointmentReminders, { timezone: process.env.TZ || "America/Sao_Paulo" });
   }
 }
 

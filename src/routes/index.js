@@ -26,14 +26,17 @@ const hotmartWebhookRoutes = require('../features/WebhookHandler/hotmart.routes'
 const googleAuthRoutes = require('../features/GoogleAuth/googleAuth.routes');
 const googleWebhookRoutes = require('../features/GoogleWebhook/googleWebhook.routes');
 const hydrationRoutes = require('../features/Hydration/hydration.routes');
-const asaasWebhookRouter = require('../features/WebhookHandler/asaas.routes'); // <<< ADICIONAR
+const asaasWebhookRouter = require('../features/WebhookHandler/asaas.routes');
 const adminRoutes = require('../features/Admin/admin.routes');
 const affiliateRoutes = require('../features/Affiliate/affiliate.routes');
 
+// <<< ADICIONADO >>> Importação das novas rotas de agendamento
+const serviceRoutes = require('../features/Service/service.routes');
+const availabilityRoutes = require('../features/Availability/availability.routes');
+const publicBookingRoutes = require('../features/PublicBooking/publicBooking.routes');
 
-// >>>>> INÍCIO DA MUDANÇA: Importar o Controller Financeiro <<<<<
+// Importação do Controller Financeiro
 const financialController = require('../features/Financial/financial.controller');
-// >>>>> FIM DA MUDANÇA <<<<<
 
 const mainApiRouter = Router();
 
@@ -46,11 +49,15 @@ mainApiRouter.get('/status', (req, res) => res.status(200).json({
 
 // --- ROTAS PÚBLICAS OU SEMI-PÚBLICAS ---
 mainApiRouter.use('/webhooks', hotmartWebhookRoutes);
-mainApiRouter.use('/webhooks', asaasWebhookRouter); // <<< USAR (agora a URL será /api/webhooks/asaas)
+mainApiRouter.use('/webhooks', asaasWebhookRouter);
 mainApiRouter.use('/auth', clientAuthRoutes);
 mainApiRouter.use('/whatsapp-zapi', whatsappWebhookRoutes);
 mainApiRouter.use('/auth/google', googleAuthRoutes);
 mainApiRouter.use('/webhooks/google-calendar', googleWebhookRoutes);
+
+// <<< ADICIONADO >>> Rota pública para agendamento
+mainApiRouter.use('/public/booking', publicBookingRoutes);
+
 
 // --- ROTAS DE ADMINISTRAÇÃO DO SISTEMA ---
 mainApiRouter.use('/users', userRoutes);
@@ -60,12 +67,13 @@ mainApiRouter.use('/dev-tools', devToolsRoutes);
 mainApiRouter.use('/chat', InteractiveChatRoutes);
 mainApiRouter.use('/shared-access', authenticateClientToken, sharedAccessRoutes);
 mainApiRouter.use('/hydration', authenticateClientToken, hydrationRoutes);
-mainApiRouter.use('/', adminRoutes); // Adiciona as rotas de admin
+mainApiRouter.use('/', adminRoutes);
 mainApiRouter.use('/affiliate', authenticateClientToken, affiliateRoutes);
 
 
 
 // --- Middleware para autorização de acesso à conta financeira ---
+// (Seu middleware original, mantido intacto)
 async function authorizeFinancialAccountOwnership(req, res, next) {
     try {
         const clientForAuth = req.sharedAccessContext ? { id: req.sharedAccessContext.ownerClientId } : req.client;
@@ -118,14 +126,13 @@ async function authorizeFinancialAccountOwnership(req, res, next) {
 // --- ROTAS PARA CLIENTS LOGADOS (com middleware de autorização de conta) ---
 const clientFinancialAccountRouter = Router({ mergeParams: true });
 clientFinancialAccountRouter.use(authenticateClientToken);
-clientFinancialAccountRouter.use(authorizeFinancialAccountOwnership);
+// O middleware authorizeFinancialAccountOwnership será aplicado na montagem final, como você fez.
 
-// >>>>> INÍCIO DA MUDANÇA: Registrar as rotas de resumo aqui <<<<<
+// Monta as rotas de resumo aqui
 clientFinancialAccountRouter.get('/summary', financialController.getFinancialSummary);
 clientFinancialAccountRouter.get('/monthly-trend', financialController.getMonthlyTrend);
 clientFinancialAccountRouter.get('/expense-category-summary', financialController.getExpenseCategorySummary);
 clientFinancialAccountRouter.get('/income-category-summary', financialController.getIncomeCategorySummary);
-// >>>>> FIM DA MUDANÇA <<<<<
 
 // Monta as sub-rotas no clientFinancialAccountRouter
 clientFinancialAccountRouter.use('/transactions', financialTransactionRoutes);
@@ -138,8 +145,13 @@ clientFinancialAccountRouter.use('/categories', financialCategoryRoutes);
 clientFinancialAccountRouter.use('/kanban', kanbanRoutes);
 clientFinancialAccountRouter.use('/business-clients', businessClientRoutes);
 
-// Monta o router de conta financeira no router principal da API
-mainApiRouter.use('/financial-accounts/:financialAccountId', clientFinancialAccountRouter);
+// <<< ADICIONADO >>> Monta as novas rotas protegidas
+clientFinancialAccountRouter.use(serviceRoutes); // service.routes já usa o /:financialAccountId/services
+clientFinancialAccountRouter.use(availabilityRoutes); // availability.routes já usa o /:financialAccountId/availability-rules
+
+
+// Monta o router de conta financeira no router principal da API, aplicando o middleware de propriedade
+mainApiRouter.use('/financial-accounts/:financialAccountId', authorizeFinancialAccountOwnership, clientFinancialAccountRouter);
 
 // Rota global de estoque para Clients logados
 mainApiRouter.use('/stock', authenticateClientToken, globalStockRouter);

@@ -179,8 +179,57 @@ function authorizeRole(allowedRoles) {
   };
 }
 
+async function checkFinancialAccountOwnership(req, res, next) {
+    try {
+        const clientForAuth = req.sharedAccessContext ? { id: req.sharedAccessContext.ownerClientId } : req.client;
+        const financialAccountIdFromParams = parseInt(req.params.financialAccountId, 10);
+
+        if (!clientForAuth || !clientForAuth.id) {
+            logger.error('[AuthOwnership] Middleware chamado sem req.client ou ownerClient válido.');
+            return res.status(500).json({ status: 'error', message: 'Erro interno de autenticação.' });
+        }
+        if (isNaN(financialAccountIdFromParams)) {
+            return res.status(400).json({ status: 'fail', message: 'ID da Conta Financeira inválido na rota.' });
+        }
+
+        const financialAccount = await FinancialAccount.findOne({
+            where: { id: financialAccountIdFromParams, clientId: clientForAuth.id }
+        });
+
+        if (!financialAccount) {
+            logger.warn(`[AuthOwnership] Cliente ${clientForAuth.id} tentou acessar FA ${financialAccountIdFromParams} que não lhe pertence ou não existe.`);
+            return res.status(403).json({ status: 'fail', message: 'Acesso negado a esta conta financeira.' });
+        }
+        if (!financialAccount.isActive) {
+            logger.warn(`[AuthOwnership] Cliente ${clientForAuth.id} tentou acessar FA ${financialAccountIdFromParams} INATIVA.`);
+            return res.status(403).json({ status: 'fail', message: 'Esta conta financeira está inativa.' });
+        }
+        
+        if (req.sharedAccessContext) {
+            const { canAccessPersonalProfile, canAccessBusinessProfileId } = req.sharedAccessContext;
+            let isAllowedForShared = false;
+            if (financialAccount.accountType === 'PF' && canAccessPersonalProfile) {
+                isAllowedForShared = true;
+            } else if ((financialAccount.accountType === 'PJ' || financialAccount.accountType === 'MEI') && canAccessBusinessProfileId === financialAccount.id) {
+                isAllowedForShared = true;
+            }
+            if (!isAllowedForShared) {
+                logger.warn(`[AuthOwnership - Shared] Usuário compartilhado ${req.client.id} tentou acessar FA ${financialAccount.id} (${financialAccount.accountType}) do dono ${clientForAuth.id}, mas não tem permissão para este perfil específico.`);
+                return res.status(403).json({ status: 'fail', message: 'Acesso compartilhado negado para este perfil financeiro específico.' });
+            }
+        }
+        
+        req.financialAccount = financialAccount.toJSON();
+        next();
+    } catch (error) {
+        logger.error('[AuthOwnership] Erro ao verificar propriedade da conta financeira:', { message: error.message, error });
+        return res.status(500).json({ status: 'error', message: 'Erro ao verificar permissões da conta.' });
+    }
+}
+
 module.exports = {
   authenticateToken,
   authenticateClientToken,
   authorizeRole,
+  checkFinancialAccountOwnership
 };

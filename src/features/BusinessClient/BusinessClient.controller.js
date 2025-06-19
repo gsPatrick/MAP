@@ -105,10 +105,53 @@ async function deleteBusinessClient(req, res, next) {
   }
 }
 
+async function getAppointmentHistory(req, res, next) {
+  try {
+    const { financialAccountId, businessClientId } = req.params;
+    const history = await businessClientService.getAppointmentHistoryForClient(
+      parseInt(financialAccountId, 10),
+      parseInt(businessClientId, 10)
+    );
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Histórico de agendamentos obtido com sucesso.',
+      data: history,
+    });
+  } catch (error) {
+    logger.error(`[BusinessClientController] Erro ao obter histórico de agendamentos: ${error.message}`);
+    next(error);
+  }
+}
+
+/**
+ * Obtém detalhes completos (dashboard) de um cliente de negócio.
+ */
+async function getDetails(req, res, next) {
+  try {
+    const { financialAccountId, businessClientId } = req.params;
+    const details = await businessClientService.getBusinessClientDetails(
+      parseInt(financialAccountId, 10),
+      parseInt(businessClientId, 10)
+    );
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Detalhes do cliente obtidos com sucesso.',
+      data: details,
+    });
+  } catch (error) {
+    logger.error(`[BusinessClientController] Erro ao obter detalhes do cliente: ${error.message}`);
+    next(error);
+  }
+}
+
 module.exports = {
   createBusinessClient,
   getAllBusinessClients,
   getBusinessClientById,
   updateBusinessClient,
   deleteBusinessClient,
+  getAppointmentHistory,
+  getDetails,
 };

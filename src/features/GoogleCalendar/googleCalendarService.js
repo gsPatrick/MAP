@@ -17,25 +17,65 @@ function mapToGoogleEvent(appointmentSystem, financialAccount, clientRecord) {
   let eventTitle = appointmentSystem.title;
   let colorIdToUse = null;
 
+  // <<< LÓGICA ATUALIZADA DE TÍTULO E COR >>>
   if (financialAccount.accountType === 'PF') {
     eventTitle = `[Pessoal] ${appointmentSystem.title}`;
-    colorIdToUse = clientRecord.googleCalendarColorIdPF || '1';
+    colorIdToUse = clientRecord.googleCalendarColorIdPF || '1'; // Azul, por exemplo
   } else if (financialAccount.accountType === 'PJ' || financialAccount.accountType === 'MEI') {
     eventTitle = `[${financialAccount.accountName}] ${appointmentSystem.title}`;
-    colorIdToUse = clientRecord.googleCalendarColorIdPJ || '2';
+    colorIdToUse = clientRecord.googleCalendarColorIdPJ || '2'; // Verde, por exemplo
   }
 
+  // <<< NOVA LÓGICA PARA STATUS 'Completed' >>>
+  // Se o agendamento estiver concluído, adicionamos um emoji e mudamos a cor para cinza.
+  if (appointmentSystem.status === 'Completed') {
+      eventTitle = `✅ ${eventTitle}`;
+      colorIdToUse = '8'; // Cinza no Google Calendar
+  }
+
+  // <<< NOVA LÓGICA DE DESCRIÇÃO >>>
   let description = appointmentSystem.description || '';
-  if (appointmentSystem.notes) description += `\n\n--- Observações Internas ---\n${appointmentSystem.notes}`;
-  const attendees = [];
+  
+  // Adiciona a lista de serviços prestados
+  if (appointmentSystem.services && appointmentSystem.services.length > 0) {
+      description += `\n\n--- Serviços Prestados ---\n`;
+      const totalValue = appointmentSystem.services.reduce((sum, s) => sum + parseFloat(s.price), 0);
+      appointmentSystem.services.forEach(service => {
+          description += `- ${service.name} (${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(service.price)})\n`;
+      });
+      description += `Valor Total: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalValue)}`;
+  }
+
+  // Adiciona a lista de clientes do negócio
   if ((financialAccount.accountType === 'PJ' || financialAccount.accountType === 'MEI') && appointmentSystem.businessClients?.length > 0) {
-    description += `\n\n--- Participantes do Negócio ---`;
+    description += `\n\n--- Participantes do Negócio ---\n`;
     appointmentSystem.businessClients.forEach(bc => {
-      description += `\n- ${bc.name}`;
-      if (bc.email) attendees.push({ email: bc.email, displayName: bc.name });
+      description += `- ${bc.name}\n`;
     });
   }
+
+  // Adiciona as observações internas
+  if (appointmentSystem.notes) {
+      description += `\n\n--- Observações Internas ---\n${appointmentSystem.notes}`;
+  }
+
   description = description.trim();
+
+  // <<< NOVA LÓGICA PARA PARTICIPANTES (ATTENDEES) >>>
+  const attendees = [];
+  if ((financialAccount.accountType === 'PJ' || financialAccount.accountType === 'MEI') && appointmentSystem.businessClients?.length > 0) {
+      appointmentSystem.businessClients.forEach(bc => {
+          if (bc.email) attendees.push({ email: bc.email, displayName: bc.name });
+      });
+  }
+
+  // <<< LÓGICA ATUALIZADA DE MAPEAMENTO DE STATUS >>>
+  let googleStatus = 'confirmed'; // Padrão para eventos visíveis
+  if (appointmentSystem.status === 'Cancelled') {
+      googleStatus = 'cancelled';
+  }
+  // Note: 'Scheduled', 'Confirmed', e 'Completed' mapeiam para 'confirmed' no Google,
+  // mas diferenciamos 'Completed' visualmente com o título e a cor.
 
   const googleEvent = {
     summary: eventTitle,
@@ -49,14 +89,20 @@ function mapToGoogleEvent(appointmentSystem, financialAccount, clientRecord) {
         systemAppointmentId: String(appointmentSystem.id),
         financialAccountId: String(financialAccount.id),
         systemAccountType: financialAccount.accountType,
+        systemStatus: appointmentSystem.status, // Adiciona nosso status interno para referência
         managedBySystem: 'true',
       }
     },
-    status: appointmentSystem.status === 'Cancelled' ? 'cancelled' : 'confirmed',
+    status: googleStatus,
   };
-  if (attendees.length > 0) googleEvent.attendees = attendees;
+
+  if (attendees.length > 0) {
+      googleEvent.attendees = attendees;
+  }
+
   return googleEvent;
 }
+
 
 async function createGoogleEvent(systemClientId, appointmentSystem) {
   try {
