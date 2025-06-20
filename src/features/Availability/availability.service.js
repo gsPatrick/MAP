@@ -105,16 +105,18 @@ async function deleteAvailabilityRule(financialAccountId, ruleId) {
  * @returns {Promise<boolean>} True se o horário estiver livre, false caso contrário.
  */
 async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMinutes) {
-  // <<< MUDANÇA PRINCIPAL AQUI >>>
   const desiredStart = new Date(startDateTime);
   const desiredEnd = new Date(desiredStart.getTime() + durationMinutes * 60 * 1000);
   
-  // 1. Verificar colisão com agendamentos existentes (sem alteração)
+  // 1. Verificar colisão com agendamentos existentes
   const existingAppointment = await Appointment.findOne({
     where: {
       financialAccountId,
       status: { [Op.in]: ['Scheduled', 'Confirmed'] },
-      eventDateTime: { [Op.lt]: desiredEnd, [Op.gt]: new Date(desiredStart.getTime() - (24 * 60 * 60 * 1000)) },
+      eventDateTime: {
+        [Op.lt]: desiredEnd,
+        [Op.gt]: new Date(desiredStart.getTime() - (24 * 60 * 60 * 1000)), // Otimização para não buscar todo o DB
+      },
     },
   });
 
@@ -143,7 +145,7 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
   // 4. Verificar se o dia da semana e o horário estão dentro da jornada de trabalho
   if (!workRule || !workRule.rrule || !workRule.startTime || !workRule.endTime) {
     logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: Nenhuma regra de trabalho (work rule) válida encontrada.`);
-    return false; // Se não há regra de trabalho, nada está disponível
+    return false;
   }
 
   try {
@@ -155,7 +157,7 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
     const occurrences = rule.between(startOfDay, endOfDay);
     if (occurrences.length === 0) {
       logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: O dia ${desiredDateString} não é um dia de trabalho segundo a RRULE.`);
-      return false; // Não é um dia de trabalho
+      return false;
     }
 
     // Compara apenas as horas e minutos, ignorando a data
@@ -166,7 +168,7 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
 
     if (desiredStartTime < workStart || desiredEndTime > workEnd) {
       logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: ${desiredStart.toISOString()} está fora do expediente (${workRule.startTime}-${workRule.endTime}).`);
-      return false; // Fora do horário de expediente
+      return false;
     }
 
     // 5. Verificar se colide com um intervalo (break)
@@ -176,7 +178,6 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
             if (breakOccurrences.length > 0) {
                 const breakStart = new Date(`1970-01-01T${breakRule.startTime}Z`);
                 const breakEnd = new Date(`1970-01-01T${breakRule.endTime}Z`);
-                // Verifica sobreposição de horários
                 if (desiredStartTime < breakEnd && desiredEndTime > breakStart) {
                     logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: ${desiredStart.toISOString()} colide com um intervalo.`);
                     return false;
@@ -187,7 +188,7 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
 
   } catch (e) {
     logger.error(`[Availability] Erro ao processar RRULE para FA ${financialAccountId}: ${e.message}`);
-    return false; // Se a regra for inválida, considera indisponível por segurança
+    return false;
   }
 
   logger.info(`[Availability] Slot disponível para FA ${financialAccountId} em ${desiredStart.toISOString()}.`);

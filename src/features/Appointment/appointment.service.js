@@ -51,9 +51,12 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
             appointmentData.reminderLeadTimeMinutes = null;
             appointmentData.reminderSentTimestamp = null;
         }
-        appointmentData.origin = 'system_pf';
+        // Define a origem, respeitando se já foi definida por outra função (ex: Google Sync)
+        appointmentData.origin = appointmentData.origin || 'system_pf';
     } else { // Lógica para PJ ou MEI
-        appointmentData.origin = 'system_pj_mei';
+        // Define a origem, respeitando se já foi definida (ex: public_booking)
+        appointmentData.origin = appointmentData.origin || 'system_pj_mei';
+        
         // Zera os campos de lembrete do sistema antigo
         appointmentData.reminderEnabled = false;
         appointmentData.reminderLeadTimeMinutes = null;
@@ -72,7 +75,7 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
                 error.statusCode = 404; error.status = 'fail'; throw error;
             }
         }
-        delete appointmentData.businessClientIds;
+        // Não delete businessClientIds do appointmentData, pois será usado depois
 
         // Validação de Serviços
         const serviceIds = appointmentData.serviceIds;
@@ -89,7 +92,7 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
             const error = new Error(`Um ou mais Serviços (IDs: ${missingIds.join(', ')}) não foram encontrados, estão inativos ou não pertencem a esta conta.`);
             error.statusCode = 404; error.status = 'fail'; throw error;
         }
-        delete appointmentData.serviceIds;
+        // Não delete serviceIds do appointmentData, pois será usado depois
     }
 
     newAppointment = await Appointment.create(

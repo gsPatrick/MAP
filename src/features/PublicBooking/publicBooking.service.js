@@ -115,6 +115,7 @@ async function createPublicBooking(financialAccountId, bookingData) {
     throw error;
   }
   
+  // 1. Re-valida a disponibilidade do slot para evitar agendamentos duplos
   const totalDuration = await calculateTotalDuration(financialAccountId, serviceIds);
   const isStillAvailable = await availabilityService.isTimeSlotAvailable(financialAccountId, eventDateTime, totalDuration);
   if (!isStillAvailable) {
@@ -123,6 +124,7 @@ async function createPublicBooking(financialAccountId, bookingData) {
     throw error;
   }
 
+  // 2. Cria ou encontra o BusinessClient
   let businessClient;
   try {
     const existingClients = await businessClientService.getAllBusinessClients(financialAccountId, { search: clientDetails.email, limit: 1 });
@@ -142,6 +144,7 @@ async function createPublicBooking(financialAccountId, bookingData) {
       }
   }
 
+  // 3. Prepara e cria o agendamento
   const services = await Service.findAll({ where: { id: { [Op.in]: serviceIds }, financialAccountId } });
   const appointmentTitle = services.map(s => s.name).join(' + ');
 
@@ -152,6 +155,7 @@ async function createPublicBooking(financialAccountId, bookingData) {
     status: 'Scheduled',
     businessClientIds: [businessClient.id],
     serviceIds,
+    origin: 'public_booking', // Define a origem correta
   };
 
   const newAppointment = await appointmentService.scheduleAppointment(financialAccountId, appointmentData);
