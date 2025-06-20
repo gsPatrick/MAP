@@ -1,26 +1,31 @@
 // src/features/BusinessClient/businessClient.routes.js
 const { Router } = require('express');
 const businessClientController = require('./BusinessClient.controller');
-// Middlewares de autenticação e autorização serão aplicados no router pai (clientFinancialAccountRouter)
-// const { authenticateClientToken, authorizeFinancialAccountOwnership } = require('../../middlewares/authMiddleware');
 
 // Este router espera que :financialAccountId seja fornecido pela rota pai
 const router = Router({ mergeParams: true });
 
-// Todas as rotas abaixo esperam o :financialAccountId na URL,
-// e dependem da autenticação e autorização já aplicadas no router pai.
-// Adicionar middleware específico para verificar se a conta é PJ/MEI, se necessário,
-// mas a validação também está no serviço e no controller helper.
+// As rotas abaixo já estão sob o prefixo /financial-accounts/:financialAccountId/business-clients
 
-router.post('/', businessClientController.createBusinessClient);
-router.get('/', businessClientController.getAllBusinessClients);
-router.get('/:businessClientId', businessClientController.getBusinessClientById);
-router.put('/:businessClientId', businessClientController.updateBusinessClient);
-router.delete('/:businessClientId', businessClientController.deleteBusinessClient);
+// Rota para criar e listar clientes
+// Caminho final: POST ou GET /financial-accounts/:financialAccountId/business-clients/
+router.route('/')
+    .post(businessClientController.createBusinessClient)
+    .get(businessClientController.getAllBusinessClients);
 
-router.get('/:financialAccountId/business-clients/:businessClientId/appointments', businessClientController.getAppointmentHistory);
+// <<< MUDANÇA: Rota simplificada para detalhes do cliente >>>
+// Caminho final: GET /financial-accounts/:financialAccountId/business-clients/:businessClientId/details
+router.get('/:businessClientId/details', businessClientController.getDetails);
 
-// Rota para obter o "dashboard" de um cliente (detalhes + faturamento)
-router.get('/:financialAccountId/business-clients/:businessClientId/details', businessClientController.getDetails);
+// <<< MUDANÇA: Rota simplificada para o histórico de agendamentos do cliente >>>
+// Caminho final: GET /financial-accounts/:financialAccountId/business-clients/:businessClientId/appointments
+router.get('/:businessClientId/appointments', businessClientController.getAppointmentHistory);
+
+// Rotas para um cliente específico
+// Caminho final: GET, PUT, DELETE /financial-accounts/:financialAccountId/business-clients/:businessClientId
+router.route('/:businessClientId')
+    .get(businessClientController.getBusinessClientById)
+    .put(businessClientController.updateBusinessClient)
+    .delete(businessClientController.deleteBusinessClient);
 
 module.exports = router;
