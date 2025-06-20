@@ -29,13 +29,9 @@ const hydrationRoutes = require('../features/Hydration/hydration.routes');
 const asaasWebhookRouter = require('../features/WebhookHandler/asaas.routes');
 const adminRoutes = require('../features/Admin/admin.routes');
 const affiliateRoutes = require('../features/Affiliate/affiliate.routes');
-
-// <<< ADICIONADO >>> Importação das novas rotas de agendamento
 const serviceRoutes = require('../features/Service/service.routes');
 const availabilityRoutes = require('../features/Availability/availability.routes');
 const publicBookingRoutes = require('../features/PublicBooking/publicBooking.routes');
-
-// Importação do Controller Financeiro para rotas de resumo
 const financialController = require('../features/Financial/financial.controller');
 
 const mainApiRouter = Router();
@@ -54,10 +50,7 @@ mainApiRouter.use('/auth', clientAuthRoutes);
 mainApiRouter.use('/whatsapp-zapi', whatsappWebhookRoutes);
 mainApiRouter.use('/auth/google', googleAuthRoutes);
 mainApiRouter.use('/webhooks/google-calendar', googleWebhookRoutes);
-
-// <<< ADICIONADO >>> Rota pública para agendamento
 mainApiRouter.use('/public/booking', publicBookingRoutes);
-
 
 // --- ROTAS DE ADMINISTRAÇÃO DO SISTEMA ---
 mainApiRouter.use('/users', userRoutes);
@@ -69,8 +62,6 @@ mainApiRouter.use('/shared-access', authenticateClientToken, sharedAccessRoutes)
 mainApiRouter.use('/hydration', authenticateClientToken, hydrationRoutes);
 mainApiRouter.use('/', adminRoutes);
 mainApiRouter.use('/affiliate', authenticateClientToken, affiliateRoutes);
-
-
 
 // --- Middleware para autorização de acesso à conta financeira ---
 async function authorizeFinancialAccountOwnership(req, res, next) {
@@ -121,10 +112,8 @@ async function authorizeFinancialAccountOwnership(req, res, next) {
     }
 }
 
-
 // --- ROTAS PARA CLIENTS LOGADOS (com middleware de autorização de conta) ---
 const clientFinancialAccountRouter = Router({ mergeParams: true });
-clientFinancialAccountRouter.use(authenticateClientToken);
 
 // Monta as rotas de resumo financeiro
 clientFinancialAccountRouter.get('/summary', financialController.getFinancialSummary);
@@ -142,17 +131,17 @@ clientFinancialAccountRouter.use('/appointments', appointmentRoutes);
 clientFinancialAccountRouter.use('/categories', financialCategoryRoutes);
 clientFinancialAccountRouter.use('/kanban', kanbanRoutes);
 clientFinancialAccountRouter.use('/business-clients', businessClientRoutes);
-
-// <<< CORREÇÃO >>> Monta as novas rotas de serviço e disponibilidade.
-// Elas serão prefixadas com a rota pai, resultando em, por exemplo:
-// /financial-accounts/:financialAccountId/services
-// /financial-accounts/:financialAccountId/availability-rules
 clientFinancialAccountRouter.use('/services', serviceRoutes);
 clientFinancialAccountRouter.use('/availability-rules', availabilityRoutes);
 
-
-// Monta o router de conta financeira no router principal da API, APLICANDO O MIDDLEWARE DE PROPRIEDADE
-mainApiRouter.use('/financial-accounts/:financialAccountId', authorizeFinancialAccountOwnership, clientFinancialAccountRouter);
+// <<< CORREÇÃO PRINCIPAL AQUI >>>
+// Monta o router de conta financeira no router principal da API,
+// aplicando os middlewares NA ORDEM CORRETA.
+mainApiRouter.use('/financial-accounts/:financialAccountId',
+    authenticateClientToken,           // 1. Autentica o token e define req.client
+    authorizeFinancialAccountOwnership,  // 2. Autoriza a posse da conta usando req.client
+    clientFinancialAccountRouter         // 3. Passa para as rotas específicas
+);
 
 // Rota global de estoque para Clients logados (não depende de uma financialAccount específica)
 mainApiRouter.use('/stock', authenticateClientToken, globalStockRouter);
