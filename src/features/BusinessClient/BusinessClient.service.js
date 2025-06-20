@@ -450,13 +450,9 @@ async function getBusinessClientDetails(financialAccountId, businessClientId) {
     // Soma os preços dos serviços associados a esses agendamentos concluídos
     const result = await AppointmentService.findOne({
         attributes: [
-            [sequelize.fn('SUM', sequelize.col('service.price')), 'totalValue']
+            // <<< MUDANÇA: Usar o preço salvo na tabela de junção para precisão histórica
+            [sequelize.fn('SUM', sequelize.col('priceAtTimeOfBooking')), 'totalValue']
         ],
-        include: [{
-            model: Service,
-            as: 'service',
-            attributes: []
-        }],
         where: {
             appointmentId: { [Op.in]: completedAppointmentIds }
         },
@@ -474,6 +470,7 @@ async function getBusinessClientDetails(financialAccountId, businessClientId) {
     appointmentHistory: history
   };
 }
+
 
 module.exports = {
   createBusinessClient,

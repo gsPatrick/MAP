@@ -1,15 +1,19 @@
 // src/features/Appointment/appointment.routes.js
 const { Router } = require('express');
 const appointmentController = require('./appointment.controller');
-// const { authenticateToken, authorizeFinancialAccountAccess } = require('../../middlewares/authMiddleware');
 
-const router = Router({ mergeParams: true }); // mergeParams para acessar :financialAccountId
+const router = Router({ mergeParams: true });
+
 router.get('/agenda-view', appointmentController.getAgendaView);
-// router.use(authenticateToken);
-// router.use(authorizeFinancialAccountAccess); // Middleware para checar acesso à financialAccountId
 
 router.post('/', appointmentController.scheduleAppointment);
 router.get('/', appointmentController.getAllAppointments);
+
+// <<< ADICIONE ESTAS NOVAS ROTAS DE AÇÃO AQUI >>>
+router.post('/:appointmentId/confirm', appointmentController.confirmAppointment);
+router.post('/:appointmentId/complete', appointmentController.completeAppointment);
+// <<< FIM DAS NOVAS ROTAS >>>
+
 router.get('/:appointmentId', appointmentController.getAppointmentById);
 router.put('/:appointmentId', appointmentController.updateAppointment);
 router.patch('/:appointmentId/cancel', appointmentController.cancelAppointment);

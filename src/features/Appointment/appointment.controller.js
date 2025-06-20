@@ -140,6 +140,27 @@ async function getAgendaView(req, res, next) {
   }
 }
 
+async function confirmAppointment(req, res, next) {
+  try {
+    const financialAccountId = getFinancialAccountIdFromRequest(req);
+    const appointmentId = getAppointmentIdFromRequest(req);
+    const confirmedAppointment = await appointmentService.confirmAppointment(financialAccountId, appointmentId);
+    res.status(200).json({ status: 'success', data: confirmedAppointment });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function completeAppointment(req, res, next) {
+  try {
+    const financialAccountId = getFinancialAccountIdFromRequest(req);
+    const appointmentId = getAppointmentIdFromRequest(req);
+    const completedAppointment = await appointmentService.completeAppointment(financialAccountId, appointmentId);
+    res.status(200).json({ status: 'success', data: completedAppointment });
+  } catch (error) {
+    next(error);
+  }
+}
 
 module.exports = {
   scheduleAppointment,
@@ -148,5 +169,7 @@ module.exports = {
   updateAppointment,
   cancelAppointment,
   deleteAppointment,
-  getAgendaView
+  getAgendaView,
+  completeAppointment,
+  confirmAppointment
 };
