@@ -114,7 +114,15 @@ async function createPublicBooking(financialAccountId, bookingData) {
   
   // 1. Re-valida a disponibilidade do slot para evitar agendamentos duplos
   const totalDuration = await calculateTotalDuration(financialAccountId, serviceIds);
-  const isStillAvailable = await availabilityService.isTimeSlotAvailable(financialAccountId, eventDateTime, totalDuration);
+
+  // <<< MUDANÇA PRINCIPAL AQUI >>>
+  // Constrói os objetos Date corretos antes de chamar a função
+  const desiredStart = new Date(eventDateTime);
+  const desiredEnd = new Date(desiredStart.getTime() + totalDuration * 60 * 1000);
+  
+  // Chama a função com os parâmetros corretos (Date, Date)
+  const isStillAvailable = await availabilityService.isTimeSlotAvailable(financialAccountId, desiredStart, desiredEnd);
+  
   if (!isStillAvailable) {
     const error = new Error('Este horário foi agendado por outra pessoa enquanto você preenchia os dados. Por favor, escolha outro horário.');
     error.statusCode = 409; // Conflict
@@ -152,7 +160,7 @@ async function createPublicBooking(financialAccountId, bookingData) {
     status: 'Scheduled',
     businessClientIds: [businessClient.id],
     serviceIds,
-    origin: 'public_booking', // Define a origem correta
+    origin: 'public_booking',
   };
 
   const newAppointment = await appointmentService.scheduleAppointment(financialAccountId, appointmentData);
