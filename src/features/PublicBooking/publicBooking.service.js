@@ -85,10 +85,10 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
       currentTime = new Date(currentTime.getTime() + slotInterval * 60 * 1000);
   }
 
-  const availabilityChecks = potentialSlots.map(slotStart => {
-    const slotEnd = new Date(slotStart.getTime() + totalDuration * 60 * 1000);
-    return availabilityService.isTimeSlotAvailable(financialAccountId, slotStart, slotEnd);
-  });
+  // <<< MUDANÇA PRINCIPAL AQUI: Corrigindo a chamada >>>
+  const availabilityChecks = potentialSlots.map(slotStart => 
+    availabilityService.isTimeSlotAvailable(financialAccountId, slotStart, totalDuration)
+  );
 
   const results = await Promise.all(availabilityChecks);
   
@@ -121,7 +121,7 @@ async function createPublicBooking(financialAccountId, bookingData) {
   const desiredEnd = new Date(desiredStart.getTime() + totalDuration * 60 * 1000);
   
   // Chama a função com os parâmetros corretos (Date, Date)
-  const isStillAvailable = await availabilityService.isTimeSlotAvailable(financialAccountId, desiredStart, desiredEnd);
+  const isStillAvailable = await availabilityService.isTimeSlotAvailable(financialAccountId, eventDateTime, totalDuration);
   
   if (!isStillAvailable) {
     const error = new Error('Este horário foi agendado por outra pessoa enquanto você preenchia os dados. Por favor, escolha outro horário.');
