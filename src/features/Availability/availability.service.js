@@ -119,8 +119,14 @@ async function isTimeSlotAvailable(financialAccountId, desiredStart, desiredEnd)
   if (!workRule || !workRule.rrule || !workRule.startTime || !workRule.endTime) return false;
 
   try {
+    // <<< MUDANÇA PRINCIPAL AQUI: Adicionar dtstart na chamada rrulestr >>>
     const rule = rrulestr(workRule.rrule, { dtstart: dayStart });
-    if (rule.between(dayStart, dayEnd).length === 0) return false;
+    
+    const occurrences = rule.between(dayStart, dayEnd, true); // O 'true' inclui o início
+    if (occurrences.length === 0) {
+      logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: O dia ${desiredDateString} não é um dia de trabalho segundo a RRULE.`);
+      return false;
+    }
 
     const [workStartHour, workStartMinute] = workRule.startTime.split(':').map(Number);
     const [workEndHour, workEndMinute] = workRule.endTime.split(':').map(Number);
@@ -130,19 +136,28 @@ async function isTimeSlotAvailable(financialAccountId, desiredStart, desiredEnd)
     const workStartTotalMinutes = workStartHour * 60 + workStartMinute;
     const workEndTotalMinutes = workEndHour * 60 + workEndMinute;
 
-    if (desiredStartTotalMinutes < workStartTotalMinutes || desiredEndTotalMinutes > workEndTotalMinutes) return false;
+    if (desiredStartTotalMinutes < workStartTotalMinutes || desiredEndTotalMinutes > workEndTotalMinutes) {
+      return false;
+    }
 
     for (const breakRule of breakRules) {
-        const breakRuleInstance = rrulestr(breakRule.rrule, { dtstart: dayStart });
-        if (breakRuleInstance.between(dayStart, dayEnd).length > 0) {
-            const [breakStartHour, breakStartMinute] = breakRule.startTime.split(':').map(Number);
-            const [breakEndHour, breakEndMinute] = breakRule.endTime.split(':').map(Number);
-            const breakStartTotalMinutes = breakStartHour * 60 + breakStartMinute;
-            const breakEndTotalMinutes = breakEndHour * 60 + breakEndMinute;
+        if (breakRule.rrule && breakRule.startTime && breakRule.endTime) {
+            // <<< MUDANÇA AQUI: Adicionar dtstart também para a regra de pausa >>>
+            const breakRuleInstance = rrulestr(breakRule.rrule, { dtstart: dayStart });
+            const breakOccurrences = breakRuleInstance.between(dayStart, dayEnd, true);
+            if (breakOccurrences.length > 0) {
+                const [breakStartHour, breakStartMinute] = breakRule.startTime.split(':').map(Number);
+                const [breakEndHour, breakEndMinute] = breakRule.endTime.split(':').map(Number);
+                const breakStartTotalMinutes = breakStartHour * 60 + breakStartMinute;
+                const breakEndTotalMinutes = breakEndHour * 60 + breakEndMinute;
 
-            if (desiredStartTotalMinutes < breakEndTotalMinutes && desiredEndTotalMinutes > breakStartTotalMinutes) return false;
+                if (desiredStartTotalMinutes < breakEndTotalMinutes && desiredEndTotalMinutes > breakStartTotalMinutes) {
+                    return false;
+                }
+            }
         }
     }
+
   } catch (e) {
     logger.error(`[Availability] Erro ao processar RRULE para FA ${financialAccountId}: ${e.message}`);
     return false;
