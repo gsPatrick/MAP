@@ -87,7 +87,7 @@ const Appointment = sequelize.define('Appointment', {
   // === NOVOS CAMPOS PARA FLUXO DE AGENDAMENTO PJ/MEI ===
   // =================================================================
   origin: {
-type: DataTypes.ENUM('system_pf', 'system_pj_mei', 'google_calendar', 'public_booking'),
+  type: DataTypes.ENUM('system_pf', 'system_pj_mei', 'google_calendar', 'public_booking', 'System'),
     allowNull: false,
     defaultValue: 'System',
     comment: 'Indica a origem do agendamento (criado no sistema ou importado do Google).',
