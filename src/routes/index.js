@@ -32,6 +32,8 @@ const serviceRoutes = require('../features/Service/service.routes');
 const availabilityRoutes = require('../features/Availability/availability.routes'); // <<< JÁ ESTÁ IMPORTADO, ÓTIMO
 const publicBookingRoutes = require('../features/PublicBooking/publicBooking.routes');
 const financialController = require('../features/Financial/financial.controller');
+const affiliateRoutes = require('../features/Affiliate/affiliate.routes');
+
 
 const mainApiRouter = Router();
 
