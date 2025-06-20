@@ -74,7 +74,7 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
   const [startHour, startMinute] = workRule.startTime.split(':').map(Number);
   const [endHour, endMinute] = workRule.endTime.split(':').map(Number);
 
-  // <<< MUDANÇA: Trabalhar com datas UTC para consistência >>>
+  // Trabalhar com datas UTC para consistência
   let currentTime = new Date(`${date}T00:00:00.000Z`);
   currentTime.setUTCHours(startHour, startMinute);
 
@@ -88,12 +88,11 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
 
   logger.info(`[PublicBooking] ${potentialSlots.length} slots potenciais gerados. Verificando disponibilidade...`);
 
-  // <<< MUDANÇA PRINCIPAL AQUI >>>
   // 1. Mapeia cada slot para uma promessa de verificação de disponibilidade.
   const availabilityChecks = potentialSlots.map(slotStart => {
-    const slotEnd = new Date(slotStart.getTime() + totalDuration * 60 * 1000);
-    // Passa os objetos Date puros para a verificação
-    return availabilityService.isTimeSlotAvailable(financialAccountId, slotStart, slotEnd);
+    // A função isTimeSlotAvailable espera (accountId, startTime, durationInMinutes).
+    // O erro estava aqui: você estava passando a data final (slotEnd) em vez da duração.
+    return availabilityService.isTimeSlotAvailable(financialAccountId, slotStart, totalDuration); // <<< CORREÇÃO APLICADA AQUI >>>
   });
 
   // 2. Espera todas as verificações terminarem.

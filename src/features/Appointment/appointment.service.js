@@ -7,6 +7,8 @@ const businessClientService = require('../BusinessClient/BusinessClient.service'
 const financialService = require('../Financial/financial.service'); // Adicionado
 const { sendWhatsappMessage } = require('../../services/whatsappService'); // Adicionado
 const formatter = require('../WhatsappHandler/response.formatter'); // Adicionado
+const { RRule } = require('rrule'); 
+
 
 const BUSINESS_CLIENT_INCLUDE_ATTRIBUTES = ['id', 'name', 'phone', 'email', 'photoUrl', 'notes'];
 const SERVICE_INCLUDE_ATTRIBUTES = ['id', 'name', 'price', 'durationMinutes', 'description'];
