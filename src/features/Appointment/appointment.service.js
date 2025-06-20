@@ -1,5 +1,5 @@
 // src/features/Appointment/appointment.service.js
-const { Appointment, FinancialAccount, Client, UserPreference, BusinessClient, AppointmentBusinessClient, Service, AppointmentService, sequelize } = require('../../database');
+const { Appointment, FinancialAccount, Client, UserPreference, BusinessClient, AppointmentBusinessClient, Service, AppointmentService, AvailabilityRule, sequelize } = require('../../database');
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 const googleCalendarService = require('../../features/GoogleCalendar/googleCalendarService'); 
@@ -985,6 +985,11 @@ async function getAgendaView(financialAccountId, startDate, endDate) {
       as: 'businessClients',
       attributes: ['name'],
       through: { attributes: [] }
+    }, { // <<< MUDANÇA: Incluir serviços para obter o título correto
+      model: Service,
+      as: 'services',
+      attributes: ['name'],
+      through: { attributes: [] }
     }]
   });
 
@@ -992,8 +997,13 @@ async function getAgendaView(financialAccountId, startDate, endDate) {
     const apptEnd = new Date(new Date(appt.eventDateTime).getTime() + (appt.durationMinutes || 60) * 60000);
     let backgroundColor = '#3788d8'; // Azul padrão para 'Scheduled'/'Confirmed'
     let title = appt.title;
+
+    // Constrói o título com base nos clientes ou serviços
     if (appt.businessClients && appt.businessClients.length > 0) {
       title = `${appt.businessClients[0].name} - ${appt.title}`;
+    } else if (appt.services && appt.services.length > 0) {
+      // Caso não tenha cliente mas tenha serviço, usa o nome do serviço
+      title = appt.services.map(s => s.name).join(' + ');
     }
 
     if (appt.status === 'Completed') {
@@ -1011,6 +1021,10 @@ async function getAgendaView(financialAccountId, startDate, endDate) {
       status: appt.status,
       backgroundColor,
       borderColor: backgroundColor,
+      // <<< MUDANÇA: Passar os dados completos para o popover
+      description: appt.description,
+      businessClients: appt.businessClients,
+      services: appt.services,
     });
   }
 
@@ -1020,17 +1034,16 @@ async function getAgendaView(financialAccountId, startDate, endDate) {
   // Itera por cada dia no período solicitado
   for (let day = new Date(start); day <= end; day.setDate(day.getDate() + 1)) {
     const currentDayStr = day.toISOString().split('T')[0];
-    const dayOfWeek = day.getDay(); // 0=Dom, 1=Seg, ...
-
+    
     for (const rule of availabilityRules) {
-      // Verifica se a regra se aplica a este dia
       let ruleApplies = false;
       if (rule.type === 'day_off' && rule.specificDate === currentDayStr) {
         ruleApplies = true;
       } else if (rule.rrule) {
         try {
+            // <<< MUDANÇA: Agora RRule está definido e funciona
             const rrule = RRule.fromString(rule.rrule);
-            const occurrences = rrule.between(new Date(currentDayStr), new Date(currentDayStr), true);
+            const occurrences = rrule.between(new Date(currentDayStr + "T00:00:00.000Z"), new Date(currentDayStr + "T23:59:59.999Z"), true);
             if(occurrences.length > 0) {
                 ruleApplies = true;
             }
@@ -1041,17 +1054,15 @@ async function getAgendaView(financialAccountId, startDate, endDate) {
 
       if (ruleApplies) {
         let eventStart, eventEnd;
-        // Dia de folga inteiro
         if (rule.type === 'day_off') {
           eventStart = new Date(`${currentDayStr}T00:00:00`);
           eventEnd = new Date(`${currentDayStr}T23:59:59`);
         }
-        // Pausa/Intervalo com horário definido
         else if (rule.type === 'break' && rule.startTime && rule.endTime) {
           eventStart = new Date(`${currentDayStr}T${rule.startTime}`);
           eventEnd = new Date(`${currentDayStr}T${rule.endTime}`);
         } else {
-            continue; // Pula regras de 'work' ou sem horário
+            continue;
         }
 
         agendaEvents.push({
@@ -1060,9 +1071,9 @@ async function getAgendaView(financialAccountId, startDate, endDate) {
           title: rule.title,
           start: eventStart.toISOString(),
           end: eventEnd.toISOString(),
-          backgroundColor: '#6c757d', // Cinza
+          backgroundColor: '#6c757d',
           borderColor: '#6c757d',
-          display: 'background', // Renderiza como um fundo, indicando bloqueio
+          display: 'background',
         });
       }
     }
