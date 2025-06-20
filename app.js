@@ -9,7 +9,6 @@ const { sequelize } = require('./src/database');
 const errorHandler = require('./src/middlewares/errorHandler');
 const { startJobs } = require('./src/jobs');
 const mainApiRouter = require('./src/routes');
-const { seedPlans } = require('./src/database/seeders/seedPlans');
 
 
 async function initializeDatabaseAndJobs() {
@@ -44,8 +43,7 @@ async function initializeDatabaseAndJobs() {
         console.log('Banco de dados resetado com sucesso (force: true).');
         
         // Após um reset total, é essencial semear os dados básicos.
-        console.log('Executando seeder de planos...');
-        await seedPlans();
+   
 
       } else {
         // Comportamento padrão para desenvolvimento: tenta alterar tabelas sem apagar.
@@ -54,8 +52,7 @@ async function initializeDatabaseAndJobs() {
         console.log('Modelos sincronizados com o banco de dados (alter: true).');
         
         // Também é seguro rodar o seeder aqui, pois ele deve ser idempotente (verificar se já existe).
-        console.log('Executando seeder de planos...');
-        await seedPlans();
+
       }
     }
 
