@@ -1,5 +1,5 @@
 // src/features/BusinessClient/businessClient.service.js
-const { BusinessClient, FinancialAccount, sequelize } = require('../../database');
+const { BusinessClient, FinancialAccount, Appointment, Service, AppointmentService, sequelize } = require('../../database');
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 
@@ -414,6 +414,7 @@ async function getAppointmentHistoryForClient(financialAccountId, businessClient
   logger.info(`Histórico de ${appointments.length} agendamentos encontrado para BusinessClient ID ${businessClientId}.`);
   return appointments.map(app => app.toJSON());
 }
+
 
 /**
  * Obtém detalhes completos de um cliente de negócio, incluindo faturamento total.
