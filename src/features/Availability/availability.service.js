@@ -87,7 +87,7 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
   const desiredEnd = new Date(desiredStart.getTime() + durationMinutes * 60 * 1000);
   const desiredDateString = desiredStart.toISOString().split('T')[0];
 
-  // <<< MUDANÇA PRINCIPAL AQUI: Lógica de verificação de conflitos refeita >>>
+  // <<< MUDANÇA PRINCIPAL AQUI: Lógica simplificada e explícita >>>
 
   // 1. Buscar TODOS os agendamentos do dia para verificação manual
   const dayStart = new Date(`${desiredDateString}T00:00:00.000Z`);
@@ -106,18 +106,17 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
   // 2. Iterar e verificar conflitos manualmente
   for (const existingAppt of appointmentsOnThisDay) {
     const existingStart = new Date(existingAppt.eventDateTime);
-    // Usa a duração do agendamento existente, com um fallback de 60 minutos
-    const existingDuration = existingAppt.durationMinutes || 60; 
+    const existingDuration = existingAppt.durationMinutes || 30; // Fallback seguro
     const existingEnd = new Date(existingStart.getTime() + existingDuration * 60 * 1000);
 
-    // Lógica de sobreposição: (StartA < EndB) and (EndA > StartB)
+    // Lógica de sobreposição: (InícioA < FimB) e (FimA > InícioB)
     if (desiredStart < existingEnd && desiredEnd > existingStart) {
       logger.warn(`[Availability] Conflito de horário para FA ${financialAccountId}: Slot desejado ${desiredStart.toISOString()} colide com agendamento existente ID ${existingAppt.id}.`);
       return false;
     }
   }
 
-  // 3. O resto da lógica para verificar regras de trabalho, pausas e folgas permanece a mesma
+  // 3. O resto da lógica para verificar regras de trabalho, pausas e folgas
   const rules = await AvailabilityRule.findAll({ where: { financialAccountId } });
   const workRule = rules.find(r => r.type === 'work');
   const breakRules = rules.filter(r => r.type === 'break');
