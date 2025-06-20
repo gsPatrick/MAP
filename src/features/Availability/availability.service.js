@@ -4,9 +4,6 @@ const { Op } = require('sequelize');
 const { RRule, RRuleSet, rrulestr } = require('rrule');
 const logger = require('../../utils/logger');
 
-/**
- * Valida a conta financeira (se é PJ/MEI e está ativa).
- */
 async function validateServiceAccount(financialAccountId, transaction = null) {
   const account = await FinancialAccount.findByPk(financialAccountId, { transaction });
   if (!account) {
@@ -20,26 +17,18 @@ async function validateServiceAccount(financialAccountId, transaction = null) {
   return account;
 }
 
-/**
- * Cria uma nova regra de disponibilidade.
- */
 async function createAvailabilityRule(financialAccountId, ruleData) {
   await validateServiceAccount(financialAccountId);
   const { type, rrule, startTime, endTime, specificDate, title } = ruleData;
-
   if (!type || !title) {
     const error = new Error("Tipo ('work', 'break', 'day_off') e Título da regra são obrigatórios.");
     error.statusCode = 400; throw error;
   }
-
   const newRule = await AvailabilityRule.create({ ...ruleData, financialAccountId });
   logger.info(`Regra de disponibilidade ID ${newRule.id} ("${newRule.title}") criada para FA ID ${financialAccountId}.`);
   return newRule.toJSON();
 }
 
-/**
- * Lista todas as regras de disponibilidade de uma conta.
- */
 async function getAllAvailabilityRules(financialAccountId) {
   await validateServiceAccount(financialAccountId);
   const rules = await AvailabilityRule.findAll({
@@ -49,9 +38,6 @@ async function getAllAvailabilityRules(financialAccountId) {
   return rules.map(rule => rule.toJSON());
 }
 
-/**
- * Busca uma regra de disponibilidade por ID.
- */
 async function getAvailabilityRuleById(financialAccountId, ruleId) {
     await validateServiceAccount(financialAccountId);
     const rule = await AvailabilityRule.findOne({ where: { id: ruleId, financialAccountId } });
@@ -63,10 +49,6 @@ async function getAvailabilityRuleById(financialAccountId, ruleId) {
     return rule.toJSON();
 }
 
-
-/**
- * Atualiza uma regra de disponibilidade.
- */
 async function updateAvailabilityRule(financialAccountId, ruleId, updateData) {
     await validateServiceAccount(financialAccountId);
     const rule = await AvailabilityRule.findOne({ where: { id: ruleId, financialAccountId } });
@@ -80,9 +62,6 @@ async function updateAvailabilityRule(financialAccountId, ruleId, updateData) {
     return rule.toJSON();
 }
 
-/**
- * Deleta uma regra de disponibilidade.
- */
 async function deleteAvailabilityRule(financialAccountId, ruleId) {
     await validateServiceAccount(financialAccountId);
     const rule = await AvailabilityRule.findOne({ where: { id: ruleId, financialAccountId } });
@@ -96,7 +75,6 @@ async function deleteAvailabilityRule(financialAccountId, ruleId) {
     return true;
 }
 
-
 /**
  * Verifica se um determinado slot de tempo está disponível para agendamento.
  * @param {number} financialAccountId - O ID da conta a ser verificada.
@@ -107,45 +85,44 @@ async function deleteAvailabilityRule(financialAccountId, ruleId) {
 async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMinutes) {
   const desiredStart = new Date(startDateTime);
   const desiredEnd = new Date(desiredStart.getTime() + durationMinutes * 60 * 1000);
-  
-  // <<< MUDANÇA PRINCIPAL AQUI: Lógica de query de colisão corrigida >>>
-  let endTimeCondition;
-  const dbDialect = sequelize.getDialect();
+  const desiredDateString = desiredStart.toISOString().split('T')[0];
 
-  // Adapta a query de cálculo de tempo final para o dialeto do banco de dados
-  if (dbDialect === 'postgres') {
-    endTimeCondition = sequelize.where(
-      sequelize.literal(`"eventDateTime" + "durationMinutes" * INTERVAL '1 minute'`),
-      { [Op.gt]: desiredStart }
-    );
-  } else { // Assume MySQL ou dialeto similar
-    endTimeCondition = sequelize.where(
-      sequelize.fn('ADDDATE', sequelize.col('eventDateTime'), sequelize.literal(`INTERVAL \`durationMinutes\` MINUTE`)),
-      { [Op.gt]: desiredStart }
-    );
-  }
+  // <<< MUDANÇA PRINCIPAL AQUI: Lógica de verificação de conflitos refeita >>>
 
-  const existingAppointment = await Appointment.findOne({
+  // 1. Buscar TODOS os agendamentos do dia para verificação manual
+  const dayStart = new Date(`${desiredDateString}T00:00:00.000Z`);
+  const dayEnd = new Date(`${desiredDateString}T23:59:59.999Z`);
+
+  const appointmentsOnThisDay = await Appointment.findAll({
     where: {
       financialAccountId,
       status: { [Op.in]: ['Scheduled', 'Confirmed'] },
-      eventDateTime: { [Op.lt]: desiredEnd },
-      [Op.and]: [endTimeCondition]
+      eventDateTime: {
+        [Op.between]: [dayStart, dayEnd],
+      },
     },
   });
 
-  if (existingAppointment) {
-    logger.warn(`[Availability] Conflito de horário para FA ${financialAccountId}: Slot desejado ${desiredStart.toISOString()} colide com agendamento existente ID ${existingAppointment.id}.`);
-    return false;
+  // 2. Iterar e verificar conflitos manualmente
+  for (const existingAppt of appointmentsOnThisDay) {
+    const existingStart = new Date(existingAppt.eventDateTime);
+    // Usa a duração do agendamento existente, com um fallback de 60 minutos
+    const existingDuration = existingAppt.durationMinutes || 60; 
+    const existingEnd = new Date(existingStart.getTime() + existingDuration * 60 * 1000);
+
+    // Lógica de sobreposição: (StartA < EndB) and (EndA > StartB)
+    if (desiredStart < existingEnd && desiredEnd > existingStart) {
+      logger.warn(`[Availability] Conflito de horário para FA ${financialAccountId}: Slot desejado ${desiredStart.toISOString()} colide com agendamento existente ID ${existingAppt.id}.`);
+      return false;
+    }
   }
 
-  // O resto da função permanece o mesmo
+  // 3. O resto da lógica para verificar regras de trabalho, pausas e folgas permanece a mesma
   const rules = await AvailabilityRule.findAll({ where: { financialAccountId } });
   const workRule = rules.find(r => r.type === 'work');
   const breakRules = rules.filter(r => r.type === 'break');
   const dayOffRules = rules.filter(r => r.type === 'day_off');
 
-  const desiredDateString = desiredStart.toISOString().split('T')[0];
   if (dayOffRules.some(rule => rule.specificDate === desiredDateString)) {
     logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: ${desiredDateString} é um dia de folga.`);
     return false;
