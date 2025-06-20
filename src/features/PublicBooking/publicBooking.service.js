@@ -6,7 +6,11 @@ const businessClientService = require('../BusinessClient/BusinessClient.service'
 const appointmentService = require('../Appointment/appointment.service');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
-
+const dayjs = require('dayjs');
+const utc = require('dayjs/plugin/utc');
+const timezone = require('dayjs/plugin/timezone');
+dayjs.extend(utc);
+dayjs.extend(timezone);
 /**
  * Busca informações públicas e seguras de um prestador de serviço para a página de agendamento.
  */
@@ -56,6 +60,8 @@ async function calculateTotalDuration(financialAccountId, serviceIds = []) {
  * Gera e verifica os slots de horário disponíveis para uma data e serviços específicos.
  */
 async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) {
+  const BRAZIL_TZ = 'America/Sao_Paulo';
+
   const rules = await availabilityService.getAllAvailabilityRules(financialAccountId);
   const workRule = rules.find(r => r.type === 'work');
   if (!workRule || !workRule.startTime || !workRule.endTime) {
@@ -71,42 +77,40 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
   const potentialSlots = [];
   const slotInterval = workRule.slotIntervalMinutes || 15;
 
-  const [startHour, startMinute] = workRule.startTime.split(':').map(Number);
-  const [endHour, endMinute] = workRule.endTime.split(':').map(Number);
+  // --- CORREÇÃO NA GERAÇÃO DOS SLOTS ---
+  // Criamos o tempo inicial e final USANDO O FUSO HORÁRIO DE SÃO PAULO
+  let currentTime = dayjs.tz(`${date}T${workRule.startTime}`, BRAZIL_TZ);
+  const endTime = dayjs.tz(`${date}T${workRule.endTime}`, BRAZIL_TZ);
 
-  // Trabalhar com datas UTC para consistência
-  let currentTime = new Date(`${date}T00:00:00.000Z`);
-  currentTime.setUTCHours(startHour, startMinute);
-
-  const endTime = new Date(`${date}T00:00:00.000Z`);
-  endTime.setUTCHours(endHour, endMinute);
-
-  while (new Date(currentTime.getTime() + totalDuration * 60 * 1000) <= endTime) {
-      potentialSlots.push(new Date(currentTime));
-      currentTime = new Date(currentTime.getTime() + slotInterval * 60 * 1000);
+  // O loop agora compara objetos dayjs, que são cientes do fuso horário
+  while (currentTime.add(totalDuration, 'minute').isBefore(endTime) || currentTime.add(totalDuration, 'minute').isSame(endTime)) {
+      // Adicionamos o objeto Date (que é sempre UTC) para a verificação
+      potentialSlots.push(currentTime.toDate());
+      currentTime = currentTime.add(slotInterval, 'minute');
   }
+  // --- FIM DA CORREÇÃO NA GERAÇÃO ---
 
-  logger.info(`[PublicBooking] ${potentialSlots.length} slots potenciais gerados. Verificando disponibilidade...`);
+  logger.info(`[PublicBooking] ${potentialSlots.length} slots potenciais gerados para ${date}. Verificando disponibilidade...`);
 
-  // 1. Mapeia cada slot para uma promessa de verificação de disponibilidade.
   const availabilityChecks = potentialSlots.map(slotStart => {
-    // A função isTimeSlotAvailable espera (accountId, startTime, durationInMinutes).
-    // O erro estava aqui: você estava passando a data final (slotEnd) em vez da duração.
-    return availabilityService.isTimeSlotAvailable(financialAccountId, slotStart, totalDuration); // <<< CORREÇÃO APLICADA AQUI >>>
+    return availabilityService.isTimeSlotAvailable(financialAccountId, slotStart, totalDuration);
   });
 
-  // 2. Espera todas as verificações terminarem.
   const results = await Promise.all(availabilityChecks);
   
-  // 3. Filtra os slots originais (objetos Date) com base nos resultados.
-  const finalSlots = potentialSlots
-    .filter((_, index) => results[index]) // Mantém apenas os que retornaram 'true'
-    .map(slot => slot.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })); // Formata para o frontend SÓ NO FINAL
+  // Filtra os slots originais (objetos Date) com base nos resultados.
+  const finalSlotsDates = potentialSlots.filter((_, index) => results[index]);
 
-  logger.info(`[PublicBooking] ${finalSlots.length} slots verificados como disponíveis.`);
-  return finalSlots;
+  // --- CORREÇÃO NA FORMATAÇÃO FINAL ---
+  // Formatamos a data para o frontend, especificando que queremos a hora LOCAL DE SÃO PAULO
+  const finalSlotsFormatted = finalSlotsDates.map(slot => 
+    dayjs(slot).tz(BRAZIL_TZ).format('HH:mm')
+  );
+  // --- FIM DA CORREÇÃO NA FORMATAÇÃO ---
+
+  logger.info(`[PublicBooking] ${finalSlotsFormatted.length} slots verificados como disponíveis.`);
+  return finalSlotsFormatted;
 }
-
 
 
 /**
