@@ -87,13 +87,6 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
   const desiredEnd = new Date(desiredStart.getTime() + durationMinutes * 60 * 1000);
   const desiredDateString = desiredStart.toISOString().split('T')[0];
 
-  // <<< LOGS DE DEPURAÇÃO ADICIONADOS >>>
-  console.log("\n--- INICIANDO VERIFICAÇÃO DE DISPONIBILIDADE ---");
-  console.log(`[DEBUG] Horário Desejado (Início): ${desiredStart.toISOString()}`);
-  console.log(`[DEBUG] Horário Desejado (Fim):    ${desiredEnd.toISOString()}`);
-  console.log(`[DEBUG] Duração Desejada: ${durationMinutes} minutos`);
-
-  // 1. Buscar TODOS os agendamentos do dia para verificação manual
   const dayStart = new Date(`${desiredDateString}T00:00:00.000Z`);
   const dayEnd = new Date(`${desiredDateString}T23:59:59.999Z`);
 
@@ -107,32 +100,23 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
     },
   });
 
-  console.log(`[DEBUG] Encontrados ${appointmentsOnThisDay.length} agendamentos existentes no dia ${desiredDateString}.`);
-
-  // 2. Iterar e verificar conflitos manualmente
   for (const existingAppt of appointmentsOnThisDay) {
     const existingStart = new Date(existingAppt.eventDateTime);
-    const existingDuration = existingAppt.durationMinutes || 30; // Fallback seguro
+    const existingDuration = existingAppt.durationMinutes || 30;
     const existingEnd = new Date(existingStart.getTime() + existingDuration * 60 * 1000);
 
-    console.log(`\n  [DEBUG] Verificando conflito com Agendamento ID: ${existingAppt.id}`);
-    console.log(`    - Início Existente: ${existingStart.toISOString()}`);
-    console.log(`    - Fim Existente:    ${existingEnd.toISOString()}`);
-    
-    const hasConflict = desiredStart < existingEnd && desiredEnd > existingStart;
-    
-    console.log(`    - Comparação: (${desiredStart.getTime()} < ${existingEnd.getTime()}) && (${desiredEnd.getTime()} > ${existingStart.getTime()})`);
-    console.log(`    - Resultado da Comparação: ${desiredStart < existingEnd} && ${desiredEnd > existingStart}`);
-    console.log(`    - Há conflito? ${hasConflict}`);
+    // <<< MUDANÇA PRINCIPAL AQUI: Lógica de sobreposição corrigida >>>
+    // Um conflito existe se o início do novo agendamento for ANTES do fim do existente
+    // E o fim do novo agendamento for DEPOIS do início do existente.
+    const hasConflict = desiredStart.getTime() < existingEnd.getTime() && desiredEnd.getTime() > existingStart.getTime();
 
     if (hasConflict) {
       logger.warn(`[Availability] Conflito de horário para FA ${financialAccountId}: Slot desejado ${desiredStart.toISOString()} colide com agendamento existente ID ${existingAppt.id}.`);
-      console.log("--- FIM DA VERIFICAÇÃO (RESULTADO: INDISPONÍVEL) ---\n");
       return false;
     }
   }
 
-  // 3. O resto da lógica para verificar regras de trabalho, pausas e folgas
+  // O resto da função permanece o mesmo
   const rules = await AvailabilityRule.findAll({ where: { financialAccountId } });
   const workRule = rules.find(r => r.type === 'work');
   const breakRules = rules.filter(r => r.type === 'break');
@@ -140,13 +124,11 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
 
   if (dayOffRules.some(rule => rule.specificDate === desiredDateString)) {
     logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: ${desiredDateString} é um dia de folga.`);
-    console.log("--- FIM DA VERIFICAÇÃO (RESULTADO: INDISPONÍVEL - FOLGA) ---\n");
     return false;
   }
 
   if (!workRule || !workRule.rrule || !workRule.startTime || !workRule.endTime) {
     logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: Nenhuma regra de trabalho (work rule) válida encontrada.`);
-    console.log("--- FIM DA VERIFICAÇÃO (RESULTADO: INDISPONÍVEL - SEM REGRA DE TRABALHO) ---\n");
     return false;
   }
 
@@ -155,18 +137,19 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
     const occurrences = rule.between(dayStart, dayEnd);
     if (occurrences.length === 0) {
       logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: O dia ${desiredDateString} não é um dia de trabalho segundo a RRULE.`);
-      console.log("--- FIM DA VERIFICAÇÃO (RESULTADO: INDISPONÍVEL - FORA DO DIA DE TRABALHO) ---\n");
       return false;
     }
 
-    const workStart = new Date(`1970-01-01T${workRule.startTime}Z`);
-    const workEnd = new Date(`1970-01-01T${workRule.endTime}Z`);
-    const desiredStartTime = new Date(`1970-01-01T${desiredStart.toISOString().split('T')[1]}`);
-    const desiredEndTime = new Date(`1970-01-01T${desiredEnd.toISOString().split('T')[1]}`);
+    const [workStartHour, workStartMinute] = workRule.startTime.split(':').map(Number);
+    const [workEndHour, workEndMinute] = workRule.endTime.split(':').map(Number);
+    
+    const desiredStartTotalMinutes = desiredStart.getUTCHours() * 60 + desiredStart.getUTCMinutes();
+    const desiredEndTotalMinutes = desiredEnd.getUTCHours() * 60 + desiredEnd.getUTCMinutes();
+    const workStartTotalMinutes = workStartHour * 60 + workStartMinute;
+    const workEndTotalMinutes = workEndHour * 60 + workEndMinute;
 
-    if (desiredStartTime < workStart || desiredEndTime > workEnd) {
+    if (desiredStartTotalMinutes < workStartTotalMinutes || desiredEndTotalMinutes > workEndTotalMinutes) {
       logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: ${desiredStart.toISOString()} está fora do expediente (${workRule.startTime}-${workRule.endTime}).`);
-      console.log("--- FIM DA VERIFICAÇÃO (RESULTADO: INDISPONÍVEL - FORA DO EXPEDIENTE) ---\n");
       return false;
     }
 
@@ -174,11 +157,13 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
         if (breakRule.rrule) {
             const breakOccurrences = rrulestr(breakRule.rrule).between(dayStart, endOfDay);
             if (breakOccurrences.length > 0) {
-                const breakStart = new Date(`1970-01-01T${breakRule.startTime}Z`);
-                const breakEnd = new Date(`1970-01-01T${breakRule.endTime}Z`);
-                if (desiredStartTime < breakEnd && desiredEndTime > breakStart) {
+                const [breakStartHour, breakStartMinute] = breakRule.startTime.split(':').map(Number);
+                const [breakEndHour, breakEndMinute] = breakRule.endTime.split(':').map(Number);
+                const breakStartTotalMinutes = breakStartHour * 60 + breakStartMinute;
+                const breakEndTotalMinutes = breakEndHour * 60 + breakEndMinute;
+
+                if (desiredStartTotalMinutes < breakEndTotalMinutes && desiredEndTotalMinutes > breakStartTotalMinutes) {
                     logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: ${desiredStart.toISOString()} colide com um intervalo.`);
-                    console.log("--- FIM DA VERIFICAÇÃO (RESULTADO: INDISPONÍVEL - CONFLITO COM PAUSA) ---\n");
                     return false;
                 }
             }
@@ -187,12 +172,10 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
 
   } catch (e) {
     logger.error(`[Availability] Erro ao processar RRULE para FA ${financialAccountId}: ${e.message}`);
-    console.log("--- FIM DA VERIFICAÇÃO (RESULTADO: INDISPONÍVEL - ERRO NA RRULE) ---\n");
     return false;
   }
 
   logger.info(`[Availability] Slot disponível para FA ${financialAccountId} em ${desiredStart.toISOString()}.`);
-  console.log("--- FIM DA VERIFICAÇÃO (RESULTADO: DISPONÍVEL) ---\n");
   return true;
 }
 
