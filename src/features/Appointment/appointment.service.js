@@ -41,9 +41,7 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
 
-    // --- Lógica de Bifurcação PF vs PJ/MEI ---
     if (account.accountType === 'PF') {
-        // Lógica existente para contas PF
         if (appointmentData.reminderEnabled !== false && appointmentData.reminderLeadTimeMinutes === undefined) {
             const preferences = await UserPreference.findOne({ order: [['id', 'ASC']], transaction: t });
             appointmentData.reminderLeadTimeMinutes = (preferences?.defaultAppointmentReminderLeadTimeMinutes) || 60;
@@ -51,18 +49,13 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
             appointmentData.reminderLeadTimeMinutes = null;
             appointmentData.reminderSentTimestamp = null;
         }
-        // Define a origem, respeitando se já foi definida por outra função (ex: Google Sync)
         appointmentData.origin = appointmentData.origin || 'system_pf';
-    } else { // Lógica para PJ ou MEI
-        // Define a origem, respeitando se já foi definida (ex: public_booking)
+    } else {
         appointmentData.origin = appointmentData.origin || 'system_pj_mei';
-        
-        // Zera os campos de lembrete do sistema antigo
         appointmentData.reminderEnabled = false;
         appointmentData.reminderLeadTimeMinutes = null;
         appointmentData.reminderSentTimestamp = null;
         
-        // Validação de Clientes de Negócio (BusinessClient)
         const businessClientIds = appointmentData.businessClientIds;
         if (businessClientIds && Array.isArray(businessClientIds) && businessClientIds.length > 0) {
             const validClients = await BusinessClient.findAll({
@@ -75,9 +68,7 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
                 error.statusCode = 404; error.status = 'fail'; throw error;
             }
         }
-        // Não delete businessClientIds do appointmentData, pois será usado depois
 
-        // Validação de Serviços
         const serviceIds = appointmentData.serviceIds;
         if (!serviceIds || !Array.isArray(serviceIds) || serviceIds.length === 0) {
             const error = new Error('Para agendamentos de contas PJ/MEI, pelo menos um serviço deve ser associado.');
@@ -92,7 +83,6 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
             const error = new Error(`Um ou mais Serviços (IDs: ${missingIds.join(', ')}) não foram encontrados, estão inativos ou não pertencem a esta conta.`);
             error.statusCode = 404; error.status = 'fail'; throw error;
         }
-        // Não delete serviceIds do appointmentData, pois será usado depois
     }
 
     newAppointment = await Appointment.create(
@@ -100,7 +90,6 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
       { transaction: t }
     );
 
-    // Criação de associações para PJ/MEI
     if (account.accountType !== 'PF') {
         if (appointmentData.businessClientIds && appointmentData.businessClientIds.length > 0) {
             const clientAssociations = appointmentData.businessClientIds.map(bcId => ({
@@ -108,10 +97,25 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
             }));
             await AppointmentBusinessClient.bulkCreate(clientAssociations, { transaction: t });
         }
+        
+        // <<< MUDANÇA PRINCIPAL AQUI >>>
         if (appointmentData.serviceIds && appointmentData.serviceIds.length > 0) {
-            const serviceAssociations = appointmentData.serviceIds.map(sId => ({
-                appointmentId: newAppointment.id, serviceId: sId
+            // 1. Busca os serviços para obter seus preços
+            const servicesToAssociate = await Service.findAll({
+                where: { id: { [Op.in]: appointmentData.serviceIds }, financialAccountId },
+                attributes: ['id', 'price'], // Pega apenas o ID e o preço
+                transaction: t
+            });
+
+            // 2. Mapeia para o formato correto, incluindo o preço
+            const serviceAssociations = servicesToAssociate.map(service => ({
+                appointmentId: newAppointment.id,
+                serviceId: service.id,
+                priceAtTimeOfBooking: service.price, // Adiciona o preço atual
+                quantity: 1 // Adiciona a quantidade padrão
             }));
+
+            // 3. Cria as associações com os dados completos
             await AppointmentService.bulkCreate(serviceAssociations, { transaction: t });
         }
     }
@@ -119,7 +123,6 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
     await t.commit(); 
     logger.info(`Compromisso "${newAppointment.title}" (ID: ${newAppointment.id}) agendado para FA ID ${financialAccountId}.`);
 
-    // --- Notificação e Sincronização (pós-commit) ---
     const reloadedApptForSync = await Appointment.findByPk(newAppointment.id, {
         include: [
             { model: FinancialAccount, as: 'financialAccount', include: [{model: Client, as: 'ownerClient'}] },
@@ -133,7 +136,6 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
         throw new Error('Falha ao recarregar compromisso para notificações.');
     }
 
-    // Notificação para o dono da conta PJ/MEI
     if (account.accountType !== 'PF' && account.ownerClient?.phone) {
         const ownerClient = account.ownerClient;
         const ownerName = ownerClient.name ? ownerClient.name.split(' ')[0] : 'Você';
@@ -143,7 +145,6 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
         await sendWhatsappMessage(ownerClient.phone, notificationMessage);
     }
 
-    // Sincronização com Google Calendar
     if (account.ownerClient && account.ownerClient.isGoogleCalendarSynced) {
         const googleEvent = await googleCalendarService.createGoogleEvent(account.ownerClient.id, reloadedApptForSync.toJSON());
         if (googleEvent && googleEvent.id) {
