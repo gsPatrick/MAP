@@ -87,8 +87,6 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
   const desiredEnd = new Date(desiredStart.getTime() + durationMinutes * 60 * 1000);
   const desiredDateString = desiredStart.toISOString().split('T')[0];
 
-  // <<< MUDANÇA PRINCIPAL AQUI: Lógica simplificada e explícita >>>
-
   // 1. Buscar TODOS os agendamentos do dia para verificação manual
   const dayStart = new Date(`${desiredDateString}T00:00:00.000Z`);
   const dayEnd = new Date(`${desiredDateString}T23:59:59.999Z`);
@@ -97,20 +95,17 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
     where: {
       financialAccountId,
       status: { [Op.in]: ['Scheduled', 'Confirmed'] },
-      eventDateTime: {
-        [Op.between]: [dayStart, dayEnd],
-      },
+      eventDateTime: { [Op.between]: [dayStart, dayEnd] },
     },
   });
 
   // 2. Iterar e verificar conflitos manualmente
   for (const existingAppt of appointmentsOnThisDay) {
     const existingStart = new Date(existingAppt.eventDateTime);
-    const existingDuration = existingAppt.durationMinutes || 30; // Fallback seguro
+    const existingDuration = existingAppt.durationMinutes || 30;
     const existingEnd = new Date(existingStart.getTime() + existingDuration * 60 * 1000);
 
-    // Lógica de sobreposição: (InícioA < FimB) e (FimA > InícioB)
-    if (desiredStart < existingEnd && desiredEnd > existingStart) {
+    if (desiredStart.getTime() < existingEnd.getTime() && desiredEnd.getTime() > existingStart.getTime()) {
       logger.warn(`[Availability] Conflito de horário para FA ${financialAccountId}: Slot desejado ${desiredStart.toISOString()} colide com agendamento existente ID ${existingAppt.id}.`);
       return false;
     }
@@ -134,32 +129,36 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
 
   try {
     const rule = rrulestr(workRule.rrule);
-    const startOfDay = new Date(desiredStart.toISOString().split('T')[0] + 'T00:00:00.000Z');
-    const endOfDay = new Date(desiredStart.toISOString().split('T')[0] + 'T23:59:59.999Z');
-    
-    const occurrences = rule.between(startOfDay, endOfDay);
+    const occurrences = rule.between(dayStart, dayEnd);
     if (occurrences.length === 0) {
       logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: O dia ${desiredDateString} não é um dia de trabalho segundo a RRULE.`);
       return false;
     }
 
-    const workStart = new Date(`1970-01-01T${workRule.startTime}Z`);
-    const workEnd = new Date(`1970-01-01T${workRule.endTime}Z`);
-    const desiredStartTime = new Date(`1970-01-01T${desiredStart.toISOString().split('T')[1]}`);
-    const desiredEndTime = new Date(`1970-01-01T${desiredEnd.toISOString().split('T')[1]}`);
+    // Comparação de tempo usando apenas horas e minutos
+    const [workStartHour, workStartMinute] = workRule.startTime.split(':').map(Number);
+    const [workEndHour, workEndMinute] = workRule.endTime.split(':').map(Number);
+    
+    const desiredStartTotalMinutes = desiredStart.getUTCHours() * 60 + desiredStart.getUTCMinutes();
+    const desiredEndTotalMinutes = desiredEnd.getUTCHours() * 60 + desiredEnd.getUTCMinutes();
+    const workStartTotalMinutes = workStartHour * 60 + workStartMinute;
+    const workEndTotalMinutes = workEndHour * 60 + workEndMinute;
 
-    if (desiredStartTime < workStart || desiredEndTime > workEnd) {
+    if (desiredStartTotalMinutes < workStartTotalMinutes || desiredEndTotalMinutes > workEndTotalMinutes) {
       logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: ${desiredStart.toISOString()} está fora do expediente (${workRule.startTime}-${workRule.endTime}).`);
       return false;
     }
 
     for (const breakRule of breakRules) {
         if (breakRule.rrule) {
-            const breakOccurrences = rrulestr(breakRule.rrule).between(startOfDay, endOfDay);
+            const breakOccurrences = rrulestr(breakRule.rrule).between(dayStart, dayEnd);
             if (breakOccurrences.length > 0) {
-                const breakStart = new Date(`1970-01-01T${breakRule.startTime}Z`);
-                const breakEnd = new Date(`1970-01-01T${breakRule.endTime}Z`);
-                if (desiredStartTime < breakEnd && desiredEndTime > breakStart) {
+                const [breakStartHour, breakStartMinute] = breakRule.startTime.split(':').map(Number);
+                const [breakEndHour, breakEndMinute] = breakRule.endTime.split(':').map(Number);
+                const breakStartTotalMinutes = breakStartHour * 60 + breakStartMinute;
+                const breakEndTotalMinutes = breakEndHour * 60 + breakEndMinute;
+
+                if (desiredStartTotalMinutes < breakEndTotalMinutes && desiredEndTotalMinutes > breakStartTotalMinutes) {
                     logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: ${desiredStart.toISOString()} colide com um intervalo.`);
                     return false;
                 }

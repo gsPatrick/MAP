@@ -56,7 +56,6 @@ async function calculateTotalDuration(financialAccountId, serviceIds = []) {
  * Gera e verifica os slots de horário disponíveis para uma data e serviços específicos.
  */
 async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) {
-  // <<< MUDANÇA PRINCIPAL AQUI >>>
   const rules = await availabilityService.getAllAvailabilityRules(financialAccountId);
   const workRule = rules.find(r => r.type === 'work');
   if (!workRule || !workRule.startTime || !workRule.endTime) {
@@ -70,16 +69,20 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
   }
   
   const potentialSlots = [];
-  // Usa o slotIntervalMinutes da regra, ou 15 como padrão
-  const slotInterval = workRule.slotIntervalMinutes || 15; 
+  const slotInterval = workRule.slotIntervalMinutes || 15;
 
-  // Converte os horários para objetos Date no fuso horário correto (UTC para consistência)
-  let currentTime = new Date(`${date}T${workRule.startTime}Z`);
-  const endTime = new Date(`${date}T${workRule.endTime}Z`);
+  // <<< MUDANÇA PRINCIPAL AQUI: Trabalhar com datas locais do servidor >>>
+  const [startHour, startMinute] = workRule.startTime.split(':').map(Number);
+  const [endHour, endMinute] = workRule.endTime.split(':').map(Number);
+
+  let currentTime = new Date(date);
+  currentTime.setHours(startHour, startMinute, 0, 0);
+
+  const endTime = new Date(date);
+  endTime.setHours(endHour, endMinute, 0, 0);
 
   logger.info(`[PublicBooking] Gerando slots para ${date} entre ${workRule.startTime} e ${workRule.endTime} com duração de ${totalDuration}min.`);
 
-  // Gera uma lista de horários possíveis
   while (new Date(currentTime.getTime() + totalDuration * 60 * 1000) <= endTime) {
       potentialSlots.push(new Date(currentTime));
       currentTime = new Date(currentTime.getTime() + slotInterval * 60 * 1000);
@@ -87,7 +90,6 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
 
   logger.info(`[PublicBooking] ${potentialSlots.length} slots gerados inicialmente. Verificando disponibilidade real...`);
 
-  // Filtra os slots que não são realmente disponíveis usando a função já existente e correta
   const availabilityChecks = potentialSlots.map(slot => 
     availabilityService.isTimeSlotAvailable(financialAccountId, slot, totalDuration)
   );
@@ -95,8 +97,8 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
   const results = await Promise.all(availabilityChecks);
   
   const finalSlots = potentialSlots
-    .filter((_, index) => results[index]) // Filtra apenas os que retornaram 'true'
-    .map(slot => slot.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })); // Formata para o frontend
+    .filter((_, index) => results[index])
+    .map(slot => slot.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
 
   logger.info(`[PublicBooking] ${finalSlots.length} slots verificados como disponíveis.`);
   return finalSlots;
