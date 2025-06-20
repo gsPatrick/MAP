@@ -511,6 +511,8 @@ async function updateClientMotivationPrefs(clientId, prefs) {
  * @returns {Promise<boolean>} True se excluído, false se não encontrado.
  */
 async function deleteClientContact(clientId) {
+    logger.error(`[AUDITORIA DELEÇÃO CRÍTICA] Tentativa de EXCLUSÃO PERMANENTE do Cliente ID: ${clientId}.`);
+
   const t = await sequelize.transaction();
   try {
     const client = await Client.findByPk(clientId, { transaction: t });

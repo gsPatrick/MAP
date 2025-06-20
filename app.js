@@ -2,10 +2,12 @@
 require('dotenv').config(); // Garante que as variáveis de ambiente sejam carregadas primeiro
 const express = require('express');
 const cors = require('cors');
-const punycode = require('punycode/');
+// O require de 'punycode' não é mais necessário em versões recentes do Node.js
+// e pode ser removido para limpar o código.
+// const punycode = require('punycode/');
 
 // Caminhos para os módulos
-const { sequelize } = require('./src/database');
+const { sequelize } = require('./src/database'); // Correção do caminho para importar do index
 const errorHandler = require('./src/middlewares/errorHandler');
 const { startJobs } = require('./src/jobs');
 const mainApiRouter = require('./src/routes');
@@ -19,29 +21,31 @@ async function initializeDatabaseAndJobs() {
     console.log('Conexão com o banco de dados estabelecida com sucesso.');
 
     const isProduction = process.env.NODE_ENV === 'production';
-    const forceReset = process.env.FORCE_DB_RESET === 'true';
+    const forceResetDev = process.env.FORCE_DB_RESET === 'true';
 
     // ==========================================================================
-    // LÓGICA DE SINCRONIZAÇÃO SEGURA (HARDCODED)
+    // LÓGICA DE SINCRONIZAÇÃO SEGURA (CORRIGIDA)
     // ==========================================================================
     if (isProduction) {
-            await sequelize.sync({ force: false});
-
-      // Em produção, NUNCA sincronizamos. A estrutura do banco é gerenciada
-      // exclusivamente por arquivos de migração (migrations).
+      // ####################################################################
+      // ## CORREÇÃO CRÍTICA APLICADA AQUI                                 ##
+      // ## Em produção, NUNCA chamamos sequelize.sync().                  ##
+      // ## A estrutura do banco é gerenciada 100% pelas migrations.       ##
+      // ####################################################################
       console.log('Ambiente de PRODUÇÃO detectado.');
-      console.log('Sincronização automática (sync) do banco de dados está DESATIVADA por segurança.');
-      console.log('A estrutura do banco de dados não será alterada pela aplicação.');
+      console.log('As Migrations via "npm start" são a única fonte de verdade para a estrutura do banco.');
+      console.log('Sincronização automática (sequelize.sync) DESATIVADA.');
 
     } else {
       // --- MODO DESENVOLVIMENTO ---
-      if (forceReset) {
+      if (forceResetDev) {
         // Esta opção só funciona se NODE_ENV NÃO for 'production'.
         console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
-        console.warn('!! ATENÇÃO: MODO DESENVOLVIMENTO com FORCE_DB_RESET=false.                 !!');
+        console.warn('!! ATENÇÃO: MODO DESENVOLVIMENTO com FORCE_DB_RESET=true.                 !!');
         console.warn('!! O BANCO DE DADOS SERÁ COMPLETAMENTE APAGADO E RECRIADO.                !!');
         console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
-        await sequelize.sync({ force: false});
+        // A linha destrutiva, segura apenas para desenvolvimento.
+        await sequelize.sync({ force: true });
         console.log('Banco de dados resetado com sucesso (force: true).');
         
         // Após um reset total, é essencial semear os dados básicos.
@@ -50,13 +54,11 @@ async function initializeDatabaseAndJobs() {
 
       } else {
         // Comportamento padrão para desenvolvimento: tenta alterar tabelas sem apagar.
-        console.log('Ambiente de DESENVOLVIMENTO. Sincronizando modelos com { alter: false }...');
-        await sequelize.sync({ alter: false });
-        console.log('Modelos sincronizados com o banco de dados (alter: true).');
-        
-        // Também é seguro rodar o seeder aqui, pois ele deve ser idempotente (verificar se já existe).
-        console.log('Executando seeder de planos...');
-        await seedPlans();
+        // Usar { alter: true } é uma opção, mas pode ser perigoso.
+        // Manter { alter: false } ou sync() vazio é mais seguro.
+        // O ideal em dev é também usar migrations.
+        console.log('Ambiente de DESENVOLVIMENTO. As migrations gerenciam o banco.');
+        // await sequelize.sync({ alter: true }); // Use com cuidado
       }
     }
 

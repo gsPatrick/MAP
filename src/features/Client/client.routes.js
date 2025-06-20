@@ -17,7 +17,7 @@ router.post('/', /*authorizeRole(['admin']),*/ clientController.createClientCont
 router.get('/', /*authorizeRole(['admin']),*/ clientController.getAllClientContacts);
 router.get('/:clientId', /*authorizeRole(['admin']),*/ clientController.getClientContactById);
 router.put('/:clientId', /*authorizeRole(['admin']),*/ clientController.updateClientContact);
-router.delete('/:clientId', /*authorizeRole(['admin']),*/ clientController.deleteClientContact);
+router.delete('/:clientId', authorizeRole(['admin']),clientController.deleteClientContact);
 
 
 // === Rotas para FinancialAccounts (aninhadas sob um Client) ===
@@ -36,7 +36,7 @@ router.get('/:clientId/financial-accounts/:accountId', /*authorizeRole(['admin',
 router.put('/:clientId/financial-accounts/:accountId', /*authorizeRole(['admin', 'owner_client']),*/ clientController.updateFinancialAccount);
 
 // Deletar uma conta financeira específica de um cliente
-router.delete('/:clientId/financial-accounts/:accountId', /*authorizeRole(['admin', 'owner_client']),*/ clientController.deleteFinancialAccount);
+router.delete('/:clientId/financial-accounts/:accountId', authorizeRole(['admin']), clientController.deleteFinancialAccount);
 
 
 module.exports = router;

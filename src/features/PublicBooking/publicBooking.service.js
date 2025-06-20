@@ -109,6 +109,7 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
 }
 
 
+
 /**
  * Orquestra a criação de um agendamento a partir de dados públicos.
  */
