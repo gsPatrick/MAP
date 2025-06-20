@@ -74,6 +74,7 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
   const [startHour, startMinute] = workRule.startTime.split(':').map(Number);
   const [endHour, endMinute] = workRule.endTime.split(':').map(Number);
 
+  // <<< MUDANÇA: Trabalhar com datas UTC para consistência >>>
   let currentTime = new Date(`${date}T00:00:00.000Z`);
   currentTime.setUTCHours(startHour, startMinute);
 
@@ -85,17 +86,25 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
       currentTime = new Date(currentTime.getTime() + slotInterval * 60 * 1000);
   }
 
-  // <<< MUDANÇA PRINCIPAL AQUI: Corrigindo a chamada >>>
-  const availabilityChecks = potentialSlots.map(slotStart => 
-    availabilityService.isTimeSlotAvailable(financialAccountId, slotStart, totalDuration)
-  );
+  logger.info(`[PublicBooking] ${potentialSlots.length} slots potenciais gerados. Verificando disponibilidade...`);
 
+  // <<< MUDANÇA PRINCIPAL AQUI >>>
+  // 1. Mapeia cada slot para uma promessa de verificação de disponibilidade.
+  const availabilityChecks = potentialSlots.map(slotStart => {
+    const slotEnd = new Date(slotStart.getTime() + totalDuration * 60 * 1000);
+    // Passa os objetos Date puros para a verificação
+    return availabilityService.isTimeSlotAvailable(financialAccountId, slotStart, slotEnd);
+  });
+
+  // 2. Espera todas as verificações terminarem.
   const results = await Promise.all(availabilityChecks);
   
+  // 3. Filtra os slots originais (objetos Date) com base nos resultados.
   const finalSlots = potentialSlots
-    .filter((_, index) => results[index])
-    .map(slot => slot.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }));
+    .filter((_, index) => results[index]) // Mantém apenas os que retornaram 'true'
+    .map(slot => slot.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })); // Formata para o frontend SÓ NO FINAL
 
+  logger.info(`[PublicBooking] ${finalSlots.length} slots verificados como disponíveis.`);
   return finalSlots;
 }
 
