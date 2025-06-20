@@ -56,9 +56,11 @@ async function calculateTotalDuration(financialAccountId, serviceIds = []) {
  * Gera e verifica os slots de horário disponíveis para uma data e serviços específicos.
  */
 async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) {
+  // <<< MUDANÇA: Lógica de geração de slots aprimorada
   const rules = await availabilityService.getAllAvailabilityRules(financialAccountId);
-  const workRules = rules.filter(r => r.type === 'work');
-  if (workRules.length === 0) {
+  const workRule = rules.find(r => r.type === 'work');
+  if (!workRule || !workRule.startTime || !workRule.endTime) {
+    logger.warn(`[PublicBooking] Nenhum horário de trabalho (work rule) encontrado para FA ID ${financialAccountId}. Retornando zero slots.`);
     return []; // Se não há horário de trabalho, não há slots.
   }
   
@@ -68,35 +70,41 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
   }
   
   const availableSlots = [];
-  
-  // Itera sobre as regras de trabalho para gerar os slots iniciais
-  for (const rule of workRules) {
-      let currentTime = new Date(`${date}T${rule.startTime}`);
-      const endTime = new Date(`${date}T${rule.endTime}`);
+  const slotInterval = 15; // Gera slots a cada 15 minutos para dar mais opções
 
-      while (new Date(currentTime.getTime() + totalDuration * 60 * 1000) <= endTime) {
-          const slot = currentTime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-          availableSlots.push(slot);
-          // Incrementa pelo intervalo do serviço (ou um intervalo fixo, ex: 15 min)
-          currentTime = new Date(currentTime.getTime() + (rule.slotIntervalMinutes || 15) * 60 * 1000);
-      }
+  // Converte os horários para objetos Date no fuso horário correto (UTC para consistência)
+  let currentTime = new Date(`${date}T${workRule.startTime}Z`);
+  const endTime = new Date(`${date}T${workRule.endTime}Z`);
+
+  logger.info(`[PublicBooking] Gerando slots para ${date} entre ${workRule.startTime} e ${workRule.endTime} com duração de ${totalDuration}min.`);
+
+  while (new Date(currentTime.getTime() + totalDuration * 60 * 1000) <= endTime) {
+      // Adiciona o slot ao array
+      availableSlots.push(currentTime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }));
+      
+      // Incrementa o tempo pelo intervalo definido
+      currentTime = new Date(currentTime.getTime() + slotInterval * 60 * 1000);
   }
 
-  // Filtra os slots que não são realmente disponíveis
-  const verifiedSlots = [];
-  for (const slot of availableSlots) {
+  logger.info(`[PublicBooking] ${availableSlots.length} slots gerados inicialmente. Verificando disponibilidade...`);
+
+  // Filtra os slots que não são realmente disponíveis usando a função já existente
+  const verifiedSlotsPromises = availableSlots.map(async (slot) => {
     const [hour, minute] = slot.split(':');
     const startDateTime = new Date(date);
     startDateTime.setUTCHours(parseInt(hour, 10), parseInt(minute, 10), 0, 0);
 
     const isAvailable = await availabilityService.isTimeSlotAvailable(financialAccountId, startDateTime, totalDuration);
-    if (isAvailable) {
-      verifiedSlots.push(slot);
-    }
-  }
-  
-  return verifiedSlots;
+    return isAvailable ? slot : null;
+  });
+
+  const resolvedSlots = await Promise.all(verifiedSlotsPromises);
+  const finalSlots = resolvedSlots.filter(Boolean); // Remove os nulos
+
+  logger.info(`[PublicBooking] ${finalSlots.length} slots verificados como disponíveis.`);
+  return finalSlots;
 }
+
 
 /**
  * Orquestra a criação de um agendamento a partir de dados públicos.
