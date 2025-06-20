@@ -19,13 +19,13 @@ async function initializeDatabaseAndJobs() {
     console.log('Conexão com o banco de dados estabelecida com sucesso.');
 
     const isProduction = process.env.NODE_ENV === 'production';
-    const forceReset = process.env.FORCE_DB_RESET === 'true';
+    const forceReset = process.env.FORCE_DB_RESET === 'false';
 
     // ==========================================================================
     // LÓGICA DE SINCRONIZAÇÃO SEGURA (HARDCODED)
     // ==========================================================================
     if (isProduction) {
-            await sequelize.sync({ force: false });
+          
 
       // Em produção, NUNCA sincronizamos. A estrutura do banco é gerenciada
       // exclusivamente por arquivos de migração (migrations).

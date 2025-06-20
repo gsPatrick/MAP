@@ -3,10 +3,9 @@
   "version": "1.0.0",
   "description": "",
   "main": "app.js",
-  "scripts": {
-    "dev": "nodemon app.js",
-    "start": "node app.js"
-  },
+"scripts": {
+"start": "npx sequelize-cli db:migrate --env production --config src/config/config.js --migrations-path src/database/migrations && node app.js"
+},
   "keywords": [],
   "author": "",
   "license": "ISC",
