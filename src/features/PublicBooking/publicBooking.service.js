@@ -55,101 +55,51 @@ async function calculateTotalDuration(financialAccountId, serviceIds = []) {
 /**
  * Gera e verifica os slots de horário disponíveis para uma data e serviços específicos.
  */
-/**
- * Verifica se um determinado slot de tempo está disponível para agendamento.
- * @param {number} financialAccountId - O ID da conta a ser verificada.
- * @param {Date|string} startDateTime - O início do horário desejado.
- * @param {number} durationMinutes - A duração do agendamento em minutos.
- * @returns {Promise<boolean>} True se o horário estiver livre, false caso contrário.
- */
-async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMinutes) {
+async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) {
   // <<< MUDANÇA PRINCIPAL AQUI >>>
-  const desiredStart = new Date(startDateTime);
-  const desiredEnd = new Date(desiredStart.getTime() + durationMinutes * 60 * 1000);
-  
-  // 1. Verificar colisão com agendamentos existentes (sem alteração)
-  const existingAppointment = await Appointment.findOne({
-    where: {
-      financialAccountId,
-      status: { [Op.in]: ['Scheduled', 'Confirmed'] },
-      eventDateTime: { [Op.lt]: desiredEnd, [Op.gt]: new Date(desiredStart.getTime() - (24 * 60 * 60 * 1000)) },
-    },
-  });
-
-  if (existingAppointment) {
-    const existingStart = new Date(existingAppointment.eventDateTime);
-    const existingEnd = new Date(existingStart.getTime() + (existingAppointment.durationMinutes || 60) * 60 * 1000);
-    if (desiredStart < existingEnd && desiredEnd > existingStart) {
-      logger.warn(`[Availability] Conflito de horário para FA ${financialAccountId}: Slot desejado ${desiredStart.toISOString()} colide com agendamento existente ID ${existingAppointment.id}.`);
-      return false;
-    }
-  }
-
-  // 2. Obter todas as regras de disponibilidade
-  const rules = await AvailabilityRule.findAll({ where: { financialAccountId } });
+  const rules = await availabilityService.getAllAvailabilityRules(financialAccountId);
   const workRule = rules.find(r => r.type === 'work');
-  const breakRules = rules.filter(r => r.type === 'break');
-  const dayOffRules = rules.filter(r => r.type === 'day_off');
+  if (!workRule || !workRule.startTime || !workRule.endTime) {
+    logger.warn(`[PublicBooking] Nenhum horário de trabalho (work rule) encontrado para FA ID ${financialAccountId}. Retornando zero slots.`);
+    return [];
+  }
+  
+  const totalDuration = await calculateTotalDuration(financialAccountId, serviceIds);
+  if (totalDuration === 0) {
+      throw new Error("A duração total dos serviços selecionados é zero. Não é possível encontrar horários.");
+  }
+  
+  const potentialSlots = [];
+  // Usa o slotIntervalMinutes da regra, ou 15 como padrão
+  const slotInterval = workRule.slotIntervalMinutes || 15; 
 
-  // 3. Verificar se é um dia de folga específico
-  const desiredDateString = desiredStart.toISOString().split('T')[0];
-  if (dayOffRules.some(rule => rule.specificDate === desiredDateString)) {
-    logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: ${desiredDateString} é um dia de folga.`);
-    return false;
+  // Converte os horários para objetos Date no fuso horário correto (UTC para consistência)
+  let currentTime = new Date(`${date}T${workRule.startTime}Z`);
+  const endTime = new Date(`${date}T${workRule.endTime}Z`);
+
+  logger.info(`[PublicBooking] Gerando slots para ${date} entre ${workRule.startTime} e ${workRule.endTime} com duração de ${totalDuration}min.`);
+
+  // Gera uma lista de horários possíveis
+  while (new Date(currentTime.getTime() + totalDuration * 60 * 1000) <= endTime) {
+      potentialSlots.push(new Date(currentTime));
+      currentTime = new Date(currentTime.getTime() + slotInterval * 60 * 1000);
   }
 
-  // 4. Verificar se o dia da semana e o horário estão dentro da jornada de trabalho
-  if (!workRule || !workRule.rrule || !workRule.startTime || !workRule.endTime) {
-    logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: Nenhuma regra de trabalho (work rule) válida encontrada.`);
-    return false; // Se não há regra de trabalho, nada está disponível
-  }
+  logger.info(`[PublicBooking] ${potentialSlots.length} slots gerados inicialmente. Verificando disponibilidade real...`);
 
-  try {
-    const rule = rrulestr(workRule.rrule);
-    const startOfDay = new Date(desiredStart.toISOString().split('T')[0] + 'T00:00:00.000Z');
-    const endOfDay = new Date(desiredStart.toISOString().split('T')[0] + 'T23:59:59.999Z');
-    
-    // Verifica se o dia desejado é uma ocorrência da regra de trabalho
-    const occurrences = rule.between(startOfDay, endOfDay);
-    if (occurrences.length === 0) {
-      logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: O dia ${desiredDateString} não é um dia de trabalho segundo a RRULE.`);
-      return false; // Não é um dia de trabalho
-    }
+  // Filtra os slots que não são realmente disponíveis usando a função já existente e correta
+  const availabilityChecks = potentialSlots.map(slot => 
+    availabilityService.isTimeSlotAvailable(financialAccountId, slot, totalDuration)
+  );
 
-    // Compara apenas as horas e minutos, ignorando a data
-    const workStart = new Date(`1970-01-01T${workRule.startTime}Z`);
-    const workEnd = new Date(`1970-01-01T${workRule.endTime}Z`);
-    const desiredStartTime = new Date(`1970-01-01T${desiredStart.toISOString().split('T')[1]}`);
-    const desiredEndTime = new Date(`1970-01-01T${desiredEnd.toISOString().split('T')[1]}`);
+  const results = await Promise.all(availabilityChecks);
+  
+  const finalSlots = potentialSlots
+    .filter((_, index) => results[index]) // Filtra apenas os que retornaram 'true'
+    .map(slot => slot.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })); // Formata para o frontend
 
-    if (desiredStartTime < workStart || desiredEndTime > workEnd) {
-      logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: ${desiredStart.toISOString()} está fora do expediente (${workRule.startTime}-${workRule.endTime}).`);
-      return false; // Fora do horário de expediente
-    }
-
-    // 5. Verificar se colide com um intervalo (break)
-    for (const breakRule of breakRules) {
-        if (breakRule.rrule) {
-            const breakOccurrences = rrulestr(breakRule.rrule).between(startOfDay, endOfDay);
-            if (breakOccurrences.length > 0) {
-                const breakStart = new Date(`1970-01-01T${breakRule.startTime}Z`);
-                const breakEnd = new Date(`1970-01-01T${breakRule.endTime}Z`);
-                // Verifica sobreposição de horários
-                if (desiredStartTime < breakEnd && desiredEndTime > breakStart) {
-                    logger.warn(`[Availability] Slot recusado para FA ${financialAccountId}: ${desiredStart.toISOString()} colide com um intervalo.`);
-                    return false;
-                }
-            }
-        }
-    }
-
-  } catch (e) {
-    logger.error(`[Availability] Erro ao processar RRULE para FA ${financialAccountId}: ${e.message}`);
-    return false; // Se a regra for inválida, considera indisponível por segurança
-  }
-
-  logger.info(`[Availability] Slot disponível para FA ${financialAccountId} em ${desiredStart.toISOString()}.`);
-  return true;
+  logger.info(`[PublicBooking] ${finalSlots.length} slots verificados como disponíveis.`);
+  return finalSlots;
 }
 
 
@@ -208,6 +158,8 @@ async function createPublicBooking(financialAccountId, bookingData) {
 
   return newAppointment;
 }
+
+
 
 module.exports = {
   getProviderPublicInfo,
