@@ -3,13 +3,6 @@ const { Service, FinancialAccount, AppointmentService, sequelize } = require('..
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 
-/**
- * Valida se a conta financeira existe, está ativa e é do tipo PJ ou MEI.
- * @param {number} financialAccountId - ID da conta financeira.
- * @param {object} [transaction=null] - A transação do Sequelize, se houver.
- * @returns {Promise<object>} O objeto da conta financeira validada.
- * @throws {Error} Se a conta não for encontrada, estiver inativa ou não for PJ/MEI.
- */
 async function validateAndGetServiceAccount(financialAccountId, transaction = null) {
   const account = await FinancialAccount.findByPk(financialAccountId, { transaction });
   if (!account) {
@@ -33,12 +26,6 @@ async function validateAndGetServiceAccount(financialAccountId, transaction = nu
   return account;
 }
 
-/**
- * Cria um novo serviço para uma conta financeira PJ/MEI.
- * @param {number} financialAccountId - ID da conta financeira proprietária.
- * @param {object} serviceData - Dados do serviço a ser criado.
- * @returns {Promise<object>} O objeto do serviço criado.
- */
 async function createService(financialAccountId, serviceData) {
   const t = await sequelize.transaction();
   try {
@@ -98,10 +85,16 @@ async function getAllServices(financialAccountId, queryParams = {}) {
       whereConditions.isActive = (isActive === true || isActive === 'true');
     }
 
+    // <<< CORREÇÃO AQUI: Substituído [Op.iLike] por uma alternativa compatível >>>
     if (search) {
+      const searchTerm = search.toLowerCase();
       whereConditions[Op.or] = [
-        { name: { [Op.iLike]: `%${search}%` } },
-        { description: { [Op.iLike]: `%${search}%` } },
+        sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), {
+          [Op.like]: `%${searchTerm}%`
+        }),
+        sequelize.where(sequelize.fn('LOWER', sequelize.col('description')), {
+          [Op.like]: `%${searchTerm}%`
+        })
       ];
     }
 
@@ -126,12 +119,6 @@ async function getAllServices(financialAccountId, queryParams = {}) {
   }
 }
 
-/**
- * Busca um serviço específico pelo seu ID.
- * @param {number} financialAccountId - ID da conta financeira.
- * @param {number} serviceId - ID do serviço a ser buscado.
- * @returns {Promise<object|null>} O objeto do serviço ou null se não encontrado.
- */
 async function getServiceById(financialAccountId, serviceId) {
   try {
     await validateAndGetServiceAccount(financialAccountId);
@@ -151,13 +138,6 @@ async function getServiceById(financialAccountId, serviceId) {
   }
 }
 
-/**
- * Atualiza os dados de um serviço existente.
- * @param {number} financialAccountId - ID da conta financeira.
- * @param {number} serviceId - ID do serviço a ser atualizado.
- * @param {object} updateData - Dados a serem atualizados.
- * @returns {Promise<object>} O objeto do serviço atualizado.
- */
 async function updateService(financialAccountId, serviceId, updateData) {
   const t = await sequelize.transaction();
   try {
@@ -175,7 +155,6 @@ async function updateService(financialAccountId, serviceId, updateData) {
       throw error;
     }
 
-    // Se o nome está sendo alterado, verifica se o novo nome já existe
     if (updateData.name && updateData.name !== service.name) {
       const existingService = await Service.findOne({
         where: {
@@ -206,12 +185,6 @@ async function updateService(financialAccountId, serviceId, updateData) {
   }
 }
 
-/**
- * Exclui um serviço, somente se ele não estiver vinculado a nenhum agendamento.
- * @param {number} financialAccountId - ID da conta financeira.
- * @param {number} serviceId - ID do serviço a ser excluído.
- * @returns {Promise<boolean>} True se a exclusão foi bem-sucedida.
- */
 async function deleteService(financialAccountId, serviceId) {
   const t = await sequelize.transaction();
   try {
@@ -225,7 +198,6 @@ async function deleteService(financialAccountId, serviceId) {
       throw error;
     }
 
-    // Verifica se o serviço está em uso em algum agendamento
     const usage = await AppointmentService.findOne({
       where: { serviceId },
       transaction: t,
