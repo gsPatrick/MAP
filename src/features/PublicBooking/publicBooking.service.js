@@ -59,48 +59,43 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
   const rules = await availabilityService.getAllAvailabilityRules(financialAccountId);
   const workRule = rules.find(r => r.type === 'work');
   if (!workRule || !workRule.startTime || !workRule.endTime) {
-    logger.warn(`[PublicBooking] Nenhum horário de trabalho (work rule) encontrado para FA ID ${financialAccountId}. Retornando zero slots.`);
+    logger.warn(`[PublicBooking] Nenhum horário de trabalho (work rule) encontrado para FA ID ${financialAccountId}.`);
     return [];
   }
   
   const totalDuration = await calculateTotalDuration(financialAccountId, serviceIds);
-  if (totalDuration === 0) {
-      throw new Error("A duração total dos serviços selecionados é zero. Não é possível encontrar horários.");
+  if (totalDuration <= 0) {
+      throw new Error("A duração dos serviços deve ser maior que zero.");
   }
   
   const potentialSlots = [];
   const slotInterval = workRule.slotIntervalMinutes || 15;
 
-  // <<< MUDANÇA PRINCIPAL AQUI: Trabalhar com datas locais do servidor >>>
   const [startHour, startMinute] = workRule.startTime.split(':').map(Number);
   const [endHour, endMinute] = workRule.endTime.split(':').map(Number);
 
-  let currentTime = new Date(date);
-  currentTime.setHours(startHour, startMinute, 0, 0);
+  let currentTime = new Date(`${date}T00:00:00.000Z`);
+  currentTime.setUTCHours(startHour, startMinute);
 
-  const endTime = new Date(date);
-  endTime.setHours(endHour, endMinute, 0, 0);
-
-  logger.info(`[PublicBooking] Gerando slots para ${date} entre ${workRule.startTime} e ${workRule.endTime} com duração de ${totalDuration}min.`);
+  const endTime = new Date(`${date}T00:00:00.000Z`);
+  endTime.setUTCHours(endHour, endMinute);
 
   while (new Date(currentTime.getTime() + totalDuration * 60 * 1000) <= endTime) {
       potentialSlots.push(new Date(currentTime));
       currentTime = new Date(currentTime.getTime() + slotInterval * 60 * 1000);
   }
 
-  logger.info(`[PublicBooking] ${potentialSlots.length} slots gerados inicialmente. Verificando disponibilidade real...`);
-
-  const availabilityChecks = potentialSlots.map(slot => 
-    availabilityService.isTimeSlotAvailable(financialAccountId, slot, totalDuration)
-  );
+  const availabilityChecks = potentialSlots.map(slotStart => {
+    const slotEnd = new Date(slotStart.getTime() + totalDuration * 60 * 1000);
+    return availabilityService.isTimeSlotAvailable(financialAccountId, slotStart, slotEnd);
+  });
 
   const results = await Promise.all(availabilityChecks);
   
   const finalSlots = potentialSlots
     .filter((_, index) => results[index])
-    .map(slot => slot.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+    .map(slot => slot.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }));
 
-  logger.info(`[PublicBooking] ${finalSlots.length} slots verificados como disponíveis.`);
   return finalSlots;
 }
 
