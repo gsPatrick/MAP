@@ -56,12 +56,12 @@ async function calculateTotalDuration(financialAccountId, serviceIds = []) {
  * Gera e verifica os slots de horário disponíveis para uma data e serviços específicos.
  */
 async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) {
-  // <<< MUDANÇA: Lógica de geração de slots aprimorada
+  // <<< MUDANÇA PRINCIPAL AQUI >>>
   const rules = await availabilityService.getAllAvailabilityRules(financialAccountId);
   const workRule = rules.find(r => r.type === 'work');
   if (!workRule || !workRule.startTime || !workRule.endTime) {
     logger.warn(`[PublicBooking] Nenhum horário de trabalho (work rule) encontrado para FA ID ${financialAccountId}. Retornando zero slots.`);
-    return []; // Se não há horário de trabalho, não há slots.
+    return [];
   }
   
   const totalDuration = await calculateTotalDuration(financialAccountId, serviceIds);
@@ -69,8 +69,9 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
       throw new Error("A duração total dos serviços selecionados é zero. Não é possível encontrar horários.");
   }
   
-  const availableSlots = [];
-  const slotInterval = 15; // Gera slots a cada 15 minutos para dar mais opções
+  const potentialSlots = [];
+  // Usa o slotIntervalMinutes da regra, ou 15 como padrão
+  const slotInterval = workRule.slotIntervalMinutes || 15; 
 
   // Converte os horários para objetos Date no fuso horário correto (UTC para consistência)
   let currentTime = new Date(`${date}T${workRule.startTime}Z`);
@@ -78,28 +79,24 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
 
   logger.info(`[PublicBooking] Gerando slots para ${date} entre ${workRule.startTime} e ${workRule.endTime} com duração de ${totalDuration}min.`);
 
+  // Gera uma lista de horários possíveis
   while (new Date(currentTime.getTime() + totalDuration * 60 * 1000) <= endTime) {
-      // Adiciona o slot ao array
-      availableSlots.push(currentTime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }));
-      
-      // Incrementa o tempo pelo intervalo definido
+      potentialSlots.push(new Date(currentTime));
       currentTime = new Date(currentTime.getTime() + slotInterval * 60 * 1000);
   }
 
-  logger.info(`[PublicBooking] ${availableSlots.length} slots gerados inicialmente. Verificando disponibilidade...`);
+  logger.info(`[PublicBooking] ${potentialSlots.length} slots gerados inicialmente. Verificando disponibilidade real...`);
 
-  // Filtra os slots que não são realmente disponíveis usando a função já existente
-  const verifiedSlotsPromises = availableSlots.map(async (slot) => {
-    const [hour, minute] = slot.split(':');
-    const startDateTime = new Date(date);
-    startDateTime.setUTCHours(parseInt(hour, 10), parseInt(minute, 10), 0, 0);
+  // Filtra os slots que não são realmente disponíveis usando a função já existente e correta
+  const availabilityChecks = potentialSlots.map(slot => 
+    availabilityService.isTimeSlotAvailable(financialAccountId, slot, totalDuration)
+  );
 
-    const isAvailable = await availabilityService.isTimeSlotAvailable(financialAccountId, startDateTime, totalDuration);
-    return isAvailable ? slot : null;
-  });
-
-  const resolvedSlots = await Promise.all(verifiedSlotsPromises);
-  const finalSlots = resolvedSlots.filter(Boolean); // Remove os nulos
+  const results = await Promise.all(availabilityChecks);
+  
+  const finalSlots = potentialSlots
+    .filter((_, index) => results[index]) // Filtra apenas os que retornaram 'true'
+    .map(slot => slot.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })); // Formata para o frontend
 
   logger.info(`[PublicBooking] ${finalSlots.length} slots verificados como disponíveis.`);
   return finalSlots;
@@ -118,7 +115,6 @@ async function createPublicBooking(financialAccountId, bookingData) {
     throw error;
   }
   
-  // 1. Re-valida a disponibilidade do slot para evitar agendamentos duplos
   const totalDuration = await calculateTotalDuration(financialAccountId, serviceIds);
   const isStillAvailable = await availabilityService.isTimeSlotAvailable(financialAccountId, eventDateTime, totalDuration);
   if (!isStillAvailable) {
@@ -127,10 +123,8 @@ async function createPublicBooking(financialAccountId, bookingData) {
     throw error;
   }
 
-  // 2. Cria ou encontra o BusinessClient
   let businessClient;
   try {
-    // Tenta encontrar por email ou telefone para evitar duplicatas
     const existingClients = await businessClientService.getAllBusinessClients(financialAccountId, { search: clientDetails.email, limit: 1 });
     if (existingClients.businessClients.length > 0) {
         businessClient = existingClients.businessClients[0];
@@ -140,7 +134,7 @@ async function createPublicBooking(financialAccountId, bookingData) {
         logger.info(`Novo BusinessClient criado (ID: ${businessClient.id}) para o agendamento.`);
     }
   } catch (error) {
-      if (error.statusCode === 409) { // Se já existe por nome/telefone
+      if (error.statusCode === 409) {
         const existingClients = await businessClientService.getAllBusinessClients(financialAccountId, { search: clientDetails.name, limit: 1 });
         businessClient = existingClients.businessClients[0];
       } else {
@@ -148,7 +142,6 @@ async function createPublicBooking(financialAccountId, bookingData) {
       }
   }
 
-  // 3. Prepara e cria o agendamento
   const services = await Service.findAll({ where: { id: { [Op.in]: serviceIds }, financialAccountId } });
   const appointmentTitle = services.map(s => s.name).join(' + ');
 
@@ -156,7 +149,7 @@ async function createPublicBooking(financialAccountId, bookingData) {
     title: appointmentTitle,
     eventDateTime,
     durationMinutes: totalDuration,
-    status: 'Scheduled', // Sempre começa como agendado, para o PJ confirmar
+    status: 'Scheduled',
     businessClientIds: [businessClient.id],
     serviceIds,
   };
