@@ -41,8 +41,8 @@ async function initializeDatabaseAndJobs() {
         console.warn('!! ATENÇÃO: MODO DESENVOLVIMENTO com FORCE_DB_RESET=false.                 !!');
         console.warn('!! O BANCO DE DADOS SERÁ COMPLETAMENTE APAGADO E RECRIADO.                !!');
         console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
-        await sequelize.sync({ force: false });
-        console.log('Banco de dados resetado com sucesso (force: false).');
+        await sequelize.sync({ force: true });
+        console.log('Banco de dados resetado com sucesso (force: true).');
         
         // Após um reset total, é essencial semear os dados básicos.
         console.log('Executando seeder de planos...');
@@ -51,7 +51,7 @@ async function initializeDatabaseAndJobs() {
       } else {
         // Comportamento padrão para desenvolvimento: tenta alterar tabelas sem apagar.
         console.log('Ambiente de DESENVOLVIMENTO. Sincronizando modelos com { alter: false }...');
-        await sequelize.sync({ alter: false });
+        await sequelize.sync({ alter: true });
         console.log('Modelos sincronizados com o banco de dados (alter: true).');
         
         // Também é seguro rodar o seeder aqui, pois ele deve ser idempotente (verificar se já existe).
