@@ -108,29 +108,38 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
   const desiredStart = new Date(startDateTime);
   const desiredEnd = new Date(desiredStart.getTime() + durationMinutes * 60 * 1000);
   
-  // 1. Verificar colisão com agendamentos existentes
+  // <<< MUDANÇA PRINCIPAL AQUI: Lógica de query de colisão corrigida >>>
+  let endTimeCondition;
+  const dbDialect = sequelize.getDialect();
+
+  // Adapta a query de cálculo de tempo final para o dialeto do banco de dados
+  if (dbDialect === 'postgres') {
+    endTimeCondition = sequelize.where(
+      sequelize.literal(`"eventDateTime" + "durationMinutes" * INTERVAL '1 minute'`),
+      { [Op.gt]: desiredStart }
+    );
+  } else { // Assume MySQL ou dialeto similar
+    endTimeCondition = sequelize.where(
+      sequelize.fn('ADDDATE', sequelize.col('eventDateTime'), sequelize.literal(`INTERVAL \`durationMinutes\` MINUTE`)),
+      { [Op.gt]: desiredStart }
+    );
+  }
+
   const existingAppointment = await Appointment.findOne({
     where: {
       financialAccountId,
-      // <<< MUDANÇA AQUI: Incluir 'Scheduled' na verificação de conflito
       status: { [Op.in]: ['Scheduled', 'Confirmed'] },
-      eventDateTime: {
-        [Op.lt]: desiredEnd,
-        [Op.gt]: new Date(desiredStart.getTime() - (24 * 60 * 60 * 1000)),
-      },
+      eventDateTime: { [Op.lt]: desiredEnd },
+      [Op.and]: [endTimeCondition]
     },
   });
 
   if (existingAppointment) {
-    const existingStart = new Date(existingAppointment.eventDateTime);
-    const existingEnd = new Date(existingStart.getTime() + (existingAppointment.durationMinutes || 60) * 60 * 1000);
-    if (desiredStart < existingEnd && desiredEnd > existingStart) {
-      logger.warn(`[Availability] Conflito de horário para FA ${financialAccountId}: Slot desejado ${desiredStart.toISOString()} colide com agendamento existente ID ${existingAppointment.id} (Status: ${existingAppointment.status}).`);
-      return false;
-    }
+    logger.warn(`[Availability] Conflito de horário para FA ${financialAccountId}: Slot desejado ${desiredStart.toISOString()} colide com agendamento existente ID ${existingAppointment.id}.`);
+    return false;
   }
 
-  // O resto da função permanece o mesmo...
+  // O resto da função permanece o mesmo
   const rules = await AvailabilityRule.findAll({ where: { financialAccountId } });
   const workRule = rules.find(r => r.type === 'work');
   const breakRules = rules.filter(r => r.type === 'break');
