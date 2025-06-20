@@ -1,7 +1,7 @@
 // src/features/Client/client.routes.js
 const { Router } = require('express');
 const clientController = require('./client.controller');
-// const { authenticateToken, authorizeRole } = require('../../middlewares/authMiddleware');
+const { authenticateToken, authorizeRole } = require('../../middlewares/authMiddleware');
 
 const router = Router();
 
