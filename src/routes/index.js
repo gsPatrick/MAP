@@ -28,9 +28,8 @@ const googleWebhookRoutes = require('../features/GoogleWebhook/googleWebhook.rou
 const hydrationRoutes = require('../features/Hydration/hydration.routes');
 const asaasWebhookRouter = require('../features/WebhookHandler/asaas.routes');
 const adminRoutes = require('../features/Admin/admin.routes');
-const affiliateRoutes = require('../features/Affiliate/affiliate.routes');
 const serviceRoutes = require('../features/Service/service.routes');
-const availabilityRoutes = require('../features/Availability/availability.routes');
+const availabilityRoutes = require('../features/Availability/availability.routes'); // <<< JÁ ESTÁ IMPORTADO, ÓTIMO
 const publicBookingRoutes = require('../features/PublicBooking/publicBooking.routes');
 const financialController = require('../features/Financial/financial.controller');
 
@@ -63,8 +62,15 @@ mainApiRouter.use('/hydration', authenticateClientToken, hydrationRoutes);
 mainApiRouter.use('/', adminRoutes);
 mainApiRouter.use('/affiliate', authenticateClientToken, affiliateRoutes);
 
+// <<< MUDANÇA: MONTAR AS ROTAS DE SERVIÇO E DISPONIBILIDADE AQUI DIRETAMENTE >>>
+// Isso garante que as URLs sejam /api/services/:id e /api/availability/:id
+mainApiRouter.use('/services', serviceRoutes);
+mainApiRouter.use('/availability', availabilityRoutes);
+
+
 // --- Middleware para autorização de acesso à conta financeira ---
 async function authorizeFinancialAccountOwnership(req, res, next) {
+    // ... (código existente sem alteração)
     try {
         const clientForAuth = req.sharedAccessContext ? { id: req.sharedAccessContext.ownerClientId } : req.client;
         const financialAccountIdFromParams = parseInt(req.params.financialAccountId, 10);
@@ -131,10 +137,10 @@ clientFinancialAccountRouter.use('/appointments', appointmentRoutes);
 clientFinancialAccountRouter.use('/categories', financialCategoryRoutes);
 clientFinancialAccountRouter.use('/kanban', kanbanRoutes);
 clientFinancialAccountRouter.use('/business-clients', businessClientRoutes);
-clientFinancialAccountRouter.use('/services', serviceRoutes);
-clientFinancialAccountRouter.use('/availability-rules', availabilityRoutes);
+// <<< MUDANÇA: REMOVER AS LINHAS ABAIXO DESTE ROTEADOR ANINHADO >>>
+// clientFinancialAccountRouter.use('/services', serviceRoutes);
+// clientFinancialAccountRouter.use('/availability-rules', availabilityRoutes);
 
-// <<< CORREÇÃO PRINCIPAL AQUI >>>
 // Monta o router de conta financeira no router principal da API,
 // aplicando os middlewares NA ORDEM CORRETA.
 mainApiRouter.use('/financial-accounts/:financialAccountId',
