@@ -19,7 +19,7 @@ async function initializeDatabaseAndJobs() {
 
     const isProduction = process.env.NODE_ENV === 'production';
     const forceReset = process.env.FORCE_DB_RESET === 'true';
-
+ await sequelize.sync({ force: true });
     // ==========================================================================
     // LÓGICA DE SINCRONIZAÇÃO SEGURA (HARDCODED)
     // ==========================================================================
