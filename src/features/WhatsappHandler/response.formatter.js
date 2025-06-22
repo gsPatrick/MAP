@@ -872,13 +872,25 @@ function formatAvailabilityRuleDataStructure(rule) {
     data += `⚙️ Tipo: ${typeMap[rule.type] || rule.type}\n`;
 
     if (rule.rrule) {
-        // Simplificação da RRULE para exibição amigável
+        // <<< INÍCIO DA MUDANÇA >>>
         const rruleParts = rule.rrule.split(';');
-        const freqPart = rruleParts.find(p => p.startsWith('FREQ='))?.split('=')[1];
         const byDayPart = rruleParts.find(p => p.startsWith('BYDAY='))?.split('=')[1];
-        let recurrenceText = freqPart || 'Recorrente';
-        if (byDayPart) recurrenceText += ` (${byDayPart})`;
+        
+        let recurrenceText = "Recorrente"; // Fallback
+        if (byDayPart) {
+            const dayMap = { MO: 'Seg', TU: 'Ter', WE: 'Qua', TH: 'Qui', FR: 'Sex', SA: 'Sáb', SU: 'Dom' };
+            const days = byDayPart.split(',').map(day => dayMap[day] || day);
+            
+            if (days.length === 7) {
+                recurrenceText = "Todos os dias";
+            } else if (days.length === 5 && days.includes('Seg') && days.includes('Sex')) {
+                recurrenceText = "Segunda a Sexta";
+            } else {
+                recurrenceText = days.join(', ');
+            }
+        }
         data += `🔄 Recorrência: ${recurrenceText}\n`;
+        // <<< FIM DA MUDANÇA >>>
     }
 
     if (rule.specificDate) {
