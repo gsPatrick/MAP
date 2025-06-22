@@ -19,7 +19,7 @@ async function initializeDatabaseAndJobs() {
 
     const isProduction = process.env.NODE_ENV === 'production';
     const forceReset = process.env.FORCE_DB_RESET === 'true';
- await sequelize.sync({ force: true });
+
     // ==========================================================================
     // LÓGICA DE SINCRONIZAÇÃO SEGURA (HARDCODED)
     // ==========================================================================
@@ -39,7 +39,7 @@ async function initializeDatabaseAndJobs() {
         console.warn('!! ATENÇÃO: MODO DESENVOLVIMENTO com FORCE_DB_RESET=true.                 !!');
         console.warn('!! O BANCO DE DADOS SERÁ COMPLETAMENTE APAGADO E RECRIADO.                !!');
         console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
-        await sequelize.sync({ force: true });
+        await sequelize.sync({ alter: false });
         console.log('Banco de dados resetado com sucesso (force: true).');
         
         // Após um reset total, é essencial semear os dados básicos.
@@ -48,7 +48,7 @@ async function initializeDatabaseAndJobs() {
       } else {
         // Comportamento padrão para desenvolvimento: tenta alterar tabelas sem apagar.
         console.log('Ambiente de DESENVOLVIMENTO. Sincronizando modelos com { alter: true }...');
-        await sequelize.sync({ alter: true });
+        await sequelize.sync({ alter: false });
         console.log('Modelos sincronizados com o banco de dados (alter: true).');
         
         // Também é seguro rodar o seeder aqui, pois ele deve ser idempotente (verificar se já existe).
