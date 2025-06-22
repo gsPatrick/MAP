@@ -683,6 +683,26 @@ case 'GET_AVAILABLE_TIME_SLOTS': {
             // AÇÕES DE LEITURA (GET / LIST)
             // =================================================================
 
+case 'GET_PROVIDER_PUBLIC_INFO': {
+    try {
+        // Verifica se a conta é do tipo correto, pois o serviço tem essa regra
+        if (!['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
+            throw { statusCode: 403, message: "Esta funcionalidade está disponível apenas para contas do tipo PJ ou MEI." };
+        }
+
+        const publicInfo = await publicBookingService.getProviderPublicInfo(state.activeFinancialAccountId);
+        // Monta a URL pública usando o ID da conta ativa no estado da conversa
+        const publicBookingUrl = `http://map-nocontrole.com.br/agendar/${state.activeFinancialAccountId}`;
+        
+        formattedData = formatter.formatProviderPublicInfoDataStructure(publicInfo, publicBookingUrl);
+    } catch (e) {
+        logger.error(`[ACTION HANDLER] Erro em GET_PROVIDER_PUBLIC_INFO: ${e.message}`, { error: e, paramsUsed: params });
+        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui buscar as informações da sua página pública.\nDetalhe: ${e.message}`;
+    }
+    break;
+}
+
+
             case 'GET_FINANCIAL_SUMMARY': {
                 try {
                     const categoryObjectSummary = params.financialCategoryName 
@@ -2459,10 +2479,10 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
                         break;
                     }
                     case 'availability_rule': {
-    const rule = await availabilityService.getAvailabilityRuleById(state.activeFinancialAccountId, resourceId);
-    if (rule) resourceDescription = `A regra de disponibilidade "${rule.title}"`;
-    await availabilityService.deleteAvailabilityRule(state.activeFinancialAccountId, resourceId);
-    break;
+                        const rule = await availabilityService.getAvailabilityRuleById(state.activeFinancialAccountId, resourceId);
+                        if (rule) resourceDescription = `A regra de disponibilidade "${rule.title}"`;
+                        await availabilityService.deleteAvailabilityRule(state.activeFinancialAccountId, resourceId);
+                        break;
 }
                     default:
                         throw new Error(`Tipo de recurso "${resourceType}" não suportado para exclusão via botão.`);
