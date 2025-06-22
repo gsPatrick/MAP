@@ -13,6 +13,9 @@ const financialCategoryService = require('../FinancialCategory/financialCategory
 const affiliateService = require('../Affiliate/affiliate.service'); // <<< ADICIONE ESTA LINHA
 const hydrationService = require('../Hydration/hydration.service'); // <<< ADICIONE ESTA LINHA
 const subscriptionService = require('../Subscription/subscription.service'); // <<< ADICIONE ESTA LINHA
+const availabilityService = require('../Availability/availability.service');
+const serviceService = require('../Service/service.service');
+const publicBookingService = require('../PublicBooking/publicBooking.service');
 const logger = require('../../utils/logger');
 const formatter = require('./response.formatter'); // Importa o novo formatador
 const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
@@ -612,6 +615,70 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
+            case 'CREATE_AVAILABILITY_RULE': {
+                try {
+                    const { title, type, rrule, startTime, endTime, specificDate, slotIntervalMinutes } = params;
+                    if (!title || !type) {
+                        throw { statusCode: 400, message: "Título e tipo da regra são obrigatórios." };
+                    }
+                    const ruleData = { title, type, rrule, startTime, endTime, specificDate, slotIntervalMinutes };
+                    const newRule = await availabilityService.createAvailabilityRule(state.activeFinancialAccountId, ruleData);
+                    
+                    formattedData = formatter.formatAvailabilityRuleDataStructure(newRule);
+                    if (isOwnerActingOnOwnBehalfGlobal) {
+                        resourceForButtonsContext.resources.push({ type: 'availability_rule', id: newRule.id, description: newRule.title });
+                    }
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em CREATE_AVAILABILITY_RULE: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui criar a regra de disponibilidade.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
+
+            case 'GET_AGENDA_VIEW': {
+    try {
+        const { dateStart, dateEnd } = params;
+        if (!dateStart || !dateEnd) {
+            throw { statusCode: 400, message: "Preciso de uma data de início e fim para mostrar a agenda." };
+        }
+        const agendaEvents = await appointmentService.getAgendaView(state.activeFinancialAccountId, dateStart, dateEnd);
+        formattedData = formatter.formatAgendaViewDataStructure(agendaEvents, dateStart, dateEnd);
+    } catch (e) {
+        logger.error(`[ACTION HANDLER] Erro em GET_AGENDA_VIEW: ${e.message}`, { error: e, paramsUsed: params });
+        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui buscar sua agenda.\nDetalhe: ${e.message}`;
+    }
+    break;
+}
+
+case 'GET_AVAILABLE_TIME_SLOTS': {
+    try {
+        const { date, serviceNames, durationMinutes } = params;
+        if (!date) {
+            throw { statusCode: 400, message: "Para qual data você gostaria de ver os horários livres?" };
+        }
+
+        let totalDuration = durationMinutes ? parseInt(durationMinutes) : 0;
+        let serviceIds = [];
+
+        if (serviceNames && Array.isArray(serviceNames) && serviceNames.length > 0) {
+            const servicesFound = await serviceService.getAllServices(state.activeFinancialAccountId, { search: serviceNames.join(' '), limit: serviceNames.length });
+            serviceIds = servicesFound.services.map(s => s.id);
+            totalDuration = servicesFound.services.reduce((sum, s) => sum + s.durationMinutes, 0);
+        }
+
+        if (totalDuration <= 0) {
+            throw { statusCode: 400, message: "Preciso saber a duração do serviço para verificar os horários. Diga, por exemplo, 'horários livres para corte de cabelo amanhã'." };
+        }
+
+        const availableSlots = await availabilityService.getAvailableTimeSlots(state.activeFinancialAccountId, date, serviceIds);
+        formattedData = formatter.formatAvailableTimeSlotsDataStructure(availableSlots, date, totalDuration);
+
+    } catch (e) {
+        logger.error(`[ACTION HANDLER] Erro em GET_AVAILABLE_TIME_SLOTS: ${e.message}`, { error: e, paramsUsed: params });
+        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui verificar os horários disponíveis.\nDetalhe: ${e.message}`;
+    }
+    break;
+}
 
             // AÇÕES DE LEITURA (GET / LIST)
             // =================================================================
@@ -998,6 +1065,78 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
+
+            case 'LIST_AVAILABILITY_RULES': {
+                try {
+                    const rules = await availabilityService.getAllAvailabilityRules(state.activeFinancialAccountId);
+                    formattedData = formatter.formatListAvailabilityRulesDataStructure(rules);
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em LIST_AVAILABILITY_RULES: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui listar suas regras de disponibilidade.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
+
+            // =================================================================
+// AÇÕES DE LEITURA (GET / LIST)
+// =================================================================
+case 'GET_BUSINESS_CLIENT_DETAILS': {
+    try {
+        const { clientName } = params;
+        if (!clientName) {
+            throw { statusCode: 400, message: "Preciso do nome do cliente para buscar os detalhes." };
+        }
+        
+        // Helper para encontrar o ID do cliente pelo nome
+        const clientsResult = await businessClientService.getAllBusinessClients(state.activeFinancialAccountId, { search: clientName, limit: 1, isActive: null });
+        if (!clientsResult.businessClients || clientsResult.businessClients.length === 0) {
+            throw { statusCode: 404, message: `Não encontrei um cliente chamado "${clientName}".` };
+        }
+        const clientId = clientsResult.businessClients[0].id;
+
+        const clientDetails = await businessClientService.getBusinessClientDetails(state.activeFinancialAccountId, clientId);
+        formattedData = formatter.formatBusinessClientDetailsDataStructure(clientDetails);
+
+    } catch (e) {
+        logger.error(`[ACTION HANDLER] Erro em GET_BUSINESS_CLIENT_DETAILS: ${e.message}`, { error: e, paramsUsed: params });
+        let intro = `❌ Ops, ${clientNameToUse}! Não consegui buscar os detalhes do cliente.`;
+        let body = `\nDetalhe: ${e.message}`;
+        if (e.statusCode === 404) {
+            intro = `Hum, não encontrei o cliente "${params.clientName}", ${clientNameToUse}.`;
+            const { businessClients } = await businessClientService.getAllBusinessClients(state.activeFinancialAccountId, { limit: 5, isActive: true });
+            if (businessClients && businessClients.length > 0) {
+                body = `\n\nSeus clientes cadastrados são: *${businessClients.map(c => c.name).join(', ')}*.\n\nVocê quis dizer um deles?`;
+            } else {
+                body = `\n\nParece que você ainda não tem nenhum cliente cadastrado.`;
+            }
+        }
+        formattedData = intro + body;
+    }
+    break;
+}
+
+case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
+    try {
+        const { clientName } = params;
+        if (!clientName) {
+            throw { statusCode: 400, message: "Preciso do nome do cliente para buscar o histórico." };
+        }
+        
+        const clientsResult = await businessClientService.getAllBusinessClients(state.activeFinancialAccountId, { search: clientName, limit: 1, isActive: null });
+        if (!clientsResult.businessClients || clientsResult.businessClients.length === 0) {
+            throw { statusCode: 404, message: `Não encontrei um cliente chamado "${clientName}".` };
+        }
+        const clientId = clientsResult.businessClients[0].id;
+
+        const history = await businessClientService.getAppointmentHistoryForClient(state.activeFinancialAccountId, clientId);
+        formattedData = formatter.formatAppointmentHistoryForClientDataStructure(history, clientsResult.businessClients[0].name);
+
+    } catch (e) {
+        logger.error(`[ACTION HANDLER] Erro em GET_APPOINTMENT_HISTORY_FOR_CLIENT: ${e.message}`, { error: e, paramsUsed: params });
+        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui buscar o histórico do cliente.\nDetalhe: ${e.message}`;
+    }
+    break;
+}
 
 
 
@@ -1553,6 +1692,37 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                 break;
             }
 
+            case 'UPDATE_AVAILABILITY_RULE': {
+    try {
+        const ruleIdToUpdate = state.editingResource?.type === 'availability_rule' && state.editingResource?.id
+            ? parseInt(state.editingResource.id, 10)
+            : (params.ruleIdToUpdate ? parseInt(params.ruleIdToUpdate, 10) : null);
+        if (!ruleIdToUpdate) {
+            throw { statusCode: 400, message: "ID da regra para atualizar não foi fornecido ou não está em contexto de edição." };
+        }
+        if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
+             throw { statusCode: 403, message: "Você não tem permissão para editar regras de disponibilidade nesta conta." };
+        }
+
+        const updateData = { ...params };
+        delete updateData.ruleIdToUpdate;
+
+        if (Object.keys(updateData).length === 0) {
+            throw { statusCode: 400, message: "Nenhum dado válido fornecido para atualizar a regra." };
+        }
+
+        const updatedRule = await availabilityService.updateAvailabilityRule(state.activeFinancialAccountId, ruleIdToUpdate, updateData);
+        
+        formattedData = formatter.formatAvailabilityRuleDataStructure(updatedRule);
+        wasAnEdit = true;
+    } catch (e) {
+        logger.error(`[ACTION HANDLER] Erro em UPDATE_AVAILABILITY_RULE: ${e.message}`, { error: e, paramsUsed: params });
+        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui atualizar a regra.\nDetalhe: ${e.message}`;
+    }
+    break;
+}
+
+
             // =================================================================
             // AÇÕES DE EXCLUSÃO (DELETE)
             // =================================================================
@@ -1805,6 +1975,27 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                 }
                 break;
             }
+
+            case 'DELETE_AVAILABILITY_RULE': {
+    try {
+        let ruleIdToDelete = params.ruleIdToDelete;
+        if (!ruleIdToDelete && params.ruleTitleToDelete) {
+             const rules = await availabilityService.getAllAvailabilityRules(state.activeFinancialAccountId);
+             const ruleFound = rules.find(r => r.title.toLowerCase() === params.ruleTitleToDelete.toLowerCase());
+             if (ruleFound) ruleIdToDelete = ruleFound.id;
+        }
+        if (!ruleIdToDelete) {
+            throw { statusCode: 404, message: `Não encontrei a regra de disponibilidade "${params.ruleTitleToDelete || 'especificada'}" para excluir.` };
+        }
+        
+        await availabilityService.deleteAvailabilityRule(state.activeFinancialAccountId, ruleIdToDelete);
+        formattedData = '✅ Regra de disponibilidade excluída com sucesso!';
+    } catch (e) {
+        logger.error(`[ACTION HANDLER] Erro em DELETE_AVAILABILITY_RULE: ${e.message}`, { error: e, paramsUsed: params });
+        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui excluir a regra.\nDetalhe: ${e.message}`;
+    }
+    break;
+}
 
 
             // ... Adicione todos os outros `UPDATE_*` e `RECREATE_*` aqui, seguindo o padrão acima ...
@@ -2267,6 +2458,12 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
                         await businessClientService.deleteBusinessClient(state.activeFinancialAccountId, resourceId);
                         break;
                     }
+                    case 'availability_rule': {
+    const rule = await availabilityService.getAvailabilityRuleById(state.activeFinancialAccountId, resourceId);
+    if (rule) resourceDescription = `A regra de disponibilidade "${rule.title}"`;
+    await availabilityService.deleteAvailabilityRule(state.activeFinancialAccountId, resourceId);
+    break;
+}
                     default:
                         throw new Error(`Tipo de recurso "${resourceType}" não suportado para exclusão via botão.`);
                 }

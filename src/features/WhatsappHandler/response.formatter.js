@@ -858,7 +858,194 @@ function formatMorningBriefing(clientName, accountName, pendingTransactions, app
     return `${greeting}\n\n${intro}${financialSection}${appointmentSection}${footer}`.trim();
 }
 
+function formatAvailabilityRuleDataStructure(rule) {
+    if (!rule) return "📅 Resumo da Regra de Disponibilidade:\n\nDados não disponíveis.";
+    
+    const typeMap = {
+        work: 'Horário de Trabalho 働く',
+        break: 'Pausa / Bloqueio ⏸️',
+        day_off: 'Folga / Feriado 🌴'
+    };
 
+    let data = `📅 Resumo da Regra de Disponibilidade:\n\n`;
+    data += `🏷️ Título: *${rule.title}*\n`;
+    data += `⚙️ Tipo: ${typeMap[rule.type] || rule.type}\n`;
+
+    if (rule.rrule) {
+        // Simplificação da RRULE para exibição amigável
+        const rruleParts = rule.rrule.split(';');
+        const freqPart = rruleParts.find(p => p.startsWith('FREQ='))?.split('=')[1];
+        const byDayPart = rruleParts.find(p => p.startsWith('BYDAY='))?.split('=')[1];
+        let recurrenceText = freqPart || 'Recorrente';
+        if (byDayPart) recurrenceText += ` (${byDayPart})`;
+        data += `🔄 Recorrência: ${recurrenceText}\n`;
+    }
+
+    if (rule.specificDate) {
+        data += `🗓️ Data Específica: ${formatDate(rule.specificDate)}\n`;
+    }
+
+    if (rule.startTime && rule.endTime) {
+        data += `⏰ Horário: Das ${rule.startTime.substring(0, 5)} às ${rule.endTime.substring(0, 5)}\n`;
+    }
+    
+    if (rule.type === 'work' && rule.slotIntervalMinutes) {
+        data += `⏱️ Intervalo de Agendamento: A cada ${rule.slotIntervalMinutes} minutos\n`;
+    }
+
+    return data.trim();
+}
+
+function formatListAvailabilityRulesDataStructure(rules) {
+    if (!rules || rules.length === 0) return "📅 Suas Regras de Disponibilidade:\n\nNenhuma regra cadastrada. Diga 'criar regra de trabalho' para começar.";
+    
+    let data = "📅 Suas Regras de Disponibilidade:\n";
+    
+    const workRules = rules.filter(r => r.type === 'work');
+    const breakRules = rules.filter(r => r.type === 'break');
+    const dayOffRules = rules.filter(r => r.type === 'day_off');
+
+    if (workRules.length > 0) {
+        data += "\n--- Horários de Trabalho ---\n";
+        workRules.forEach(rule => {
+            data += `\n働く *${rule.title}* (ID: ${rule.id})\n`;
+            data += `   - Das ${rule.startTime.substring(0,5)} às ${rule.endTime.substring(0,5)}\n`;
+            if (rule.rrule) data += `   - Recorrência: ${rule.rrule.split(';').find(p=>p.startsWith('BYDAY='))?.split('=')[1] || 'Definida'}\n`;
+        });
+    }
+    if (breakRules.length > 0) {
+        data += "\n--- Pausas / Bloqueios ---\n";
+        breakRules.forEach(rule => {
+            data += `\n⏸️ *${rule.title}* (ID: ${rule.id})\n`;
+            data += `   - Das ${rule.startTime.substring(0,5)} às ${rule.endTime.substring(0,5)}\n`;
+            if (rule.rrule) data += `   - Recorrência: ${rule.rrule.split(';').find(p=>p.startsWith('BYDAY='))?.split('=')[1] || 'Definida'}\n`;
+        });
+    }
+    if (dayOffRules.length > 0) {
+        data += "\n--- Folgas / Feriados ---\n";
+        dayOffRules.forEach(rule => {
+            data += `\n🌴 *${rule.title}* (ID: ${rule.id})\n`;
+            if (rule.specificDate) data += `   - Data: ${formatDate(rule.specificDate)}\n`;
+            if (rule.rrule) data += `   - Recorrência: Anual\n`;
+        });
+    }
+    
+    return data.trim();
+}
+
+function formatAgendaViewDataStructure(events, startDate, endDate) {
+    if (!events || events.length === 0) {
+        return `🗓️ Agenda de ${formatDate(startDate)} a ${formatDate(endDate)}:\n\nNenhum evento encontrado. Dia livre! ✨`;
+    }
+
+    let data = `🗓️ Sua Agenda de ${formatDate(startDate)} a ${formatDate(endDate)}:\n`;
+
+    // Agrupa eventos por dia
+    const eventsByDay = events.reduce((acc, event) => {
+        const day = new Date(event.start).toISOString().split('T')[0];
+        if (!acc[day]) acc[day] = [];
+        acc[day].push(event);
+        return acc;
+    }, {});
+
+    // Ordena os dias
+    const sortedDays = Object.keys(eventsByDay).sort();
+
+    for (const day of sortedDays) {
+        data += `\n\n*--- ${formatDate(day)} ---*`;
+        
+        // Ordena eventos do dia por horário de início
+        const sortedEvents = eventsByDay[day].sort((a, b) => new Date(a.start) - new Date(b.start));
+
+        sortedEvents.forEach(event => {
+            const startTime = formatTime(event.start);
+            const endTime = formatTime(event.end);
+            if (event.type === 'appointment') {
+                data += `\n✅ ${startTime} - ${endTime}: *${event.title}* (Status: ${translateStatus(event.status)})`;
+            } else if (event.type === 'break') {
+                data += `\n⏸️ ${startTime} - ${endTime}: *${event.title}* (Bloqueio)`;
+            }
+        });
+    }
+    
+    return data.trim();
+}
+
+function formatAvailableTimeSlotsDataStructure(slots, date, duration) {
+    if (!slots || slots.length === 0) {
+        return `🗓️ Horários para ${formatDate(date)} (duração ${duration} min):\n\nNenhum horário disponível encontrado para esta data. 😕`;
+    }
+
+    let data = `✅ Horários disponíveis para *${formatDate(date)}* (duração de ${duration} min):\n\n`;
+    
+    // Formata em colunas para melhor visualização
+    const columns = [[], [], []];
+    slots.forEach((slot, index) => {
+        columns[index % 3].push(`- ${slot}`);
+    });
+
+    const maxRows = Math.max(columns[0].length, columns[1].length, columns[2].length);
+    for (let i = 0; i < maxRows; i++) {
+        const col1 = columns[0][i] || '';
+        const col2 = columns[1][i] || '';
+        const col3 = columns[2][i] || '';
+        data += `${col1.padEnd(12)}${col2.padEnd(12)}${col3}\n`;
+    }
+
+    data += `\nPara agendar, diga "agendar [serviço] para [cliente] no dia ${formatDate(date)} às [horário]".`;
+    return data.trim();
+}
+
+function formatBusinessClientDetailsDataStructure(details) {
+    if (!details) return "👥 Detalhes do Cliente:\n\nDados não disponíveis.";
+    
+    let data = `👥 Detalhes de *${details.name}*:\n\n`;
+    if (details.phone) data += `📞 Telefone: ${details.phone}\n`;
+    if (details.email) data += `📧 E-mail: ${details.email}\n`;
+    data += `💰 Faturamento Total (Concluído): *${formatCurrency(details.totalFaturado)}*\n`;
+    data += `🚦 Status: ${translateStatus(details.isActive ? 'Active' : 'Inactive')}\n`;
+    
+    if (details.appointmentHistory && details.appointmentHistory.length > 0) {
+        data += `\n--- Histórico Recente ---\n`;
+        details.appointmentHistory.slice(0, 3).forEach(appt => {
+            const serviceNames = appt.services.map(s => s.name).join(' + ');
+            data += `\n🗓️ ${formatDate(appt.eventDateTime)}: ${serviceNames || appt.title} - ${translateStatus(appt.status)}`;
+        });
+    } else {
+        data += `\n--- Histórico Recente ---\nNenhum agendamento encontrado para este cliente.`;
+    }
+
+    return data.trim();
+}
+
+function formatAppointmentHistoryForClientDataStructure(history, clientName) {
+    if (!history || history.length === 0) {
+        return `📜 Histórico de Agendamentos de *${clientName}*:\n\nNenhum agendamento encontrado.`;
+    }
+
+    let data = `📜 Histórico de Agendamentos de *${clientName}*:\n`;
+    history.slice(0, 10).forEach(appt => {
+        const serviceNames = appt.services.map(s => s.name).join(' + ');
+        data += `\n- ${formatDate(appt.eventDateTime)}: ${serviceNames || appt.title} (${translateStatus(appt.status)})`;
+    });
+
+    if (history.length > 10) {
+        data += `\n\n... e mais ${history.length - 10} agendamento(s).`;
+    }
+
+    return data.trim();
+}
+
+function formatProviderPublicInfoDataStructure(publicInfo, publicUrl) {
+    if (!publicInfo) return "🌐 Página Pública de Agendamento:\n\nInformações não disponíveis.";
+    
+    let data = `🌐 Sua Página Pública de Agendamento está no ar!\n\n`;
+    data += `✨ Nome do Prestador: *${publicInfo.providerName}*\n`;
+    data += `🔗 Seu link para compartilhar: *${publicUrl}*\n\n`;
+    data += `Seus clientes podem usar este link para ver seus serviços e agendar um horário diretamente com você. Simples assim! 😉`;
+    
+    return data.trim();
+}
 
 // Exporta todas as funções em um único objeto
 module.exports = {
@@ -898,7 +1085,14 @@ module.exports = {
     formatRecurringRuleDataStructure,
     formatFinancialSummaryDataStructure,
     formatRichRecurringRuleList,
-        formatServiceDataStructure, // <-- NOVA FUNÇÃO
+    formatServiceDataStructure, // <-- NOVA FUNÇÃO
     formatListServicesDataStructure, // <-- NOVA FUNÇÃO
-    formatMorningBriefing
+    formatMorningBriefing,
+    formatAvailabilityRuleDataStructure,
+    formatListAvailabilityRulesDataStructure,
+    formatAgendaViewDataStructure,
+    formatAvailableTimeSlotsDataStructure,
+    formatBusinessClientDetailsDataStructure,
+    formatAppointmentHistoryForClientDataStructure,
+formatProviderPublicInfoDataStructure
 };

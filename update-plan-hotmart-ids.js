@@ -8,20 +8,6 @@ const plansData = [
   // ==========================================================
   // PLANO DE TESTE
   // ==========================================================
-  {
-    targetName: 'Plano Sandbox Teste Avancado',
-    hotmartId: null,
-    asaasProductId: null,
-    defaults: {
-      description: 'Plano para testes no sandbox que libera acesso avançado.',
-      price: 5.00,
-      currency: 'BRL',
-      durationDays: 30,
-      tier: 'avancado',
-      isActive: true,
-      affiliateCommissionValue: 1.00, // << COMISSÃO DE TESTE
-    }
-  },
 
   // --- PLANOS PESSOAIS ---
   {
