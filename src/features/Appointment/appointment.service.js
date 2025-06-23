@@ -149,12 +149,21 @@ async function scheduleAppointment(financialAccountId, appointmentData) {
     }
 
     // Notificação para o dono da conta PJ/MEI
-    if (account.accountType !== 'PF' && account.ownerClient?.phone) {
+ if (account.accountType !== 'PF' && account.ownerClient?.phone) {
         const ownerClient = account.ownerClient;
         const ownerName = ownerClient.name ? ownerClient.name.split(' ')[0] : 'Você';
-        const notificationMessage = `🔔 *Novo Agendamento Recebido!*\n\nOlá, ${ownerName}! Um novo serviço foi agendado na sua conta *${account.accountName}*.\n\n` +
-                                    formatter.formatAppointmentDataStructure(reloadedApptForSync.toJSON()) +
-                                    `\n\nPara aceitar, responda: "confirmar agendamento ${reloadedApptForSync.id}".`;
+        
+        // Passo 1: Gerar a introdução criativa com a IA
+        const creativeIntro = await aiModelService.generateNewBookingNotification(ownerName, reloadedApptForSync.toJSON());
+
+        // Passo 2: Formatar os detalhes do agendamento
+        const formattedDetails = formatter.formatAppointmentDataStructure(reloadedApptForSync.toJSON(), false, null, true);
+
+        // Passo 3: Montar a mensagem final
+        const notificationMessage = `${creativeIntro}\n\n` +
+                                    `${formattedDetails}\n\n` +
+                                    `Para aceitar e confirmar com o cliente, responda: *"confirmar agendamento ${reloadedApptForSync.id}"*.`;
+        
         await sendWhatsappMessage(ownerClient.phone, notificationMessage);
     }
 
@@ -411,13 +420,22 @@ async function deleteOrCancelAppointment(financialAccountId, appointmentId, actu
     });
 
     // Notificação para o BusinessClient em caso de cancelamento
-    if (!actuallyDelete && reloadedApptForNotify && account.accountType !== 'PF' && reloadedApptForNotify.businessClients.length > 0) {
-        for (const bClient of reloadedApptForNotify.businessClients) {
-            if (bClient.phone) {
-                const ownerName = reloadedApptForNotify.financialAccount.ownerClient.name;
-                const message = `❌ *Agendamento Cancelado*\n\nOlá, ${bClient.name}! O seu agendamento "${reloadedApptForNotify.title}" com ${ownerName} para ${formatter.formatDate(reloadedApptForNotify.eventDateTime)} foi cancelado. Para mais detalhes, por favor, entre em contato.`;
-                await sendWhatsappMessage(bClient.phone, message);
-            }
+if (!actuallyDelete && reloadedApptForNotify && account.accountType !== 'PF' && reloadedApptForNotify.businessClients.length > 0) {
+            for (const bClient of reloadedApptForNotify.businessClients) {
+                if (bClient.phone) {
+                    const providerName = reloadedApptForNotify.financialAccount.accountName || reloadedApptForNotify.financialAccount.ownerClient.name;
+
+                    // Gerar a mensagem de cancelamento com a IA
+                    const cancellationMessage = await aiModelService.generateClientCancellationMessage(providerName, bClient.name, reloadedApptForNotify.toJSON());
+
+                    const finalMessage = `${cancellationMessage}\n\n` +
+                                         `---\n` +
+                                         `Mensagem de *${providerName}* via MAP no Controle.`;
+
+                    await sendWhatsappMessage(bClient.phone, finalMessage);
+                }
+            
+        
         }
     }
 
@@ -472,12 +490,23 @@ async function confirmAppointment(financialAccountId, appointmentId) {
         }
 
         // Notificar BusinessClient
-        if (confirmedAppointment.businessClients && confirmedAppointment.businessClients.length > 0) {
+   if (confirmedAppointment.businessClients && confirmedAppointment.businessClients.length > 0) {
             for (const bClient of confirmedAppointment.businessClients) {
                 if (bClient.phone) {
-                    const ownerName = account.ownerClient.name;
-                    const message = `✅ *Agendamento Confirmado!*\n\nOlá, ${bClient.name}! O seu agendamento "${confirmedAppointment.title}" com ${ownerName} para ${formatter.formatDate(confirmedAppointment.eventDateTime)} às ${formatter.formatTime(confirmedAppointment.eventDateTime)} foi confirmado. Até lá!`;
-                    await sendWhatsappMessage(bClient.phone, message);
+                    const providerName = account.accountName || account.ownerClient.name;
+                    
+                    // Passo 1: Gerar a mensagem criativa com a IA
+                    const creativeMessage = await aiModelService.generateClientConfirmationMessage(providerName, bClient.name, confirmedAppointment);
+
+                    // Passo 2: Formatar os detalhes
+                    const formattedDetails = formatter.formatAppointmentDataStructure(confirmedAppointment);
+                    
+                    // Passo 3: Montar a mensagem final com a "assinatura"
+                    const finalMessage = `${creativeMessage}\n\n${formattedDetails}\n\n` +
+                                         `---\n` +
+                                         `Esta é uma mensagem automática do sistema MAP no Controle em nome de *${providerName}*.`;
+
+                    await sendWhatsappMessage(bClient.phone, finalMessage);
                 }
             }
         }

@@ -96,45 +96,66 @@ function formatFinancialTransactionDataStructure(transaction) {
     return data.trim();
 }
 
-function formatAppointmentDataStructure(appointment, forReminder = false, clientNameForReminder = "Você") {
+function formatAppointmentDataStructure(appointment, forReminder = false, clientNameForReminder = "Você", isNotification = false) {
     if (!appointment) return "📅 Resumo do Compromisso:\n\nDados não disponíveis.";
+
     let introEmoji = "📅";
     let introText = "Resumo do Compromisso";
-    let forWhom = "";
-    if (appointment?.financialAccount?.client?.name && appointment.financialAccount.client.name.toLowerCase() !== 'unknown' && appointment.financialAccount.client.name.toLowerCase() !== 'null') {
-        forWhom = `(${appointment.financialAccount.client.name.split(" ")[0]})`;
-    } else if (clientNameForReminder && clientNameForReminder !== "Você") {
-        forWhom = `(${clientNameForReminder})`;
-    }
+
     if (forReminder) {
-        introEmoji = "🔔 LEMBRETE";
-        introText = `Compromisso Próximo ${forWhom}`; 
-    } else {
-        introText = `Resumo do Compromisso ${forWhom}`;
+        introEmoji = "🔔";
+        introText = `LEMBRETE DE COMPROMISSO`;
+    } else if (isNotification) {
+        introEmoji = "✨";
+        introText = `DETALHES DO NOVO AGENDAMENTO`;
     }
-    let data = `${introEmoji} ${introText}:\n\n`;
-    data += `💼 Título: *${appointment.title || 'N/A'}*\n`;
-    data += `📆 Data: ${formatDate(appointment.eventDateTime)}\n`;
-    data += `🕔 Horário: ${formatTime(appointment.eventDateTime)}\n`;
+
+    let data = `${introEmoji} *${introText}*\n\n`;
+
+    // Cliente(s)
+    if (appointment.businessClients && appointment.businessClients.length > 0) {
+        const clientNames = appointment.businessClients.map(c => c.name).join(', ');
+        data += `👤 *Cliente(s):* ${clientNames}\n`;
+    }
+
+    // Serviços e Valor Total
+    let totalValue = 0;
+    if (appointment.services && appointment.services.length > 0) {
+        data += `🛠️ *Serviço(s):*\n`;
+        appointment.services.forEach(service => {
+            const price = parseFloat(service.priceAtTimeOfBooking || service.price || 0);
+            totalValue += price;
+            data += `  - ${service.name} (${formatCurrency(price)})\n`;
+        });
+        if (appointment.services.length > 1) {
+            data += `💰 *Valor Total:* ${formatCurrency(totalValue)}\n`;
+        }
+    } else {
+        // Fallback para o título se não houver serviços (agendamentos PF)
+        data += `🏷️ *Título:* ${appointment.title || 'N/A'}\n`;
+    }
+
+    // Data, Horário e Duração
+    data += `🗓️ *Data:* ${formatDate(appointment.eventDateTime)}\n`;
+    data += `⏰ *Horário:* ${formatTime(appointment.eventDateTime)}\n`;
     if (appointment.durationMinutes) {
         const endTime = new Date(new Date(appointment.eventDateTime).getTime() + appointment.durationMinutes * 60000);
-        data += `🕔 Término Estimado: ${formatTime(endTime)}\n`;
+        data += `⏳ *Duração:* ${appointment.durationMinutes} minutos (até aprox. ${formatTime(endTime)})\n`;
     }
-    if (appointment.location) {
-        data += `📍 Local: ${appointment.location}\n`;
-    }
+    
+    // Status
     if (appointment.status) {
-        data += `🚦 Status: ${translateStatus(appointment.status)}\n`;
+        data += `🚦 *Status:* ${translateStatus(appointment.status)}\n`;
     }
-    if (appointment.associatedValue && appointment.associatedTransactionType) {
-        data += `💰 Valor Associado: ${formatCurrency(appointment.associatedValue)} (${appointment.associatedTransactionType})\n`;
-    }
-    if (appointment.businessClients && appointment.businessClients.length > 0) {
-        data += `👥 Clientes Associados: ${appointment.businessClients.map(c => c.name).join(', ')}\n`;
+
+    // Localização e Notas
+    if (appointment.location) {
+        data += `📍 *Local:* ${appointment.location}\n`;
     }
     if (appointment.notes) {
-        data += `🗒️ Observações: ${appointment.notes}\n`;
+        data += `🗒️ *Observações:* ${appointment.notes}\n`;
     }
+
     return data.trim();
 }
 

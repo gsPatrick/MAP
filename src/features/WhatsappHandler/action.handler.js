@@ -734,35 +734,48 @@ case 'GET_PROVIDER_PUBLIC_INFO': {
                 break;
             }
 
-            case 'LIST_APPOINTMENTS': {
-                try {
-                    const filterParamsAppt = {
-                        dateStart: params.dateStart, dateEnd: params.dateEnd, status: params.status,
-                        limit: params.limit || 5, page: params.page || 1,
-                    };
-                    
-                    const { appointments, totalItems: totalAppts } = await appointmentService.getAllAppointments(state.activeFinancialAccountId, filterParamsAppt, params.period);
+case 'LIST_APPOINTMENTS': {
+    try {
+        const filterParamsAppt = {
+            dateStart: params.dateStart, dateEnd: params.dateEnd, status: params.status,
+            limit: params.limit || 5, page: params.page || 1,
+            period: params.period || 'proximos_7_dias'
+        };
+        
+        const { appointments, totalItems: totalAppts, periodDescription } = await appointmentService.getAllAppointments(state.activeFinancialAccountId, filterParamsAppt);
 
-                    if (totalAppts === 0) {
-                        formattedData = "Nenhum compromisso encontrado para os filtros. 👍\nQue tal agendar um novo?";
-                    } else {
-                        let listTextAppt = `📅 Encontrei ${totalAppts} compromissos. Os ${appointments.length > 1 ? appointments.length + " " : ""}próximos são:\n`;
-                        for (const appt of appointments) {
-                            listTextAppt += `\n🗓️ *${appt.title}* - ${formatter.formatDate(appt.eventDateTime)} às ${formatter.formatTime(appt.eventDateTime, false)}`;
-                            if (appt.status) listTextAppt += ` (Status: ${formatter.translateStatus(appt.status)})`;
-                            listTextAppt += ` (ID: ${appt.id})`;
-                        }
-                        formattedData = listTextAppt.trim();
-                        if (totalAppts > appointments.length) {
-                            formattedData += `\n\nE mais ${totalAppts - appointments.length} compromissos. Peça para ver mais ou veja tudo na plataforma!`;
-                        }
-                    }
-                } catch (e) {
-                    logger.error(`[ACTION HANDLER] Erro em LIST_APPOINTMENTS: ${e.message}`, { error: e, paramsUsed: params });
-                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui listar os compromissos.\nDetalhe: ${e.message}`;
-                }
-                break;
+        if (totalAppts === 0) {
+            // A IA vai gerar a resposta para "nenhum agendamento"
+            // Para garantir isso, podemos passar um array vazio para a IA
+            const creativeResponse = await aiModelService.generateCreativeAgendaResponse(clientNameToUse, [], periodDescription);
+            formattedData = creativeResponse.overall_summary || `Você não tem nenhum compromisso para *${periodDescription}*. 👍`;
+        } else {
+            // Passo 1: Pedir à IA para gerar as frases criativas
+            const creativeResponse = await aiModelService.generateCreativeAgendaResponse(clientNameToUse, appointments, periodDescription);
+
+            // Passo 2: Montar os blocos de dados detalhados
+            const appointmentDetails = appointments.map((appt, index) => {
+                const formattedBlock = formatter.formatAppointmentDataStructure(appt);
+                // Pega a frase individual correspondente gerada pela IA
+                const individualPhrase = creativeResponse.individual_phrases[index] || "Fique de olho neste compromisso!";
+                return `${formattedBlock}\n_${individualPhrase}_`;
+            });
+
+            // Passo 3: Juntar tudo
+            let finalResponse = `${creativeResponse.overall_summary}\n\n` + appointmentDetails.join("\n\n---\n\n");
+
+            if (totalAppts > appointments.length) {
+                finalResponse += `\n\nE mais ${totalAppts - appointments.length} compromisso(s). Peça para ver mais ou veja tudo na plataforma!`;
             }
+            
+            formattedData = finalResponse.trim();
+        }
+    } catch (e) {
+        logger.error(`[ACTION HANDLER] Erro em LIST_APPOINTMENTS: ${e.message}`, { error: e, paramsUsed: params });
+        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui listar os compromissos.\nDetalhe: ${e.message}`;
+    }
+    break;
+}
 
             case 'LIST_CREDIT_CARDS': {
                 try {
@@ -2141,22 +2154,31 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
             // AÇÕES DE CICLO DE VIDA DO AGENDAMENTO (PJ/MEI)
             // =================================================================
 
-            case 'CONFIRM_APPOINTMENT': {
-                try {
-                    const appointmentId = params.appointmentId ? parseInt(params.appointmentId, 10) : null;
-                    if (!appointmentId) {
-                        throw { statusCode: 400, message: "Preciso do ID do agendamento para confirmá-lo." };
-                    }
-                    
-                    const confirmedAppointment = await appointmentService.confirmAppointment(state.activeFinancialAccountId, appointmentId);
-                    formattedData = `✅ Agendamento ID ${confirmedAppointment.id} ("${confirmedAppointment.title}") confirmado com sucesso!\n\nSeu cliente será notificado.`;
+      case 'CONFIRM_APPOINTMENT': {
+    try {
+        const appointmentId = params.appointmentId ? parseInt(params.appointmentId, 10) : null;
+        if (!appointmentId) {
+            throw { statusCode: 400, message: "Preciso do ID do agendamento para confirmá-lo." };
+        }
+        
+        const confirmedAppointment = await appointmentService.confirmAppointment(state.activeFinancialAccountId, appointmentId);
+        
+        // Passo 1: Gerar a resposta criativa e motivacional com a IA
+        const creativeResponse = await aiModelService.generateBookingConfirmationResponse(clientNameToUse, confirmedAppointment);
 
-                } catch (e) {
-                    logger.error(`[ACTION HANDLER] Erro em CONFIRM_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
-                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui confirmar o agendamento.\nDetalhe: ${e.message}`;
-                }
-                break;
-            }
+        // Passo 2: Formatar os detalhes para anexo
+        const formattedDetails = formatter.formatAppointmentDataStructure(confirmedAppointment);
+
+        // Passo 3: Juntar tudo
+        formattedData = `${creativeResponse}\n\n${formattedDetails}`;
+
+    } catch (e) {
+        logger.error(`[ACTION HANDLER] Erro em CONFIRM_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
+        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui confirmar o agendamento.\nDetalhe: ${e.message}`;
+    }
+    break;
+}
+
 
             case 'COMPLETE_APPOINTMENT': {
                 try {

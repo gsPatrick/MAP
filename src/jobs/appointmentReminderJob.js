@@ -67,16 +67,16 @@ async function sendBusinessAccountReminders() {
         if (appointments24h.length > 0) {
             logger.info(`[JOB LEMBRETE - PJ/MEI] ${appointments24h.length} compromissos encontrados para lembrete de 24h.`);
             for (const app of appointments24h) {
-                const ownerName = app.financialAccount.ownerClient.name;
-                const message = `👋 *Lembrete de Agendamento (24h)*\n\nOlá! Este é um lembrete do seu compromisso com *${ownerName}* amanhã.\n\n` +
-                                `*Serviço:* ${app.title}\n` +
-                                `*Data:* ${formatter.formatDate(app.eventDateTime)}\n` +
-                                `*Horário:* ${formatter.formatTime(app.eventDateTime)}\n\n` +
-                                `Caso precise reagendar, por favor, entre em contato. Até breve!`;
-
+                const providerName = app.financialAccount.accountName || app.financialAccount.ownerClient.name;
                 for (const bClient of app.businessClients) {
                     if (bClient.phone) {
-                        const sent = await sendWhatsappMessage(bClient.phone, message);
+                        // <<< INÍCIO DA MUDANÇA >>>
+                        const creativeMessage = await aiModelService.generateClientReminderMessage(providerName, bClient.name, app.toJSON(), "24 horas");
+                        const formattedDetails = formatter.formatAppointmentDataStructure(app.toJSON(), true);
+                        const finalMessage = `${creativeMessage}\n\n${formattedDetails}\n\n---\nLembrete de *${providerName}* via MAP no Controle.`;
+                        
+                        const sent = await sendWhatsappMessage(bClient.phone, finalMessage);
+                        // <<< FIM DA MUDANÇA >>>
                         if (sent) {
                             logger.info(`[JOB LEMBRETE - PJ/MEI] Lembrete de 24h para Appt ID ${app.id} enviado para BusinessClient ${bClient.name} (${bClient.phone}).`);
                         }
@@ -95,15 +95,16 @@ async function sendBusinessAccountReminders() {
         if (appointments30min.length > 0) {
             logger.info(`[JOB LEMBRETE - PJ/MEI] ${appointments30min.length} compromissos encontrados para lembrete de 30min.`);
             for (const app of appointments30min) {
-                const ownerName = app.financialAccount.ownerClient.name;
-                const message = `⏰ *Seu Agendamento é em 30 Minutos!*\n\nOlá! Passando para lembrar que seu compromisso com *${ownerName}* está chegando.\n\n` +
-                                `*Serviço:* ${app.title}\n` +
-                                `*Horário:* ${formatter.formatTime(app.eventDateTime)}\n\n` +
-                                `Nos vemos em breve!`;
-
+                const providerName = app.financialAccount.accountName || app.financialAccount.ownerClient.name;
                 for (const bClient of app.businessClients) {
                     if (bClient.phone) {
-                        const sent = await sendWhatsappMessage(bClient.phone, message);
+                        // <<< INÍCIO DA MUDANÇA >>>
+                        const creativeMessage = await aiModelService.generateClientReminderMessage(providerName, bClient.name, app.toJSON(), "30 minutos");
+                        const formattedDetails = formatter.formatAppointmentDataStructure(app.toJSON(), true);
+                        const finalMessage = `${creativeMessage}\n\n${formattedDetails}\n\n---\nLembrete de *${providerName}* via MAP no Controle.`;
+
+                        const sent = await sendWhatsappMessage(bClient.phone, finalMessage);
+                        // <<< FIM DA MUDANÇA >>>
                          if (sent) {
                             logger.info(`[JOB LEMBRETE - PJ/MEI] Lembrete de 30min para Appt ID ${app.id} enviado para BusinessClient ${bClient.name} (${bClient.phone}).`);
                         }

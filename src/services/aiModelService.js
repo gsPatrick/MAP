@@ -222,15 +222,6 @@ Quando uma ou mais ações forem detectadas e executadas com sucesso, sua respos
     *   **Conselho sobre Cartão (para gastos no cartão):** "Gasto no cartão registrado com sucesso! Lembre-se que a qualquer momento você pode me pedir para 'ver a fatura aberta do cartão [nome do cartão]' para acompanhar o total e não ter surpresas no fim do mês."
     *   **Conselho sobre Categoria (APENAS E SOMENTE SE NENHUMA CATEGORIA FOI APLICADA):** "Registrei sua transferência. Para um controle ainda mais fino, que tal criarmos uma categoria para isso, como 'Ajuda Familiar'? Para criar, é só dizer 'criar categoria Ajuda Familiar'. Isso vai te dar uma visão incrível de onde seu dinheiro está indo."
 
-**REGRA DE OURO PARA RESPOSTAS DE CONSULTA (Ações GET_* e LIST_*)**
-*   Para ações que apenas **buscam e listam** informações (como \`GET_FINANCIAL_SUMMARY\`, \`LIST_CREDIT_CARDS\`, \`GET_PROVIDER_PUBLIC_INFO\`), sua tarefa é mais simples.
-*   **NÃO** use a estrutura de 3 partes (UAU! + PONTE + OURO). Em vez disso, o campo \`overall_summary_suggestion\` deve conter apenas uma **frase de transição curta e direta**. O sistema se encarregará de adicionar os dados formatados.
-*   **Exemplos de \`overall_summary_suggestion\` para consultas:**
-    *   Para \`GET_PROVIDER_PUBLIC_INFO\`: "Com certeza! Aqui estão as informações da sua página pública:"
-    *   Para \`LIST_CREDIT_CARDS\`: "Prontinho! Aqui está a lista dos seus cartões de crédito:"
-    *   Para \`GET_FINANCIAL_SUMMARY\`: "Ok! Preparei o resumo financeiro que você pediu:"
-    *   Para \`GET_AGENDA_VIEW\`: "Claro! Segue sua agenda para o período solicitado:"
-
 **JUNTANDO TUDO NO \`overall_summary_suggestion\`:**
 
 O conteúdo que você deve colocar no campo \`overall_summary_suggestion\` é a **junção da Parte 1 e da Parte 3**, separadas por uma quebra de linha.
@@ -1031,9 +1022,312 @@ Você receberá um objeto com \`clientName\`, e arrays para \`pendingTransaction
   }
 }
 
+async function generateCreativeAgendaResponse(clientName, appointments, periodDescription) {
+  if (!OPENAI_API_KEY) {
+    logger.error('[AI SERVICE - Agenda] OPENAI_API_KEY não configurada.');
+    return {
+      overall_summary: `Aqui estão seus agendamentos para ${periodDescription}:`,
+      individual_phrases: appointments.map(() => "Fique de olho neste compromisso!")
+    };
+  }
+
+  const systemPrompt = `
+Você é o "${ASSISTANT_NAME}", um assistente de negócios e produtividade para WhatsApp. Sua personalidade é a de um coach: EXTREMAMENTE amigável, proativo, motivador e um pouco brincalhão.
+
+Sua tarefa é receber uma lista de agendamentos em JSON e gerar duas coisas:
+1.  **overall_summary:** Uma análise geral e criativa sobre a agenda do período. Comente sobre o volume de trabalho (se a semana está cheia ou tranquila), parabenize por ter clientes, ou dê uma dica geral de organização.
+2.  **individual_phrases:** Um array de strings, onde cada string é uma frase curta, carismática e única para CADA agendamento da lista, na mesma ordem. A frase deve ser inspirada nos detalhes do agendamento (nome do cliente, serviço, status).
+
+**REGRAS DE OURO:**
+-   **Seja Específico:** Se um agendamento é para "Corte de Cabelo" com "João", a frase pode ser "Tudo pronto para deixar o João com o visual em dia! 💇‍♂️".
+-   **Seja Proativo:** Se o status for "Scheduled", a frase pode ser "Este está aguardando sua confirmação. Que tal dar um OK para o cliente?".
+-   **Seja Variado:** NUNCA repita a mesma frase. Crie algo único para cada item.
+-   **Formato da Resposta:** A sua resposta DEVE ser um objeto JSON com as chaves "overall_summary" e "individual_phrases".
+
+**Exemplo de Entrada (Dados Simplificados):**
+[
+  { "client": "João Silva", "service": "Corte de Cabelo", "status": "Confirmed" },
+  { "client": "Maria Souza", "service": "Manicure", "status": "Scheduled" }
+]
+
+**Exemplo de Saída JSON Esperada:**
+{
+  "overall_summary": "Uau, ${clientName}, sua semana está começando a ficar movimentada! Ótimo ver seus clientes agendando. Manter a agenda organizada é o segredo para um negócio de sucesso! 🚀",
+  "individual_phrases": [
+    "Tudo certo para o encontro com o João Silva. Vai ser um sucesso!",
+    "Este agendamento com a Maria Souza ainda precisa da sua confirmação. Um toque seu e ela ficará super feliz!"
+  ]
+}
+`;
+
+  const simplifiedAppointments = appointments.map(appt => ({
+    client: appt.businessClients?.map(c => c.name).join(', ') || 'Pessoal',
+    service: appt.services?.map(s => s.name).join(' + ') || appt.title,
+    status: appt.status,
+    value: appt.services?.reduce((sum, s) => sum + parseFloat(s.price || 0), 0) || 0
+  }));
+
+  const userPrompt = `
+    Gere a análise da agenda e as frases individuais para o cliente '${clientName}' para o período '${periodDescription}'.
+    Dados dos agendamentos:
+    ${JSON.stringify(simplifiedAppointments, null, 2)}
+  `;
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0.8,
+      response_format: { type: "json_object" },
+    });
+
+    const aiResultContent = completion.choices[0].message.content;
+    const parsedResult = JSON.parse(aiResultContent);
+
+    if (parsedResult.individual_phrases && parsedResult.individual_phrases.length === appointments.length) {
+        return parsedResult;
+    } else {
+        throw new Error("A resposta da IA não continha o número correto de frases individuais.");
+    }
+
+  } catch (error) {
+    logger.error(`[AI SERVICE - Agenda] Erro ao gerar resposta criativa para agenda: ${error.message}`);
+    // Retorna um objeto de fallback em caso de erro
+    return {
+      overall_summary: `Aqui estão seus agendamentos para ${periodDescription}:`,
+      individual_phrases: appointments.map(() => "Fique de olho neste compromisso!")
+    };
+  }
+}
+
+async function generateNewBookingNotification(ownerName, appointmentDetails) {
+  const systemPrompt = `
+Você é o "${ASSISTANT_NAME}", um assistente de negócios. Sua personalidade é a de um secretário particular: eficiente, proativo e ligeiramente formal, mas sempre amigável.
+
+Sua tarefa é criar uma frase de introdução para uma notificação de um NOVO AGENDAMENTO recebido pelo dono da conta. A frase deve ser curta, profissional e contextual ao serviço agendado.
+
+**REGRAS:**
+- Use o nome do dono da conta (${ownerName}).
+- Inspire-se nos detalhes do agendamento (cliente, serviço, valor).
+- A frase deve terminar de forma que a lista de detalhes do agendamento se encaixe naturalmente depois.
+
+**Exemplo de Entrada (Dados Simplificados):**
+{ "client": "João Silva", "service": "Corte de Cabelo", "value": 30 }
+
+**Exemplo de Saída (Apenas a string da frase):**
+"Ótima notícia, ${ownerName}! Um novo agendamento para Corte de Cabelo foi solicitado pelo cliente João Silva. Seguem os detalhes para sua aprovação:"
+`;
+
+  const simplifiedAppointment = {
+    client: appointmentDetails.businessClients?.map(c => c.name).join(', ') || 'Cliente',
+    service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
+    value: appointmentDetails.services?.reduce((sum, s) => sum + parseFloat(s.price || 0), 0) || 0
+  };
+
+  const userPrompt = `Gere a frase de notificação para o dono da conta '${ownerName}'. Detalhes do agendamento: ${JSON.stringify(simplifiedAppointment)}`;
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0.7,
+    });
+    return completion.choices[0].message.content;
+  } catch (error) {
+    logger.error(`[AI SERVICE - NewBooking] Erro ao gerar notificação: ${error.message}`);
+    return `🔔 *Novo Agendamento Recebido!*\n\nOlá, ${ownerName}! Um novo serviço foi agendado na sua conta.`;
+  }
+}
+
+async function generateBookingConfirmationResponse(ownerName, appointmentDetails) {
+  const systemPrompt = `
+Você é o "${ASSISTANT_NAME}", um assistente de negócios. Sua personalidade é a de um coach de sucesso: motivador, positivo e focado no crescimento do negócio do cliente.
+
+Sua tarefa é criar uma MENSAGEM DE CONFIRMAÇÃO para o dono da conta, que acabou de confirmar um agendamento. A mensagem deve ser inspiradora e dar uma dica ou fazer um comentário estratégico sobre o agendamento.
+
+**REGRAS:**
+- Use o nome do dono da conta (${ownerName}).
+- A mensagem deve celebrar a confirmação e olhar para o futuro (o sucesso do serviço).
+- Dê uma dica relevante. Se for um serviço de alto valor, fale sobre a importância do cliente. Se for um cliente recorrente (não temos esse dado, mas você pode inferir), fale sobre fidelização.
+
+**Exemplo de Entrada (Dados Simplificados):**
+{ "client": "Empresa X", "service": "Consultoria Estratégica", "value": 500 }
+
+**Exemplo de Saída (Apenas a string da mensagem):**
+"Excelente, ${ownerName}! Agendamento confirmado e mais um passo dado para o sucesso. Lembre-se que um serviço de consultoria bem executado não só resolve o problema do cliente, mas também abre portas para parcerias futuras. Prepare-se para brilhar! ✨"
+`;
+
+  const simplifiedAppointment = {
+    client: appointmentDetails.businessClients?.map(c => c.name).join(', ') || 'Cliente',
+    service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
+    value: appointmentDetails.services?.reduce((sum, s) => sum + parseFloat(s.price || 0), 0) || 0
+  };
+
+  const userPrompt = `Gere a mensagem de confirmação para o dono da conta '${ownerName}'. Detalhes do agendamento confirmado: ${JSON.stringify(simplifiedAppointment)}`;
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0.8,
+    });
+    return completion.choices[0].message.content;
+  } catch (error) {
+    logger.error(`[AI SERVICE - Confirmation] Erro ao gerar confirmação: ${error.message}`);
+    return `✅ Agendamento confirmado com sucesso, ${ownerName}!`;
+  }
+}
+
+async function generateClientConfirmationMessage(providerName, clientName, appointmentDetails) {
+  const systemPrompt = `
+Você é o "${ASSISTANT_NAME}", um assistente de agendamentos que trabalha para o(a) ${providerName}. Sua personalidade é profissional, clara e muito cordial.
+
+Sua tarefa é criar uma MENSAGEM DE CONFIRMAÇÃO para o cliente final (${clientName}) que acabou de ter seu agendamento confirmado por ${providerName}.
+
+**REGRAS:**
+- A mensagem deve ser otimista e confirmar o compromisso.
+- Mencione o serviço principal para contextualizar.
+- Termine com uma frase amigável, como "Até lá!" ou "Estamos ansiosos para recebê-lo(a)!".
+
+**Exemplo de Entrada (Dados Simplificados):**
+{ "service": "Corte de Cabelo" }
+
+**Exemplo de Saída (Apenas a string da mensagem):**
+"Olá, ${clientName}! Ótimas notícias! 🎉 Seu agendamento para Corte de Cabelo com ${providerName} foi confirmado. Já está tudo certo e anotado na agenda. Até lá!"
+`;
+
+  const simplifiedAppointment = {
+    service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
+  };
+
+  const userPrompt = `Gere a mensagem de confirmação para o cliente '${clientName}'. Detalhes: ${JSON.stringify(simplifiedAppointment)}`;
+
+  try {
+    const completion = await openai.chat.completions.create({ model: "gpt-4o", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.7 });
+    return completion.choices[0].message.content;
+  } catch (error) {
+    logger.error(`[AI SERVICE - ClientConfirm] Erro: ${error.message}`);
+    return `Olá, ${clientName}! Seu agendamento com ${providerName} foi confirmado.`;
+  }
+}
+
+async function generateClientReminderMessage(providerName, clientName, appointmentDetails, timeFrame) {
+  const systemPrompt = `
+Você é o "${ASSISTANT_NAME}", um assistente de agendamentos que trabalha para o(a) ${providerName}. Sua personalidade é prestativa, amigável e eficiente.
+
+Sua tarefa é criar uma MENSAGEM DE LEMBRETE para o cliente final (${clientName}). A mensagem deve lembrá-lo de seu compromisso que acontecerá em ${timeFrame}.
+
+**REGRAS:**
+- Seja caloroso e direto.
+- Mencione o serviço principal para que o cliente se lembre do que se trata.
+- Se o tempo for "24 horas", você pode sugerir que ele se prepare. Se for "30 minutos", a mensagem deve criar um senso de "está quase na hora".
+- Inclua uma frase sobre ${providerName} estar aguardando por ele(a).
+
+**Exemplo de Entrada (timeFrame: "24 horas"):**
+{ "service": "Consultoria Estratégica" }
+
+**Exemplo de Saída (Apenas a string da mensagem):**
+"Olá, ${clientName}! Passando para te lembrar do nosso encontro amanhã para a Consultoria Estratégica. ${providerName} está preparando tudo para uma sessão muito produtiva. Nos vemos em breve! 😉"
+`;
+
+  const simplifiedAppointment = {
+    service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
+  };
+
+  const userPrompt = `Gere a mensagem de lembrete de ${timeFrame} para o cliente '${clientName}'. Detalhes: ${JSON.stringify(simplifiedAppointment)}`;
+
+  try {
+    const completion = await openai.chat.completions.create({ model: "gpt-4o", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.7 });
+    return completion.choices[0].message.content;
+  } catch (error) {
+    logger.error(`[AI SERVICE - ClientReminder] Erro: ${error.message}`);
+    return `Olá, ${clientName}! Lembrete: você tem um agendamento com ${providerName} em ${timeFrame}.`;
+  }
+}
+
+async function generateClientCancellationMessage(providerName, clientName, appointmentDetails) {
+    const systemPrompt = `
+Você é o "${ASSISTANT_NAME}", um assistente de agendamentos que trabalha para o(a) ${providerName}. Sua personalidade é empática, profissional e prestativa.
+
+Sua tarefa é criar uma MENSAGEM DE CANCELAMENTO para o cliente final (${clientName}), informando que seu agendamento foi cancelado por ${providerName}.
+
+**REGRAS:**
+- Comece de forma suave, lamentando o ocorrido.
+- Deixe claro qual agendamento foi cancelado.
+- Sugira que o cliente entre em contato para mais detalhes ou para reagendar.
+
+**Exemplo de Entrada (Dados Simplificados):**
+{ "service": "Manicure e Pedicure" }
+
+**Exemplo de Saída (Apenas a string da mensagem):**
+"Olá, ${clientName}. Temos uma atualização sobre seu agendamento. Infelizmente, seu horário para Manicure e Pedicure com ${providerName} precisou ser cancelado. Pedimos desculpas por qualquer inconveniente. Por favor, entre em contato para mais detalhes ou para encontrar um novo horário. Agradecemos a compreensão."
+`;
+
+    const simplifiedAppointment = {
+        service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
+    };
+
+    const userPrompt = `Gere a mensagem de cancelamento para o cliente '${clientName}'. Detalhes: ${JSON.stringify(simplifiedAppointment)}`;
+
+    try {
+        const completion = await openai.chat.completions.create({ model: "gpt-4o", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.7 });
+        return completion.choices[0].message.content;
+    } catch (error) {
+        logger.error(`[AI SERVICE - ClientCancel] Erro: ${error.message}`);
+        return `Olá, ${clientName}. Informamos que seu agendamento com ${providerName} foi cancelado. Para mais detalhes, por favor, entre em contato.`;
+    }
+}
+
+async function generateAlertsIntro(clientName, accountName, alertTypes) {
+  const systemPrompt = `
+Você é o "${ASSISTANT_NAME}", um assistente de negócios proativo e vigilante. Sua personalidade é a de um "guardião" do negócio do cliente: atento, prestativo e direto ao ponto, mas sem ser alarmista.
+
+Sua tarefa é criar uma FRASE DE INTRODUÇÃO para uma mensagem de alerta. Você receberá os tipos de alertas encontrados (ex: ['due_dates', 'low_stock']). Sua frase deve resumir a situação de forma inteligente.
+
+**REGRAS:**
+- Use o nome do cliente (${clientName}) e o nome da conta (${accountName}).
+- Se houver mais de um tipo de alerta, combine-os em uma única frase.
+- O tom deve ser de "pontos de atenção", não de "problemas".
+
+**Exemplos de Entrada (alertTypes):**
+- ['due_dates'] -> "Olá, ${clientName}! Dei uma olhada na sua conta *${accountName}* e vi que há algumas contas vencendo em breve. Vamos dar uma olhada para você não perder nenhum prazo!"
+- ['low_stock'] -> "Epa, ${clientName}! Notei que o estoque de alguns produtos na sua conta *${accountName}* está baixo. É bom ficar de olho para não faltar na hora da venda!"
+- ['due_dates', 'low_stock'] -> "Atenção, ${clientName}! Encontrei alguns pontos importantes na sua conta *${accountName}* que merecem um olhar cuidadoso: contas próximas do vencimento e produtos com estoque baixo. Segue o resumo:"
+`;
+
+  const userPrompt = `Gere a introdução de alerta para o cliente '${clientName}', conta '${accountName}'. Tipos de alerta encontrados: ${JSON.stringify(alertTypes)}`;
+
+  try {
+    const completion = await openai.chat.completions.create({ model: "gpt-4o", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.7 });
+    return completion.choices[0].message.content;
+  } catch (error) {
+    logger.error(`[AI SERVICE - Alerts] Erro: ${error.message}`);
+    return `Epa, ${clientName}! 🕵️‍♂️ Dei uma olhadinha nos seus controles e encontrei alguns pontos de atenção para a conta *${accountName}*:`;
+  }
+}
+
+
+
 module.exports = {
   interpretUserMessage,
   ASSISTANT_NAME,
   transcribeAudioStream, 
-  generateMorningBriefingMessage
+  generateMorningBriefingMessage,
+  generateCreativeAgendaResponse,
+   generateNewBookingNotification,    // <<< ADICIONE ESTA LINHA
+  generateBookingConfirmationResponse,
+    generateBookingConfirmationResponse,
+  generateClientConfirmationMessage,     // <<< ADICIONE ESTA LINHA
+  generateClientReminderMessage,         // <<< ADICIONE ESTA LINHA
+  generateClientCancellationMessage,      // <<< ADICIONE ESTA LINHA
+generateAlertsIntro
 };

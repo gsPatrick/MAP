@@ -104,8 +104,18 @@ async function checkAndSendAlerts() {
         }
 
         // Enviar alertas acumulados para o cliente desta conta
-        if (alertSections.length > 0) {
-          const intro = `Epa, ${clientFirstName}! 🕵️‍♂️ Dei uma olhadinha nos seus controles e encontrei alguns pontos de atenção para a conta *${account.accountName}*:`;
+if (alertSections.length > 0) {
+          // <<< INÍCIO DA MUDANÇA >>>
+          // Cria uma lista dos tipos de alerta encontrados para a IA
+          const alertTypesFound = [];
+          if (upcomingDues.length > 0) alertTypesFound.push('due_dates');
+          if (lowStockProducts && lowStockProducts.length > 0) alertTypesFound.push('low_stock');
+          if (account.accountType === 'MEI' && (alertSections.some(s => s.includes("Lembrete Fiscal")))) alertTypesFound.push('fiscal_reminder');
+          
+          // Chama a IA para gerar a introdução
+          const intro = await aiModelService.generateAlertsIntro(clientFirstName, account.accountName, alertTypesFound);
+          // <<< FIM DA MUDANÇA >>>
+          
           const body = alertSections.join('\n\n');
           const footer = `Qualquer coisa, é só me chamar! 😉`;
 
@@ -120,6 +130,7 @@ async function checkAndSendAlerts() {
           } else {
             logger.warn(`[JOB ALERTAS] Alertas gerados para conta ${account.accountName} mas sem destinatário (cliente sem tel e admin não configurado).`);
           }
+        }
         }
     }
      logger.info('[JOB ALERTAS] Verificação de alertas concluída.');
