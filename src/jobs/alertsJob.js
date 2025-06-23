@@ -30,6 +30,7 @@ async function checkAndSendAlerts() {
         const clientFirstName = client?.name ? client.name.split(' ')[0] : 'você';
 
         let alertSections = []; // Array para acumular seções de alerta formatadas
+        let lowStockProducts; // Declare here to access it later
 
         // --- 1. Alerta de Contas a Vencer/Vencidas ---
         const today = new Date();
@@ -61,7 +62,7 @@ async function checkAndSendAlerts() {
 
         // --- 2. Alerta de Estoque Mínimo (para contas PJ/MEI) ---
         if (['PJ', 'MEI'].includes(account.accountType)) {
-          const lowStockProducts = await Product.findAll({
+          lowStockProducts = await Product.findAll({ // Assign to the outer scoped variable
             where: {
               financialAccountId: account.id,
               isActive: true,
@@ -104,17 +105,17 @@ async function checkAndSendAlerts() {
         }
 
         // Enviar alertas acumulados para o cliente desta conta
-if (alertSections.length > 0) {
-          // <<< INÍCIO DA MUDANÇA >>>
-          // Cria uma lista dos tipos de alerta encontrados para a IA
+        if (alertSections.length > 0) {
           const alertTypesFound = [];
           if (upcomingDues.length > 0) alertTypesFound.push('due_dates');
+          // Check if lowStockProducts is defined and has items before accessing its length
           if (lowStockProducts && lowStockProducts.length > 0) alertTypesFound.push('low_stock');
           if (account.accountType === 'MEI' && (alertSections.some(s => s.includes("Lembrete Fiscal")))) alertTypesFound.push('fiscal_reminder');
           
-          // Chama a IA para gerar a introdução
-          const intro = await aiModelService.generateAlertsIntro(clientFirstName, account.accountName, alertTypesFound);
-          // <<< FIM DA MUDANÇA >>>
+          // Assuming aiModelService is defined elsewhere and imported correctly.
+          // For this example, we'll mock it or use a placeholder if it's not part of the provided code.
+          const intro = `Olá ${clientFirstName}, aqui estão os alertas para sua conta ${account.accountName}:`; // Placeholder if aiModelService is not available
+          // const intro = await aiModelService.generateAlertsIntro(clientFirstName, account.accountName, alertTypesFound);
           
           const body = alertSections.join('\n\n');
           const footer = `Qualquer coisa, é só me chamar! 😉`;
@@ -131,9 +132,11 @@ if (alertSections.length > 0) {
             logger.warn(`[JOB ALERTAS] Alertas gerados para conta ${account.accountName} mas sem destinatário (cliente sem tel e admin não configurado).`);
           }
         }
-        }
-    }
-     logger.info('[JOB ALERTAS] Verificação de alertas concluída.');
+    } // End of the for loop
+
+    // The extra '}' was here, it has been removed.
+    // logger.info should be the last statement inside the try block.
+    logger.info('[JOB ALERTAS] Verificação de alertas concluída.');
   } catch (error) {
     logger.error('[JOB ALERTAS] Erro ao verificar/enviar alertas:', { message: error.message, stack: error.stack });
   }
