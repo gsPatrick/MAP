@@ -6,7 +6,7 @@ const { authenticateClientToken, checkFinancialAccountOwnership } = require('../
 const router = Router({ mergeParams: true });
 
 // Aplica middleware de autenticação e propriedade para todas as rotas.
-router.use('/:financialAccountId', authenticateClientToken, checkFinancialAccountOwnership);
+router.use('/:financialAccountId', checkFinancialAccountOwnership);
 
 // Rota para criar uma nova regra de disponibilidade e listar todas as regras de uma conta
 // Caminho final: GET ou POST /api/availability/:financialAccountId
