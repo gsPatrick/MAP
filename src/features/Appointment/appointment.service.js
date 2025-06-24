@@ -7,6 +7,7 @@ const businessClientService = require('../BusinessClient/BusinessClient.service'
 const financialService = require('../Financial/financial.service'); // Adicionado
 const { sendWhatsappMessage } = require('../../services/whatsappService'); // Adicionado
 const formatter = require('../WhatsappHandler/response.formatter'); // Adicionado
+const aiModelService = require('../../services/aiModelService');
 const { RRule } = require('rrule'); 
 
 
@@ -434,7 +435,7 @@ if (!actuallyDelete && reloadedApptForNotify && account.accountType !== 'PF' && 
 
                     await sendWhatsappMessage(bClient.phone, finalMessage);
                 }
-            
+                
         
         }
     }
