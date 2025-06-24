@@ -12,7 +12,7 @@ const { Op, fn, col, literal } = require('sequelize');
 const logger = require('../../utils/logger');
 const { calculateNextDueDate } = require('../../utils/dateUtils');
 const creditCardService = require('../CreditCardManagement/creditCard.service');
-const { formatDate, formatCurrency } = require('../../utils/formatters'); // <<< ADICIONE ESTA LINHA
+const { formatDate, formatCurrency } = require('../../utils/formatters'); // <<< LINHA ADICIONADA
 
 
 async function validateAndGetFinancialAccount(financialAccountId, transaction = null, include = []) {

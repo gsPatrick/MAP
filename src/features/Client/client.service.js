@@ -1,13 +1,8 @@
 // src/features/Client/client.service.js
-// <<< CORREÇÃO: Importado 'FinancialCategory' em vez de 'Category' >>>
 const { Client, FinancialAccount, FinancialCategory, sequelize } = require('../../database');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
-const crypto = require('node:crypto'); // <<<< ADICIONE ESTA LINHA AQUI
-
-
-
-// <<< INÍCIO DA MODIFICAÇÃO: DEFINIÇÃO DAS CATEGORIAS PADRÃO POR TIPO DE CONTA >>>
+const crypto = require('node:crypto'); 
 
 // Lista de categorias para Contas Pessoais (PF)
 const defaultPersonalCategoryNames = [
@@ -35,7 +30,6 @@ const defaultBusinessCategoryNames = [
 
 
 /**
- * <<< MODIFICAÇÃO: Nova função auxiliar para criar categorias padrão >>>
  * Cria as categorias padrão para uma nova conta financeira com base em seu tipo.
  * @param {number} financialAccountId - O ID da conta financeira.
  * @param {string} accountType - O tipo da conta ('PF', 'PJ', 'MEI').
@@ -51,20 +45,17 @@ async function createDefaultCategoriesForAccount(financialAccountId, accountType
         categoryNames = defaultBusinessCategoryNames;
     } else {
         logger.warn(`Tipo de conta '${accountType}' não tem categorias padrão definidas. Nenhuma categoria será criada.`);
-        return; // Não há categorias para este tipo de conta
+        return; 
     }
 
-    // <<< CORREÇÃO: Removida a lógica do campo 'type' que não existe mais no modelo FinancialCategory >>>
     const categoriesToCreate = categoryNames.map(name => {
         return {
             financialAccountId: financialAccountId,
             name: name,
-            // O campo 'type' foi removido do objeto de criação.
         };
     });
 
     if (categoriesToCreate.length > 0) {
-        // <<< CORREÇÃO: Usando 'FinancialCategory.bulkCreate' em vez de 'Category.bulkCreate' >>>
         await FinancialCategory.bulkCreate(categoriesToCreate, { transaction });
         logger.info(`${categoriesToCreate.length} categorias padrão do tipo '${accountType}' criadas com sucesso para a conta ID ${financialAccountId}.`);
     }
@@ -74,24 +65,20 @@ async function createDefaultCategoriesForAccount(financialAccountId, accountType
 /**
  * Busca um Client (contato WhatsApp) pelo número de telefone.
  * @param {string} phone - Número de telefone.
- * @returns {Promise<object|null>} O Client encontrado (toJSON) ou null.
+ * @returns {Promise<object|null>} O Client encontrado (instância Sequelize) ou null.
  */
 async function findClientByPhone(phone) {
   if (!phone) return null;
   const normalizedPhone = phone.replace(/\D/g, '');
   try {
-    // CORREÇÃO: Usamos .scope('withPassword') para incluir o passwordHash na consulta.
     const client = await Client.scope('withPassword').findOne({ where: { phone: normalizedPhone } });
-    
-    // Retorna o objeto completo para que a lógica de verificação de estado funcione.
-    // O toJSON() é chamado depois pelo serviço de whatsapp se necessário.
-    return client; // Retorna a instância do Sequelize diretamente
+    return client; 
   } catch (error) {
     logger.error(`Erro ao buscar cliente por telefone ${normalizedPhone}: ${error.message}`, { error });
     throw error;
   }
 }
-// --- FUNÇÃO DE DEBUG MODIFICADA ---
+
 /**
  * ATENÇÃO: Função de debug para listar todos os CLIENTES com dados de afiliado.
  * @returns {Promise<Array<object>>} Lista de clientes com detalhes.
@@ -102,9 +89,9 @@ async function getClientsForDebug() {
       include: [
         {
           model: Client,
-          as: 'referrer', // Inclui o modelo Client novamente, usando o alias 'referrer'
-          attributes: ['name', 'affiliateCode'], // Pega apenas o nome e o código de afiliado do indicador
-          required: false // Usa LEFT JOIN para não excluir clientes que não foram indicados
+          as: 'referrer', 
+          attributes: ['name', 'affiliateCode'], 
+          required: false 
         }
       ],
       order: [['id', 'ASC']],
@@ -122,11 +109,11 @@ async function getClientsForDebug() {
         plano_acesso: clientJSON.accessLevel,
         plano_expira_em: clientJSON.accessExpiresAt,
         status: clientJSON.status,
-        meu_codigo_afiliado: clientJSON.affiliateCode, // O código do próprio cliente
+        meu_codigo_afiliado: clientJSON.affiliateCode, 
         saldo_comissao: clientJSON.balance,
         indicado_por_id: clientJSON.referredByClientId,
-        indicado_por_nome: clientJSON.referrer ? clientJSON.referrer.name : null, // Nome do indicador
-        codigo_do_indicador: clientJSON.referrer ? clientJSON.referrer.affiliateCode : null, // Código do indicador
+        indicado_por_nome: clientJSON.referrer ? clientJSON.referrer.name : null, 
+        codigo_do_indicador: clientJSON.referrer ? clientJSON.referrer.affiliateCode : null, 
       };
     });
 
@@ -155,21 +142,15 @@ async function findOrCreateClientByPhone(phone, defaultData = {}) {
     });
 
     if (client) {
-      // ===== INÍCIO DA LÓGICA DE PROTEÇÃO =====
-      // Se o cliente já tem um nome e email definidos, consideramos ele "completo".
-      // Não faremos nenhuma atualização para evitar apagar dados. Apenas o retornamos.
       if (client.name && client.email) {
         logger.info(`Cliente ${normalizedPhone} (ID: ${client.id}) já está totalmente configurado. Nenhuma atualização necessária.`);
         await t.commit();
         return client.toJSON();
       }
 
-      // Se chegamos aqui, o cliente existe mas é um "esqueleto" (pode não ter nome ou email).
-      // É seguro tentar preencher os dados faltantes com o que veio do WhatsApp.
       let clientNeedsUpdate = false;
       const updatePayload = {};
 
-      // Atualiza o nome apenas se o novo nome for mais completo ou se o atual for nulo.
       if (defaultData.name && defaultData.name.trim() !== "") {
         const existingNameWords = client.name ? client.name.split(' ').length : 0;
         const newNameWords = defaultData.name.split(' ').length;
@@ -179,7 +160,6 @@ async function findOrCreateClientByPhone(phone, defaultData = {}) {
         }
       }
       
-      // Atualiza o email apenas se ele não existir ainda.
       if (defaultData.email && !client.email) {
         updatePayload.email = defaultData.email;
         clientNeedsUpdate = true;
@@ -191,11 +171,8 @@ async function findOrCreateClientByPhone(phone, defaultData = {}) {
       } else {
         logger.info(`Cliente ${normalizedPhone} (ID: ${client.id}) encontrado. Nenhum dado novo para preencher.`);
       }
-      // ===== FIM DA LÓGICA DE PROTEÇÃO =====
-
+      
     } else {
-      // Cliente não encontrado, criar novo.
-      // Esta parte já estava correta, criando um registro com o que tiver disponível.
       logger.info(`Cliente com telefone ${normalizedPhone} não encontrado. Criando novo...`);
       client = await Client.create({
         phone: normalizedPhone,
@@ -240,7 +217,7 @@ async function createClient(clientData) {
 
     const existingClient = await Client.findOne({ where: { phone: normalizedPhone }, transaction: t });
     if (existingClient) {
-      await t.commit(); // Commit pois não houve erro, apenas cliente já existe
+      await t.commit(); 
       logger.warn(`Tentativa de criar cliente com telefone ${normalizedPhone} que já existe (ID: ${existingClient.id}). Retornando existente.`);
       return existingClient.toJSON();
     }
@@ -249,7 +226,7 @@ async function createClient(clientData) {
         phone: normalizedPhone,
         name: name,
         email: email || null,
-        status: 'Ativo', // Ou 'Aguardando Pagamento' se esse for o fluxo pós-criação inicial
+        status: 'Ativo', 
     }, { transaction: t });
 
     await t.commit();
@@ -270,7 +247,7 @@ async function createClient(clientData) {
 
 /**
  * Cria um novo Client (contato do WhatsApp) - Usado por admin ou sistema interno.
- * MODIFICADO para aceitar um código de afiliado.
+ * MODIFICADO para aceitar um código de afiliado e criar conta PF padrão com categorias.
  * @param {object} clientData - { phone, name, status, email, affiliateCode (opcional) }
  * @returns {Promise<object>} O Client criado.
  */
@@ -297,10 +274,9 @@ async function createClientContact(clientData) {
         status: clientData.status || 'Ativo',
     };
 
-    // === NOVA LÓGICA DE AFILIADO ===
     if (clientData.affiliateCode) {
         const referrer = await Client.findOne({ 
-            where: { affiliateCode: clientData.affiliateCode.toUpperCase() }, // Busca pelo código em maiúsculas
+            where: { affiliateCode: clientData.affiliateCode.toUpperCase() }, 
             transaction: t 
         });
         if (referrer) {
@@ -310,11 +286,9 @@ async function createClientContact(clientData) {
             logger.warn(`Código de afiliado "${clientData.affiliateCode}" fornecido mas não encontrado. Cliente será criado sem indicador.`);
         }
     }
-    // === FIM DA LÓGICA DE AFILIADO ===
 
     const newClient = await Client.create(newClientPayload, { transaction: t });
     
-    // Supondo que você tem a função para criar contas PF e categorias...
     const pfAccount = await FinancialAccount.create({
         clientId: newClient.id,
         accountName: 'Pessoal',
@@ -417,7 +391,7 @@ async function updateClientContact(clientId, updateData) {
     const allowedFields = ['name', 'status', 'email'];
     const filteredData = {};
     for(const key of allowedFields) {
-        if(updateData.hasOwnProperty(key)) { // Usar hasOwnProperty para permitir '' ou false como valores válidos
+        if(updateData.hasOwnProperty(key)) { 
             filteredData[key] = updateData[key];
         }
     }
@@ -431,10 +405,9 @@ async function updateClientContact(clientId, updateData) {
         }
     }
 
-
     if(Object.keys(filteredData).length === 0) {
         await t.commit();
-        return client.toJSON(); // Nada a atualizar
+        return client.toJSON(); 
     }
 
     await client.update(filteredData, { transaction: t });
@@ -471,31 +444,34 @@ async function updateClientMotivationPrefs(clientId, prefs) {
       wantsMotivationMessage: prefs.enable,
     };
 
-    // <<<< INÍCIO DA LÓGICA DE RESET >>>>
-    // Verifica se o horário está sendo ativado ou alterado para um novo valor.
     if (prefs.enable && prefs.time) {
-      // Compara o novo horário com o horário salvo no banco.
-      // Se forem diferentes, significa que o usuário está mudando o horário.
       if (client.motivationMessageTime !== prefs.time) {
         updateData.motivationMessageTime = prefs.time;
-        // Reseta a data do último envio para permitir que a mensagem seja enviada novamente hoje no novo horário.
         updateData.lastMotivationSentDate = null; 
         logger.info(`Horário de motivação para Cliente ID ${clientId} alterado para ${prefs.time}. Resetando lastMotivationSentDate.`);
       }
     } else if (!prefs.enable) {
-      // Se o usuário está desativando, não precisamos mexer no horário ou na data.
-      // A verificação `wantsMotivationMessage: true` no job já vai impedi-lo de receber.
+      // Se desativando, o lastMotivationSentDate não precisa ser resetado.
+      // Apenas `wantsMotivationMessage: false` é suficiente.
+      // Se o horário estava preenchido, pode ser mantido ou zerado, dependendo da regra de negócio.
+      // Para simplicidade, vamos manter o horário salvo, caso o usuário reative.
+      // updateData.motivationMessageTime = null; // Opcional: zerar o horário ao desativar
     }
-    // <<<< FIM DA LÓGICA DE RESET >>>>
 
-    // Se não houver nada para atualizar (ex: o usuário pediu para ativar no mesmo horário que já estava), não faz nada.
-    if (Object.keys(updateData).length === 0) {
-        logger.info(`Nenhuma alteração nas preferências de motivação para Cliente ID ${clientId}.`);
+    if (Object.keys(updateData).length === 0 && !(prefs.enable && prefs.time && client.motivationMessageTime === prefs.time && client.wantsMotivationMessage)) {
+        // Se nada mudou significativamente (ex: já estava ativado para o mesmo horário)
+        logger.info(`Nenhuma alteração significativa nas preferências de motivação para Cliente ID ${clientId}.`);
         return client.toJSON();
     }
+    
+    // Garante que se está desativando, não grava um horário.
+    if (!updateData.wantsMotivationMessage) {
+        updateData.motivationMessageTime = null;
+    }
+
 
     await client.update(updateData);
-    logger.info(`Preferências de motivação atualizadas para Cliente ID ${clientId}. Ativo: ${prefs.enable}, Horário: ${prefs.time || client.motivationMessageTime}`);
+    logger.info(`Preferências de motivação atualizadas para Cliente ID ${clientId}. Ativo: ${client.wantsMotivationMessage}, Horário: ${client.motivationMessageTime}`);
     return client.toJSON();
 
   } catch (error) {
@@ -521,7 +497,7 @@ async function deleteClientContact(clientId) {
       logger.warn(`Contato Cliente ID ${clientId} não encontrado para exclusão.`);
       return false;
     }
-    await client.destroy({ transaction: t }); // Cascade delete definido no modelo Client para FinancialAccounts, Subscriptions, etc.
+    await client.destroy({ transaction: t }); 
     await t.commit();
     logger.info(`Contato Cliente ID ${clientId} (${client.name || client.phone}) e todos os dados associados foram excluídos.`);
     return true;
@@ -586,9 +562,9 @@ async function createFinancialAccount(clientId, accountData) {
     } else {
       const defaultCount = await FinancialAccount.count({ where: { clientId, isDefault: true }, transaction: t });
       if (defaultCount === 0) {
-        accountData.isDefault = true; // A primeira conta do cliente se torna default
+        accountData.isDefault = true; 
       } else {
-        accountData.isDefault = false; // Garante que seja false se não explicitamente true
+        accountData.isDefault = false; 
       }
     }
     accountData.isActive = accountData.isActive === undefined ? true : (accountData.isActive === 'true' || accountData.isActive === true);
@@ -596,8 +572,6 @@ async function createFinancialAccount(clientId, accountData) {
 
     const newAccount = await FinancialAccount.create({ ...accountData, clientId }, { transaction: t });
     
-    // <<< MODIFICAÇÃO: Chamada para a nova função de criação de categorias >>>
-    // Passa o tipo da conta para que a função saiba quais categorias criar.
     await createDefaultCategoriesForAccount(newAccount.id, newAccount.accountType, t);
     
     await t.commit();
@@ -706,17 +680,15 @@ async function updateFinancialAccount(financialAccountId, updateData) {
         where: { clientId: account.clientId, isActive: true, id: { [Op.ne]: financialAccountId } }, transaction: t
       });
       if (otherActiveAccountsCount === 0 && (updateData.isDefault === false || updateData.isDefault === 'false')) {
-          updateData.isDefault = true; // Se for a única conta ativa, força a ser default
+          updateData.isDefault = true; 
           logger.info(`Conta ID ${financialAccountId} é a única ativa, forçada a ser default.`);
       } else if (otherActiveAccountsCount > 0 && (updateData.isDefault === false || updateData.isDefault === 'false')) {
           logger.warn(`Tentativa de desmarcar conta default ID ${financialAccountId} sem definir outra. A UI deve garantir a seleção de um novo padrão, ou uma será promovida.`);
-          // Não impede, mas a lógica para promover outra a default ao deletar esta é mais importante.
       }
     }
 
-    // Evitar que clientId ou accountType sejam alterados por este método se não for intencional
     delete updateData.clientId;
-    // delete updateData.accountType; // Permitir mudar tipo pode ter implicações (ex: produtos só em PJ/MEI) - avaliar
+    // delete updateData.accountType; // Não permitir mudança de tipo via update simples
 
     await account.update(updateData, { transaction: t });
     await t.commit();
@@ -763,7 +735,7 @@ async function deleteFinancialAccount(financialAccountId) {
       }
     }
 
-    await account.destroy({ transaction: t }); // Cascade delete definido nos modelos associados
+    await account.destroy({ transaction: t }); 
     await t.commit();
     logger.info(`Conta Financeira ID ${financialAccountId} ("${account.accountName}") e dados associados foram excluídos.`);
     return true;
@@ -797,6 +769,10 @@ async function getActiveOrDefaultFinancialAccount(clientId) {
     }
 }
 
+/**
+ * Preenche o campo `affiliateCode` para todos os clientes que ainda não o possuem.
+ * @returns {Promise<object>} Objeto com mensagem e contagem de clientes atualizados.
+ */
 async function backfillAffiliateCodes() {
   const t = await sequelize.transaction();
   try {
@@ -817,19 +793,24 @@ async function backfillAffiliateCodes() {
     let updatedCount = 0;
 
     for (const client of clientsWithoutCode) {
-      // Gera um código único para evitar colisões, mesmo que seja improvável
       let newCode;
       let isUnique = false;
-      while (!isUnique) {
-        // Formato: MAP + primeiras 4 letras do nome (se houver) + 4 caracteres aleatórios
-        const namePart = client.name ? client.name.replace(/[^a-zA-Z]/g, '').substring(0, 4).toUpperCase() : '';
+      let attempts = 0;
+      while (!isUnique && attempts < 10) { // Limita tentativas para evitar loop infinito
+        const namePart = client.name ? client.name.replace(/[^a-zA-Z0-9]/g, '').substring(0, 4).toUpperCase() : '';
         const randomPart = crypto.randomBytes(2).toString('hex').toUpperCase();
         newCode = `MAP${namePart}${randomPart}`;
+        if (newCode.length > 10) newCode = newCode.substring(0, 10); // Garante tamanho máximo
 
         const existingCode = await Client.findOne({ where: { affiliateCode: newCode }, transaction: t });
         if (!existingCode) {
           isUnique = true;
         }
+        attempts++;
+      }
+      if (!isUnique) { // Se não conseguiu gerar único após tentativas
+        newCode = `MAP${crypto.randomBytes(4).toString('hex').toUpperCase()}`.substring(0,10);
+        logger.warn(`[Backfill] Não foi possível gerar código único baseado no nome para client ID ${client.id} após ${attempts} tentativas. Usando código totalmente aleatório: ${newCode}`);
       }
       
       await client.update({ affiliateCode: newCode }, { transaction: t });
