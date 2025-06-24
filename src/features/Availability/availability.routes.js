@@ -5,21 +5,40 @@ const { authenticateClientToken, checkFinancialAccountOwnership } = require('../
 
 const router = Router({ mergeParams: true });
 
-// Aplica middleware de autenticação e propriedade para todas as rotas.
-router.use('/:financialAccountId', checkFinancialAccountOwnership);
-
-// Rota para criar uma nova regra de disponibilidade e listar todas as regras de uma conta
-// Caminho final: GET ou POST /api/availability/:financialAccountId
+// Rota para criar uma nova regra de disponibilidade (PROTEGIDA) e listar todas as regras de uma conta (PÚBLICA)
+// Caminho final: GET (público) ou POST (protegido) /api/availability/:financialAccountId
 router.route('/:financialAccountId')
-  .post(availabilityController.createAvailabilityRule)
-  .get(availabilityController.getAllAvailabilityRules);
+  .post( // Apenas o POST é protegido
+    authenticateClientToken,
+    checkFinancialAccountOwnership,
+    availabilityController.createAvailabilityRule
+  )
+  .get( // O GET para listar todas as regras é público, sem middlewares de autenticação
+    availabilityController.getAllAvailabilityRules
+  );
 
-// Rota para obter, atualizar e deletar uma regra de disponibilidade específica
-// Caminho final: GET, PATCH, DELETE /api/availability/:financialAccountId/:ruleId
+// Rota para obter, atualizar e deletar uma regra de disponibilidade específica (TODAS PROTEGIDAS)
+// Caminho final: GET, PATCH, PUT, DELETE /api/availability/:financialAccountId/:ruleId
 router.route('/:financialAccountId/:ruleId')
-  .get(availabilityController.getAvailabilityRuleById)
-  .patch(availabilityController.updateAvailabilityRule)
-  .put(availabilityController.updateAvailabilityRule) // Suporte para PUT e PATCH
-  .delete(availabilityController.deleteAvailabilityRule);
+  .get( // Obter uma regra específica continua protegido
+    authenticateClientToken,
+    checkFinancialAccountOwnership,
+    availabilityController.getAvailabilityRuleById
+  )
+  .patch(
+    authenticateClientToken,
+    checkFinancialAccountOwnership,
+    availabilityController.updateAvailabilityRule
+  )
+  .put( // Suporte para PUT e PATCH
+    authenticateClientToken,
+    checkFinancialAccountOwnership,
+    availabilityController.updateAvailabilityRule
+  )
+  .delete(
+    authenticateClientToken,
+    checkFinancialAccountOwnership,
+    availabilityController.deleteAvailabilityRule
+  );
 
 module.exports = router;
