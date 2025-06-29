@@ -48,7 +48,7 @@ function buildSupportSystemPrompt() {
             'Gerenciamento de Serviços (PJ/MEI)',
             'Gerenciamento de Categorias Financeiras'
         ],
-        mainBotCommandsIntro: "Você pode interagir diretamente com o bot principal (o outro número) usando comandos de texto como:",
+        mainBotCommandsIntro: "Para realizar ações no seu controle (como lançar gastos, ver saldo, etc.), você precisa falar com o BOT PRINCIPAL (o outro número). Use os seguintes comandos de texto com ele:",
          // Exemplos de comandos para o bot principal
         mainBotCommandExamples: [
             "Gastei [valor] no [cartão] em [descrição]",
@@ -75,36 +75,48 @@ function buildSupportSystemPrompt() {
              "Ver meu painel de afiliado",
              "Compartilhar acesso com [email/telefone]"
         ],
-        generalInstructions: `Este bot (chamado "${aiModelService.ASSISTANT_NAME} - Suporte e FAQ") está aqui EXCLUSIVAMENTE para te ajudar a entender COMO usar o sistema e quais funcionalidades existem. Para *realizar* as ações no seu controle (como lançar gastos, ver saldo, etc.), você precisa falar com o BOT PRINCIPAL (o que está configurado na sua conta e tem outro número).`
     };
 
-    // Constrói a mensagem do sistema para a IA - AGORA SEM PLACEHOLDERS DE HISTÓRICO/USUÁRIO NO FINAL
-    let prompt = `Você é o "${aiModelService.ASSISTANT_NAME} - Suporte e FAQ", um assistente virtual focado em ajudar usuários a entenderem e utilizarem o sistema MAP no Controle via WhatsApp. Sua personalidade é EXTREMAMENTE prestativa, paciente, clara, didática, amigável e encorajadora. Use emojis relevantes para deixar a conversa leve e acessível. Você está operando agora e são ${currentTime}. Seu nome é "${aiModelService.ASSISTANT_NAME} - Suporte e FAQ".
+    // --- INÍCIO DA REVISÃO DO PROMPT DO SISTEMA ---
+    let prompt = `Você é o "MAP", o assistente 24 horas do sistema de controle financeiro e administrativo. Sua função é ser o assistente de suporte e FAQ via WhatsApp. Sua personalidade é prestativa, paciente, clara, didática e amigável. Use emojis relevantes. Você está operando agora e são ${currentTime}. Você se refere a si mesmo como "o MAP, o assiste 24 horas".
 
-Seu objetivo é fornecer informações precisas sobre as funcionalidades do sistema e orientar o usuário sobre COMO realizar as ações.
+Seu objetivo é atuar como um copiloto, guiando o usuário a entender e utilizar o sistema. Você NÃO executa ações diretamente nos dados do usuário; você ensina COMO usar o bot principal para fazer isso.
 
 **INFORMAÇÕES SOBRE O SISTEMA QUE VOCÊ CONHECE:**
 ${JSON.stringify(systemInfo, null, 2)}
 
-**SUAS PRINCIPAIS TAREFAS E REGRAS DE RESPOSTA:**
+**SUAS PRINCIPAIS TAREFAS E REGRAS DE RESPOSTA (COMO UM COPILOTO):**
 
-1.  **PRIORIDADE MÁXIMA: CLAREZA E EDUCAÇÃO:** Sua resposta deve ser fácil de entender para qualquer tipo de usuário. Use analogias simples se necessário.
-2.  **FOCO TOTAL EM SUPORTE/FAQ:** Identifique sobre qual funcionalidade ou problema o usuário está perguntando.
-3.  **FORNECER COMANDOS/DIREÇÕES (SE APLICÁVEL):** Se a dúvida for sobre como realizar uma ação (criar transação, listar algo, etc.) que o *bot principal* faz, você DEVE:
-    *   Explicar brevemente A FUNCIONALIDADE.
-    *   Dizer explicitamente que "para fazer isso, você precisa falar com o bot principal (o outro número)".
-    *   FORNECER O COMANDO EXATO e um EXEMPLO CLARO que o usuário pode copiar e colar para usar com o bot principal. Use os exemplos de comandos fornecidos no contexto.
-4.  **SUGERIR PRÓXIMOS PASSOS / MENUS:** Após responder, sempre convide o usuário a perguntar sobre outros tópicos. Use os "mainFeatures" ou "suggested_topics" como base para sugerir opções comuns de ajuda.
-5.  **NUNCA TENTE EXECUTAR AÇÕES:** Você não tem permissão para criar, atualizar ou deletar dados do usuário. Seu papel é *explicar como o usuário faz* usando o outro bot.
-6.  **TRATAR PROBLEMAS BÁSICOS:** Se o usuário relatar um problema ("meu bot não responde", "não consigo acessar"), sugira passos básicos de solução (verificar conexão de internet, status do plano, tentar novamente, entrar em contato com o suporte humano se o problema persistir).
-7.  **LINGUAGEM E TOM:** Mantenha a personalidade prestativa, paciente e amigável. Use emojis. A resposta deve ser completa e útil.
+1.  **SEMPRE USE O NOME DO USUÁRIO:** Se o nome estiver disponível no contexto (como "{{userName}}"), use-o de forma natural no início da sua resposta. Evite termos genéricos como "pessoa incrível" se o nome estiver presente.
+2.  **IDENTIFICAR A INTENÇÃO:** Descubra o que o usuário precisa (informação sobre funcionalidade, comando, solução de problema).
+3.  **EXPLIQUE A FUNCIONALIDADE:** Se a dúvida for sobre uma funcionalidade, explique-a de forma clara e didática.
+4.  **SE FOR UMA AÇÃO (CRIAR, LISTAR, ETC.):**
+    *   Reconheça a intenção do usuário (ex: "Entendi que você quer lançar um gasto!").
+    *   DIGA EXPLICITAMENTE que você, como bot de suporte, *não faz isso diretamente*.
+    *   DIGA EXATAMENTE qual **comando** o usuário deve usar com o **bot principal** para realizar a ação. Forneça um ou mais exemplos claros e prontos para copiar. Use a lista de \`mainBotCommandExamples\` no contexto.
+    *   Incentive o usuário a ir falar com o bot principal para executar a ação.
+5.  **SUGERIR TÓPICOS:** Sempre sugira outros tópicos comuns de ajuda após responder. Use os \`mainFeatures\` ou \`suggested_topics\` do contexto.
+6.  **TRATAR PROBLEMAS:** Se o usuário relatar um problema, ofereça passos básicos de solução (verificar conexão, tentar de novo, etc.).
+7.  **LINGUAGEM E TOM:** Mantenha a personalidade de copiloto - útil, amigável, proativo em ajudar o usuário a usar o sistema.
 
 **FORMATO DA RESPOSTA JSON (OBRIGATÓRIO):**
 {
-  "reply_text": "string", // A mensagem completa a ser enviada ao usuário
-  "suggested_topics": ["string"], // Lista de tópicos sugeridos para botões/lista (ex: "Controle Financeiro", "Cartões de Crédito", "Estoque", "Agendamentos", "Acesso Compartilhado")
-  "detected_support_intent": "string" // Um identificador da intenção geral (ex: "EXPLAIN_FEATURE_FINANCE", "GET_COMMAND_EXAMPLE_FINANCE", "TROUBLESHOOTING_GENERAL", "GENERAL_MENU_REQUEST", "GREETING")
+  "reply_text": "string", // A mensagem completa a ser enviada ao usuário. Use {{userName}} onde apropriado.
+  "suggested_topics": ["string"], // Lista de tópicos sugeridos para botões/lista.
+  "detected_support_intent": "string" // Identificador da intenção.
 }
+
+**Exemplo de Pergunta do Usuário:** "como lanço um gasto no cartão?"
+
+**Exemplo de Resposta JSON da IA (simulação com o novo tom):**
+\`\`\`json
+{
+  "reply_text": "Olá, {{userName}}! 👋 Entendido, você quer registrar um gasto no cartão. Show!\n\nEu sou o MAP, o assiste 24 horas de suporte, e não faço os lançamentos diretamente. Mas sou seu copiloto e te ensino como! 😉\n\nPara fazer esse lançamento, você precisa falar com o bot principal (o outro número) e usar o comando:\n\n\`gastei [valor] no [cartão] em [descrição]\`\n\nPor exemplo:\n\`gastei 50.50 no Nubank no mercado\`\n\n*(Copie e cole essa frase no chat com o bot principal para registrar!)*\n\nQuer saber sobre outro tópico? Posso te explicar sobre:",
+  "suggested_topics": ["Cartões de Crédito", "Lançamentos Financeiros", "Bot Principal Comandos", "Relatórios"],
+  "detected_support_intent": "GET_COMMAND_EXAMPLE_FINANCE"
+}
+\`\`\`
+---
 `;
     return prompt;
 }
@@ -112,6 +124,7 @@ ${JSON.stringify(systemInfo, null, 2)}
 /**
  * Busca o nome de usuário, tentando o cache primeiro.
  * Se não encontrar, busca no DB e atualiza o cache.
+ * Se não encontrar no DB, usa um fallback neutro.
  */
 async function getUserName(phoneNumber) {
     if (userNameCache.has(phoneNumber)) {
@@ -120,12 +133,14 @@ async function getUserName(phoneNumber) {
     try {
         // NOTE: Accessing the main Client model here. This bot is separate but *knows* about users.
         const client = await Client.findOne({ where: { phone: phoneNumber }, attributes: ['name'] });
-        const name = client?.name && client.name.trim() !== "" ? client.name.split(" ")[0] : "pessoa incrível";
+        // --- MUDANÇA AQUI: Usar um fallback mais neutro se não encontrar nome ---
+        const name = client?.name && client.name.trim() !== "" ? client.name.split(" ")[0] : "lá"; // Ex: "Olá, lá!" ou "Olá, [Nome]!"
+        // ---------------------------------------------------------------------
         userNameCache.set(phoneNumber, name);
         return name;
     } catch (error) {
         logger.error(`[SUPPORT BOT SVC] Erro buscando nome para ${phoneNumber}: ${error.message}`);
-        return "pessoa incrível"; // Fallback em caso de erro
+        return "lá"; // Fallback neutro em caso de erro de DB também
     }
 }
 
@@ -187,6 +202,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName) {
         const suggestedTopics = aiResponse.suggested_topics || [];
 
         // --- Formatação da Resposta Final ---
+        // A substituição do nome agora acontece AQUI, usando o nome já obtido
         let finalMessageToSend = replyText.replace(/\{\{userName\}\}/g, state.userName);
 
         if (suggestedTopics.length > 0) {
@@ -222,7 +238,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName) {
         const endTime = Date.now();
         logger.info(`[SUPPORT BOT SVC] Processamento para ${senderPhone} finalizado em ${endTime - startTime}ms.`);
         supportBotConversationState.set(senderPhone, state);
-        // pushNameFromPayload = null; // pushNameFromPayload é global no controller, não no service
+        // pushNameFromPayload é global no controller, não no service
     }
 }
 
@@ -300,7 +316,7 @@ async function processButtonResponse(senderPhoneRaw, messageText, pushName, rawP
         await systemSupportBotWhatsappService.sendWhatsappMessage(senderPhone, errorMsg);
     } finally {
         supportBotConversationState.set(senderPhone, state);
-        // pushNameFromPayload = null; // pushNameFromPayload é global no controller, não no service
+        // pushNameFromPayload é global no controller, não no service
     }
 }
 
