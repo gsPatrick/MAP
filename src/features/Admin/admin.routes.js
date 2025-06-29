@@ -18,6 +18,7 @@ router.post('/admin/clients', adminController.createClient);
 router.put('/admin/clients/:clientId', adminController.updateClient);
 router.delete('/admin/clients/:clientId', adminController.deleteClient);
 router.post('/admin/clients/change-plan', adminController.changeUserPlan);
+router.put('/admin/clients/:clientId/clear-balance', adminController.clearClientBalance); // NOVA ROTA AQUI
 
 // --- Rotas de Gerenciamento de Planos ---
 router.post('/admin/plans/custom', adminController.createCustomPlan);

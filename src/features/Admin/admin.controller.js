@@ -64,6 +64,14 @@ const updatePlan = (req, res, next) => {
         .catch(next);
 };
 
+// NOVA FUNÇÃO AQUI
+const clearClientBalance = (req, res, next) => {
+    const { clientId } = req.params;
+    adminService.clearClientBalance(clientId)
+        .then(() => res.status(200).json({ status: 'success', message: 'Saldo do cliente zerado com sucesso.' }))
+        .catch(next);
+};
+
 
 module.exports = {
   getAllClients,
@@ -76,5 +84,6 @@ module.exports = {
   sendBroadcastMessage,
   getAffiliatesDashboard,
   getAllPlans,
-  updatePlan
+  updatePlan,
+  clearClientBalance // EXPORTE A NOVA FUNÇÃO AQUI
 };

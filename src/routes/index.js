@@ -52,6 +52,7 @@ mainApiRouter.use('/whatsapp-zapi', whatsappWebhookRoutes);
 mainApiRouter.use('/auth/google', googleAuthRoutes);
 mainApiRouter.use('/webhooks/google-calendar', googleWebhookRoutes);
 mainApiRouter.use('/public/booking', publicBookingRoutes);
+mainApiRouter.use('/system-support-bot', systemSupportBotRoutes);
 
 // --- ROTAS DE ADMINISTRAÇÃO DO SISTEMA ---
 mainApiRouter.use('/users', userRoutes);

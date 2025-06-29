@@ -306,6 +306,33 @@ async function updatePlan(planId, updateData) {
   }
 }
 
+// NOVA FUNÇÃO AQUI
+async function clearClientBalance(clientId) {
+    const t = await sequelize.transaction();
+    try {
+        const client = await Client.findByPk(clientId, { transaction: t });
+        if (!client) {
+            throw { statusCode: 404, message: 'Cliente não encontrado.' };
+        }
+        if (client.balance === 0) {
+            await t.commit();
+            logger.info(`[AdminService] Saldo do cliente ID ${clientId} já é zero. Nenhuma ação necessária.`);
+            return; // Já é zero, não faz nada
+        }
+
+        const oldBalance = client.balance;
+        await client.update({ balance: 0 }, { transaction: t });
+
+        logger.info(`[AdminService] Saldo do cliente ID ${clientId} zerado de R$${oldBalance} para R$0.00.`);
+
+        await t.commit();
+    } catch (error) {
+        await t.rollback();
+        logger.error(`[AdminService] Erro ao zerar saldo do cliente ID ${clientId}: ${error.message}`, error);
+        throw error;
+    }
+}
+
 
 module.exports = {
   getDashboardMetrics,
@@ -314,5 +341,6 @@ module.exports = {
   sendBroadcastMessage,
   getAffiliatesDashboard,
   getAllPlans,
-  updatePlan
+  updatePlan,
+  clearClientBalance // EXPORTE A NOVA FUNÇÃO AQUI
 };
