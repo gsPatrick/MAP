@@ -1,15 +1,11 @@
 // src/features/WhatsappHandler/whatsapp.service.js
-// VERSÃO FINAL REATORADA - O MAESTRO (COMPLETO)
-
 // --- Imports dos Serviços de Negócio (Core) ---
 const clientService = require('../Client/client.service');
 const clientAuthService = require('../ClientAuth/clientAuth.service');
 const sharedAccessService = require('../SharedAccess/sharedAccess.service');
 const financialCategoryService = require('../FinancialCategory/financialCategory.service');
-const financialService = require('../Financial/financial.service'); // <<< ESTA LINHA PROVAVELMENTE ESTÁ FALTANDO
+const financialService = require('../Financial/financial.service');
 const creditCardService = require('../CreditCardManagement/creditCard.service');
-
-
 
 // --- Imports dos Novos Especialistas e Utilitários ---
 const onboardingHandler = require('./onboarding.handler');
@@ -254,13 +250,10 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
     }
 }
 
-/**
- * Função principal que orquestra o processamento de mensagens recebidas.
- */
-// =========================================================================================
-// <<< SUBSTITUA SUA FUNÇÃO processIncomingMessage INTEIRA POR ESTA VERSÃO >>>
-// =========================================================================================
 
+// =========================================================================================
+// <<< INÍCIO DA FUNÇÃO `processIncomingMessage` TOTALMENTE REESTRUTURADA >>>
+// =========================================================================================
 async function processIncomingMessage(senderPhoneRaw, messageText, pushName, rawPayload) {
     const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
     if (!canonicalPhone) {
@@ -276,7 +269,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
     let actorClient;
 
     try {
-        // ETAPA 1: Obter Cliente e Estado da Sessão
+        // ETAPA 1: Obter Cliente e Estado da Sessão - LÓGICA DE IDENTIFICAÇÃO CENTRAL
         actorClient = await clientService.findClientByPhone(senderPhone);
         
         let sharedAccessRecord = null;
@@ -284,13 +277,20 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         let ownerAccountsIfShared = [];
 
         if (actorClient) {
+            // CASO 1: O número de telefone pertence a um cliente principal.
+            logger.info(`[WHATSAPP SERVICE] Identificado CLIENTE PRINCIPAL: ${actorClient.name} (ID: ${actorClient.id}) pelo telefone ${senderPhone}.`);
             clientAccountsForOnboarding = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
         } else {
+            // CASO 2: O número não é de um cliente principal. VERIFICAR SE É UM CONVIDADO.
+            logger.info(`[WHATSAPP SERVICE] Telefone ${senderPhone} não é de um cliente principal. Verificando acessos compartilhados...`);
             sharedAccessRecord = await sharedAccessService.findActiveSharedAccessByPhone(senderPhone);
+            
             if (sharedAccessRecord && sharedAccessRecord.sharedWithClient) {
+                // CASO 2.1: É um convidado com acesso compartilhado ativo!
                 actorClient = sharedAccessRecord.sharedWithClient;
                 const ownerClientIdForContext = sharedAccessRecord.ownerClientId;
-                
+                logger.info(`[WHATSAPP SERVICE] Identificado ACESSO COMPARTILHADO. Ator: ${actorClient.name} (ID: ${actorClient.id}), Dono: ${ownerClientIdForContext}`);
+
                 if (!actorClient.status || actorClient.status !== 'Ativo') {
                      logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas convidado (ator) ${actorClient.id} está inativo.`);
                      await sendWhatsappMessage(senderPhone, "Olá! Seu acesso a esta conta compartilhada não está ativo. Por favor, contate o proprietário.");
@@ -302,7 +302,8 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     return;
                 }
                 
-                const allOwnerAccounts = await clientService.getClientFinancialAccounts(ownerClientIdForContext, { isActive: true });
+                // Carrega as contas do DONO e filtra com base nas permissões do convidado
+                const allOwnerAccounts = sharedAccessRecord.ownerClient.financialAccounts || [];
                 if (sharedAccessRecord.canAccessPersonalProfile) {
                     const pfAccount = allOwnerAccounts.find(acc => acc.accountType === 'PF');
                     if (pfAccount) ownerAccountsIfShared.push(pfAccount);
@@ -313,17 +314,14 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 }
 
                 if (ownerAccountsIfShared.length === 0 ) { 
-                    if(sharedAccessRecord.canAccessPersonalProfile || sharedAccessRecord.canAccessBusinessProfileId){
-                        logger.warn(`[WHATSAPP SERVICE] Acesso compartilhado para ${actorClient.name} (${senderPhone}) para contas de ${ownerClientIdForContext}, mas nenhuma conta do dono acessível encontrada (mesmo com permissões). Proprietário pode não ter contas do tipo permitido.`);
-                        await sendWhatsappMessage(senderPhone, `Olá ${actorClient.name.split(" ")[0]}! Você tem um acesso compartilhado para as contas de ${sharedAccessRecord.ownerClient?.name || 'um usuário'}, mas parece que o proprietário não possui contas ativas do tipo que você pode acessar (Pessoal ou o Empresarial específico). Peça para ele verificar, por favor! 😉`);
-                    } else {
-                        logger.warn(`[WHATSAPP SERVICE] Acesso compartilhado para ${actorClient.name} (${senderPhone}) para contas de ${ownerClientIdForContext}, mas NENHUMA permissão de acesso a perfil foi dada no sharedAccessRecord.`);
-                        await sendWhatsappMessage(senderPhone, `Olá ${actorClient.name.split(" ")[0]}! Você tem um acesso compartilhado para as contas de ${sharedAccessRecord.ownerClient?.name || 'um usuário'}, mas parece que nenhuma permissão para acessar perfis específicos (Pessoal ou Empresarial) foi configurada. Peça para ele verificar as permissões, por favor! 😉`);
-                    }
+                    const ownerName = sharedAccessRecord.ownerClient?.name || 'o proprietário';
+                    logger.warn(`[WHATSAPP SERVICE] Acesso compartilhado para ${actorClient.name} (${senderPhone}) para contas de ${ownerClientIdForContext}, mas nenhuma conta do dono acessível foi encontrada.`);
+                    await sendWhatsappMessage(senderPhone, `Olá ${actorClient.name.split(" ")[0]}! Você tem um acesso compartilhado, mas parece que ${ownerName} não possui contas ativas do tipo que você pode acessar (Pessoal ou o Empresarial específico). Peça para ele verificar, por favor! 😉`);
                     return;
                 }
             } else {
-                logger.info(`[WHATSAPP SERVICE] Telefone ${senderPhone} não reconhecido. Criando novo cliente...`);
+                // CASO 3: Não é cliente principal nem convidado. É um usuário novo.
+                logger.info(`[WHATSAPP SERVICE] Telefone ${senderPhone} não reconhecido. Criando novo cliente para onboarding...`);
                 actorClient = await clientService.createClientContact({ phone: senderPhone, name: pushNameFromPayload || pushName });
                 const welcomeMsg = onboardingHandler.getOnboardingWelcomeNoPlanMessage(actorClient.name ? actorClient.name.split(" ")[0] : (pushNameFromPayload || "você"));
                 await sendWhatsappMessage(senderPhone, welcomeMsg);
@@ -336,6 +334,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
         }
         
+        // A partir daqui, 'actorClient' está definido, e 'sharedAccessRecord' também se for um convidado.
         const existingState = conversationState.get(senderPhone);
         state = await initializeOrUpdateState(actorClient, sharedAccessRecord, existingState, clientAccountsForOnboarding, ownerAccountsIfShared);
         state.isNewUserForSessionLogic = !existingState;
@@ -344,9 +343,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
             const buttonId = rawPayload.selectedButtonId;
             logger.info(`[MAESTRO] Botão clicado por ${senderPhone}: ID '${buttonId}'`);
-
             const buttonResult = await actionHandler.handleButtonInteraction(state, buttonId, senderPhone);
-
             if (buttonResult.stateUpdated) {
                 conversationState.set(senderPhone, buttonResult.newState);
                 return; 
@@ -381,21 +378,14 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             conversationState.set(senderPhone, state);
             pushNameFromPayload = null;
             return;
-      }
-
-        /// =================================================================
-        // <<< INÍCIO DA CORREÇÃO E REESTRUTURAÇÃO >>>
-        // =================================================================
+        }
 
         // ETAPA 2.5: Tratamento de Respostas a Perguntas Diretas do Bot
-        // Este bloco agora tem prioridade MÁXIMA após o onboarding.
         if (state.currentAction === 'awaiting_confirmation' && state.pendingConfirmation) {
             const pendingAction = state.pendingConfirmation;
-
             if (pendingAction.action === 'AWAITING_DELETION_CHOICE') {
                 const userChoiceText = messageText.toLowerCase();
                 let itemDeleted = false;
-
                 if (userChoiceText.includes('todos')) {
                     let deletedCount = 0;
                     for (const resource of pendingAction.resources) {
@@ -409,14 +399,11 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     await sendWhatsappMessage(senderPhone, `✅ Prontinho! ${deletedCount} de ${pendingAction.resources.length} itens foram excluídos.`);
                     itemDeleted = true;
                 } else {
-                    // << INÍCIO DA MUDANÇA >>
-                        const userWords = userChoiceText.split(' ').filter(word => word.length > 1); // Quebra a busca do usuário em palavras
-                        
-                        const resourceToDelete = pendingAction.resources.find(r => {
-                            const resourceWords = r.description.toLowerCase().split(' ');
-                            // Verifica se TODAS as palavras da busca do usuário estão na descrição do recurso
-                            return userWords.every(userWord => resourceWords.includes(userWord));
-                        });                    
+                    const userWords = userChoiceText.split(' ').filter(word => word.length > 1);
+                    const resourceToDelete = pendingAction.resources.find(r => {
+                        const resourceWords = r.description.toLowerCase().split(' ');
+                        return userWords.every(userWord => resourceWords.includes(userWord));
+                    });                    
                     if (resourceToDelete) {
                         try {
                             if (resourceToDelete.type === 'transaction') {
@@ -431,7 +418,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                         await sendWhatsappMessage(senderPhone, `🤔 Humm, não entendi qual item você quer excluir. Por favor, diga o nome exato ou 'todos'.`);
                     }
                 }
-
                 if (itemDeleted) {
                     state.pendingConfirmation = null;
                     state.currentAction = null;
@@ -439,14 +425,8 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 conversationState.set(senderPhone, state);
                 return;
             }
-            
-            // Adicione outros 'if (pendingAction.action === ...)' aqui para outros tipos de confirmação no futuro
         }
         
-        // =================================================================
-        // <<< FIM DO BLOCO ADICIONADO >>>
-        // =====
-
         // ETAPA 3: Lógica de Fluxo Pós-Onboarding (Seleção de Conta)
         if (!state.activeFinancialAccountId) {
             const accountsForSelection = state.isSharedAccessContext
@@ -501,7 +481,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
         // ETAPA 4: Delegar para a IA e para o Action Handler
         const availableFinancialCategoriesForAI = await financialCategoryService.getAllCategoriesForAccountAI(state.activeFinancialAccountId);
-        
         const availableCreditCardsForAI = await creditCardService.getActiveCreditCardsForAI(state.activeFinancialAccountId);
 
         const aiContext = {
@@ -522,27 +501,21 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
         let finalMessageToSend = "";
 
-             if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
+        if (aiResponse.detected_actions && aiResponse.detected_actions.length > 0) {
             state.pendingConfirmation = null;
             state.currentAction = null;
-
             let multipleActionBodiesList = [];
-            let mainActionResult = null; // Para guardar o resultado da ação principal
+            let mainActionResult = null;
             const isOwnerActingOnOwnBehalfGlobal = !state.isSharedAccessContext || state.ownerClientIdForContext === actorClient.id;
 
-            // --- PASSO 5.1: Executa as ações detectadas pela IA ---
             for (const detectedAction of aiResponse.detected_actions) {
                 const actionName = detectedAction.action || detectedAction.action_type;
-                
                 const ownerOnlyActions = ['CREATE_FINANCIAL_ACCOUNT', 'UPDATE_FINANCIAL_ACCOUNT', 'DELETE_FINANCIAL_ACCOUNT', 'GRANT_ACCESS', 'LIST_GRANTED_ACCESS', 'UPDATE_GRANTED_ACCESS', 'REVOKE_ACCESS'];
                 if (ownerOnlyActions.includes(actionName) && !isOwnerActingOnOwnBehalfGlobal) {
                     multipleActionBodiesList.push(`❌ Desculpe, ${state.clientName}, mas a ação de "${actionName.toLowerCase().replace(/_/g, " ")}" só pode ser realizada pelo proprietário da conta.`);
                     continue;
                 }
-                
-                // Executa a ação e guarda o resultado
                 mainActionResult = await actionHandler.handleAction(state, detectedAction, state.clientName, isOwnerActingOnOwnBehalfGlobal, actorClient.id);
-                
                 if (mainActionResult.formattedData) {
                     multipleActionBodiesList.push(mainActionResult.formattedData);
                 }
@@ -557,36 +530,27 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 }
             }
 
-            // --- PASSO 5.2: Verifica e executa a ação encadeada (se houver) ---
             if (state.pendingChainedAction && mainActionResult) {
-                const primaryAction = aiResponse.detected_actions[0]; // Ação que acabou de ser executada
+                const primaryAction = aiResponse.detected_actions[0];
                 const newResource = mainActionResult.resourceForButtonsContext?.resources?.[0];
-
-                // Condição: A ação principal foi a criação de um cartão e foi bem-sucedida?
                 if (primaryAction.action === 'CREATE_CREDIT_CARD' && newResource?.type === 'credit_card') {
                     logger.info(`[MAESTRO] Ação principal (Criação de Cartão) concluída. Executando ação encadeada: ${state.pendingChainedAction.action}`);
-                    
                     const chainedAction = state.pendingChainedAction;
-                    chainedAction.parameters.creditCardName = newResource.description; // Adiciona o nome do cartão novo
-
+                    chainedAction.parameters.creditCardName = newResource.description;
                     const chainedActionResult = await actionHandler.handleAction(state, chainedAction, state.clientName, isOwnerActingOnOwnBehalfGlobal, actorClient.id);
-                    
                     if (chainedActionResult.formattedData) {
                         multipleActionBodiesList.push(chainedActionResult.formattedData);
                     }
-                    // Adiciona o recurso da ação encadeada ao contexto dos botões, se houver
                     if (chainedActionResult.resourceForButtonsContext?.resources) {
                          if (!mainActionResult.resourceForButtonsContext) {
                             mainActionResult.resourceForButtonsContext = { type: 'multi_action_block', resources: [] };
                         }
                         mainActionResult.resourceForButtonsContext.resources.push(...chainedActionResult.resourceForButtonsContext.resources);
                     }
-
-                    state.pendingChainedAction = null; // Limpa a ação encadeada
+                    state.pendingChainedAction = null;
                 }
             }
 
-            // --- PASSO 5.3: Monta a mensagem final e envia ---
             let aiMessageIntro = aiResponse.overall_summary_suggestion || `Ok, ${state.clientName}!`;
             if (state.pendingChainedAction === null && aiResponse.detected_actions[0]?.action === 'CREATE_CREDIT_CARD') {
                  aiMessageIntro = `Cartão na mão e gasto anotado! ✅ Seu novo cartão foi criado e o gasto original já foi registrado nele. Simples assim!`;
@@ -600,7 +564,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
             const platformLinkFooter = formatter.formatPlatformLink();
             const platformBaseUrl = process.env.PLATFORM_URL || 'map-nocontrole.com.br/painel';
-
             if (!finalMessageToSend.includes(platformBaseUrl)) {
                  finalMessageToSend += `\n\n---\n\n${platformLinkFooter.trim()}`;
             }
@@ -608,10 +571,8 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
             if (finalMessageToSend) {
                 state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
-
                 const resourcesForButtons = mainActionResult?.resourceForButtonsContext?.resources || [];
                 const hasMultipleResources = resourcesForButtons.length > 1;
-
                 if (hasMultipleResources) {
                     const blockId = Buffer.from(JSON.stringify(resourcesForButtons)).toString('base64');
                     const buttons = [
@@ -636,20 +597,17 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
         } else if (aiResponse.clarifications_needed && aiResponse.clarifications_needed.length > 0) {
             const clarification = aiResponse.clarifications_needed[0];
-            
             if (clarification.parameters_so_far && clarification.parameters_so_far.chained_action_context) {
                 logger.info(`[MAESTRO] Ação encadeada detectada. Armazenando contexto para execução posterior.`);
                 state.pendingChainedAction = clarification.parameters_so_far.chained_action_context;
                 clarification.parameters_so_far = {}; 
             }
-            
             state.pendingConfirmation = {
                 action: clarification.original_intent_action_suggestion,
                 parameters: clarification.parameters_so_far,
                 timestamp: Date.now()
             };
             state.currentAction = 'awaiting_clarification_response';
-            
             finalMessageToSend = clarification.clarification_question;
             state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
             await sendWhatsappMessage(senderPhone, finalMessageToSend);
@@ -675,6 +633,9 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         pushNameFromPayload = null;
     }
 }
+// =========================================================================================
+// <<< FIM DA FUNÇÃO `processIncomingMessage` REESTRUTURADA >>>
+// =========================================================================================
 
 module.exports = { 
     processIncomingMessage, 
