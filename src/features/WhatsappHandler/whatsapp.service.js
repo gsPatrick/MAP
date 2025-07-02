@@ -252,7 +252,7 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
 
 
 // =========================================================================================
-// <<< INÍCIO DA FUNÇÃO `processIncomingMessage` TOTALMENTE REESTRUTURADA >>>
+// <<< INÍCIO DA FUNÇÃO `processIncomingMessage` COM A LÓGICA CORRIGIDA >>>
 // =========================================================================================
 async function processIncomingMessage(senderPhoneRaw, messageText, pushName, rawPayload) {
     const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
@@ -269,58 +269,59 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
     let actorClient;
 
     try {
-        // ETAPA 1: Obter Cliente e Estado da Sessão - LÓGICA DE IDENTIFICAÇÃO CENTRAL
-        actorClient = await clientService.findClientByPhone(senderPhone);
-        
+        // ETAPA 1: Obter Cliente e Estado da Sessão - LÓGICA DE IDENTIFICAÇÃO CORRIGIDA
         let sharedAccessRecord = null;
         let clientAccountsForOnboarding = [];
         let ownerAccountsIfShared = [];
 
-        if (actorClient) {
-            // CASO 1: O número de telefone pertence a um cliente principal.
-            logger.info(`[WHATSAPP SERVICE] Identificado CLIENTE PRINCIPAL: ${actorClient.name} (ID: ${actorClient.id}) pelo telefone ${senderPhone}.`);
-            clientAccountsForOnboarding = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
-        } else {
-            // CASO 2: O número não é de um cliente principal. VERIFICAR SE É UM CONVIDADO.
-            logger.info(`[WHATSAPP SERVICE] Telefone ${senderPhone} não é de um cliente principal. Verificando acessos compartilhados...`);
-            sharedAccessRecord = await sharedAccessService.findActiveSharedAccessByPhone(senderPhone);
+        // <<< MUDANÇA CRUCIAL: PRIMEIRO, VERIFICA SE O NÚMERO É DE UM CONVIDADO >>>
+        logger.info(`[WHATSAPP SERVICE] Verificando se ${senderPhone} é um convidado (SharedAccess)...`);
+        sharedAccessRecord = await sharedAccessService.findActiveSharedAccessByPhone(senderPhone);
+
+        if (sharedAccessRecord && sharedAccessRecord.sharedWithClient) {
+            // CASO 1: É um convidado com acesso compartilhado ativo!
+            actorClient = sharedAccessRecord.sharedWithClient;
+            const ownerClientIdForContext = sharedAccessRecord.ownerClientId;
+            logger.info(`[WHATSAPP SERVICE] Identificado ACESSO COMPARTILHADO. Ator: ${actorClient.name} (ID: ${actorClient.id}), Dono: ${ownerClientIdForContext}`);
+
+            if (!actorClient.status || actorClient.status !== 'Ativo') {
+                 logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas convidado (ator) ${actorClient.id} está inativo.`);
+                 await sendWhatsappMessage(senderPhone, "Olá! Seu acesso a esta conta compartilhada não está ativo. Por favor, contate o proprietário.");
+                 return;
+            }
+            if (!sharedAccessRecord.ownerClient || sharedAccessRecord.ownerClient.status !== 'Ativo') {
+                logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas proprietário ${ownerClientIdForContext} está inativo.`);
+                await sendWhatsappMessage(senderPhone, "Olá! O proprietário da conta que compartilhou este acesso parece não estar ativo. Tente mais tarde ou contate-o.");
+                return;
+            }
             
-            if (sharedAccessRecord && sharedAccessRecord.sharedWithClient) {
-                // CASO 2.1: É um convidado com acesso compartilhado ativo!
-                actorClient = sharedAccessRecord.sharedWithClient;
-                const ownerClientIdForContext = sharedAccessRecord.ownerClientId;
-                logger.info(`[WHATSAPP SERVICE] Identificado ACESSO COMPARTILHADO. Ator: ${actorClient.name} (ID: ${actorClient.id}), Dono: ${ownerClientIdForContext}`);
+            const allOwnerAccounts = sharedAccessRecord.ownerClient.financialAccounts || [];
+            if (sharedAccessRecord.canAccessPersonalProfile) {
+                const pfAccount = allOwnerAccounts.find(acc => acc.accountType === 'PF');
+                if (pfAccount) ownerAccountsIfShared.push(pfAccount);
+            }
+            if (sharedAccessRecord.canAccessBusinessProfileId) {
+                const bizAccount = allOwnerAccounts.find(acc => acc.id === sharedAccessRecord.canAccessBusinessProfileId);
+                if (bizAccount) ownerAccountsIfShared.push(bizAccount);
+            }
 
-                if (!actorClient.status || actorClient.status !== 'Ativo') {
-                     logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas convidado (ator) ${actorClient.id} está inativo.`);
-                     await sendWhatsappMessage(senderPhone, "Olá! Seu acesso a esta conta compartilhada não está ativo. Por favor, contate o proprietário.");
-                     return;
-                }
-                if (!sharedAccessRecord.ownerClient || sharedAccessRecord.ownerClient.status !== 'Ativo') {
-                    logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas proprietário ${ownerClientIdForContext} está inativo.`);
-                    await sendWhatsappMessage(senderPhone, "Olá! O proprietário da conta que compartilhou este acesso parece não estar ativo. Tente mais tarde ou contate-o.");
-                    return;
-                }
-                
-                // Carrega as contas do DONO e filtra com base nas permissões do convidado
-                const allOwnerAccounts = sharedAccessRecord.ownerClient.financialAccounts || [];
-                if (sharedAccessRecord.canAccessPersonalProfile) {
-                    const pfAccount = allOwnerAccounts.find(acc => acc.accountType === 'PF');
-                    if (pfAccount) ownerAccountsIfShared.push(pfAccount);
-                }
-                if (sharedAccessRecord.canAccessBusinessProfileId) {
-                    const bizAccount = allOwnerAccounts.find(acc => acc.id === sharedAccessRecord.canAccessBusinessProfileId);
-                    if (bizAccount) ownerAccountsIfShared.push(bizAccount);
-                }
+            if (ownerAccountsIfShared.length === 0 ) { 
+                const ownerName = sharedAccessRecord.ownerClient?.name || 'o proprietário';
+                logger.warn(`[WHATSAPP SERVICE] Acesso compartilhado para ${actorClient.name} (${senderPhone}) para contas de ${ownerClientIdForContext}, mas nenhuma conta do dono acessível foi encontrada.`);
+                await sendWhatsappMessage(senderPhone, `Olá ${actorClient.name.split(" ")[0]}! Você tem um acesso compartilhado, mas parece que ${ownerName} não possui contas ativas do tipo que você pode acessar (Pessoal ou o Empresarial específico). Peça para ele verificar, por favor! 😉`);
+                return;
+            }
+        } else {
+            // CASO 2: Não é um convidado. AGORA, VERIFICA SE É UM CLIENTE PRINCIPAL.
+            logger.info(`[WHATSAPP SERVICE] ${senderPhone} não é um convidado. Verificando se é um cliente principal...`);
+            actorClient = await clientService.findClientByPhone(senderPhone);
 
-                if (ownerAccountsIfShared.length === 0 ) { 
-                    const ownerName = sharedAccessRecord.ownerClient?.name || 'o proprietário';
-                    logger.warn(`[WHATSAPP SERVICE] Acesso compartilhado para ${actorClient.name} (${senderPhone}) para contas de ${ownerClientIdForContext}, mas nenhuma conta do dono acessível foi encontrada.`);
-                    await sendWhatsappMessage(senderPhone, `Olá ${actorClient.name.split(" ")[0]}! Você tem um acesso compartilhado, mas parece que ${ownerName} não possui contas ativas do tipo que você pode acessar (Pessoal ou o Empresarial específico). Peça para ele verificar, por favor! 😉`);
-                    return;
-                }
+            if (actorClient) {
+                // CASO 2.1: O número de telefone pertence a um cliente principal.
+                logger.info(`[WHATSAPP SERVICE] Identificado CLIENTE PRINCIPAL: ${actorClient.name} (ID: ${actorClient.id}) pelo telefone ${senderPhone}.`);
+                clientAccountsForOnboarding = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
             } else {
-                // CASO 3: Não é cliente principal nem convidado. É um usuário novo.
+                // CASO 3: Não é convidado nem cliente principal. É um usuário novo.
                 logger.info(`[WHATSAPP SERVICE] Telefone ${senderPhone} não reconhecido. Criando novo cliente para onboarding...`);
                 actorClient = await clientService.createClientContact({ phone: senderPhone, name: pushNameFromPayload || pushName });
                 const welcomeMsg = onboardingHandler.getOnboardingWelcomeNoPlanMessage(actorClient.name ? actorClient.name.split(" ")[0] : (pushNameFromPayload || "você"));
@@ -634,7 +635,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
     }
 }
 // =========================================================================================
-// <<< FIM DA FUNÇÃO `processIncomingMessage` REESTRUTURADA >>>
+// <<< FIM DA FUNÇÃO `processIncomingMessage` CORRIGIDA >>>
 // =========================================================================================
 
 module.exports = { 
