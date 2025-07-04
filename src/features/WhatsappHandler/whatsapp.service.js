@@ -17,6 +17,8 @@ const aiModelService = require('../../services/aiModelService');
 const logger = require('../../utils/logger');
 const path = require('path');
 const hydrationService = require('../Hydration/hydration.service'); // Adicionar import do serviço de hidratação
+const systemService = require('../System/system.service'); // Adicionar import do serviço de sistema para formatar a resposta
+
 
 // --- Gerenciamento de Estado da Conversa ---
 const conversationState = new Map();
@@ -366,7 +368,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 if (actionType === 'bebi') {
                     await hydrationService.updateLogStatus(actorClient.id, logId, 'completed');
                     const logs = await hydrationService.getTodaysLogsByClient(actorClient.id);
-                    const prefs = await systemService.getSystemPreferences();
+                    const prefs = await systemService.getSystemPreferences(); // Busca as preferências para formatar a mensagem
                     const hydrationSummary = formatter.formatHydrationLogDataStructure(logs, prefs, state.clientName);
                     await sendWhatsappMessage(senderPhone, `🎉 Boa, ${state.clientName}! Seu copo de água foi registrado! ${hydrationSummary}`);
                     conversationState.set(senderPhone, state);
@@ -375,7 +377,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 } else if (actionType === 'nao_bebi') {
                     await hydrationService.handleNegativeWaterResponse(actorClient.id, logId);
                     await sendWhatsappMessage(senderPhone, `Entendido, ${state.clientName}! Sem problemas. Que tal tentar beber um pouco de água agora? Te lembro novamente em 5 minutinhos! 😉`);
-                    // Não precisa de mais nada aqui, o job se encarregará de reenviar
                     conversationState.set(senderPhone, state);
                     pushNameFromPayload = null;
                     return;

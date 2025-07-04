@@ -170,8 +170,9 @@ async function getOrCreateDailyLogs(clientId) {
  * Atualiza o status de um log de hidratação específico.
  */
 async function updateLogStatus(clientId, logId, status) {
-  if (!['pending', 'completed', 'notified'].includes(status)) { // Adicionado 'notified'
-    const error = new Error('Status inválido. Use "pending", "completed" ou "notified".');
+  // MUDANÇA: Adicionado 'notified' como status válido.
+  if (!['pending', 'completed', 'notified', 'failed'].includes(status)) { 
+    const error = new Error('Status inválido. Use "pending", "completed", "notified" ou "failed".');
     error.statusCode = 400;
     throw error;
   }
@@ -186,7 +187,8 @@ async function updateLogStatus(clientId, logId, status) {
 
   const updatedLog = await log.update({
     status,
-    completedAt: status === 'completed' ? new Date() : null
+    // Define completedAt apenas se o status for 'completed'
+    completedAt: status === 'completed' ? new Date() : null 
   });
 
   logger.info(`Log de hidratação ID ${logId} atualizado para status "${status}" para o cliente ${clientId}.`);
@@ -287,6 +289,7 @@ async function handleNegativeWaterResponse(clientId, originalLogId) {
     }
 
     // 1. Marcar o log original como 'completed' para tirá-lo do fluxo de lembretes pendentes/notificados.
+    // Isso é importante para que o job não o pegue mais para reenvio do lembrete original.
     await updateLogStatus(clientId, originalLogId, 'completed');
     logger.info(`[HydrationService] Log de água original (ID: ${originalLogId}) marcado como 'completed' após resposta 'Não Bebi'.`);
 
