@@ -35,7 +35,7 @@ async function createOrUpdateHydrationSettings(clientId, settings) {
     await WaterIntakeLog.destroy({
         where: {
             clientId: clientId,
-            status: 'pending',
+            status: { [Op.in]: ['pending', 'notified'] }, // Inclui 'notified' para limpar lembretes ativos
             intakeDate: { [Op.gte]: today }
         }
     });
@@ -170,8 +170,8 @@ async function getOrCreateDailyLogs(clientId) {
  * Atualiza o status de um log de hidratação específico.
  */
 async function updateLogStatus(clientId, logId, status) {
-  if (!['pending', 'completed'].includes(status)) {
-    const error = new Error('Status inválido. Use "pending" ou "completed".');
+  if (!['pending', 'completed', 'notified'].includes(status)) { // Adicionado 'notified'
+    const error = new Error('Status inválido. Use "pending", "completed" ou "notified".');
     error.statusCode = 400;
     throw error;
   }
@@ -212,6 +212,30 @@ async function getTodaysLogsByClient(clientId) {
     return logs;
 }
 
+/**
+ * Cria um único log de consumo de água.
+ * @param {number} clientId - ID do cliente.
+ * @param {number} amount - Quantidade de água em ml.
+ * @param {string} scheduledTime - Hora agendada para o log (HH:MM:SS).
+ * @param {string} status - Status inicial do log ('pending', 'completed', 'notified').
+ * @param {string} intakeDate - Data do log (YYYY-MM-DD). Default para hoje.
+ * @returns {Promise<WaterIntakeLog>} O log de água criado.
+ */
+async function createSingleWaterIntakeLog(clientId, amount, scheduledTime, status = 'pending', intakeDate = null) {
+    const today = intakeDate || new Date().toISOString().split('T')[0];
+    const newLog = await WaterIntakeLog.create({
+        clientId,
+        intakeDate: today,
+        scheduledTime,
+        amount,
+        status,
+        completedAt: status === 'completed' ? new Date() : null,
+    });
+    logger.info(`[HydrationService] Novo log de água para ${clientId} criado: ${amount}ml às ${scheduledTime}, status ${status}.`);
+    return newLog;
+}
+
+
 async function logWaterIntake(clientId, amount = null) {
     if (amount && (isNaN(amount) || amount <= 0)) {
         throw new Error("A quantidade de água registrada deve ser um número positivo.");
@@ -220,18 +244,9 @@ async function logWaterIntake(clientId, amount = null) {
     if (amount) {
         // Se uma quantidade foi especificada, criamos um novo registro já completo.
         const now = new Date();
-        const intakeDate = now.toISOString().split('T')[0];
-        const completedAt = now;
         const scheduledTime = now.toLocaleTimeString('pt-BR', { hour12: false, timeZone: process.env.TZ || 'America/Sao_Paulo' });
-
-        const newLog = await WaterIntakeLog.create({
-            clientId,
-            intakeDate,
-            scheduledTime,
-            amount,
-            status: 'completed',
-            completedAt,
-        });
+        // Usa a nova função
+        const newLog = await createSingleWaterIntakeLog(clientId, amount, scheduledTime, 'completed');
         logger.info(`[HydrationService] Log de água de ${amount}ml criado diretamente para cliente ${clientId}.`);
         return newLog.toJSON();
     } else {
@@ -240,7 +255,7 @@ async function logWaterIntake(clientId, amount = null) {
         const nextPendingLog = await WaterIntakeLog.findOne({
             where: {
                 clientId,
-                status: 'pending',
+                status: { [Op.in]: ['pending', 'notified'] }, // Pode ser 'pending' ou 'notified'
                 intakeDate: today,
             },
             order: [['scheduledTime', 'ASC']]
@@ -250,13 +265,36 @@ async function logWaterIntake(clientId, amount = null) {
             return await updateLogStatus(clientId, nextPendingLog.id, 'completed');
         } else {
             // Se não há logs pendentes, podemos criar um genérico ou informar o usuário.
-            // Por simplicidade, vamos criar um log genérico de 200ml.
-            logger.info(`[HydrationService] Nenhum log pendente encontrado para cliente ${clientId}. Criando log genérico.`);
+            logger.info(`[HydrationService] Nenhum log pendente ou notificado encontrado para cliente ${clientId}. Criando log genérico.`);
             return await logWaterIntake(clientId, 200); // Chama a si mesmo com um valor padrão.
         }
     }
 }
 
+/**
+ * Lida com a resposta negativa do usuário ('Não Bebi').
+ * Marca o log original como 'completed' e cria um novo log para 5 minutos no futuro.
+ * @param {number} clientId - ID do cliente.
+ * @param {number} originalLogId - ID do log original ao qual o usuário respondeu 'Não Bebi'.
+ * @returns {Promise<void>}
+ */
+async function handleNegativeWaterResponse(clientId, originalLogId) {
+    const originalLog = await WaterIntakeLog.findOne({ where: { id: originalLogId, clientId } });
+
+    if (!originalLog) {
+        logger.warn(`[HydrationService] Tentativa de processar resposta negativa para log de água inexistente (ID: ${originalLogId}, Cliente: ${clientId}).`);
+        return;
+    }
+
+    // 1. Marcar o log original como 'completed' para tirá-lo do fluxo de lembretes pendentes/notificados.
+    await updateLogStatus(clientId, originalLogId, 'completed');
+    logger.info(`[HydrationService] Log de água original (ID: ${originalLogId}) marcado como 'completed' após resposta 'Não Bebi'.`);
+
+    // 2. Criar um novo log de água para 5 minutos no futuro, com o mesmo 'amount' e status 'pending'.
+    const newScheduledTime = dayjs().add(5, 'minute').format('HH:mm:ss');
+    await createSingleWaterIntakeLog(clientId, originalLog.amount, newScheduledTime, 'pending');
+    logger.info(`[HydrationService] Novo log de água criado para reenvio em 5 minutos (Cliente: ${clientId}, Horário: ${newScheduledTime}).`);
+}
 
 
 module.exports = {
@@ -264,5 +302,6 @@ module.exports = {
   updateLogStatus,
   getTodaysLogsByClient,
   createOrUpdateHydrationSettings,
-  logWaterIntake
+  logWaterIntake,
+  handleNegativeWaterResponse // Exportar a nova função
 };

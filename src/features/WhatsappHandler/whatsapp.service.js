@@ -16,6 +16,7 @@ const { sendWhatsappMessage, sendButtonListMessage, downloadZapiMedia } = requir
 const aiModelService = require('../../services/aiModelService');
 const logger = require('../../utils/logger');
 const path = require('path');
+const hydrationService = require('../Hydration/hydration.service'); // Adicionar import do serviço de hidratação
 
 // --- Gerenciamento de Estado da Conversa ---
 const conversationState = new Map();
@@ -52,8 +53,8 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
              if(ownerClientTemp) { 
                 ownerClientForContext = ownerClientTemp; 
                 ownerClientNameForContext = ownerClientTemp.name ? ownerClientTemp.name.split(" ")[0] : "Dono(a) da Conta";
-            } else {
-                 logger.error(`[InitializeState] CRITICAL: Dono da conta ${ownerClientIdForContext} não encontrado para acesso compartilhado.`);
+            } else { 
+                logger.error(`[InitializeState] CRITICAL: Dono da conta ${ownerClientIdForContext} não encontrado para acesso compartilhado.`);
                 ownerClientNameForContext = "Dono(a) da Conta"; 
                 ownerClientForContext = { accessLevel: 'gratuito', accessExpiresAt: null, id: ownerClientIdForContext, name: "Dono Desconhecido" }; 
             }
@@ -266,7 +267,9 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
     }
     const startTime = Date.now();
     let state;
-    let actorClient;
+
+    // Adicione a declaração de actorClient aqui para garantir que esteja sempre definida
+    let actorClient = null; 
 
     try {
         // ETAPA 1: Obter Cliente e Estado da Sessão - LÓGICA DE IDENTIFICAÇÃO CORRIGIDA
@@ -341,9 +344,45 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         state.isNewUserForSessionLogic = !existingState;
 
         // ETAPA 1.5: Tratamento de Comandos Diretos (Botões)
+        // MUDANÇA: Se é um clique de botão de hidratação, tratar primeiro
         if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
             const buttonId = rawPayload.selectedButtonId;
             logger.info(`[MAESTRO] Botão clicado por ${senderPhone}: ID '${buttonId}'`);
+            
+            // Tratamento específico para botões de hidratação
+            if (buttonId.startsWith('water_intake:')) {
+                const parts = buttonId.split(':');
+                const actionType = parts[1]; // 'bebi' ou 'nao_bebi'
+                const logId = parseInt(parts[2], 10);
+
+                if (isNaN(logId)) {
+                    logger.warn(`[WHATSAPP SERVICE] Botão de hidratação com ID de log inválido: ${buttonId}`);
+                    await sendWhatsappMessage(senderPhone, "Ops, tive um problema para identificar qual lembrete era esse. Tente novamente ou digite sua mensagem!");
+                    conversationState.set(senderPhone, state);
+                    pushNameFromPayload = null;
+                    return;
+                }
+
+                if (actionType === 'bebi') {
+                    await hydrationService.updateLogStatus(actorClient.id, logId, 'completed');
+                    const logs = await hydrationService.getTodaysLogsByClient(actorClient.id);
+                    const prefs = await systemService.getSystemPreferences();
+                    const hydrationSummary = formatter.formatHydrationLogDataStructure(logs, prefs, state.clientName);
+                    await sendWhatsappMessage(senderPhone, `🎉 Boa, ${state.clientName}! Seu copo de água foi registrado! ${hydrationSummary}`);
+                    conversationState.set(senderPhone, state);
+                    pushNameFromPayload = null;
+                    return;
+                } else if (actionType === 'nao_bebi') {
+                    await hydrationService.handleNegativeWaterResponse(actorClient.id, logId);
+                    await sendWhatsappMessage(senderPhone, `Entendido, ${state.clientName}! Sem problemas. Que tal tentar beber um pouco de água agora? Te lembro novamente em 5 minutinhos! 😉`);
+                    // Não precisa de mais nada aqui, o job se encarregará de reenviar
+                    conversationState.set(senderPhone, state);
+                    pushNameFromPayload = null;
+                    return;
+                }
+            }
+
+            // Se não for um botão de hidratação, processa como um botão genérico
             const buttonResult = await actionHandler.handleButtonInteraction(state, buttonId, senderPhone);
             if (buttonResult.stateUpdated) {
                 conversationState.set(senderPhone, buttonResult.newState);
