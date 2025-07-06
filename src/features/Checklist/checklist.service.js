@@ -10,30 +10,30 @@ const logger = require('../../utils/logger');
  * @returns {Promise<object>} O objeto DailyChecklist com seus itens.
  */
 async function getChecklistByDate(financialAccountId, date) {
-  const [checklist] = await DailyChecklist.findOrCreate({
+  // Use findOrCreate para garantir que o registro DailyChecklist exista para a data e conta
+  const [dailyChecklistRecord, created] = await DailyChecklist.findOrCreate({
     where: { financialAccountId, date },
     defaults: { financialAccountId, date },
-    include: [{
-      model: ChecklistItem,
-      as: 'items',
-      order: [['createdAt', 'ASC']],
-    }],
-    order: [
-      [{ model: ChecklistItem, as: 'items' }, 'createdAt', 'ASC']
-    ]
   });
 
-  // findOrCreate retorna um array [instance, created]. Queremos a instância.
-  // Se foi recém-criado, o `include` não funciona, então buscamos de novo.
-  if (!checklist.items) {
-    const freshChecklist = await DailyChecklist.findByPk(checklist.id, {
-        include: [{ model: ChecklistItem, as: 'items' }],
-        order: [[{ model: ChecklistItem, as: 'items' }, 'createdAt', 'ASC']]
-    });
-    return freshChecklist.toJSON();
-  }
+  // Agora, busque os ChecklistItems para este DailyChecklist específico.
+  // CRITICAMENTE, inclua o DailyChecklist pai dentro de cada item, usando o alias 'checklist'.
+  // Isso é o que tornará 'item.checklist' acessível no frontend e permitirá a verificação de posse.
+  const checklistItems = await ChecklistItem.findAll({
+    where: { dailyChecklistId: dailyChecklistRecord.id },
+    include: [{
+      model: DailyChecklist,
+      as: 'checklist', // Este alias é definido em ChecklistItem.associate
+      attributes: ['financialAccountId'] // Busca apenas o financialAccountId do DailyChecklist
+    }],
+    order: [['createdAt', 'ASC']],
+  });
 
-  return checklist.toJSON();
+  // Prepara a estrutura de resposta: o objeto DailyChecklist contendo seus itens
+  const result = dailyChecklistRecord.toJSON();
+  result.items = checklistItems.map(item => item.toJSON()); // Converte os itens para objetos JSON planos
+
+  return result;
 }
 
 /**
@@ -46,6 +46,7 @@ async function getChecklistByDate(financialAccountId, date) {
 async function addChecklistItem(financialAccountId, date, itemData) {
   const checklist = await getChecklistByDate(financialAccountId, date);
   if (!checklist) {
+    // Embora getChecklistByDate sempre crie um, esta verificação serve como segurança extra.
     throw { statusCode: 404, message: 'Checklist para esta data não encontrado.' };
   }
 
@@ -55,6 +56,7 @@ async function addChecklistItem(financialAccountId, date, itemData) {
     priority: itemData.priority || 'medium',
     notes: itemData.notes || null,
     completed: false,
+    order: (checklist.items.length > 0 ? Math.max(...checklist.items.map(item => item.order)) + 1 : 0) // Define uma ordem
   });
 
   logger.info(`Novo item de checklist (ID: ${newItem.id}) adicionado para a conta ${financialAccountId} na data ${date}.`);
