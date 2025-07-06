@@ -20,6 +20,7 @@ const logger = require('../../utils/logger');
 const formatter = require('./response.formatter'); // Importa o novo formatador
 const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
 const aiModelService = require('../../services/aiModelService');
+const checklistService = require('../Checklist/checklist.service'); // <<< ADICIONE ESTA LINHA AQUI
 
 // Helpers que antes estavam no whatsapp.service
 async function findCreditCardIdByName(name, financialAccountId) {
