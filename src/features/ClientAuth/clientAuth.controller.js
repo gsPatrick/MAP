@@ -87,10 +87,31 @@ async function updateCalendarPreferences(req, res, next) {
   }
 }
 
+async function updateMyProfile(req, res, next) {
+  try {
+    const clientId = req.client.id; // ID do cliente vem do token autenticado
+    const updateData = req.body;
+
+    // Validação básica para garantir que não está vazio
+    if (Object.keys(updateData).length === 0) {
+        const error = new Error('Nenhum dado fornecido para atualização.');
+        error.statusCode = 400; error.status = 'fail';
+        return next(error);
+    }
+
+    const result = await clientAuthService.updateClientProfile(clientId, updateData);
+    res.status(200).json({ status: 'success', data: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+
 
 module.exports = {
   setCredentials,
   login,
   getCurrentClientProfile,
-  updateCalendarPreferences
+  updateCalendarPreferences,
+  updateMyProfile
 };

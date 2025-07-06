@@ -64,6 +64,67 @@ async function setClientCredentials(phone, password, name = null, email = null) 
   }
 }
 
+async function updateClientProfile(clientId, updateData) {
+  const t = await sequelize.transaction();
+  try {
+    const client = await Client.scope('withPassword').findByPk(clientId, { transaction: t });
+    if (!client) {
+      throw { statusCode: 404, message: 'Cliente não encontrado.' };
+    }
+
+    const { name, email, phone, password, newPassword } = updateData;
+    const dataToUpdate = {};
+    let passwordChanged = false;
+
+    // Valida a senha atual se uma nova senha for fornecida
+    if (newPassword) {
+      if (!password) {
+        throw { statusCode: 400, message: 'A senha atual é necessária para definir uma nova senha.' };
+      }
+      const isPasswordMatch = await client.isValidPassword(password);
+      if (!isPasswordMatch) {
+        throw { statusCode: 403, message: 'A senha atual está incorreta.' };
+      }
+      dataToUpdate.passwordHash = newPassword; // O hook beforeUpdate cuidará do hash
+      passwordChanged = true;
+    }
+
+    // Atualiza outros campos se fornecidos
+    if (name !== undefined) dataToUpdate.name = name;
+    if (phone !== undefined) dataToUpdate.phone = phone;
+    if (email !== undefined) {
+      const lowerEmail = email.toLowerCase().trim();
+      if (lowerEmail !== client.email) {
+        const existingEmail = await Client.findOne({ where: { email: lowerEmail, id: { [Op.ne]: clientId } }, transaction: t });
+        if (existingEmail) {
+          throw { statusCode: 409, message: 'Este endereço de e-mail já está em uso por outro cliente.' };
+        }
+        dataToUpdate.email = lowerEmail;
+      }
+    }
+
+    if (Object.keys(dataToUpdate).length === 0) {
+      await t.commit();
+      return { client: client.toJSON(), message: 'Nenhuma informação para atualizar.' };
+    }
+
+    await client.update(dataToUpdate, { transaction: t });
+    await t.commit();
+
+    const reloadedClient = await Client.findByPk(clientId);
+    return {
+      client: reloadedClient.toJSON(),
+      message: `Perfil atualizado com sucesso.${passwordChanged ? ' A senha foi alterada.' : ''}`
+    };
+
+  } catch (error) {
+    if (t && !t.finished) await t.rollback();
+    logger.error(`Erro ao atualizar perfil do cliente ID ${clientId}: ${error.message}`, { error });
+    throw error;
+  }
+}
+
+
 /**
  * Define credenciais (senha, nome, email) e o código de afiliado de uma só vez.
  * Usado no onboarding do WhatsApp.
@@ -545,5 +606,6 @@ module.exports = {
   setClientCredentialsAndAffiliate, // <<< MUDANÇA APLICADA AQUI
   loginClient,
   getClientProfile,
-  updateClientCalendarPreferences
+  updateClientCalendarPreferences,
+  updateClientProfile
 }

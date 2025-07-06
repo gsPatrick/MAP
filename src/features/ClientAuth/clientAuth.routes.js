@@ -9,6 +9,7 @@ router.post('/client/set-credentials', clientAuthController.setCredentials);
 router.post('/client/login', clientAuthController.login);
 router.get('/client/me', authenticateClientToken, clientAuthController.getCurrentClientProfile);
 router.put('/client/me/calendar-preferences', authenticateClientToken, clientAuthController.updateCalendarPreferences);
+router.put('/client/update-profile', authenticateClientToken, clientAuthController.updateMyProfile);
 
 
 module.exports = router;
