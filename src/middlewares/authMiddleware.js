@@ -178,51 +178,120 @@ function authorizeRole(allowedRoles) {
     next();
   };
 }
-
 async function checkFinancialAccountOwnership(req, res, next) {
     try {
-        const clientForAuth = req.sharedAccessContext ? { id: req.sharedAccessContext.ownerClientId } : req.client;
         const financialAccountIdFromParams = parseInt(req.params.financialAccountId, 10);
 
-        if (!clientForAuth || !clientForAuth.id) {
-            logger.error('[AuthOwnership] Middleware chamado sem req.client ou ownerClient válido.');
+        // Verifica se req.client está populado (deve estar pelo authenticateClientToken)
+        if (!req.client || !req.client.id) {
+            logger.error('[AuthOwnership] Middleware chamado sem req.client. O authenticateClientToken falhou ou não foi executado.');
             return res.status(500).json({ status: 'error', message: 'Erro interno de autenticação.' });
         }
         if (isNaN(financialAccountIdFromParams)) {
             return res.status(400).json({ status: 'fail', message: 'ID da Conta Financeira inválido na rota.' });
         }
 
-        const financialAccount = await FinancialAccount.findOne({
-            where: { id: financialAccountIdFromParams, clientId: clientForAuth.id }
-        });
+        let financialAccount = null;
 
+        // Cenário 1: Cliente logado diretamente (token.type === 'client')
+        // req.sharedAccessContext será null neste caso.
+        if (!req.sharedAccessContext) {
+            logger.debug(`[AuthOwnership] Cliente ID ${req.client.id} logado diretamente. Verificando posse ou acesso compartilhado recebido para FA ID ${financialAccountIdFromParams}.`);
+            
+            // Tenta encontrar por posse DIRETA
+            financialAccount = await FinancialAccount.findOne({
+                where: {
+                    id: financialAccountIdFromParams,
+                    clientId: req.client.id // O cliente logado é o proprietário
+                }
+            });
+
+            // Se não encontrou por posse direta, tenta encontrar por ACESSO COMPARTILHADO RECEBIDO
+            if (!financialAccount) {
+                const sharedAccess = await SharedAccess.findOne({
+                    where: {
+                        sharedWithClientId: req.client.id, // O cliente logado recebeu acesso
+                        status: 'Ativo', // O acesso compartilhado deve estar ativo
+                        [Op.or]: [ // Pode ser acesso ao perfil PF ou a um perfil PJ/MEI específico
+                            { canAccessPersonalProfile: true, '$accessibleBusinessProfile.accountType$': 'PF' },
+                            { canAccessBusinessProfileId: financialAccountIdFromParams }
+                        ]
+                    },
+                    include: [{
+                        model: FinancialAccount,
+                        as: 'accessibleBusinessProfile',
+                        required: false // Para permitir o OR com canAccessPersonalProfile
+                    }]
+                });
+
+                if (sharedAccess) {
+                    // Confirma que o sharedAccess encontrado é para a FA correta
+                    // Se for acesso a PF, precisamos que a FA da rota seja PF.
+                    // Se for acesso a PJ/MEI, precisa bater o ID.
+                    const faTypeFromDb = (await FinancialAccount.findByPk(financialAccountIdFromParams))?.accountType;
+
+                    if (faTypeFromDb === 'PF' && sharedAccess.canAccessPersonalProfile) {
+                        financialAccount = await FinancialAccount.findByPk(financialAccountIdFromParams);
+                    } else if (['PJ', 'MEI'].includes(faTypeFromDb) && sharedAccess.canAccessBusinessProfileId === financialAccountIdFromParams) {
+                        financialAccount = await FinancialAccount.findByPk(financialAccountIdFromParams);
+                    }
+                }
+                
+                if (financialAccount) {
+                    logger.debug(`[AuthOwnership] Acesso concedido via SharedAccess recebido para FA ID ${financialAccountIdFromParams} pelo Cliente ID ${req.client.id}.`);
+                }
+            }
+
+        } else { // Cenário 2: Cliente logado via token de acesso compartilhado (token.type === 'client_shared_access')
+            // req.client é o sharedWithClient, req.sharedAccessContext.ownerClientId é o dono.
+            logger.debug(`[AuthOwnership] Cliente ID ${req.client.id} logado via acesso compartilhado do Owner ID ${req.sharedAccessContext.ownerClientId}. Verificando acesso para FA ID ${financialAccountIdFromParams}.`);
+
+            // Aqui, a validação é se o token de acesso compartilhado realmente dá permissão para esta FA.
+            const sharedAccess = await SharedAccess.findOne({
+                where: {
+                    ownerClientId: req.sharedAccessContext.ownerClientId,
+                    sharedWithClientId: req.client.id,
+                    status: 'Ativo',
+                    [Op.or]: [
+                        { canAccessPersonalProfile: true }, // Acesso ao perfil pessoal do dono
+                        { canAccessBusinessProfileId: financialAccountIdFromParams } // Acesso a um perfil de negócio específico
+                    ]
+                }
+            });
+
+            if (sharedAccess) {
+                financialAccount = await FinancialAccount.findByPk(financialAccountIdFromParams);
+                if (financialAccount) {
+                    // Verificações adicionais baseadas no tipo de conta e nas permissões do sharedAccess
+                    if (financialAccount.accountType === 'PF' && !sharedAccess.canAccessPersonalProfile) {
+                        financialAccount = null; // Tenta acessar PF sem permissão específica
+                    } else if (['PJ', 'MEI'].includes(financialAccount.accountType) && sharedAccess.canAccessBusinessProfileId !== financialAccount.id) {
+                        financialAccount = null; // Tenta acessar um PJ/MEI diferente do concedido
+                    }
+                    if (financialAccount) {
+                        logger.debug(`[AuthOwnership] Acesso concedido via token SharedAccess para FA ID ${financialAccountIdFromParams}.`);
+                    }
+                }
+            }
+        }
+        
+        // Se, após todas as verificações, a financialAccount ainda é nula, nega o acesso.
         if (!financialAccount) {
-            logger.warn(`[AuthOwnership] Cliente ${clientForAuth.id} tentou acessar FA ${financialAccountIdFromParams} que não lhe pertence ou não existe.`);
+            logger.warn(`[AuthOwnership] Acesso negado para FinancialAccount ID ${financialAccountIdFromParams} ao Cliente ID ${req.client.id}.`);
             return res.status(403).json({ status: 'fail', message: 'Acesso negado a esta conta financeira.' });
         }
+        
+        // Verifica se a conta financeira está ativa
         if (!financialAccount.isActive) {
-            logger.warn(`[AuthOwnership] Cliente ${clientForAuth.id} tentou acessar FA ${financialAccountIdFromParams} INATIVA.`);
+            logger.warn(`[AuthOwnership] Cliente ${req.client.id} tentou acessar FinancialAccount INATIVA ID ${financialAccountIdFromParams}.`);
             return res.status(403).json({ status: 'fail', message: 'Esta conta financeira está inativa.' });
         }
         
-        if (req.sharedAccessContext) {
-            const { canAccessPersonalProfile, canAccessBusinessProfileId } = req.sharedAccessContext;
-            let isAllowedForShared = false;
-            if (financialAccount.accountType === 'PF' && canAccessPersonalProfile) {
-                isAllowedForShared = true;
-            } else if ((financialAccount.accountType === 'PJ' || financialAccount.accountType === 'MEI') && canAccessBusinessProfileId === financialAccount.id) {
-                isAllowedForShared = true;
-            }
-            if (!isAllowedForShared) {
-                logger.warn(`[AuthOwnership - Shared] Usuário compartilhado ${req.client.id} tentou acessar FA ${financialAccount.id} (${financialAccount.accountType}) do dono ${clientForAuth.id}, mas não tem permissão para este perfil específico.`);
-                return res.status(403).json({ status: 'fail', message: 'Acesso compartilhado negado para este perfil financeiro específico.' });
-            }
-        }
-        
+        // Popula req.financialAccount com o objeto da conta para uso posterior nos controllers
         req.financialAccount = financialAccount.toJSON();
         next();
     } catch (error) {
-        logger.error('[AuthOwnership] Erro ao verificar propriedade da conta financeira:', { message: error.message, error });
+        logger.error('[AuthOwnership] Erro ao verificar propriedade/acesso da conta financeira:', { message: error.message, stack: error.stack });
         return res.status(500).json({ status: 'error', message: 'Erro ao verificar permissões da conta.' });
     }
 }
