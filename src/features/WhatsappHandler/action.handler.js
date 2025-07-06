@@ -143,6 +143,92 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
+                     case 'CREATE_CHECKLIST_ITEM': {
+                try {
+                    // Garante que só contas de negócio podem usar
+                    if (!['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
+                        throw { statusCode: 403, message: "O checklist diário é uma funcionalidade para contas de negócio (PJ/MEI)." };
+                    }
+
+                    const { text, priority } = detectedAction.parameters;
+                    if (!text) {
+                        throw { statusCode: 400, message: "Para adicionar uma tarefa, preciso que me diga o que fazer. Ex: 'adicionar tarefa Falar com fornecedor'." };
+                    }
+                    
+                    const today = new Date().toISOString().split('T')[0];
+                    const newItem = await checklistService.addChecklistItem(state.activeFinancialAccountId, today, { text, priority });
+
+                    formattedData = `✅ Tarefa adicionada ao seu checklist de hoje!\n\n> *"${newItem.text}"* (Prioridade: ${priority || 'Média'})`;
+
+                    // Pega o checklist atualizado para dar um mini-resumo
+                    const currentChecklist = await checklistService.getChecklistByDate(state.activeFinancialAccountId, today);
+                    const pendingCount = currentChecklist.items.filter(item => !item.completed).length;
+
+                    formattedData += `\n\nVocê tem agora *${pendingCount}* tarefa(s) pendente(s) para hoje. Vamos nessa! 💪`;
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em CREATE_CHECKLIST_ITEM: ${e.message}`, { error: e, paramsUsed: detectedAction.parameters });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui adicionar sua tarefa.\nDetalhe: ${e.message}`;
+                }
+                break;
+            } case 'COMPLETE_CHECKLIST_ITEM': {
+                try {
+                    if (!['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
+                        throw { statusCode: 403, message: "O checklist diário é uma funcionalidade para contas de negócio (PJ/MEI)." };
+                    }
+
+                    const { text } = detectedAction.parameters;
+                    if (!text) {
+                        throw { statusCode: 400, message: "Qual tarefa você concluiu? Preciso da descrição para marcá-la." };
+                    }
+                    
+                    const today = new Date().toISOString().split('T')[0];
+                    const currentChecklist = await checklistService.getChecklistByDate(state.activeFinancialAccountId, today);
+                    
+                    // Lógica para encontrar a tarefa mais provável
+                    const pendingItems = currentChecklist.items.filter(item => !item.completed);
+                    if (pendingItems.length === 0) {
+                        formattedData = `🎉 Uau, você já tinha concluído tudo por hoje! Se quiser, pode adicionar mais tarefas.`;
+                        break;
+                    }
+                    
+                    // Simplificando a busca: encontrar o item que mais se assemelha
+                    let bestMatch = null;
+                    let highestScore = 0;
+                    const userWords = text.toLowerCase().split(' ');
+
+                    for (const item of pendingItems) {
+                        const itemWords = item.text.toLowerCase().split(' ');
+                        const score = userWords.filter(word => itemWords.includes(word)).length;
+                        if (score > highestScore) {
+                            highestScore = score;
+                            bestMatch = item;
+                        }
+                    }
+
+                    if (!bestMatch) {
+                        throw { statusCode: 404, message: `Não encontrei uma tarefa pendente parecida com "${text}".` };
+                    }
+
+                    const updatedItem = await checklistService.updateChecklistItem(state.activeFinancialAccountId, bestMatch.id, { completed: true });
+
+                    formattedData = `✅ Mandou bem! Marquei a tarefa *"${updatedItem.text}"* como concluída.`;
+
+                    // Pega o checklist atualizado para dar um novo resumo de progresso
+                    const updatedChecklist = await checklistService.getChecklistByDate(state.activeFinancialAccountId, today);
+                    const newPendingCount = updatedChecklist.items.filter(item => !item.completed).length;
+
+                    if (newPendingCount === 0) {
+                         formattedData += `\n\n*PARABÉNS!* 🏆 Você finalizou todas as tarefas de hoje! Momento de celebrar e relaxar!`;
+                    } else {
+                         formattedData += `\n\nAgora faltam apenas *${newPendingCount}* tarefa(s). Continue assim! 💪`;
+                    }
+                    
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em COMPLETE_CHECKLIST_ITEM: ${e.message}`, { error: e, paramsUsed: detectedAction.parameters });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui marcar sua tarefa como concluída.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }    
 
  case 'SCHEDULE_APPOINTMENT': {
                 try {

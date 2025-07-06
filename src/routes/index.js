@@ -34,6 +34,7 @@ const publicBookingRoutes = require('../features/PublicBooking/publicBooking.rou
 const financialController = require('../features/Financial/financial.controller');
 const affiliateRoutes = require('../features/Affiliate/affiliate.routes');
 const systemSupportBotRoutes = require ('../features/SystemSupportBot/systemSupportBot.routes')
+const checklistRoutes = require('../features/Checklist/checklist.routes'); // <<< ADICIONE ESTE IMPORT
 
 const mainApiRouter = Router();
 
@@ -129,6 +130,7 @@ clientFinancialAccountRouter.get('/summary', financialController.getFinancialSum
 clientFinancialAccountRouter.get('/monthly-trend', financialController.getMonthlyTrend);
 clientFinancialAccountRouter.get('/expense-category-summary', financialController.getExpenseCategorySummary);
 clientFinancialAccountRouter.get('/income-category-summary', financialController.getIncomeCategorySummary);
+clientFinancialAccountRouter.use('/checklists', checklistRoutes); // <<< ADICIONE ESTA LINHA
 
 // Monta as sub-rotas no clientFinancialAccountRouter
 clientFinancialAccountRouter.use('/transactions', financialTransactionRoutes);

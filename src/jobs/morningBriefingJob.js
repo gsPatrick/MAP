@@ -1,6 +1,6 @@
 // src/jobs/morningBriefingJob.js
 const cron = require('node-cron');
-const { Client, FinancialAccount, FinancialTransaction, Appointment } = require('../database');
+const { Client, FinancialAccount, FinancialTransaction, Appointment, DailyChecklist, ChecklistItem } = require('../database');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
@@ -38,7 +38,9 @@ async function processAndSendBriefings() {
         if (clientAccounts.length === 0) continue;
 
         const accountIds = clientAccounts.map(acc => acc.id);
+        const businessAccount = clientAccounts.find(acc => ['PJ', 'MEI'].includes(acc.accountType));
 
+        // --- BUSCA DE DADOS FINANCEIROS E DE AGENDA (EXISTENTE) ---
         const pendingTransactions = await FinancialTransaction.findAll({
           where: {
             financialAccountId: { [Op.in]: accountIds },
@@ -59,7 +61,7 @@ async function processAndSendBriefings() {
           include: [{ model: FinancialAccount, as: 'financialAccount', attributes: ['accountName'] }],
           order: [['eventDateTime', 'ASC']],
         });
-
+        
         const recurringItems = await FinancialTransaction.findAll({
             where: {
                 financialAccountId: { [Op.in]: accountIds },
@@ -69,6 +71,21 @@ async function processAndSendBriefings() {
             include: [{ model: FinancialAccount, as: 'financialAccount', attributes: ['accountName'] }],
             order: [['createdAt', 'DESC']],
         });
+
+        // --- INÍCIO DA NOVA LÓGICA DE CHECKLIST ---
+        let checklistData = null;
+        if (businessAccount) {
+            const checklist = await DailyChecklist.findOne({
+                where: { financialAccountId: businessAccount.id, date: todayDateString },
+                include: [{ model: ChecklistItem, as: 'items', order: [['createdAt', 'ASC']] }] // Ordena as tarefas
+            });
+            // Estrutura os dados do checklist para enviar à IA
+            checklistData = {
+                accountName: businessAccount.accountName,
+                items: checklist ? checklist.items.map(item => item.toJSON()) : [] // Garante que itens seja um array
+            };
+        }
+        // --- FIM DA NOVA LÓGICA DE CHECKLIST ---
 
         // Ação proativa de hidratação
         await hydrationService.logWaterIntake(client.id, 250, 'Registrado automaticamente pelo briefing matinal');
@@ -80,8 +97,10 @@ async function processAndSendBriefings() {
           pendingTransactions,
           appointments,
           recurringItems,
+          checklistData, // PASSANDO OS DADOS DO CHECKLIST PARA A IA
         };
-
+        
+        // A IA agora recebe os dados do checklist e pode incluí-los na mensagem
         const briefingMessage = await aiModelService.generateMorningBriefingMessage(briefingData);
 
         await sendWhatsappMessage(client.phone, briefingMessage);

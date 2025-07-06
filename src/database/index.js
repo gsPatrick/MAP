@@ -27,6 +27,9 @@ require ('../models/WaterIntakeLog') // <<< SharedAccess está aqui
 require('../models/AppointmentService')
 require('../models/Service');
 require('../models/AvailabilityRule')
+require('../models/DailyChecklist'); // <<< ADICIONE ESTA LINHA
+require('../models/ChecklistItem');  // <<< ADICIONE ESTA LINHA
+
 
 const models = sequelize.models;
 

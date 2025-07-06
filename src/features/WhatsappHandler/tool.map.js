@@ -23,7 +23,8 @@ const toolFunctionMap = {
     'PAY_CREDIT_CARD_INVOICE': actions.payCreditCardInvoice,
     'CREATE_FINANCIAL_CATEGORY': actions.createFinancialCategory,
     'CREATE_MOTIVATIONAL_PHRASE': actions.createMotivationalPhrase,
-
+    'CREATE_CHECKLIST_ITEM': actions.createChecklistItem, // <<< ADICIONE ESTA LINHA
+ 'COMPLETE_CHECKLIST_ITEM': actions.completeChecklistItem, // <<< ADICIONE ESTA LINHA
     // Ações de Leitura (GET / LIST)
     'GET_FINANCIAL_SUMMARY': actions.getFinancialSummary,
     'LIST_FINANCIAL_TRANSACTIONS': actions.listFinancialTransactions,
