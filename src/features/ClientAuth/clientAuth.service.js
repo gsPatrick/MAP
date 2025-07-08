@@ -63,54 +63,76 @@ async function setClientCredentials(phone, password, name = null, email = null) 
     throw error;
   }
 }
-
 async function updateClientProfile(clientId, updateData) {
   const t = await sequelize.transaction();
   try {
+    // Busca o cliente incluindo o hash da senha para poder validar a senha atual se necessário
     const client = await Client.scope('withPassword').findByPk(clientId, { transaction: t });
     if (!client) {
-      throw { statusCode: 404, message: 'Cliente não encontrado.' };
+      await t.rollback();
+      const error = new Error('Cliente não encontrado.');
+      error.statusCode = 404; error.status = 'fail'; throw error;
     }
 
     const { name, email, phone, password, newPassword } = updateData;
     const dataToUpdate = {};
     let passwordChanged = false;
 
-    // Valida a senha atual se uma nova senha for fornecida
+    // --- LÓGICA DE ATUALIZAÇÃO DE SENHA ---
+    // Este bloco só é executado se uma nova senha for fornecida.
     if (newPassword) {
       if (!password) {
-        throw { statusCode: 400, message: 'A senha atual é necessária para definir uma nova senha.' };
+        await t.rollback();
+        const error = new Error('A senha atual é necessária para definir uma nova senha.');
+        error.statusCode = 400; error.status = 'fail'; throw error;
       }
       const isPasswordMatch = await client.isValidPassword(password);
       if (!isPasswordMatch) {
-        throw { statusCode: 403, message: 'A senha atual está incorreta.' };
+        await t.rollback();
+        const error = new Error('A senha atual está incorreta.');
+        error.statusCode = 403; error.status = 'fail'; throw error;
       }
-      dataToUpdate.passwordHash = newPassword; // O hook beforeUpdate cuidará do hash
+      // Adiciona a nova senha ao payload de atualização. O hook do modelo fará o hash.
+      dataToUpdate.passwordHash = newPassword;
       passwordChanged = true;
     }
 
-    // Atualiza outros campos se fornecidos
-    if (name !== undefined) dataToUpdate.name = name;
-    if (phone !== undefined) dataToUpdate.phone = phone;
+    // --- LÓGICA DE ATUALIZAÇÃO DE OUTROS DADOS ---
+    // Verifica e adiciona outros campos ao payload se eles foram fornecidos e são diferentes.
+    if (name !== undefined && name !== client.name) {
+      dataToUpdate.name = name;
+    }
+    if (phone !== undefined && phone !== client.phone) {
+      // Adicionar aqui validação de formato de telefone se necessário
+      dataToUpdate.phone = phone;
+    }
     if (email !== undefined) {
       const lowerEmail = email.toLowerCase().trim();
       if (lowerEmail !== client.email) {
-        const existingEmail = await Client.findOne({ where: { email: lowerEmail, id: { [Op.ne]: clientId } }, transaction: t });
+        const existingEmail = await Client.findOne({ 
+            where: { email: lowerEmail, id: { [Op.ne]: clientId } }, 
+            transaction: t 
+        });
         if (existingEmail) {
-          throw { statusCode: 409, message: 'Este endereço de e-mail já está em uso por outro cliente.' };
+          await t.rollback();
+          const error = new Error('Este endereço de e-mail já está em uso por outro cliente.');
+          error.statusCode = 409; error.status = 'fail'; throw error;
         }
         dataToUpdate.email = lowerEmail;
       }
     }
 
+    // Se nenhum dado foi alterado, não faz nada no banco.
     if (Object.keys(dataToUpdate).length === 0) {
-      await t.commit();
+      await t.commit(); // Commit a transação vazia
       return { client: client.toJSON(), message: 'Nenhuma informação para atualizar.' };
     }
 
+    // Executa a atualização com os dados coletados.
     await client.update(dataToUpdate, { transaction: t });
     await t.commit();
 
+    // Recarrega o cliente para retornar os dados atualizados (sem o hash da senha)
     const reloadedClient = await Client.findByPk(clientId);
     return {
       client: reloadedClient.toJSON(),
@@ -120,6 +142,8 @@ async function updateClientProfile(clientId, updateData) {
   } catch (error) {
     if (t && !t.finished) await t.rollback();
     logger.error(`Erro ao atualizar perfil do cliente ID ${clientId}: ${error.message}`, { error });
+    // Se o erro já tiver um statusCode (lançado por nós), mantenha-o. Senão, defina como 500.
+    if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
 }

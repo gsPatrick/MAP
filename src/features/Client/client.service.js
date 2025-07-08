@@ -666,76 +666,131 @@ async function getFinancialAccountById(financialAccountId) {
  * @returns {Promise<object|null>} A FinancialAccount atualizada.
  */
 async function updateFinancialAccount(financialAccountId, updateData) {
+  // Inicia uma transação para garantir que todas as operações sejam atômicas
   const t = await sequelize.transaction();
   try {
+    // Busca a conta financeira pelo ID dentro da transação
     const account = await FinancialAccount.findByPk(financialAccountId, { transaction: t });
+
+    // Se a conta não for encontrada, desfaz a transação e retorna nulo
     if (!account) {
       await t.rollback();
       logger.warn(`Conta Financeira ID ${financialAccountId} não encontrada para atualização.`);
       return null;
     }
 
+    // --- Validações de Unicidade ---
+
+    // Valida se o novo nome da conta já existe para este cliente em outra conta
     if (updateData.accountName && updateData.accountName !== account.accountName) {
         const existingAccountName = await FinancialAccount.findOne({
-            where: { clientId: account.clientId, accountName: updateData.accountName, id: {[Op.ne]: financialAccountId} }, transaction: t
+            where: {
+                clientId: account.clientId, // Apenas para o mesmo cliente
+                accountName: updateData.accountName,
+                id: { [Op.ne]: financialAccountId } // Excluindo a conta atual da busca
+            },
+            transaction: t
         });
-        if(existingAccountName){
+        if (existingAccountName) {
             await t.rollback();
             const error = new Error(`O cliente já possui outra conta financeira chamada "${updateData.accountName}".`);
-            error.statusCode = 409; error.status = 'fail'; throw error;
-        }
-    }
-    if(updateData.documentNumber && updateData.documentNumber !== account.documentNumber){
-        const existingDoc = await FinancialAccount.findOne({
-            where: { documentNumber: updateData.documentNumber, id: {[Op.ne]: financialAccountId} }, transaction: t
-        });
-        if(existingDoc){
-            await t.rollback();
-            const error = new Error(`O documento ${updateData.documentNumber} já está associado a outra conta financeira (ID: ${existingDoc.id}).`);
-            error.statusCode = 409; error.status = 'fail'; throw error;
+            error.statusCode = 409; // 409 Conflict
+            error.status = 'fail';
+            throw error;
         }
     }
 
+    // Valida se o novo número de documento já existe em qualquer outra conta no sistema
+    if (updateData.documentNumber && updateData.documentNumber !== account.documentNumber) {
+        const existingDoc = await FinancialAccount.findOne({
+            where: {
+                documentNumber: updateData.documentNumber,
+                id: { [Op.ne]: financialAccountId } // Excluindo a conta atual da busca
+            },
+            transaction: t
+        });
+        if (existingDoc) {
+            await t.rollback();
+            const error = new Error(`O documento ${updateData.documentNumber} já está associado a outra conta financeira (ID: ${existingDoc.id}).`);
+            error.statusCode = 409; // 409 Conflict
+            error.status = 'fail';
+            throw error;
+        }
+    }
+
+    // --- Lógica para Definir Conta Padrão ---
+
+    // Caso 1: A conta está sendo marcada como padrão (`isDefault: true`)
     if ((updateData.isDefault === true || updateData.isDefault === 'true') && !account.isDefault) {
+      // Desmarca qualquer outra conta que atualmente seja a padrão para este cliente
       await FinancialAccount.update(
         { isDefault: false },
-        { where: { clientId: account.clientId, isDefault: true, id: { [Op.ne]: financialAccountId } }, transaction: t }
+        {
+          where: {
+            clientId: account.clientId,
+            isDefault: true,
+            id: { [Op.ne]: financialAccountId } // Garante que não desmarque a própria conta
+          },
+          transaction: t
+        }
       );
-    } else if ((updateData.isDefault === false || updateData.isDefault === 'false') && account.isDefault) {
+      logger.info(`Conta ID ${financialAccountId} promovida a padrão. Outras contas do cliente ID ${account.clientId} foram desmarcadas.`);
+    }
+    // Caso 2: A conta padrão está sendo desmarcada (`isDefault: false`)
+    else if ((updateData.isDefault === false || updateData.isDefault === 'false') && account.isDefault) {
+      // Verifica se existem outras contas ATIVAS para este cliente
       const otherActiveAccountsCount = await FinancialAccount.count({
-        where: { clientId: account.clientId, isActive: true, id: { [Op.ne]: financialAccountId } }, transaction: t
+        where: {
+          clientId: account.clientId,
+          isActive: true,
+          id: { [Op.ne]: financialAccountId }
+        },
+        transaction: t
       });
-      if (otherActiveAccountsCount === 0 && (updateData.isDefault === false || updateData.isDefault === 'false')) {
-          updateData.isDefault = true; // Se for a única conta ativa, força a ser default
-          logger.info(`Conta ID ${financialAccountId} é a única ativa, forçada a ser default.`);
-      } else if (otherActiveAccountsCount > 0 && (updateData.isDefault === false || updateData.isDefault === 'false')) {
-          logger.warn(`Tentativa de desmarcar conta default ID ${financialAccountId} sem definir outra. A UI deve garantir a seleção de um novo padrão, ou uma será promovida.`);
-          // Não impede, mas a lógica para promover outra a default ao deletar esta é mais importante.
+
+      // Se não houver outras contas ativas, impede que esta seja desmarcada
+      if (otherActiveAccountsCount === 0) {
+          updateData.isDefault = true; // Força o valor de volta para 'true'
+          logger.warn(`Tentativa de desmarcar a única conta padrão ativa (ID ${financialAccountId}). Ação prevenida para manter a integridade.`);
+      } else {
+          logger.warn(`Conta padrão ID ${financialAccountId} desmarcada. A interface do usuário deve garantir a seleção de um novo padrão.`);
       }
     }
 
-    // Evitar que clientId ou accountType sejam alterados por este método se não for intencional
-    delete updateData.clientId;
-    // delete updateData.accountType; // Permitir mudar tipo pode ter implicações (ex: produtos só em PJ/MEI) - avaliar
+    // --- Sanitização e Atualização ---
 
+    // Remove campos que não devem ser alterados por este método para segurança
+    delete updateData.clientId;
+    delete updateData.accountType;
+
+    // Aplica as atualizações no objeto da conta
     await account.update(updateData, { transaction: t });
+
+    // Confirma a transação, salvando todas as alterações no banco de dados
     await t.commit();
-    logger.info(`Conta Financeira ID ${financialAccountId} ("${account.accountName}") atualizada.`);
-    return account.reload({ include: [{model: Client, as: 'ownerClient'}] }).then(acc => acc.toJSON());
+    logger.info(`Conta Financeira ID ${financialAccountId} ("${account.accountName}") atualizada com sucesso.`);
+
+    // Recarrega os dados da conta (incluindo associações) para garantir que o retorno seja o mais recente
+    return account.reload({ include: [{ model: Client, as: 'ownerClient' }] }).then(acc => acc.toJSON());
+
   } catch (error) {
+    // Em caso de qualquer erro, desfaz a transação para reverter todas as alterações
     await t.rollback();
     logger.error(`Erro ao atualizar conta financeira ID ${financialAccountId}: ${error.message}`, { error, updateData });
+
+    // Trata erros específicos do Sequelize para fornecer feedback mais claro
     if (error.name === 'SequelizeValidationError' || error.name === 'SequelizeUniqueConstraintError') {
         const customError = new Error(error.errors.map(e => e.message).join(', '));
         customError.statusCode = error.name === 'SequelizeUniqueConstraintError' ? 409 : 400;
         customError.status = 'fail';
         throw customError;
     }
+    
+    // Se o erro não tiver um statusCode definido, joga-o novamente para ser tratado pelo errorHandler
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
 }
-
 /**
  * Exclui uma FinancialAccount.
  * @param {number} financialAccountId - ID da FinancialAccount.
