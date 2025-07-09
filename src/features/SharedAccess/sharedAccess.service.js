@@ -2,8 +2,8 @@
 const { SharedAccess, Client, FinancialAccount, sequelize } = require('../../database');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
-const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils'); // <<< MUDANÇA: Importar o normalizador
-const { sendWhatsappMessage } = require('../../services/whatsappService'); // <<< MUDANÇA: Importar para enviar notificação
+const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
+const { sendWhatsappMessage } = require('../../services/whatsappService');
 
 async function grantAccess(ownerClientId, grantData) {
   const t = await sequelize.transaction();
@@ -53,13 +53,16 @@ async function grantAccess(ownerClientId, grantData) {
 
     if (!sharedWithClient) {
         logger.info(`[GrantAccess] Cliente convidado não encontrado. Criando novo Client... Email: ${clientEmailForLookup}, Tel: ${clientPhoneForLookup}`);
+        // <<< INÍCIO DA MUDANÇA >>>
+        // Usar um nome mais neutro para o convidado recém-criado.
         const newClientDataForSharedWith = {
-            name: sharedWithClientName || (clientEmailForLookup ? clientEmailForLookup.split('@')[0] : `Convidado ${clientPhoneForLookup || Date.now()}`),
+            name: sharedWithClientName || 'Convidado', // Alterado de 'Perfil...' para 'Convidado'
             status: 'Ativo',
             phone: clientPhoneForLookup,
             email: clientEmailForLookup,
             passwordHash: null,
         };
+        // <<< FIM DA MUDANÇA >>>
         if (!newClientDataForSharedWith.phone && !newClientDataForSharedWith.email) {
              const error = new Error('Para criar um novo usuário convidado, é necessário pelo menos um email ou telefone principal.');
              error.statusCode = 400; error.status = 'fail'; throw error;
@@ -170,11 +173,11 @@ async function grantAccess(ownerClientId, grantData) {
     await t.commit();
     logger.info(`Acesso concedido pelo Cliente ID ${ownerClientId} para Cliente ID ${sharedWithClient.id}. SharedAccess ID: ${newSharedAccess.id}. Login SA: Email=${newSharedAccess.sharedAccessEmail}, Tel=${newSharedAccess.sharedAccessPhone}`);
 
-    // <<< INÍCIO DA MUDANÇA >>>
-    // Enviar notificação para o convidado via WhatsApp, se ele tiver telefone
     if (sharedWithClient.phone) {
         try {
-            const guestName = sharedWithClient.name ? sharedWithClient.name.split(' ')[0] : 'você';
+            // <<< INÍCIO DA MUDANÇA >>>
+            // Usar uma saudação genérica na notificação inicial, pois ainda não sabemos o nome exato do convidado.
+            const guestName = (sharedWithClient.name && sharedWithClient.name !== 'Convidado') ? sharedWithClient.name.split(' ')[0] : 'Olá';
             const ownerName = ownerClient.name ? ownerClient.name.split(' ')[0] : 'um usuário';
             
             let sharedProfileText = [];
@@ -187,7 +190,8 @@ async function grantAccess(ownerClientId, grantData) {
                 sharedProfileText.push(bizAccount ? `Perfil Empresarial ("${bizAccount.accountName}")` : 'Perfil Empresarial');
             }
 
-            const notificationMessage = `Olá, ${guestName}! 👋\n\nBoas notícias! *${ownerName}* compartilhou o acesso à(s) conta(s) dele(a) no NoControle com você: *${sharedProfileText.join(' e ')}*.\n\nAgora você pode me mandar mensagens por aqui para gerenciar essa(s) conta(s). Tente dizer "resumo" para começar! 🚀`;
+            const notificationMessage = `${guestName}! 👋\n\nBoas notícias! *${ownerName}* compartilhou o acesso à(s) conta(s) dele(a) no NoControle com você: *${sharedProfileText.join(' e ')}*.\n\nAgora você pode me mandar mensagens por aqui para gerenciar essa(s) conta(s). Tente dizer "resumo" para começar! 🚀`;
+            // <<< FIM DA MUDANÇA >>>
             
             await sendWhatsappMessage(sharedWithClient.phone, notificationMessage);
             logger.info(`[GrantAccess] Notificação de acesso compartilhado enviada com sucesso para ${sharedWithClient.phone}.`);
@@ -195,7 +199,6 @@ async function grantAccess(ownerClientId, grantData) {
             logger.error(`[GrantAccess] Acesso concedido, mas FALHA ao enviar notificação de WhatsApp para ${sharedWithClient.phone}: ${notificationError.message}`);
         }
     }
-    // <<< FIM DA MUDANÇA >>>
 
     return SharedAccess.findByPk(newSharedAccess.id, {
         include: [
