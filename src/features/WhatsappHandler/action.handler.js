@@ -70,7 +70,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
     const actionName = detectedAction.action || detectedAction.action_type;
     let formattedData = "";
     
-    // << MUDANÇA AQUI: Inicializamos o resourceForButtonsContext e wasAnEdit no escopo principal >>
     let resourceForButtonsContext = {
         type: 'multi_action_block',
         resources: []
@@ -118,10 +117,10 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, newTx.id);
                     
                     formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx);
-                    if (isOwnerActingOnOwnBehalfGlobal) {
-                        // << MUDANÇA APLICADA >>
-                        resourceForButtonsContext.resources.push({ type: 'transaction', id: newTx.id, description: newTx.description });
-                    }
+                    // <<< INÍCIO DA MUDANÇA >>>
+                    // Remove a condição 'isOwnerActingOnOwnBehalfGlobal' para que convidados também recebam os botões.
+                    resourceForButtonsContext.resources.push({ type: 'transaction', id: newTx.id, description: newTx.description });
+                    // <<< FIM DA MUDANÇA >>>
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_FINANCIAL_TRANSACTION: ${e.message}`, { error: e, paramsUsed: params });
                     let intro = `Ops, ${clientNameToUse}! 😬 Tive um problema ao registrar sua transação.`;
@@ -251,7 +250,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         serviceIds: [],
                     };
                     
-                    // Lógica PJ/MEI: Associa BusinessClients e Services
                     if (['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
                         if (params.businessClientNames && Array.isArray(params.businessClientNames)) {
                             for (const name of params.businessClientNames) {
@@ -262,7 +260,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         
                         if (params.serviceNames && Array.isArray(params.serviceNames)) {
                              for (const name of params.serviceNames) {
-                                // Reutilizando a lógica do service para encontrar IDs
                                 const { services } = await serviceService.getAllServices(state.activeFinancialAccountId, { search: name, limit: 1, isActive: true });
                                 if (services && services.length > 0) {
                                     appointmentData.serviceIds.push(services[0].id);
@@ -278,12 +275,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const newAppt = await appointmentService.scheduleAppointment(state.activeFinancialAccountId, appointmentData, actorId);
                     
-                    // O service agora retorna o objeto completo com as associações
                     formattedData = formatter.formatAppointmentDataStructure(newAppt);
-
-                    if (isOwnerActingOnOwnBehalfGlobal) {
-                        resourceForButtonsContext.resources.push({ type: 'appointment', id: newAppt.id, description: newAppt.title });
-                    }
+                    resourceForButtonsContext.resources.push({ type: 'appointment', id: newAppt.id, description: newAppt.title });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em SCHEDULE_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui agendar seu compromisso.\nDetalhe: ${e.message}`;
@@ -332,9 +325,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const parcelResult = await financialService.createParcelledAccount(state.activeFinancialAccountId, parcelData, actorId);
                     
                     formattedData = formatter.formatParcelledAccountDataStructure(parcelData, parcelResult);
-                    if (parcelResult.parcels && parcelResult.parcels.length > 0 && isOwnerActingOnOwnBehalfGlobal) {
+                    if (parcelResult.parcels && parcelResult.parcels.length > 0) {
                         const originalTxId = parcelResult.parcels[0].originalAccountId || parcelResult.parcels[0].id;
-                        // << MUDANÇA APLICADA >>
                         resourceForButtonsContext.resources.push({ type: 'parcelled_account', id: originalTxId, description: parcelData.description });
                     }
                 } catch (e) {
@@ -387,10 +379,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const reloadedRule = await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, newRule.id);
                     
                     formattedData = formatter.formatRecurringRuleDataStructure(reloadedRule);
-                    if (isOwnerActingOnOwnBehalfGlobal) {
-                        // << MUDANÇA APLICADA >>
-                        resourceForButtonsContext.resources.push({ type: 'recurring_rule', id: newRule.id, description: newRule.description });
-                    }
+                    resourceForButtonsContext.resources.push({ type: 'recurring_rule', id: newRule.id, description: newRule.description });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_RECURRING_RULE: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui criar a regra de recorrência.\nDetalhe: ${e.message}`;
@@ -414,10 +403,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const newProduct = await productService.createProduct(state.activeFinancialAccountId, productData, actorId);
                     
                     formattedData = formatter.formatProductDataStructure(newProduct);
-                    if (isOwnerActingOnOwnBehalfGlobal) {
-                        // << MUDANÇA APLICADA >>
-                        resourceForButtonsContext.resources.push({ type: 'product', id: newProduct.id, description: newProduct.name });
-                    }
+                    resourceForButtonsContext.resources.push({ type: 'product', id: newProduct.id, description: newProduct.name });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_PRODUCT: ${e.message}`, { error: e, paramsUsed: params });
                     let intro = `Ops, ${clientNameToUse}! Não consegui cadastrar o produto.`;
@@ -446,10 +432,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const newCard = await creditCardService.createCreditCard(state.activeFinancialAccountId, cardData, actorId);
                     
                     formattedData = formatter.formatCreditCardDataStructure(newCard);
-                    if (isOwnerActingOnOwnBehalfGlobal) {
-                        // << MUDANÇA APLICADA >>
-                        resourceForButtonsContext.resources.push({ type: 'credit_card', id: newCard.id, description: newCard.name });
-                    }
+                    resourceForButtonsContext.resources.push({ type: 'credit_card', id: newCard.id, description: newCard.name });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_CREDIT_CARD: ${e.message}`, { error: e, paramsUsed: params });
                     let intro = `Ops, ${clientNameToUse}! Não consegui cadastrar o cartão.`;
@@ -490,7 +473,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const newFinancialAccount = await clientService.createFinancialAccount(actorId, { accountName: newAccountName, accountType: accountTypeToCreate, documentNumber });
                     
                     formattedData = formatter.formatFinancialAccountDataStructure(newFinancialAccount) + "\n\nEsta conta foi criada, mas a sua conta ativa continua a mesma. Diga \"mudar para " + newFinancialAccount.accountName + "\" para começar a usá-la.";
-                    // Ações de sistema não precisam de botões de edição/exclusão.
                 } catch(e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_FINANCIAL_ACCOUNT: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui criar a conta.\nDetalhe: ${e.message}`;
@@ -507,10 +489,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const newBc = await businessClientService.createBusinessClient(state.activeFinancialAccountId, bcData, actorId);
                     
                     formattedData = formatter.formatBusinessClientDataStructure(newBc);
-                    if (isOwnerActingOnOwnBehalfGlobal) {
-                        // << MUDANÇA APLICADA >>
-                        resourceForButtonsContext.resources.push({ type: 'business_client', id: newBc.id, description: newBc.name });
-                    }
+                    resourceForButtonsContext.resources.push({ type: 'business_client', id: newBc.id, description: newBc.name });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_BUSINESS_CLIENT: ${e.message}`, { error: e, paramsUsed: params });
                     let intro = `Ops, ${clientNameToUse}! Não consegui cadastrar este cliente.`;
@@ -713,9 +692,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const newRule = await availabilityService.createAvailabilityRule(state.activeFinancialAccountId, ruleData);
                     
                     formattedData = formatter.formatAvailabilityRuleDataStructure(newRule);
-                    if (isOwnerActingOnOwnBehalfGlobal) {
-                        resourceForButtonsContext.resources.push({ type: 'availability_rule', id: newRule.id, description: newRule.title });
-                    }
+                    resourceForButtonsContext.resources.push({ type: 'availability_rule', id: newRule.id, description: newRule.title });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_AVAILABILITY_RULE: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui criar a regra de disponibilidade.\nDetalhe: ${e.message}`;
@@ -773,13 +750,11 @@ case 'GET_AVAILABLE_TIME_SLOTS': {
 
 case 'GET_PROVIDER_PUBLIC_INFO': {
     try {
-        // Verifica se a conta é do tipo correto, pois o serviço tem essa regra
         if (!['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
             throw { statusCode: 403, message: "Esta funcionalidade está disponível apenas para contas do tipo PJ ou MEI." };
         }
 
         const publicInfo = await publicBookingService.getProviderPublicInfo(state.activeFinancialAccountId);
-        // Monta a URL pública usando o ID da conta ativa no estado da conversa
         const publicBookingUrl = `http://map-nocontrole.com.br/agendar/${state.activeFinancialAccountId}`;
         
         formattedData = formatter.formatProviderPublicInfoDataStructure(publicInfo, publicBookingUrl);
@@ -806,10 +781,8 @@ case 'GET_PROVIDER_PUBLIC_INFO': {
                         type: params.type,
                     };
 
-                    // O serviço agora retorna o objeto completo
                     const summary = await financialService.getFinancialSummary(state.activeFinancialAccountId, filters);
                     
-                    // Monta a mensagem usando o novo formatador
                     let summaryIntro = `Aqui está o resumo financeiro para *${summary.periodDescription}*, ${clientNameToUse}! 📊`;
                     const summaryBody = formatter.formatFinancialSummaryDataStructure(summary);
                     
@@ -833,23 +806,17 @@ case 'LIST_APPOINTMENTS': {
         const { appointments, totalItems: totalAppts, periodDescription } = await appointmentService.getAllAppointments(state.activeFinancialAccountId, filterParamsAppt);
 
         if (totalAppts === 0) {
-            // A IA vai gerar a resposta para "nenhum agendamento"
-            // Para garantir isso, podemos passar um array vazio para a IA
             const creativeResponse = await aiModelService.generateCreativeAgendaResponse(clientNameToUse, [], periodDescription);
             formattedData = creativeResponse.overall_summary || `Você não tem nenhum compromisso para *${periodDescription}*. 👍`;
         } else {
-            // Passo 1: Pedir à IA para gerar as frases criativas
             const creativeResponse = await aiModelService.generateCreativeAgendaResponse(clientNameToUse, appointments, periodDescription);
 
-            // Passo 2: Montar os blocos de dados detalhados
             const appointmentDetails = appointments.map((appt, index) => {
                 const formattedBlock = formatter.formatAppointmentDataStructure(appt);
-                // Pega a frase individual correspondente gerada pela IA
                 const individualPhrase = creativeResponse.individual_phrases[index] || "Fique de olho neste compromisso!";
                 return `${formattedBlock}\n_${individualPhrase}_`;
             });
 
-            // Passo 3: Juntar tudo
             let finalResponse = `${creativeResponse.overall_summary}\n\n` + appointmentDetails.join("\n\n---\n\n");
 
             if (totalAppts > appointments.length) {
@@ -893,14 +860,10 @@ case 'LIST_APPOINTMENTS': {
                         period: params.period
                     };
                     
-                    // =================================================================
-                    // <<< MUDANÇA PRINCIPAL AQUI >>>
-                    // Desestruturamos o objeto para pegar o array 'rules' e o 'totalItems'.
                     const { rules: allRulesFound, totalItems } = await recurringTransactionService.getAllRecurringRules(
                         state.activeFinancialAccountId, 
                         filterParamsRules
                     );
-                    // =================================================================
 
                     if (totalItems === 0) {
                         let responseMsg = "Você ainda não tem nenhuma regra de recorrência ativa.";
@@ -911,7 +874,7 @@ case 'LIST_APPOINTMENTS': {
                         break;
                     }
 
-                    const enrichedRules = await Promise.all(allRulesFound.map(async (rule) => { // Agora 'allRulesFound' é um array
+                    const enrichedRules = await Promise.all(allRulesFound.map(async (rule) => { 
                         const history = await recurringTransactionService.getRecurringRuleHistory(state.activeFinancialAccountId, rule.id, { limit: 5 });
                         const pendingTransactions = history.transactions.filter(tx => !tx.isPaidOrReceived);
                         
@@ -1085,7 +1048,6 @@ case 'LIST_APPOINTMENTS': {
 
             case 'LIST_FINANCIAL_CATEGORIES': {
                 try {
-                    // Usando o service para buscar de forma hierárquica para uma melhor formatação
                     const categories = await financialCategoryService.getAllFinancialCategories(state.activeFinancialAccountId, { hierarchical: true });
                     formattedData = formatter.formatListFinancialCategoriesDataStructure(categories);
                 } catch (e) {
@@ -1129,9 +1091,7 @@ case 'LIST_APPOINTMENTS': {
                     }
                     const product = await productService.getProductById(state.activeFinancialAccountId, productId);
                     formattedData = formatter.formatProductDataStructure(product);
-                    if (isOwnerActingOnOwnBehalfGlobal) {
-                        resourceForButtonsContext = { type: 'product', id: product.id, description: product.name };
-                    }
+                    resourceForButtonsContext.resources.push({ type: 'product', id: product.id, description: product.name });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_PRODUCT_DETAILS: ${e.message}`, { error: e, paramsUsed: params });
                     let intro = `❌ Ops, ${clientNameToUse}! Não consegui buscar os detalhes do produto.`;
@@ -1153,7 +1113,7 @@ case 'LIST_APPOINTMENTS': {
             case 'GET_HYDRATION_LOG': {
                 try {
                     const logs = await hydrationService.getTodaysLogsByClient(actorId);
-                    const prefs = await systemService.getSystemPreferences(); // Precisa da meta para o formato
+                    const prefs = await systemService.getSystemPreferences(); 
                     formattedData = formatter.formatHydrationLogDataStructure(logs, prefs, clientNameToUse);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_HYDRATION_LOG: ${e.message}`, { error: e, paramsUsed: params });
@@ -1198,9 +1158,7 @@ case 'LIST_APPOINTMENTS': {
                 break;
             }
 
-            // =================================================================
 // AÇÕES DE LEITURA (GET / LIST)
-// =================================================================
 case 'GET_BUSINESS_CLIENT_DETAILS': {
     try {
         const { clientName } = params;
@@ -1208,7 +1166,6 @@ case 'GET_BUSINESS_CLIENT_DETAILS': {
             throw { statusCode: 400, message: "Preciso do nome do cliente para buscar os detalhes." };
         }
         
-        // Helper para encontrar o ID do cliente pelo nome
         const clientsResult = await businessClientService.getAllBusinessClients(state.activeFinancialAccountId, { search: clientName, limit: 1, isActive: null });
         if (!clientsResult.businessClients || clientsResult.businessClients.length === 0) {
             throw { statusCode: 404, message: `Não encontrei um cliente chamado "${clientName}".` };
@@ -1273,9 +1230,6 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                     if (!transactionIdToUpdate) {
                         throw { statusCode: 400, message: "ID da transação para atualizar não foi fornecido ou não está em contexto de edição." };
                     }
-                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal ) {
-                         throw { statusCode: 403, message: "Você não tem permissão para editar transações nesta conta compartilhada." };
-                    }
 
                     const updateDataTx = {};
                     if (params.hasOwnProperty('description')) updateDataTx.description = params.description;
@@ -1321,9 +1275,6 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                     if (!appointmentIdToUpdate) {
                         throw { statusCode: 400, message: "ID do compromisso para atualizar não foi fornecido." };
                     }
-                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                         throw { statusCode: 403, message: "Você não tem permissão para editar compromissos nesta conta compartilhada." };
-                    }
                     
                     const updateDataAppt = {};
                     if (params.hasOwnProperty('title')) updateDataAppt.title = params.title;
@@ -1367,9 +1318,6 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                 try {
                     if (!params.transactionDescription) {
                         throw { statusCode: 400, message: "Descrição da transação é obrigatória para marcar como paga/recebida." };
-                    }
-                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                         throw { statusCode: 403, message: "Você não tem permissão para marcar transações como pagas/recebidas nesta conta compartilhada." };
                     }
                     
                     const paymentDate = params.paymentDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0];
@@ -1415,9 +1363,6 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                         : (params.ruleIdToUpdate ? parseInt(params.ruleIdToUpdate, 10) : null);
                     if (!ruleIdToUpdate) {
                         throw { statusCode: 400, message: "ID da regra recorrente para atualizar não foi fornecido." };
-                    }
-                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                         throw { statusCode: 403, message: "Você não tem permissão para editar regras recorrentes nesta conta compartilhada." };
                     }
 
                     const updateDataRule = {};
@@ -1465,9 +1410,6 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                     if (!productIdToUpdate) {
                         throw { statusCode: 400, message: "ID do produto para atualizar não fornecido." };
                     }
-                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                         throw { statusCode: 403, message: "Você não tem permissão para editar produtos nesta conta compartilhada." };
-                    }
 
                     const updateDataProd = {};
                     if (params.hasOwnProperty('name')) updateDataProd.name = params.name;
@@ -1502,9 +1444,6 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                     if (!accountIdToUpdateDesc || !params.newDescription) {
                         throw { statusCode: 400, message: "ID da compra parcelada e nova descrição são obrigatórios." };
                     }
-                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                         throw { statusCode: 403, message: "Você não tem permissão para editar descrições nesta conta compartilhada." };
-                    }
 
                     await financialService.updateParcelledAccountDescription(state.activeFinancialAccountId, accountIdToUpdateDesc, params.newDescription, actorId);
                     
@@ -1524,9 +1463,6 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                         : (params.originalAccountIdToUpdate ? parseInt(params.originalAccountIdToUpdate, 10) : null);
                     if (!originalAccountIdToUpdate) {
                         throw { statusCode: 400, message: "ID da compra parcelada original é obrigatório para recriar." };
-                    }
-                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                         throw { statusCode: 403, message: "Você não tem permissão para recriar compras parceladas nesta conta compartilhada." };
                     }
 
                     const newCatObject = params.newFinancialCategoryName 
@@ -1571,9 +1507,6 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                     if (!cardIdToUpdate) {
                         throw { statusCode: 400, message: "ID do cartão para atualizar não foi fornecido." };
                     }
-                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                         throw { statusCode: 403, message: "Você não tem permissão para editar cartões nesta conta compartilhada." };
-                    }
 
                     const updateDataCard = {};
                     if (params.hasOwnProperty('name')) updateDataCard.name = params.name;
@@ -1602,9 +1535,6 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
 
             case 'UPDATE_BUSINESS_CLIENT': {
                 try {
-                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                         throw { statusCode: 403, message: "Você não tem permissão para editar clientes nesta conta compartilhada." };
-                    }
                     const clientIdToUpdate = state.editingResource?.type === 'business_client' && state.editingResource?.id
                         ? parseInt(state.editingResource.id, 10)
                         : (params.clientIdToUpdate ? parseInt(params.clientIdToUpdate) : null); 
@@ -1667,8 +1597,6 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
 
                     const updatedFA = await clientService.updateFinancialAccount(accountToUpdate.id, updateDataFA); 
                     
-                    // AVISO: Esta ação pode mudar o estado, mas o handler não deve fazer isso diretamente.
-                    // O serviço principal (whatsapp.service) precisará atualizar o estado após esta chamada.
                     formattedData = formatter.formatFinancialAccountDataStructure(updatedFA);
                     wasAnEdit = true;
                 } catch (e) {
@@ -1687,7 +1615,6 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                         throw { statusCode: 400, message: "Preciso do ID do compartilhamento ou do email/telefone do convidado para saber qual acesso atualizar." };
                     }
                     
-                    // Lógica para encontrar o sharedAccessId correto
                     let sharedAccessIdToUpdate;
                     if (!isNaN(parseInt(params.sharedAccessIdOrUserIdentifier))) {
                         sharedAccessIdToUpdate = parseInt(params.sharedAccessIdOrUserIdentifier);
@@ -1732,7 +1659,7 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
 
 case 'UPDATE_FINANCIAL_CATEGORY': {
                 try {
-                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
+                    if (state.isSharedAccessContext) {
                          throw { statusCode: 403, message: "Você não tem permissão para editar categorias nesta conta compartilhada." };
                     }
                     const { categoryNameToUpdate, newName, newParentCategoryName } = params;
@@ -1751,7 +1678,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         if (!newParentCat) throw { statusCode: 404, message: `A nova categoria pai "${newParentCategoryName}" não foi encontrada.`};
                         updateData.parentId = newParentCat.id;
                     } else if (params.hasOwnProperty('newParentCategoryName') && newParentCategoryName === null) {
-                        updateData.parentId = null; // Permite mover para o nível raiz
+                        updateData.parentId = null; 
                     }
 
                     if(Object.keys(updateData).length === 0) {
@@ -1780,10 +1707,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     if (newAuthor) updateData.author = newAuthor;
                     if (isActive !== undefined) updateData.isActive = isActive;
                     
-                    // Validação: Apenas o criador pode editar. O service já deve ter essa lógica, mas reforçamos.
-                    // const phrase = await systemService.getMotivationalPhraseById(phraseIdToUpdate);
-                    // if (phrase.createdBy !== actorId) throw { statusCode: 403, message: "Você só pode editar as frases que você criou."};
-
                     const updatedPhrase = await systemService.updateMotivationalPhrase(phraseIdToUpdate, updateData);
                     formattedData = `✅ Frase atualizada!\n\n_"${updatedPhrase.text}"_\n- ${updatedPhrase.author || 'Autor Desconhecido'} (Status: ${updatedPhrase.isActive ? 'Ativa' : 'Inativa'})`;
                     wasAnEdit = true;
@@ -1798,11 +1721,8 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                 try {
                     const amount = params.amountInMl ? parseInt(params.amountInMl) : null;
                     
-                    // A função de serviço agora precisa lidar com a lógica de registro.
-                    // Vamos criar uma nova função de serviço para isso.
                     await hydrationService.logWaterIntake(actorId, amount);
 
-                    // Após o registro, buscamos o estado atual para mostrar ao usuário.
                     const logs = await hydrationService.getTodaysLogsByClient(actorId);
                     const prefs = await systemService.getSystemPreferences();
                     formattedData = formatter.formatHydrationLogDataStructure(logs, prefs, clientNameToUse);
@@ -1820,9 +1740,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
             : (params.ruleIdToUpdate ? parseInt(params.ruleIdToUpdate, 10) : null);
         if (!ruleIdToUpdate) {
             throw { statusCode: 400, message: "ID da regra para atualizar não foi fornecido ou não está em contexto de edição." };
-        }
-        if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-             throw { statusCode: 403, message: "Você não tem permissão para editar regras de disponibilidade nesta conta." };
         }
 
         const updateData = { ...params };
@@ -1867,8 +1784,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         throw { statusCode: 400, message: "Você não pode excluir sua única conta financeira. Crie outra primeiro, se desejar." };
                     }
                     
-                    // Ação destrutiva, precisa de confirmação.
-                    // O whatsapp.service irá interceptar isso e gerenciar o fluxo de confirmação.
                     resourceForButtonsContext = { 
                         type: 'system_action', 
                         id: 'pending_confirmation',
@@ -1921,7 +1836,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         sharedAccessIdToRevoke = saToRevoke.id;
                         guestNameForMsg = saToRevoke.sharedWithClient?.name || params.sharedWithUserIdentifier;
                     } else if (sharedAccesses.length > 1) {
-                        // Confirmação necessária para revogar múltiplos acessos
                         resourceForButtonsContext = { 
                             type: 'system_action',
                             id: 'pending_confirmation',
@@ -1961,7 +1875,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         throw { statusCode: 404, message: "Não encontrei a transação que você pediu para excluir." };
                     }
                     
-                    // Ação destrutiva, idealmente com confirmação, mas vamos executar direto por simplicidade aqui.
                     await financialService.deleteTransaction(state.activeFinancialAccountId, transactionIdToDelete);
                     formattedData = '✅ Transação excluída com sucesso!';
                 } catch (e) {
@@ -1973,9 +1886,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
 
             case 'DELETE_PRODUCT': {
                 try {
-                     if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                         throw { statusCode: 403, message: "Você não tem permissão para excluir produtos nesta conta." };
-                    }
                     const productNameOrCode = params.productNameOrCode;
                     if (!productNameOrCode) {
                         throw { statusCode: 400, message: "Qual produto você gostaria de excluir?" };
@@ -1990,7 +1900,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     logger.error(`[ACTION HANDLER] Erro em DELETE_PRODUCT: ${e.message}`, { error: e, paramsUsed: params });
                      let intro = `❌ Ops, ${clientNameToUse}! Não consegui excluir o produto.`;
                     let body = `\nDetalhe: ${e.message}`;
-                    if(e.statusCode === 409) { // Conflito, produto tem movimentações
+                    if(e.statusCode === 409) { 
                         intro = `Opa, ${clientNameToUse}!`;
                         body = `\nNão posso excluir o produto "${params.productNameOrCode}" porque ele já tem movimentações de estoque registradas. Se você não vai mais usá-lo, você pode marcá-lo como inativo. Quer fazer isso?`;
                     }
@@ -2001,9 +1911,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
 
             case 'DELETE_RECURRING_RULE': {
                 try {
-                     if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                         throw { statusCode: 403, message: "Você não tem permissão para excluir regras nesta conta." };
-                    }
                     const ruleDescription = params.ruleDescription;
                     if (!ruleDescription) {
                         throw { statusCode: 400, message: "Qual regra recorrente você quer excluir?" };
@@ -2027,9 +1934,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
 
             case 'DELETE_BUSINESS_CLIENT': {
                  try {
-                     if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                         throw { statusCode: 403, message: "Você não tem permissão para excluir clientes nesta conta." };
-                    }
                     const clientNameToDelete = params.clientNameToDelete;
                     if (!clientNameToDelete) {
                         throw { statusCode: 400, message: "Qual cliente do negócio você quer excluir?" };
@@ -2049,7 +1953,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
 
             case 'DELETE_FINANCIAL_CATEGORY': {
                 try {
-                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
+                    if (state.isSharedAccessContext) {
                         throw { statusCode: 403, message: "Você não tem permissão para excluir categorias nesta conta compartilhada." };
                     }
                     const categoryNameToDelete = params.categoryNameToDelete;
@@ -2061,8 +1965,8 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         throw { statusCode: 404, message: `Não encontrei uma categoria chamada "${categoryNameToDelete}".` };
                     }
                     
-                    const actionForTransactions = params.actionForTransactions || 'set_null'; // Padrão seguro
-                    const actionForSubcategories = params.actionForSubcategories || 'restrict'; // Padrão seguro
+                    const actionForTransactions = params.actionForTransactions || 'set_null'; 
+                    const actionForSubcategories = params.actionForSubcategories || 'restrict'; 
                     
                     const options = { actionForTransactions, actionForSubcategories };
                     
@@ -2075,7 +1979,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     if(e.statusCode === 409) {
                         intro = `Opa, ${clientNameToUse}!`;
                         body = `\nNão pude excluir a categoria "${params.categoryNameToDelete}" porque ela tem transações ou subcategorias associadas. Se quiser, posso mover as transações para "Sem Categoria" e promover as subcategorias para o nível principal. Deseja prosseguir com essa opção?`;
-                        // Aqui seria um bom lugar para usar o fluxo de confirmação.
                     }
                     formattedData = intro + body;
                 }
@@ -2119,13 +2022,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
 }
 
 
-            // ... Adicione todos os outros `UPDATE_*` e `RECREATE_*` aqui, seguindo o padrão acima ...
-            // Lembre-se de setar `wasAnEdit = true;` no final de cada um.
-
-            // =================================================================
             // AÇÕES DE GESTÃO DE SERVIÇOS (CRUD)
-            // =================================================================
-
             case 'CREATE_SERVICE': {
                 try {
                     const serviceData = {
@@ -2140,11 +2037,9 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     }
 
                     const newService = await serviceService.createService(state.activeFinancialAccountId, serviceData);
-                    formattedData = formatter.formatServiceDataStructure(newService); // Você precisará criar este formatador
+                    formattedData = formatter.formatServiceDataStructure(newService);
 
-                    if (isOwnerActingOnOwnBehalfGlobal) {
-                        resourceForButtonsContext.resources.push({ type: 'service', id: newService.id, description: newService.name });
-                    }
+                    resourceForButtonsContext.resources.push({ type: 'service', id: newService.id, description: newService.name });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_SERVICE: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui criar o serviço.\nDetalhe: ${e.message}`;
@@ -2163,7 +2058,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     if (totalItems === 0) {
                         formattedData = "Você ainda não cadastrou nenhum serviço. Diga 'criar serviço [nome] preço [valor] duração [minutos]' para começar.";
                     } else {
-                        formattedData = formatter.formatListServicesDataStructure(services); // Você precisará criar este formatador
+                        formattedData = formatter.formatListServicesDataStructure(services);
                         if (totalItems > services.length) {
                             formattedData += `\n\nE mais ${totalItems - services.length} serviço(s).`;
                         }
@@ -2183,9 +2078,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     
                     if (!serviceIdToUpdate) {
                         throw { statusCode: 400, message: "Por favor, primeiro selecione o serviço que deseja editar." };
-                    }
-                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                        throw { statusCode: 403, message: "Você não tem permissão para editar serviços nesta conta." };
                     }
 
                     const updateDataSvc = {};
@@ -2219,9 +2111,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     if (!serviceIdToDelete) {
                         throw { statusCode: 404, message: `Não encontrei o serviço "${params.serviceName}" para excluir.` };
                     }
-                    if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                        throw { statusCode: 403, message: "Você não tem permissão para excluir serviços nesta conta." };
-                    }
 
                     await serviceService.deleteService(state.activeFinancialAccountId, serviceIdToDelete);
                     formattedData = `✅ Serviço (ID: ${serviceIdToDelete}) excluído com sucesso!`;
@@ -2238,10 +2127,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                 break;
             }
 
-            // =================================================================
             // AÇÕES DE CICLO DE VIDA DO AGENDAMENTO (PJ/MEI)
-            // =================================================================
-
       case 'CONFIRM_APPOINTMENT': {
     try {
         const appointmentId = params.appointmentId ? parseInt(params.appointmentId, 10) : null;
@@ -2251,13 +2137,9 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
         
         const confirmedAppointment = await appointmentService.confirmAppointment(state.activeFinancialAccountId, appointmentId);
         
-        // Passo 1: Gerar a resposta criativa e motivacional com a IA
         const creativeResponse = await aiModelService.generateBookingConfirmationResponse(clientNameToUse, confirmedAppointment);
-
-        // Passo 2: Formatar os detalhes para anexo
         const formattedDetails = formatter.formatAppointmentDataStructure(confirmedAppointment);
 
-        // Passo 3: Juntar tudo
         formattedData = `${creativeResponse}\n\n${formattedDetails}`;
 
     } catch (e) {
@@ -2277,7 +2159,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
 
                     const completedAppointment = await appointmentService.completeAppointment(state.activeFinancialAccountId, appointmentId);
                     
-                    // O service já cria a transação. O handler apenas informa o usuário.
                     const totalValue = completedAppointment.services.reduce((sum, service) => sum + parseFloat(service.price), 0);
                     
                     formattedData = `🎉 Serviço concluído com sucesso!\n\n` +
@@ -2298,7 +2179,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         throw { statusCode: 400, message: "Preciso do ID do agendamento para cancelar." };
                     }
                     
-                    // Usando a função existente que agora notifica o cliente final
                     await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, appointmentId, false);
                     formattedData = `✅ Agendamento ID ${appointmentId} cancelado com sucesso. A outra parte será notificada.`;
 
@@ -2309,17 +2189,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                 break;
             }
 
-            // MODIFICAÇÃO NO CASE 'SCHEDULE_APPOINTMENT'
-            // O case existente precisa ser alterado para incluir a lógica de serviços
-            // A seguir, uma versão completa e modificada do case SCHEDULE_APPOINTMENT
-
-           
-            
-
-          // =================================================================
-            // AÇÕES DE SISTEMA, ESTADO E PREFERÊNCIAS
-            // =================================================================
-
+          // AÇÕES DE SISTEMA, ESTADO E PREFERÊNCIAS
             case 'SWITCH_FINANCIAL_ACCOUNT': {
                 try {
                     const targetAccountIdentifier = params.targetAccountNameOrType;
@@ -2351,12 +2221,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     }
 
                     if (foundAccount && foundAccount.id !== state.activeFinancialAccountId) {
-                        // AVISO: Esta ação muda o estado, mas o handler não deve fazer isso diretamente.
-                        // O serviço principal (whatsapp.service) precisará atualizar o estado após esta chamada.
-                        // A resposta formatada aqui serve para informar o usuário da mudança que DEVE acontecer.
                         formattedData = `Prontinho! Mudei para a conta *"${foundAccount.accountName}"* (${foundAccount.accountType}).\n\nO que vamos fazer por aqui agora?`;
-                        // Sinaliza ao whatsapp.service que uma troca de conta foi solicitada com sucesso.
-                        // O whatsapp.service será responsável por atualizar o 'state'.
                         resourceForButtonsContext = { type: 'system_action', id: 'account_switched', description: 'Troca de conta realizada', data: foundAccount };
 
                     } else if (foundAccount && foundAccount.id === state.activeFinancialAccountId) {
@@ -2404,7 +2269,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         throw { statusCode: 400, message: "Para frequência personalizada de lembrete de água, preciso do intervalo em minutos." };
                     }
 
-                    // Esta é uma preferência de sistema, não de cliente. A lógica está correta.
                     await systemService.updateSystemPreferences({
                         enableWaterReminder: params.enable,
                         waterReminderFrequencyType: params.enable ? params.frequencyType : 'disabled',
@@ -2464,9 +2328,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
             case 'GENERAL_QUESTION_OR_HELP':
             case 'ACTION_CONFIRMATION_YES':
             case 'ACTION_CONFIRMATION_NO':
-                // Estas ações são puramente conversacionais e a resposta é gerada pela IA.
-                // O `action.handler` não precisa formatar nada, apenas passar a resposta da IA.
-                // A IA é instruída a colocar a resposta no campo `reply_to_user_suggestion`.
                 formattedData = detectedAction.action_specific_reply_suggestion || "";
                 break;
             
@@ -2487,16 +2348,13 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
     try {
         const [action, resourceType, idStr] = buttonId.split(':');
 
-        // --- LÓGICA PARA AÇÕES DE BLOCO (MÚLTIPLAS AÇÕES) ---
         if (resourceType === 'multi_action_block') {
             const resources = JSON.parse(Buffer.from(idStr, 'base64').toString('utf8'));
             
             if (action === 'edit') {
-                // Entra em modo de edição de bloco
                 state.editingResource = { type: 'multi_action_block', resources: resources };
                 let editPrompt = "Ok! Estou em modo de edição para este bloco de ações. O que você gostaria de mudar? 😉\n\nPode dizer, por exemplo: ";
                 
-                // Cria um exemplo dinâmico com base no primeiro item do bloco
                 const firstItem = resources[0];
                 editPrompt += `'mudar o ${firstItem.description} para 60 reais'.`;
                 
@@ -2505,12 +2363,10 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
             }
 
             if (action === 'delete') {
-                // Pergunta qual item excluir, incluindo a opção "todos"
                 let deletePrompt = "Entendido. Qual dos itens você gostaria de excluir?\n\n";
                 const itemDescriptions = resources.map(r => `*${r.description}*`).join(' ou ');
                 deletePrompt += `Você pode me dizer: ${itemDescriptions}.\n\nSe quiser apagar tudo de uma vez, é só dizer *"todos"*!`;
                 
-                // Entra em um estado de "aguardando escolha para exclusão"
                 state.pendingConfirmation = {
                     action: 'AWAITING_DELETION_CHOICE',
                     resources: resources
@@ -2522,7 +2378,6 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
             }
         }
 
-        // --- LÓGICA PARA AÇÕES DE ITEM ÚNICO (COMPORTAMENTO ORIGINAL) ---
         const resourceId = parseInt(idStr, 10);
 
         if (!action || !resourceType || isNaN(resourceId)) {
@@ -2531,7 +2386,6 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
             return { flowCompleted: true };
         }
 
-        // --- Ação de Edição (Item Único) ---
         if (action === 'edit') {
             state.editingResource = { type: resourceType, id: resourceId };
             const editPrompt = `Ok! Selecionei o item para edição. O que você gostaria de mudar?`;
@@ -2539,11 +2393,10 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
             return { stateUpdated: true, newState: state, flowCompleted: false };
         }
 
-        // --- Ação de Exclusão (Item Único) ---
         if (action === 'delete') {
             let successMessage;
             try {
-                let resourceDescription = `O item`; // Descrição de fallback
+                let resourceDescription = `O item`; 
                 
                 switch (resourceType) {
                     case 'transaction': {
@@ -2609,7 +2462,6 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
             return { flowCompleted: true };
         }
 
-        // --- Ação de Detalhes (Ex: Ver Fatura) ---
         if (action === 'details' && resourceType === 'credit_card') {
             try {
                 const card = await creditCardService.getCreditCardById(state.activeFinancialAccountId, resourceId);

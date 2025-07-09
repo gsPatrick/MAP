@@ -15,7 +15,13 @@ function getOnboardingWelcomeNoPlanMessage(clientName) {
     return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
 }
 
-function getOnboardingAskForEmailMessage(clientName, planDetailsText) {
+function getOnboardingAskForEmailMessage(clientName, planDetailsText, isSharedContext = false) {
+    if (isSharedContext) {
+        const aiIntro = `🎉 E aí, ${clientName}! Bem-vindo(a) ao acesso compartilhado!`;
+        const dataStructure = `📧 Para podermos criar seu login de acesso à plataforma web (caso queira usar no futuro), qual é o seu melhor e-mail?`;
+        const linkText = `Fique tranquilo, esta etapa é só para garantir seu acesso futuro à plataforma. Para usar o WhatsApp, não será necessário.`;
+        return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
+    }
     const aiIntro = `🎉 E aí, ${clientName}! Seja muito bem-vindo ao seu ${planDetailsText}! 🚀`;
     const dataStructure = `📋 Detalhes do Plano:\n\n` +
                           `🗓️ Validade: ${planDetailsText.includes('válido até') ? planDetailsText.split('válido até ')[1].replace(')!','').trim() : (planDetailsText.toLowerCase().includes('vitalício') ? 'Vitalício' : 'N/A')}\n`+
@@ -33,16 +39,36 @@ function getOnboardingAskForPasswordMessage(clientName, email) {
     return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
 }
 
-function getOnboardingAskForFullNameMessage(clientName) {
+function getOnboardingAskForFullNameMessage(clientName, isSharedContext = false, ownerName = 'O proprietário') {
+    if (isSharedContext) {
+        // <<< INÍCIO DA ALTERAÇÃO DA MENSAGEM >>>
+        const aiIntro = `Olá, ${clientName}! 👋 Bem-vindo(a) ao Acesso Compartilhado do NoControle! Que legal ter você por aqui para ajudar a gerenciar as contas de *${ownerName}*. 🤝`;
+        
+        const dataStructure = `*O que isso significa?*\n`+
+                              `Significa que *${ownerName}* confia em você e te concedeu permissão para visualizar e registrar informações em nome dele(a). 📊 Você funcionará como um "braço direito", ajudando a manter tudo organizado!\n\n`+
+                              `*O que você poderá fazer?*\n`+
+                              `✅ Lançar despesas e receitas\n`+
+                              `✅ Agendar compromissos\n`+
+                              `✅ Consultar resumos e saldos`;
+                              
+        const linkText = `Para começarmos, e para que suas ações fiquem corretamente identificadas para o proprietário, por favor, me diga o seu *nome completo*.`;
+
+        return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
+        // <<< FIM DA ALTERAÇÃO DA MENSAGEM >>>
+    }
+    // Mensagem original para o dono da conta
     const aiIntro = `🔐 Senha guardada com todo carinho e segurança! 🗝️`;
     const dataStructure = `😊 Agora, para a gente se conhecer melhor, qual nome completo podemos usar no seu perfil?`;
     const linkText = `📊 Assim seu cadastro fica completinho e personalizado para você!`;
     return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
 }
 
-function getOnboardingAskForAffiliateCodeMessage(clientName) {
-    const aiIntro = `Legal, ${clientName}! Nome anotado. 😊`;
-    const dataStructure = `🤝 Para finalizar: você foi indicado(a) por alguém? Se sim, digite o código de indicação aqui.`;
+function getOnboardingAskForAffiliateCodeMessage(clientName, isSharedContext = false) {
+    // A pergunta sobre afiliado pode ser a mesma para ambos, pois é sobre como o convidado conheceu a plataforma
+    const aiIntro = isSharedContext 
+        ? `Perfeito, ${clientName}! Agora o proprietário saberá quem está acessando. 👍`
+        : `Legal, ${clientName}! Nome anotado. 😊`;
+    const dataStructure = `🤝 Para finalizar: você foi indicado(a) por alguém para usar o NoControle? Se sim, digite o código de indicação aqui.`;
     const linkText = `Se não foi indicado(a), não tem problema! É só digitar "não" ou "pular" que a gente continua. 😉`;
     return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
 }
@@ -96,8 +122,37 @@ async function handleOnboardingStep(state, messageText, actorClient) {
     let onboardingReply = "";
     const clientNameToUse = state.clientName;
     const lowerMessageText = (messageText || "").toLowerCase().trim();
+    const isSharedContext = state.isSharedAccessContext;
 
-    // Copiamos a lógica de onboarding para cá
+    // Se for um usuário convidado (shared context) e ele ainda não tem nome, vamos pedir apenas isso.
+    if (isSharedContext && (!actorClient.name || actorClient.name.startsWith('Convidado') || actorClient.name === state.pushNameFromPayload)) {
+        // Se já estamos aguardando o nome, processa a entrada
+        if (state.currentAction === 'awaiting_shared_user_name') {
+            const nameInput = messageText.trim();
+            if (nameInput.length >= 3 && nameInput.includes(" ")) {
+                // Atualiza o nome do cliente convidado
+                const updatedClient = await clientService.updateClient(actorClient.id, { name: nameInput });
+                state.clientName = updatedClient.name.split(" ")[0]; // Atualiza o primeiro nome no estado
+                actorClient = updatedClient; // Atualiza o objeto do ator
+                
+                // Finaliza o onboarding do convidado e o move para a seleção de conta
+                state.data.onboardingStage = 'onboarding_complete';
+                state.currentAction = 'selecting_account_flow_active';
+                state.activeFinancialAccountId = null;
+                onboardingReply = `Perfeito, ${state.clientName}! Nome salvo. Agora o proprietário saberá que é você. 😊\n\nVamos começar? Qual das contas compartilhadas você gostaria de usar agora?`;
+            } else {
+                onboardingReply = `Para um toque mais pessoal, ${clientNameToUse}, poderia me dizer seu nome completo? ✨ Assim o proprietário da conta te identifica melhor!`;
+            }
+        } else {
+            // Se ainda não pedimos o nome, pede agora com a nova mensagem.
+            state.currentAction = 'awaiting_shared_user_name';
+            // <<< CORREÇÃO: Passando o nome do proprietário para a mensagem >>>
+            onboardingReply = getOnboardingAskForFullNameMessage(clientNameToUse, true, state.ownerClientNameForContext);
+        }
+        return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
+    }
+
+    // Fluxo normal de onboarding para proprietários de conta ou convidados que já têm nome
     if (state.data.onboardingStage === 'awaiting_plan_confirmation') {
         if(state.hasPaidAccess_whenStageLastSet || !state.isNewUserForSessionLogic) {
             onboardingReply = getOnboardingWelcomeNoPlanMessage(clientNameToUse);
@@ -105,7 +160,7 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         state.currentAction = 'awaiting_plan_interest_generic';
     } else if (state.data.onboardingStage === 'setting_up_credentials_email') {
          if (state.currentAction !== 'awaiting_input_email_for_credentials' || state.isNewUserForSessionLogic) {
-             onboardingReply = getOnboardingAskForEmailMessage(clientNameToUse, state.accessLevelTextForUser);
+             onboardingReply = getOnboardingAskForEmailMessage(clientNameToUse, state.accessLevelTextForUser, isSharedContext);
              state.currentAction = 'awaiting_input_email_for_credentials';
         } else { 
             const emailInput = messageText.trim();
@@ -123,7 +178,7 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         const passwordInput = messageText.trim();
         if (passwordInput.length >= 6) {
             state.data.tempPassword = passwordInput;
-            onboardingReply = getOnboardingAskForFullNameMessage(clientNameToUse);
+            onboardingReply = getOnboardingAskForFullNameMessage(clientNameToUse, isSharedContext, state.ownerClientNameForContext);
             state.data.onboardingStage = 'setting_up_credentials_name';
             state.currentAction = 'awaiting_input_name_for_credentials';
         } else {
@@ -133,7 +188,7 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         const nameInput = messageText.trim();
         if (nameInput.length >= 3 && nameInput.includes(" ")) {
             state.data.tempName = nameInput;
-            onboardingReply = getOnboardingAskForAffiliateCodeMessage(clientNameToUse);
+            onboardingReply = getOnboardingAskForAffiliateCodeMessage(clientNameToUse, isSharedContext);
             state.data.onboardingStage = 'setting_up_affiliate_code';
             state.currentAction = 'awaiting_input_affiliate_code';
         } else {
@@ -154,7 +209,16 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             state.clientName = actorClient.name.split(" ")[0];
             logger.info(`[ONBOARDING HANDLER] Credenciais e indicação (código: ${affiliateCodeToUse}) definidas para ATOR ${actorClient.phone}.`);
             delete state.data.tempEmail; delete state.data.tempPassword; delete state.data.tempName;
-            if (!state.isSharedAccessContext) {
+            
+            if (isSharedContext) {
+                state.data.onboardingStage = 'onboarding_complete';
+                const aiIntro = `Maravilha, ${clientNameToUse}! Suas credenciais para a plataforma web estão configuradas! 🎉`;
+                const dataStructure = `Agora você pode acessar as contas de ${state.ownerClientNameForContext} com o plano ${state.accessLevelTextForUser}.`;
+                const linkText = `Vamos ver quais contas estão disponíveis?`;
+                onboardingReply = `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
+                state.currentAction = 'selecting_account_flow_active'; 
+                state.activeFinancialAccountId = null; 
+            } else {
                 const actorAccounts = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
                 const hasPfActor = actorAccounts.some(acc => acc.accountType === 'PF');
                 if (!hasPfActor) {
@@ -178,14 +242,6 @@ async function handleOnboardingStep(state, messageText, actorClient) {
                         state.currentAction = null;
                     }
                 }
-            } else { 
-                state.data.onboardingStage = 'onboarding_complete';
-                const aiIntro = `Maravilha, ${clientNameToUse}! Suas credenciais estão configuradas! 🎉`;
-                const dataStructure = `Agora você pode acessar as contas de ${state.ownerClientNameForContext} com o plano ${state.accessLevelTextForUser}.`;
-                const linkText = `Vamos ver quais contas estão disponíveis?`;
-                onboardingReply = `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
-                state.currentAction = 'selecting_account_flow_active'; 
-                state.activeFinancialAccountId = null; 
             }
         } catch (e) { 
             logger.error(`[ONBOARDING HANDLER] Erro ao definir credenciais/afiliado para ATOR ${actorClient.phone}: ${e.message}`);
@@ -201,7 +257,7 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             }
         }
     } else if (state.data.onboardingStage === 'setting_up_pf_account_name') {
-         if (state.isSharedAccessContext) { 
+         if (isSharedContext) { 
             state.data.onboardingStage = 'onboarding_complete'; state.currentAction = null;
         } else if (state.currentAction !== 'awaiting_input_pf_name' || state.isNewUserForSessionLogic) {
             onboardingReply = getOnboardingAskForPFAccountNameMessage(clientNameToUse);
@@ -244,7 +300,7 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             }
         }
     } else if (state.data.onboardingStage === 'confirming_pj_mei_setup') {
-        if (state.isSharedAccessContext) {
+        if (isSharedContext) {
             state.data.onboardingStage = 'onboarding_complete'; state.currentAction = null;
          } else if (state.currentAction !== 'awaiting_pj_mei_confirm' || state.isNewUserForSessionLogic) {
             const actorPFAccount = (await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true })).find(a => a.accountType === 'PF');
@@ -284,7 +340,7 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             }
         }
     } else if (state.data.onboardingStage === 'awaiting_pj_mei_type') {
-        if (state.isSharedAccessContext) { state.data.onboardingStage = 'onboarding_complete'; state.currentAction = null; }
+        if (isSharedContext) { state.data.onboardingStage = 'onboarding_complete'; state.currentAction = null; }
         else {
             const typeInput = messageText.trim().toUpperCase();
             if (typeInput === 'PJ' || typeInput === 'MEI') {
@@ -297,7 +353,7 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             }
         }
     } else if (state.data.onboardingStage === 'creating_pj_mei_account_name') {
-        if (state.isSharedAccessContext) { state.data.onboardingStage = 'onboarding_complete'; state.currentAction = null; }
+        if (isSharedContext) { state.data.onboardingStage = 'onboarding_complete'; state.currentAction = null; }
         else {
             const companyName = messageText.trim();
             const companyType = state.data.tempPjMeiType;

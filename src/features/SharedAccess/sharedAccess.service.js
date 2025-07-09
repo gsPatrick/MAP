@@ -27,7 +27,7 @@ async function grantAccess(ownerClientId, grantData) {
     }
 
     const ownerClient = await Client.findByPk(ownerClientId, {
-        include: [{ model: FinancialAccount, as: 'financialAccounts', attributes:['accountName', 'accountType'] }],
+        include: [{ model: FinancialAccount, as: 'financialAccounts', attributes:['id', 'accountName', 'accountType'] }],
         transaction: t
     });
     if (!ownerClient) {
@@ -37,7 +37,6 @@ async function grantAccess(ownerClientId, grantData) {
 
     let sharedWithClient;
     const clientEmailForLookup = sharedAccessEmail ? sharedAccessEmail.toLowerCase().trim() : null;
-    // <<< MUDANÇA: Normalizar o telefone ANTES de qualquer operação
     const clientPhoneForLookup = sharedAccessPhone ? normalizePhoneNumberToCanonical(sharedAccessPhone) : null;
 
     if (clientPhoneForLookup && clientPhoneForLookup.length !== 12) {
@@ -49,7 +48,6 @@ async function grantAccess(ownerClientId, grantData) {
         sharedWithClient = await Client.findOne({ where: { email: clientEmailForLookup }, transaction: t });
     }
     if (!sharedWithClient && clientPhoneForLookup) {
-        // <<< MUDANÇA: Usar o telefone já normalizado para a busca
         sharedWithClient = await Client.findOne({ where: { phone: clientPhoneForLookup }, transaction: t });
     }
 
@@ -139,7 +137,6 @@ async function grantAccess(ownerClientId, grantData) {
         }
     }
 
-    // <<< MUDANÇA: O telefone para o registro do SharedAccess é o mesmo usado para criar/identificar o convidado
     let saPhoneToSaveForSharedAccessRecord = clientPhoneForLookup;
     if (saPhoneToSaveForSharedAccessRecord) {
         const existingSharedAccessBySpecificPhone = await SharedAccess.findOne({
@@ -173,7 +170,8 @@ async function grantAccess(ownerClientId, grantData) {
     await t.commit();
     logger.info(`Acesso concedido pelo Cliente ID ${ownerClientId} para Cliente ID ${sharedWithClient.id}. SharedAccess ID: ${newSharedAccess.id}. Login SA: Email=${newSharedAccess.sharedAccessEmail}, Tel=${newSharedAccess.sharedAccessPhone}`);
 
-    // <<< MUDANÇA: Enviar notificação para o convidado via WhatsApp, se ele tiver telefone
+    // <<< INÍCIO DA MUDANÇA >>>
+    // Enviar notificação para o convidado via WhatsApp, se ele tiver telefone
     if (sharedWithClient.phone) {
         try {
             const guestName = sharedWithClient.name ? sharedWithClient.name.split(' ')[0] : 'você';
@@ -189,7 +187,7 @@ async function grantAccess(ownerClientId, grantData) {
                 sharedProfileText.push(bizAccount ? `Perfil Empresarial ("${bizAccount.accountName}")` : 'Perfil Empresarial');
             }
 
-            const notificationMessage = `Olá, ${guestName}! 👋\n\nBoas notícias! *${ownerName}* compartilhou o acesso à(s) conta(s) dele(a) no NoControle com você: *${sharedProfileText.join(' e ')}*.\n\nAgora você pode me mandar mensagens por aqui para gerenciar essa(s) conta(s). Tente dizer "resumo financeiro" para começar! 🚀`;
+            const notificationMessage = `Olá, ${guestName}! 👋\n\nBoas notícias! *${ownerName}* compartilhou o acesso à(s) conta(s) dele(a) no NoControle com você: *${sharedProfileText.join(' e ')}*.\n\nAgora você pode me mandar mensagens por aqui para gerenciar essa(s) conta(s). Tente dizer "resumo" para começar! 🚀`;
             
             await sendWhatsappMessage(sharedWithClient.phone, notificationMessage);
             logger.info(`[GrantAccess] Notificação de acesso compartilhado enviada com sucesso para ${sharedWithClient.phone}.`);
@@ -197,6 +195,7 @@ async function grantAccess(ownerClientId, grantData) {
             logger.error(`[GrantAccess] Acesso concedido, mas FALHA ao enviar notificação de WhatsApp para ${sharedWithClient.phone}: ${notificationError.message}`);
         }
     }
+    // <<< FIM DA MUDANÇA >>>
 
     return SharedAccess.findByPk(newSharedAccess.id, {
         include: [
@@ -230,7 +229,7 @@ async function getSharedAccessesByOwner(ownerClientId, queryParams = {}) {
 
         if (guestIdentifier) {
             const guestIdLower = guestIdentifier.toLowerCase();
-            const guestPhoneNorm = normalizePhoneNumberToCanonical(guestIdentifier); // <<< MUDANÇA: Normalizar busca
+            const guestPhoneNorm = normalizePhoneNumberToCanonical(guestIdentifier); 
             includeSharedWithClient.where = {
                 [Op.or]: [
                     { name: { [Op.iLike]: `%${guestIdLower}%` } },
@@ -367,7 +366,6 @@ async function updateSharedAccess(ownerClientId, sharedAccessId, updateData) {
     }
 
     if (sharedAccessPhone !== undefined) {
-        // <<< MUDANÇA: Normalizar telefone na atualização
         const saPhoneNorm = sharedAccessPhone ? normalizePhoneNumberToCanonical(sharedAccessPhone) : null;
         if (saPhoneNorm !== sharedAccess.sharedAccessPhone) {
             if (saPhoneNorm && saPhoneNorm !== "") {
@@ -484,14 +482,13 @@ async function revokeAccess(ownerClientId, sharedAccessId) {
 
 async function findActiveSharedAccessByPhone(sharedPhone) {
     if (!sharedPhone) return null;
-    // <<< MUDANÇA: Normalizar o telefone recebido para garantir consistência na busca
     const normalizedPhone = normalizePhoneNumberToCanonical(sharedPhone);
     if (!normalizedPhone) return null;
     
     try {
         const sharedAccess = await SharedAccess.findOne({
             where: {
-                sharedAccessPhone: normalizedPhone, // <<< MUDANÇA: Buscar pelo telefone normalizado
+                sharedAccessPhone: normalizedPhone, 
                 status: 'Ativo'
             },
             include: [

@@ -1,10 +1,4 @@
-// src/services/aiModelService.js teste
-const OpenAI = require('openai');
-const logger =require('../utils/logger');
-const axios = require('axios'); 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_API_KEY) {
@@ -99,10 +93,14 @@ function buildSystemPrompt(conversationContext) {
   const accountCtx = conversationContext.currentFinancialAccountId
     ? `Você está operando na conta financeira "${conversationContext.currentFinancialAccountName}" (ID: ${conversationContext.currentFinancialAccountId}, Tipo: ${conversationContext.currentFinancialAccountType}).`
     : "Nenhuma conta financeira foi selecionada ainda. Se o usuário tentar realizar uma ação que necessite de uma conta, você deve primeiro guiá-lo a selecionar ou criar uma.";
+  
   const clientNameForPrompt = conversationContext.clientName || "pessoa incrível";
+
+  // <<< INÍCIO DA MUDANÇA >>>
   const sharedAccessInfo = conversationContext.isSharedAccess
-    ? `Importante: ${clientNameForPrompt} está acessando esta conta através de um compartilhamento concedido por outra pessoa. Portanto, ${clientNameForPrompt} NÃO PODE realizar ações que modifiquem a estrutura da conta do proprietário (como criar/deletar contas financeiras do dono, alterar dados cadastrais do dono, gerenciar outros compartilhamentos em nome do dono). Foque nas operações permitidas dentro da conta selecionada.`
+    ? `Importante: Você está em MODO DE ACESSO COMPARTILHADO. O usuário logado, '${clientNameForPrompt}', é um convidado gerenciando a conta em nome de outra pessoa. Portanto, ${clientNameForPrompt} NÃO PODE realizar ações que modifiquem a estrutura da conta do proprietário (como criar/deletar contas financeiras do dono, alterar dados cadastrais do dono, gerenciar outros compartilhamentos em nome do dono). Foque em responder como um assistente para o convidado, mas sempre reconhecendo que as operações são para a conta do proprietário. NUNCA detecte ações como CREATE_FINANCIAL_ACCOUNT ou GRANT_ACCESS neste modo.`
     : "";
+  // <<< FIM DA MUDANÇA >>>
 
   let availableCategoriesText = "Nenhuma categoria financeira cadastrada para esta conta.";
   if (conversationContext.availableFinancialCategories && conversationContext.availableFinancialCategories.length > 0) {
