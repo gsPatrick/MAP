@@ -1,4 +1,10 @@
-
+// src/services/aiModelService.js teste
+const { OpenAI } = require('openai'); // <<< CORREÇÃO APLICADA AQUI: Garante que a classe OpenAI seja importada.
+const logger =require('../utils/logger');
+const axios = require('axios'); 
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_API_KEY) {
@@ -96,11 +102,9 @@ function buildSystemPrompt(conversationContext) {
   
   const clientNameForPrompt = conversationContext.clientName || "pessoa incrível";
 
-  // <<< INÍCIO DA MUDANÇA >>>
   const sharedAccessInfo = conversationContext.isSharedAccess
     ? `Importante: Você está em MODO DE ACESSO COMPARTILHADO. O usuário logado, '${clientNameForPrompt}', é um convidado gerenciando a conta em nome de outra pessoa. Portanto, ${clientNameForPrompt} NÃO PODE realizar ações que modifiquem a estrutura da conta do proprietário (como criar/deletar contas financeiras do dono, alterar dados cadastrais do dono, gerenciar outros compartilhamentos em nome do dono). Foque em responder como um assistente para o convidado, mas sempre reconhecendo que as operações são para a conta do proprietário. NUNCA detecte ações como CREATE_FINANCIAL_ACCOUNT ou GRANT_ACCESS neste modo.`
     : "";
-  // <<< FIM DA MUDANÇA >>>
 
   let availableCategoriesText = "Nenhuma categoria financeira cadastrada para esta conta.";
   if (conversationContext.availableFinancialCategories && conversationContext.availableFinancialCategories.length > 0) {
@@ -998,9 +1002,6 @@ Você receberá um objeto com \`clientName\`, e arrays para \`pendingTransaction
 `;
 
 
-  // <<< CORREÇÃO APLICADA AQUI >>>
-  // Garante que mesmo que os dados venham nulos ou indefinidos, eles se tornem arrays vazios.
-  // Isso evita o erro "Cannot read properties of undefined (reading 'map')".
   const simplifiedData = {
       pendingTransactions: (pendingTransactions || []).map(t => ({ description: t.description, value: t.value, type: t.type, account: t.financialAccount?.accountName })),
       appointments: (appointments || []).map(a => ({ time: new Date(a.eventDateTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), title: a.title, account: a.financialAccount?.accountName })),
