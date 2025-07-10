@@ -44,11 +44,19 @@ async function grantAccess(ownerClientId, grantData) {
     }
 
     if (clientEmailForLookup) {
-        sharedWithClient = await Client.findOne({ where: { email: clientEmailForLookup }, transaction: t });
+        sharedWithClient = await Client.findOne({ 
+            where: { email: clientEmailForLookup }, 
+            attributes: ['id', 'name', 'email', 'phone', 'status', 'passwordHash'], // Garante que passwordHash seja incluído
+            transaction: t 
+        });
     }
     // Se não encontrou por email (ou email não foi fornecido), tenta por telefone
     if (!sharedWithClient && clientPhoneForLookup) {
-        sharedWithClient = await Client.findOne({ where: { phone: clientPhoneForLookup }, transaction: t });
+        sharedWithClient = await Client.findOne({ 
+            where: { phone: clientPhoneForLookup }, 
+            attributes: ['id', 'name', 'email', 'phone', 'status', 'passwordHash'], // Garante que passwordHash seja incluído
+            transaction: t 
+        });
     }
 
     if (!sharedWithClient) {
@@ -147,7 +155,7 @@ async function grantAccess(ownerClientId, grantData) {
     if (saPhoneToSaveForSharedAccessRecord) { // sharedAccessPhone é obrigatório do lado do dono.
         const existingSharedAccessBySpecificPhone = await SharedAccess.findOne({
             where: { sharedAccessPhone: saPhoneToSaveForSharedAccessRecord
-                   }, // AQUI FOI REMOVIDO: id: { [Op.ne]: newSharedAccess?.id || null }
+                   },
             transaction: t
         });
         if (existingSharedAccessBySpecificPhone) {
@@ -169,9 +177,10 @@ async function grantAccess(ownerClientId, grantData) {
       status: 'Ativo',
     };
 
-    const newSharedAccess = await SharedAccess.create(newSharedAccessRecordData, { transaction: t }); // AQUI A VARIÁVEL newSharedAccess É FINALMENTE INICIALIZADA
+    const newSharedAccess = await SharedAccess.create(newSharedAccessRecordData, { transaction: t });
 
-    await t.commit();
+    await t.commit(); // Commita a transação antes de enviar a mensagem
+
     logger.info(`Acesso concedido pelo Cliente ID ${ownerClientId} para Cliente ID ${sharedWithClient.id}. SharedAccess ID: ${newSharedAccess.id}. Login SA: Tel=${newSharedAccess.sharedAccessPhone}`);
 
     // ENVIO DA MENSAGEM DE WHATSAPP PARA O CONVIDADO
@@ -192,10 +201,8 @@ async function grantAccess(ownerClientId, grantData) {
 
             let notificationMessage = `${guestName}! 👋\n\nBoas notícias! *${ownerName}* te concedeu acesso compartilhado a ${sharedProfileText.join(' e ')} no NoControle.\n\nAgora você pode me mandar mensagens por aqui para gerenciar essa(s) conta(s). Tente dizer "resumo" para começar! 🚀`;
 
-            // Recarrega o cliente para ter o passwordHash atualizado, caso tenha sido criado nesta transação.
-            const reloadedSharedWithClient = await Client.findByPk(sharedWithClient.id, { transaction: t });
-
-            if (reloadedSharedWithClient && reloadedSharedWithClient.passwordHash === null) {
+            // Usa o sharedWithClient existente, que já possui o passwordHash (seja ele nulo ou preenchido)
+            if (sharedWithClient && sharedWithClient.passwordHash === null) {
                 // Cenário: O convidado é um usuário NOVO no sistema principal (ainda não tem email/senha principal).
                 // A mensagem inicial é curta; o onboarding.handler fará as perguntas para configurar o login principal.
                 notificationMessage += `\n\nEm breve, vou te guiar para configurar seu acesso completo ao painel web. Fique atento! 😉`;
