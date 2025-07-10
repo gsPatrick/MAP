@@ -22,9 +22,7 @@ async function grantAccess(ownerClientId, grantData) {
         const error = new Error('O Telefone para WhatsApp para este acesso compartilhado é obrigatório.');
         error.statusCode = 400; error.status = 'fail'; throw error;
     }
-    // As validações para sharedAccessEmail e sharedAccessPassword foram removidas,
-    // pois o dono não as fornece mais. O login para o painel será o login principal do convidado.
-
+    
     const ownerClient = await Client.findByPk(ownerClientId, {
         include: [{ model: FinancialAccount, as: 'financialAccounts', attributes:['id', 'accountName', 'accountType'] }],
         transaction: t
@@ -131,10 +129,6 @@ async function grantAccess(ownerClientId, grantData) {
     }
 
     // Valida se o email/telefone ESPECÍFICO DESTE ACESSO COMPARTILHADO já está em uso em OUTRO SharedAccess.
-    // sharedAccessEmail e sharedAccessPhone no SharedAccess.
-    // ATENÇÃO: Estes campos sharedAccessEmail/Phone/PasswordHash no modelo SharedAccess
-    // NÃO SÃO MAIS AS CREDENCIAIS DE LOGIN DO PAINEL. O login será sempre via Client principal.
-    // Eles podem ser mantidos como metadados ou removidos do modelo futuramente se não tiverem outra função.
     const saEmailToSaveForSharedAccessRecord = clientEmailForLookup; // Pode ser null
     const saPhoneToSaveForSharedAccessRecord = clientPhoneForLookup; // Este virá do dono (obrigatório)
     const saPasswordToSaveForSharedAccessRecord = sharedAccessPassword || null; // Será null pois o dono não fornece
@@ -152,11 +146,8 @@ async function grantAccess(ownerClientId, grantData) {
 
     if (saPhoneToSaveForSharedAccessRecord) { // sharedAccessPhone é obrigatório do lado do dono.
         const existingSharedAccessBySpecificPhone = await SharedAccess.findOne({
-            where: { sharedAccessPhone: saPhoneToSaveForSharedAccessRecord,
-                     // Garante que não seja o mesmo SharedAccess que estamos criando/atualizando (se fosse um update)
-                     // No caso de criação, o ID ainda não existe, então esta condição não é estritamente necessária aqui, mas é boa prática
-                     id: { [Op.ne]: newSharedAccess?.id || null } 
-                   },
+            where: { sharedAccessPhone: saPhoneToSaveForSharedAccessRecord
+                   }, // AQUI FOI REMOVIDO: id: { [Op.ne]: newSharedAccess?.id || null }
             transaction: t
         });
         if (existingSharedAccessBySpecificPhone) {
@@ -164,9 +155,9 @@ async function grantAccess(ownerClientId, grantData) {
             error.statusCode = 409; error.status = 'fail'; throw error;
         }
     }
-
+    
     // sharedAccessEmail e sharedAccessPasswordHash serão null,
-    // pois o login para o painel será sempre com as credenciais principais do Client.
+    // pois o login para o painel será sempre as credenciais principais do Client.
     const newSharedAccessRecordData = {
       ownerClientId,
       sharedWithClientId: sharedWithClient.id,
@@ -178,7 +169,7 @@ async function grantAccess(ownerClientId, grantData) {
       status: 'Ativo',
     };
 
-    const newSharedAccess = await SharedAccess.create(newSharedAccessRecordData, { transaction: t });
+    const newSharedAccess = await SharedAccess.create(newSharedAccessRecordData, { transaction: t }); // AQUI A VARIÁVEL newSharedAccess É FINALMENTE INICIALIZADA
 
     await t.commit();
     logger.info(`Acesso concedido pelo Cliente ID ${ownerClientId} para Cliente ID ${sharedWithClient.id}. SharedAccess ID: ${newSharedAccess.id}. Login SA: Tel=${newSharedAccess.sharedAccessPhone}`);
@@ -344,7 +335,8 @@ async function getSharedAccessById(sharedAccessId) {
             error.statusCode = 404; error.status = 'fail'; throw error;
         }
         return sharedAccess.toJSON();
-    } catch (error) {
+    }
+    catch (error) {
         logger.error(`Erro ao buscar acesso compartilhado ID ${sharedAccessId}: ${error.message}`, error);
         throw error;
     }
