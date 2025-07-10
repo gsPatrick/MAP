@@ -87,23 +87,38 @@ async function handleOnboardingStep(state, messageText, actorClient) {
     const lowerMessageText = (messageText || "").toLowerCase().trim();
     const isSharedContext = state.isSharedAccessContext;
 
-    // <<< INÍCIO DA CORREÇÃO PRINCIPAL NO FLUXO >>>
+    // FASE 1: Acesso Compartilhado - Coleta do Nome (se for 'Convidado' pela primeira vez)
     if (isSharedContext && (!actorClient.name || actorClient.name === 'Convidado')) {
         if (state.currentAction === 'awaiting_shared_user_name') {
             const nameInput = messageText.trim();
-            if (nameInput.length >= 3 && nameInput.includes(" ")) {
+            if (nameInput.length >= 3 && nameInput.includes(" ")) { // Exige nome completo
                 const updatedClient = await clientService.updateClient(actorClient.id, { name: nameInput });
                 state.clientName = updatedClient.name.split(" ")[0];
-                actorClient = updatedClient;
+                actorClient = updatedClient; // Atualiza o actorClient no estado
+                logger.info(`[ONBOARDING HANDLER] Nome de convidado (ID ${actorClient.id}) definido para "${updatedClient.name}".`);
                 
-                state.data.onboardingStage = 'onboarding_complete';
-                state.currentAction = 'selecting_account_flow_active';
-                state.activeFinancialAccountId = null;
-                onboardingReply = `Perfeito, ${state.clientName}! Nome salvo. Agora o proprietário saberá que é você. 😊\n\nVamos começar? Qual das contas compartilhadas você gostaria de usar agora?`;
+                // Após definir o nome, verifica se precisa configurar credenciais principais
+                if (actorClient.passwordHash === null) {
+                    state.data.onboardingStage = 'setting_up_main_client_credentials'; // Transiciona para a próxima etapa
+                    state.currentAction = 'awaiting_main_credentials_input'; // Define a ação esperada
+                    onboardingReply = `Perfeito, ${state.clientName}! Nome salvo. Agora o proprietário saberá que é você. 😊\n\n`;
+                    onboardingReply += `**✨ Primeiro Acesso Pessoal (Painel Web)!**\n`;
+                    onboardingReply += `Para ter *seu próprio* acesso ao painel do NoControle (onde você verá *todas* as contas que *você possui* ou que *foram compartilhadas com você*), por favor, *me diga seu nome completo, seu email e uma senha que você quer usar*.\n`;
+                    onboardingReply += `\n_Ex: Meu nome é *${state.clientName} Silva*, meu email é *${state.clientName.toLowerCase()}@email.com* e minha senha é *MinhaSenha123*._\n`;
+                    onboardingReply += `Este será seu login pessoal para acessar o painel em: https://www.map-nocontrole.com.br/login`;
+                    onboardingReply += `\n\nAssim que você me passar essas informações, estará tudo pronto para você dominar suas finanças! 🤩`;
+                } else {
+                    // Já possui credenciais principais, move para o final do onboarding do acesso compartilhado
+                    state.data.onboardingStage = 'onboarding_complete';
+                    state.currentAction = 'selecting_account_flow_active'; // Força a seleção de conta compartilhada.
+                    state.activeFinancialAccountId = null; // Zera para forçar a re-avaliação da conta ativa
+                    onboardingReply = `Perfeito, ${state.clientName}! Nome salvo. 😊\n\nAgora, para a conta compartilhada, qual das contas de *${state.ownerClientNameForContext}* você gostaria de usar agora?`;
+                }
             } else {
-                onboardingReply = `Para que o proprietário da conta te identifique melhor, por favor, me diga seu nome completo. ✨`;
+                onboardingReply = `Para que o proprietário da conta te identifique melhor, por favor, me diga seu nome completo (nome e sobrenome). ✨`;
             }
         } else {
+            // Se ainda não estava esperando o nome, define a ação e envia a primeira mensagem
             state.currentAction = 'awaiting_shared_user_name';
             const clientNameForPrompt = (state.pushNameFromPayload || 'Olá');
             onboardingReply = getOnboardingAskForFullNameMessage(clientNameForPrompt, true, state.ownerClientNameForContext);
@@ -111,12 +126,57 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
 
+    // FASE 2: Acesso Compartilhado - Coleta de Credenciais Principais (apenas se passwordHash for nulo)
+    if (isSharedContext && actorClient.passwordHash === null) {
+        if (state.currentAction === 'awaiting_main_credentials_input') {
+            // Regex para tentar extrair nome, email e senha
+            // Ex: "Meu nome é João Silva, meu email é joao@email.com e minha senha é MinhaSenha123."
+            const match = messageText.match(/(?:meu nome é|nome é)\s*(.+?),?\s*meu email é\s*([^\s,]+@[^\s,]+(?:com|br)),?\s*e minha senha é\s*(\S+)/i);
+            
+            if (match && match[1] && match[2] && match[3]) {
+                const fullName = match[1].trim();
+                const email = match[2].trim();
+                const password = match[3].trim();
+
+                try {
+                    // Atualiza o cliente com o nome completo, email e gera o password hash
+                    const updatedClient = await clientAuthService.registerNewUser(actorClient.phone, fullName, email, password);
+                    actorClient = updatedClient; // Garante que o actorClient no estado seja atualizado
+                    state.clientName = actorClient.name.split(" ")[0]; // Atualiza o nome usado nas mensagens
+
+                    state.data.onboardingStage = 'onboarding_complete'; // Marca o onboarding como completo
+                    state.currentAction = null; // Reseta a ação
+                    onboardingReply = `🎉 Maravilha, ${state.clientName}! Seus dados pessoais foram salvos com sucesso! 🚀\n\n`;
+                    onboardingReply += `Agora você pode usar seu email *${actorClient.email}* e a senha que escolheu para acessar o painel web em: https://www.map-nocontrole.com.br/login\n\n`;
+                    onboardingReply += `E aqui pelo WhatsApp, você continua no modo de Acesso Compartilhado. Qual das contas de *${state.ownerClientNameForContext}* você gostaria de usar agora?`;
+
+                    logger.info(`[ONBOARDING HANDLER] Credenciais principais definidas para convidado (ID ${actorClient.id}).`);
+                } catch (e) {
+                    logger.error(`[ONBOARDING HANDLER] Erro ao registrar credenciais principais para convidado (ID ${actorClient.id}): ${e.message}`);
+                    onboardingReply = `Opa! 😬 Tive um probleminha para salvar suas credenciais principais: ${e.message}\n\nPor favor, tente novamente com seu nome completo, email e uma senha no formato sugerido. Ex: *Meu nome é João Silva, meu email é joao@email.com e minha senha é MinhaSenha123*.`;
+                }
+            } else {
+                onboardingReply = `Não consegui entender seu nome, email e senha no formato esperado. Por favor, use o formato sugerido:\n\n_Ex: Meu nome é *João Silva*, meu email é *joao@email.com* e minha senha é *MinhaSenha123*._`;
+            }
+        } else {
+            // Se o estágio foi definido, mas a ação não (primeira vez aqui), define a ação e re-prompt
+            state.currentAction = 'awaiting_main_credentials_input';
+            onboardingReply = `Olá, ${clientName}! Por favor, para completar seu acesso, me diga seu nome completo, seu email e uma senha que você quer usar.\n\n_Ex: Meu nome é *João Silva*, meu email é *joao@email.com* e minha senha é *MinhaSenha123*._`;
+        }
+        return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
+    }
+
+    // FASE 3: Fluxo de Onboarding Padrão (para usuários normais ou convidados que já têm credenciais principais)
+    // Se o onboarding estiver em andamento E não for um contexto de acesso compartilhado
+    // OU se for um contexto de acesso compartilhado, mas as credenciais principais já estiverem definidas
     if (state.data.onboardingStage === 'awaiting_plan_confirmation') {
         if(state.hasPaidAccess_whenStageLastSet || !state.isNewUserForSessionLogic) {
             onboardingReply = getOnboardingWelcomeNoPlanMessage(clientName);
         }
         state.currentAction = 'awaiting_plan_interest_generic';
     } else if (state.data.onboardingStage === 'setting_up_pf_account_name') {
+         // Se for acesso compartilhado e chegou aqui, significa que o estágio foi definido para PF, mas não deveria.
+         // Apenas força o onboarding para completo e sem ação.
          if (isSharedContext) { 
             state.data.onboardingStage = 'onboarding_complete'; state.currentAction = null;
         } else if (state.currentAction !== 'awaiting_input_pf_name' || state.isNewUserForSessionLogic) {

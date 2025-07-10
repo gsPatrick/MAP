@@ -9,22 +9,21 @@ async function grantAccess(ownerClientId, grantData) {
   const t = await sequelize.transaction();
   try {
     const {
-      sharedAccessEmail,
-      sharedAccessPhone,
-      sharedAccessPassword,
+      sharedAccessEmail, // Vindo do front, mas pode ser nulo/indefinido se o dono não o preenche
+      sharedAccessPhone, // Este é o único obrigatório que o dono fornece
+      sharedAccessPassword, // Vindo do front, mas pode ser nulo/indefinido se o dono não o preenche
       sharedWithClientName,
       canAccessPersonalProfile,
       canAccessBusinessProfileId
     } = grantData;
 
-    if (!sharedAccessEmail && !sharedAccessPhone) {
-        const error = new Error('É necessário fornecer o Email ou o Telefone para WhatsApp para este acesso compartilhado.');
+    // Apenas sharedAccessPhone é obrigatório para o dono
+    if (!sharedAccessPhone) {
+        const error = new Error('O Telefone para WhatsApp para este acesso compartilhado é obrigatório.');
         error.statusCode = 400; error.status = 'fail'; throw error;
     }
-    if (!sharedAccessPassword) {
-        const error = new Error('Senha para o acesso compartilhado é obrigatória.');
-        error.statusCode = 400; error.status = 'fail'; throw error;
-    }
+    // As validações para sharedAccessEmail e sharedAccessPassword foram removidas,
+    // pois o dono não as fornece mais. O login para o painel será o login principal do convidado.
 
     const ownerClient = await Client.findByPk(ownerClientId, {
         include: [{ model: FinancialAccount, as: 'financialAccounts', attributes:['id', 'accountName', 'accountType'] }],
@@ -36,6 +35,8 @@ async function grantAccess(ownerClientId, grantData) {
     }
 
     let sharedWithClient;
+    // O email e telefone para lookup do cliente principal virão do que o dono forneceu.
+    // Se o dono não forneceu o email, será null para lookup.
     const clientEmailForLookup = sharedAccessEmail ? sharedAccessEmail.toLowerCase().trim() : null;
     const clientPhoneForLookup = sharedAccessPhone ? normalizePhoneNumberToCanonical(sharedAccessPhone) : null;
 
@@ -47,26 +48,26 @@ async function grantAccess(ownerClientId, grantData) {
     if (clientEmailForLookup) {
         sharedWithClient = await Client.findOne({ where: { email: clientEmailForLookup }, transaction: t });
     }
+    // Se não encontrou por email (ou email não foi fornecido), tenta por telefone
     if (!sharedWithClient && clientPhoneForLookup) {
         sharedWithClient = await Client.findOne({ where: { phone: clientPhoneForLookup }, transaction: t });
     }
 
     if (!sharedWithClient) {
-        logger.info(`[GrantAccess] Cliente convidado não encontrado. Criando novo Client... Email: ${clientEmailForLookup}, Tel: ${clientPhoneForLookup}`);
-        // <<< INÍCIO DA MUDANÇA >>>
-        // Usar um nome mais neutro para o convidado recém-criado.
+        logger.info(`[GrantAccess] Cliente convidado não encontrado. Criando novo Client... Tel: ${clientPhoneForLookup}`);
         const newClientDataForSharedWith = {
-            name: sharedWithClientName || 'Convidado', // Alterado de 'Perfil...' para 'Convidado'
+            name: sharedWithClientName || 'Convidado',
             status: 'Ativo',
             phone: clientPhoneForLookup,
-            email: clientEmailForLookup,
-            passwordHash: null,
+            email: clientEmailForLookup, // Pode ser nulo se o dono não forneceu email
+            passwordHash: null, // Deixamos o passwordHash nulo para forçar o onboarding de credenciais principais (nome, email, senha) pelo próprio convidado
         };
-        // <<< FIM DA MUDANÇA >>>
+        // Validação adicional caso o dono não forneça nem telefone nem email (embora o controller já exija telefone)
         if (!newClientDataForSharedWith.phone && !newClientDataForSharedWith.email) {
              const error = new Error('Para criar um novo usuário convidado, é necessário pelo menos um email ou telefone principal.');
              error.statusCode = 400; error.status = 'fail'; throw error;
         }
+        // Valida se o telefone principal ou email principal já está em uso por outro CLIENTE (não SharedAccess)
         if (newClientDataForSharedWith.phone) {
             const existingClientByMainPhone = await Client.findOne({ where: { phone: newClientDataForSharedWith.phone }, transaction: t });
             if (existingClientByMainPhone) {
@@ -114,6 +115,7 @@ async function grantAccess(ownerClientId, grantData) {
     
     const accessTargetDescription = canAccessPersonalProfile ? "Perfil Pessoal" : (effectiveBusinessProfileId ? `Perfil Empresarial ID ${effectiveBusinessProfileId}` : "Nenhum Perfil Específico");
     
+    // Verifica se já existe um acesso *idêntico* para a mesma combinação owner-sharedWith-perfis
     const existingIdenticalShare = await SharedAccess.findOne({
         where: {
             ownerClientId,
@@ -128,7 +130,15 @@ async function grantAccess(ownerClientId, grantData) {
         error.statusCode = 409; error.status = 'fail'; throw error;
     }
 
-    let saEmailToSaveForSharedAccessRecord = clientEmailForLookup;
+    // Valida se o email/telefone ESPECÍFICO DESTE ACESSO COMPARTILHADO já está em uso em OUTRO SharedAccess.
+    // sharedAccessEmail e sharedAccessPhone no SharedAccess.
+    // ATENÇÃO: Estes campos sharedAccessEmail/Phone/PasswordHash no modelo SharedAccess
+    // NÃO SÃO MAIS AS CREDENCIAIS DE LOGIN DO PAINEL. O login será sempre via Client principal.
+    // Eles podem ser mantidos como metadados ou removidos do modelo futuramente se não tiverem outra função.
+    const saEmailToSaveForSharedAccessRecord = clientEmailForLookup; // Pode ser null
+    const saPhoneToSaveForSharedAccessRecord = clientPhoneForLookup; // Este virá do dono (obrigatório)
+    const saPasswordToSaveForSharedAccessRecord = sharedAccessPassword || null; // Será null pois o dono não fornece
+
     if (saEmailToSaveForSharedAccessRecord) {
         const existingSharedAccessBySpecificEmail = await SharedAccess.findOne({
             where: { sharedAccessEmail: saEmailToSaveForSharedAccessRecord },
@@ -140,10 +150,13 @@ async function grantAccess(ownerClientId, grantData) {
         }
     }
 
-    let saPhoneToSaveForSharedAccessRecord = clientPhoneForLookup;
-    if (saPhoneToSaveForSharedAccessRecord) {
+    if (saPhoneToSaveForSharedAccessRecord) { // sharedAccessPhone é obrigatório do lado do dono.
         const existingSharedAccessBySpecificPhone = await SharedAccess.findOne({
-            where: { sharedAccessPhone: saPhoneToSaveForSharedAccessRecord },
+            where: { sharedAccessPhone: saPhoneToSaveForSharedAccessRecord,
+                     // Garante que não seja o mesmo SharedAccess que estamos criando/atualizando (se fosse um update)
+                     // No caso de criação, o ID ainda não existe, então esta condição não é estritamente necessária aqui, mas é boa prática
+                     id: { [Op.ne]: newSharedAccess?.id || null } 
+                   },
             transaction: t
         });
         if (existingSharedAccessBySpecificPhone) {
@@ -152,47 +165,56 @@ async function grantAccess(ownerClientId, grantData) {
         }
     }
 
-    if (!saEmailToSaveForSharedAccessRecord && !saPhoneToSaveForSharedAccessRecord) {
-        const error = new Error('É obrigatório fornecer um Email ou um Telefone para WhatsApp para identificar este acesso compartilhado.');
-        error.statusCode = 400; error.status = 'fail'; throw error;
-    }
-
+    // sharedAccessEmail e sharedAccessPasswordHash serão null,
+    // pois o login para o painel será sempre com as credenciais principais do Client.
     const newSharedAccessRecordData = {
       ownerClientId,
       sharedWithClientId: sharedWithClient.id,
       canAccessPersonalProfile: !!canAccessPersonalProfile,
       canAccessBusinessProfileId: effectiveBusinessProfileId,
-      sharedAccessEmail: saEmailToSaveForSharedAccessRecord,
-      sharedAccessPhone: saPhoneToSaveForSharedAccessRecord,
-      sharedAccessPasswordHash: sharedAccessPassword,
+      sharedAccessEmail: saEmailToSaveForSharedAccessRecord, // Pode ser null
+      sharedAccessPhone: saPhoneToSaveForSharedAccessRecord, // Virá do dono
+      sharedAccessPasswordHash: saPasswordToSaveForSharedAccessRecord, // Será null
       status: 'Ativo',
     };
 
     const newSharedAccess = await SharedAccess.create(newSharedAccessRecordData, { transaction: t });
 
     await t.commit();
-    logger.info(`Acesso concedido pelo Cliente ID ${ownerClientId} para Cliente ID ${sharedWithClient.id}. SharedAccess ID: ${newSharedAccess.id}. Login SA: Email=${newSharedAccess.sharedAccessEmail}, Tel=${newSharedAccess.sharedAccessPhone}`);
+    logger.info(`Acesso concedido pelo Cliente ID ${ownerClientId} para Cliente ID ${sharedWithClient.id}. SharedAccess ID: ${newSharedAccess.id}. Login SA: Tel=${newSharedAccess.sharedAccessPhone}`);
 
+    // ENVIO DA MENSAGEM DE WHATSAPP PARA O CONVIDADO
     if (sharedWithClient.phone) {
         try {
-            // <<< INÍCIO DA MUDANÇA >>>
-            // Usar uma saudação genérica na notificação inicial, pois ainda não sabemos o nome exato do convidado.
             const guestName = (sharedWithClient.name && sharedWithClient.name !== 'Convidado') ? sharedWithClient.name.split(' ')[0] : 'Olá';
             const ownerName = ownerClient.name ? ownerClient.name.split(' ')[0] : 'um usuário';
             
             let sharedProfileText = [];
             if (newSharedAccess.canAccessPersonalProfile) {
                 const pfAccount = ownerClient.financialAccounts.find(acc => acc.accountType === 'PF');
-                sharedProfileText.push(pfAccount ? `Perfil Pessoal ("${pfAccount.accountName}")` : 'Perfil Pessoal');
+                sharedProfileText.push(pfAccount ? `o Perfil Pessoal ("${pfAccount.accountName}")` : 'o Perfil Pessoal');
             }
             if (newSharedAccess.canAccessBusinessProfileId) {
                 const bizAccount = ownerClient.financialAccounts.find(acc => acc.id === newSharedAccess.canAccessBusinessProfileId);
-                sharedProfileText.push(bizAccount ? `Perfil Empresarial ("${bizAccount.accountName}")` : 'Perfil Empresarial');
+                sharedProfileText.push(bizAccount ? `o Perfil Empresarial ("${bizAccount.accountName}")` : 'o Perfil Empresarial');
             }
 
-            const notificationMessage = `${guestName}! 👋\n\nBoas notícias! *${ownerName}* compartilhou o acesso à(s) conta(s) dele(a) no NoControle com você: *${sharedProfileText.join(' e ')}*.\n\nAgora você pode me mandar mensagens por aqui para gerenciar essa(s) conta(s). Tente dizer "resumo" para começar! 🚀`;
-            // <<< FIM DA MUDANÇA >>>
-            
+            let notificationMessage = `${guestName}! 👋\n\nBoas notícias! *${ownerName}* te concedeu acesso compartilhado a ${sharedProfileText.join(' e ')} no NoControle.\n\nAgora você pode me mandar mensagens por aqui para gerenciar essa(s) conta(s). Tente dizer "resumo" para começar! 🚀`;
+
+            // Recarrega o cliente para ter o passwordHash atualizado, caso tenha sido criado nesta transação.
+            const reloadedSharedWithClient = await Client.findByPk(sharedWithClient.id, { transaction: t });
+
+            if (reloadedSharedWithClient && reloadedSharedWithClient.passwordHash === null) {
+                // Cenário: O convidado é um usuário NOVO no sistema principal (ainda não tem email/senha principal).
+                // A mensagem inicial é curta; o onboarding.handler fará as perguntas para configurar o login principal.
+                notificationMessage += `\n\nEm breve, vou te guiar para configurar seu acesso completo ao painel web. Fique atento! 😉`;
+            } else {
+                 // Cenário: O convidado já é um usuário existente no sistema principal (já tem email/senha principal).
+                 // Ele usará as credenciais PRINCIPAIS dele para acessar o painel, onde verá também as contas compartilhadas.
+                 notificationMessage += `\n\nPara acessar o painel pela web (com este acesso), use *suas credenciais principais* em: https://www.map-nocontrole.com.br/login`;
+                 notificationMessage += `\n\nQualquer dúvida, é só me chamar! 😉`;
+            }
+
             await sendWhatsappMessage(sharedWithClient.phone, notificationMessage);
             logger.info(`[GrantAccess] Notificação de acesso compartilhado enviada com sucesso para ${sharedWithClient.phone}.`);
         } catch (notificationError) {
@@ -354,6 +376,9 @@ async function updateSharedAccess(ownerClientId, sharedAccessId, updateData) {
     const filteredUpdateData = {};
     let requiresRevalidation = false;
 
+    // A atualização de sharedAccessEmail e sharedAccessPhone continua possível
+    // caso o proprietário queira alterar os metadados do acesso ou se futuramente
+    // estes campos tiverem outra função para o acesso em si (não para login principal).
     if (sharedAccessEmail !== undefined) {
         const saEmailLower = sharedAccessEmail ? sharedAccessEmail.toLowerCase().trim() : null;
         if (saEmailLower !== sharedAccess.sharedAccessEmail) {
@@ -369,12 +394,12 @@ async function updateSharedAccess(ownerClientId, sharedAccessId, updateData) {
     }
 
     if (sharedAccessPhone !== undefined) {
-        const saPhoneNorm = sharedAccessPhone ? normalizePhoneNumberToCanonical(sharedAccessPhone) : null;
+        const saPhoneNorm = normalizePhoneNumberToCanonical(sharedAccessPhone);
         if (saPhoneNorm !== sharedAccess.sharedAccessPhone) {
             if (saPhoneNorm && saPhoneNorm !== "") {
                 const existingSharedPhone = await SharedAccess.findOne({ where: { sharedAccessPhone: saPhoneNorm, id: {[Op.ne]: sharedAccessId } }, transaction: t });
                 if (existingSharedPhone) {
-                    const error = new Error(`O "Telefone WhatsApp para este Acesso" (${sharedAccessPhone}) já está em uso em outro compartilhamento.`);
+                    const error = new Error(`O "Telefone WhatsApp para este Acesso" (${sharedAccessPhone}) já está em uso em outro compartilhamento. Escolha um telefone único para este acesso específico.`);
                     error.statusCode = 409; error.status = 'fail'; throw error;
                 }
             }
@@ -382,11 +407,13 @@ async function updateSharedAccess(ownerClientId, sharedAccessId, updateData) {
         }
     }
 
-    if (sharedAccessPassword && typeof sharedAccessPassword === 'string' && sharedAccessPassword.trim() !== '') {
-        filteredUpdateData.sharedAccessPasswordHash = sharedAccessPassword;
-    } else if (sharedAccessPassword === null || sharedAccessPassword === '') {
-        filteredUpdateData.sharedAccessPasswordHash = null;
-    }
+    // A atualização da senha de acesso compartilhado via proprietário também foi removida.
+    // O login principal do convidado é que terá a senha.
+    // if (sharedAccessPassword && typeof sharedAccessPassword === 'string' && sharedAccessPassword.trim() !== '') {
+    //     filteredUpdateData.sharedAccessPasswordHash = sharedAccessPassword;
+    // } else if (sharedAccessPassword === null || sharedAccessPassword === '') {
+    //     filteredUpdateData.sharedAccessPasswordHash = null;
+    // }
 
 
     if (canAccessPersonalProfile !== undefined) {
@@ -418,14 +445,16 @@ async function updateSharedAccess(ownerClientId, sharedAccessId, updateData) {
         }
     }
     
+    // As verificações de finalSharedAccessEmail/Phone/PasswordHash foram ajustadas
+    // pois a senha não é mais fornecida pelo proprietário para este acesso.
     const finalSharedAccessEmail = filteredUpdateData.hasOwnProperty('sharedAccessEmail') ? filteredUpdateData.sharedAccessEmail : sharedAccess.sharedAccessEmail;
     const finalSharedAccessPhone = filteredUpdateData.hasOwnProperty('sharedAccessPhone') ? filteredUpdateData.sharedAccessPhone : sharedAccess.sharedAccessPhone;
-    const finalSharedAccessPasswordHash = filteredUpdateData.hasOwnProperty('sharedAccessPasswordHash') ? filteredUpdateData.sharedAccessPasswordHash : sharedAccess.sharedAccessPasswordHash;
+    // const finalSharedAccessPasswordHash = filteredUpdateData.hasOwnProperty('sharedAccessPasswordHash') ? filteredUpdateData.sharedAccessPasswordHash : sharedAccess.sharedAccessPasswordHash;
 
-    if (finalSharedAccessPasswordHash && !finalSharedAccessEmail && !finalSharedAccessPhone) {
-        const error = new Error('Não é possível ter uma senha para o acesso compartilhado sem um Email ou Telefone específico para este acesso.');
-        error.statusCode = 400; error.status = 'fail'; throw error;
-    }
+    // if (finalSharedAccessPasswordHash && !finalSharedAccessEmail && !finalSharedAccessPhone) {
+    //     const error = new Error('Não é possível ter uma senha para o acesso compartilhado sem um Email ou Telefone específico para este acesso.');
+    //     error.statusCode = 400; error.status = 'fail'; throw error;
+    // }
 
 
     if (Object.keys(filteredUpdateData).length === 0) {
@@ -504,7 +533,7 @@ async function findActiveSharedAccessByPhone(sharedPhone) {
                 {
                     model: Client,
                     as: 'sharedWithClient',
-                    attributes: ['id', 'name', 'email', 'phone', 'status']
+                    attributes: ['id', 'name', 'email', 'phone', 'status', 'passwordHash'] // Adicionado passwordHash
                 },
                 {
                     model: FinancialAccount,

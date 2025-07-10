@@ -7,28 +7,30 @@ async function grantAccess(req, res, next) {
         const ownerClientId = req.client.id;
         const grantData = req.body;
 
-        // CORREÇÃO: Usar as chaves que o frontend envia para identificar o convidado
-        // e para as credenciais específicas do acesso.
-        if (!(grantData.sharedAccessEmail || grantData.sharedAccessPhone)) {
-             const error = new Error('O "Email de Login para este Acesso" ou o "Telefone WhatsApp para este Acesso" é obrigatório.');
+        // CORREÇÃO: Apenas o telefone do WhatsApp é obrigatório para o proprietário.
+        // O email e senha do acesso compartilhado não são mais fornecidos pelo proprietário,
+        // mas sim configurados pelo convidado no onboarding se ele for um novo usuário.
+        if (!grantData.sharedAccessPhone) {
+             const error = new Error('O "Telefone WhatsApp para este Acesso" é obrigatório.');
              error.statusCode = 400; error.status = 'fail'; return next(error);
         }
-        // A senha também é obrigatória ao criar
-        if (!grantData.sharedAccessPassword) {
-            const error = new Error('A "Senha para este Acesso" é obrigatória.');
-            error.statusCode = 400; error.status = 'fail'; return next(error);
-        }
+        
+        // A senha e o email do acesso compartilhado NÃO SÃO MAIS OBRIGATÓRIOS AQUI,
+        // pois serão definidos ou utilizados do login principal do convidado.
+        // As validações removidas:
+        // if (!(grantData.sharedAccessEmail || grantData.sharedAccessPhone)) { ... }
+        // if (!grantData.sharedAccessPassword) { ... }
+        
         // Validação se canAccessPersonalProfile ou canAccessBusinessProfileId foi fornecido
         if (grantData.canAccessPersonalProfile === undefined && grantData.canAccessBusinessProfileId === undefined) {
-            // Se nenhum foi definido explicitamente, podemos assumir um default ou erro
-            // Para ser mais explícito, vamos exigir que pelo menos um seja definido via frontend (Radio buttons)
             const error = new Error('Pelo menos um tipo de perfil (pessoal ou de negócio) deve ser especificado para o compartilhamento.');
             error.statusCode = 400; error.status = 'fail'; return next(error);
         }
 
-
-        // O service 'grantAccess' já espera 'sharedAccessEmail', 'sharedAccessPhone', 'sharedAccessPassword'
-        // e os usará tanto para o registro SharedAccess quanto para identificar/criar o Client convidado.
+        // O service 'grantAccess' agora espera 'sharedAccessPhone' e o usará
+        // para identificar/criar o Client convidado e vincular o SharedAccess.
+        // 'sharedAccessEmail' e 'sharedAccessPassword' não serão passados pelo controller
+        // se o dono não os fornecer (eles serão nulos no SharedAccess record e o login será sempre pelo Client principal).
         const newSharedAccess = await sharedAccessService.grantAccess(ownerClientId, grantData);
         res.status(201).json({ status: 'success', data: newSharedAccess });
     } catch (error) {

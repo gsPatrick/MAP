@@ -87,14 +87,17 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
                 clientAccessLevel = 'gratuito';
             }
         } else {
-            logger.warn(`[WHATSAPP SERVICE - Initialize/UpdateState] Cliente DONO ${ownerClientForContext.id} com accessLevel ${ownerClientForContext.accessLevel} mas sem accessExpiresAt. Considerando como sem plano pago.`);
+            logger.warn(`[WHATSAPP SERVICE - Initialize/UpdateState] Cliente DONO ${ownerClientForContext.id} com accessLevel ${ownerClientForContext.accessLevel} sem accessExpiresAt. Considerando como sem plano pago.`);
             clientAccessLevel = 'gratuito';
         }
     }
    
     const accountsForOperation = isSharedAccessContext ? ownerAccountsIfShared : clientAccountsFromDb;
    
-    if (hasPaidAccess) {
+    // NOVO: Prioriza o onboarding de credenciais para usuários de acesso compartilhado que são novos no sistema
+    if (isSharedAccessContext && client.passwordHash === null) {
+        onboardingStage = 'setting_up_main_client_credentials';
+    } else if (hasPaidAccess) {
         if (onboardingStage === 'awaiting_plan_confirmation' || (existingState && !existingState.hasPaidAccess_whenStageLastSet) ) {
             if (!client.email || !client.passwordHash) {
                 onboardingStage = 'setting_up_credentials_email';
@@ -254,6 +257,61 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
 }
 
 
+async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, pushName, rawPayload) {
+    const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
+    if (!canonicalPhone) {
+        logger.error(`[WHATSAPP SERVICE] Falha ao normalizar o telefone para MENSAGEM DE ÁUDIO: ${senderPhoneRaw}`);
+        return;
+    }
+    logger.info(`[WHATSAPP SERVICE] Processando mensagem de áudio de ${canonicalPhone}. URL: ${mediaUrl}`);
+    pushNameFromPayload = pushName; 
+    let filenameFromMime = 'audio.ogg'; 
+    if (mimeType) { 
+        if (mimeType.includes('opus')) filenameFromMime = 'audio.opus';
+        else if (mimeType.includes('aac')) filenameFromMime = 'audio.aac';
+        else if (mimeType.includes('mpeg')) filenameFromMime = 'audio.mp3';
+        else if (mimeType.includes('amr')) filenameFromMime = 'audio.amr';
+    }
+     try {
+        const urlPath = new URL(mediaUrl).pathname;
+        const baseName = path.basename(urlPath);
+        if (baseName && baseName.includes('.')) { 
+             filenameFromMime = baseName; 
+        }
+    } catch (e) { 
+        logger.warn(`[WHATSAPP SERVICE] Não foi possível parsear a URL para extrair nome do arquivo da mídia: ${mediaUrl}. Usando nome inferido: ${filenameFromMime}`);
+    }
+
+    try {
+        const processingMessage = `🎧 Opa, ${pushName || 'você'}! Já recebi seu áudio e tô aqui processando tudinho com carinho! 💻✨\nSó um segundinho 😉`;
+        await sendWhatsappMessage(canonicalPhone, processingMessage);
+        const downloadedMedia = await downloadZapiMedia(mediaUrl); 
+        if (downloadedMedia && downloadedMedia.stream) {
+            const finalFilenameForWhisper = downloadedMedia.filename && downloadedMedia.filename.includes('.')
+                ? downloadedMedia.filename
+                : filenameFromMime;
+            logger.info(`[WHATSAPP SERVICE] Áudio baixado, enviando para transcrição com nome de arquivo: ${finalFilenameForWhisper}`);
+            const transcribedText = await aiModelService.transcribeAudioStream(downloadedMedia.stream, finalFilenameForWhisper);
+            if (transcribedText && transcribedText.trim() !== "") {
+                logger.info(`[WHATSAPP SERVICE] Áudio de ${canonicalPhone} transcrito com sucesso. Chamando processIncomingMessage com o texto.`);
+                return await processIncomingMessage(canonicalPhone, transcribedText, pushName, rawPayload);
+            } else {
+                logger.warn(`[WHATSAPP SERVICE] Transcrição do áudio de ${canonicalPhone} resultou em texto vazio. Notificando usuário.`);
+                await sendWhatsappMessage(canonicalPhone, "Não consegui entender o áudio que você enviou. 🤫 Pode tentar gravar novamente ou digitar, por favor?");
+            }
+        } else {
+            logger.error(`[WHATSAPP SERVICE] Falha ao baixar áudio de ${canonicalPhone} da URL: ${mediaUrl}. Notificando usuário.`);
+            await sendWhatsappMessage(canonicalPhone, "Tive um problema ao acessar o áudio que você enviou. 🙁 Poderia tentar novamente?");
+        }
+    } catch (transcriptionError) {
+        logger.error(`[WHATSAPP SERVICE] Erro ao transcrever áudio de ${canonicalPhone}: ${transcriptionError.message}`, {stack: transcriptionError.stack});
+        await sendWhatsappMessage(canonicalPhone, "Puxa, tive um probleminha para processar seu áudio. 😵‍💫 Pode tentar de novo ou digitar sua mensagem?");
+    } finally {
+        pushNameFromPayload = null; 
+    }
+}
+
+
 // =========================================================================================
 // <<< INÍCIO DA FUNÇÃO `processIncomingMessage` COM A LÓGICA CORRIGIDA >>>
 // =========================================================================================
@@ -329,8 +387,10 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 // CASO 3: Não é convidado nem cliente principal. É um usuário novo.
                 logger.info(`[WHATSAPP SERVICE] Telefone ${senderPhone} não reconhecido. Criando novo cliente para onboarding...`);
                 actorClient = await clientService.createClientContact({ phone: senderPhone, name: pushNameFromPayload || pushName });
+                // <<< INÍCIO DA MUDANÇA NA MENSAGEM INICIAL DE NOVO USUÁRIO >>>
                 const welcomeMsg = onboardingHandler.getOnboardingWelcomeNoPlanMessage(actorClient.name ? actorClient.name.split(" ")[0] : (pushNameFromPayload || "você"));
                 await sendWhatsappMessage(senderPhone, welcomeMsg);
+                // <<< FIM DA MUDANÇA NA MENSAGEM INICIAL DE NOVO USUÁRIO >>>
                 const tempStateForNewUser = await initializeOrUpdateState(actorClient, null, null, [], []);
                 tempStateForNewUser.data.onboardingStage = 'awaiting_plan_confirmation';
                 tempStateForNewUser.currentAction = 'awaiting_plan_interest_generic';
