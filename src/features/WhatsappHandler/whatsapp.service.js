@@ -95,8 +95,20 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
     const accountsForOperation = isSharedAccessContext ? ownerAccountsIfShared : clientAccountsFromDb;
    
     // NOVO: Prioriza o onboarding de credenciais para usuários de acesso compartilhado que são novos no sistema
+    // Esta verificação deve ocorrer antes de qualquer outra lógica de estágio de onboarding.
     if (isSharedAccessContext && client.passwordHash === null) {
-        onboardingStage = 'setting_up_main_client_credentials';
+        // Se já está na fase de coletar nome, mantém (primeira interação)
+        // Se ainda não está, define para coletar nome ou diretamente para credenciais se o nome já foi coletado em outra sessão.
+        if (onboardingStage === 'awaiting_shared_user_name') {
+            // Mantém este estágio se já estava nele.
+        } else if (client.name === 'Convidado') {
+             // Se o nome ainda é 'Convidado', força para coletar o nome primeiro
+            onboardingStage = 'awaiting_shared_user_name';
+        } else {
+            // Se o nome já foi atualizado (não é mais 'Convidado') e o passwordHash ainda é null,
+            // vai direto para coletar as credenciais principais.
+            onboardingStage = 'setting_up_main_client_credentials';
+        }
     } else if (hasPaidAccess) {
         if (onboardingStage === 'awaiting_plan_confirmation' || (existingState && !existingState.hasPaidAccess_whenStageLastSet) ) {
             if (!client.email || !client.passwordHash) {
@@ -150,7 +162,9 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
         existingState.accessExpiresAt = clientAccessExpiresAt;
         existingState.hasPaidAccess = hasPaidAccess;
         existingState.accessLevelTextForUser = accessLevelTextForUser;
-        if (existingState.data.onboardingStage !== onboardingStage && onboardingStage !== 'onboarding_complete') {
+        // Se o stage mudou (ex: de 'awaiting_shared_user_name' para 'setting_up_main_client_credentials'),
+        // ou de qualquer estágio para 'onboarding_complete', resetar currentAction
+        if (existingState.data.onboardingStage !== onboardingStage || onboardingStage === 'onboarding_complete') {
             existingState.currentAction = null;
         }
         existingState.data.onboardingStage = onboardingStage;
@@ -162,7 +176,7 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
                 existingState.activeFinancialAccountName = defaultAccount.accountName || defaultAccount.name;
                 existingState.activeFinancialAccountType = defaultAccount.accountType || defaultAccount.type;
             } else if (!currentActiveStillValid && accountsForOperation.length > 0) {
-                existingState.activeFinancialAccountId = null;
+                existingState.activeFinancialAccountId = null; // Força re-seleção se a conta ativa não for mais válida
                 existingState.activeFinancialAccountName = null;
                 existingState.activeFinancialAccountType = null;
             } else if (!currentActiveStillValid && accountsForOperation.length === 0) {
@@ -202,6 +216,59 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
     return newState;
 }
 
+async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, pushName, rawPayload) {
+    const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
+    if (!canonicalPhone) {
+        logger.error(`[WHATSAPP SERVICE] Falha ao normalizar o telefone para MENSAGEM DE ÁUDIO: ${senderPhoneRaw}`);
+        return;
+    }
+    logger.info(`[WHATSAPP SERVICE] Processando mensagem de áudio de ${canonicalPhone}. URL: ${mediaUrl}`);
+    pushNameFromPayload = pushName; 
+    let filenameFromMime = 'audio.ogg'; 
+    if (mimeType) { 
+        if (mimeType.includes('opus')) filenameFromMime = 'audio.opus';
+        else if (mimeType.includes('aac')) filenameFromMime = 'audio.aac';
+        else if (mimeType.includes('mpeg')) filenameFromMime = 'audio.mp3';
+        else if (mimeType.includes('amr')) filenameFromMime = 'audio.amr';
+    }
+     try {
+        const urlPath = new URL(mediaUrl).pathname;
+        const baseName = path.basename(urlPath);
+        if (baseName && baseName.includes('.')) { 
+             filenameFromMime = baseName; 
+        }
+    } catch (e) { 
+        logger.warn(`[WHATSAPP SERVICE] Não foi possível parsear a URL para extrair nome do arquivo da mídia: ${mediaUrl}. Usando nome inferido: ${filenameFromMime}`);
+    }
+
+    try {
+        const processingMessage = `🎧 Opa, ${pushName || 'você'}! Já recebi seu áudio e tô aqui processando tudinho com carinho! 💻✨\nSó um segundinho 😉`;
+        await sendWhatsappMessage(canonicalPhone, processingMessage);
+        const downloadedMedia = await downloadZapiMedia(mediaUrl); 
+        if (downloadedMedia && downloadedMedia.stream) {
+            const finalFilenameForWhisper = downloadedMedia.filename && downloadedMedia.filename.includes('.')
+                ? downloadedMedia.filename
+                : filenameFromMime;
+            logger.info(`[WHATSAPP SERVICE] Áudio baixado, enviando para transcrição com nome de arquivo: ${finalFilenameForWhisper}`);
+            const transcribedText = await aiModelService.transcribeAudioStream(downloadedMedia.stream, finalFilenameForWhisper);
+            if (transcribedText && transcribedText.trim() !== "") {
+                logger.info(`[WHATSAPP SERVICE] Áudio de ${canonicalPhone} transcrito com sucesso. Chamando processIncomingMessage com o texto.`);
+                return await processIncomingMessage(canonicalPhone, transcribedText, pushName, rawPayload);
+            } else {
+                logger.warn(`[WHATSAPP SERVICE] Transcrição do áudio de ${canonicalPhone} resultou em texto vazio. Notificando usuário.`);
+                await sendWhatsappMessage(canonicalPhone, "Não consegui entender o áudio que você enviou. 🤫 Pode tentar gravar novamente ou digitar, por favor?");
+            }
+        } else {
+            logger.error(`[WHATSAPP SERVICE] Falha ao baixar áudio de ${canonicalPhone} da URL: ${mediaUrl}. Notificando usuário.`);
+            await sendWhatsappMessage(canonicalPhone, "Tive um problema ao acessar o áudio que você enviou. 🙁 Poderia tentar novamente?");
+        }
+    } catch (transcriptionError) {
+        logger.error(`[WHATSAPP SERVICE] Erro ao transcrever áudio de ${canonicalPhone}: ${transcriptionError.message}`, {stack: transcriptionError.stack});
+        await sendWhatsappMessage(canonicalPhone, "Puxa, tive um probleminha para processar seu áudio. 😵‍💫 Pode tentar de novo ou digitar sua mensagem?");
+    } finally {
+        pushNameFromPayload = null; 
+    }
+}
 async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, pushName, rawPayload) {
     const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
     if (!canonicalPhone) {
@@ -460,6 +527,8 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
         }
 
+        // Adiciona a mensagem do usuário ao histórico antes de qualquer processamento
+        // EXCETO se for um botão (já tratado acima e pode levar a um reprompt)
         if (!(rawPayload && rawPayload.selectedButtonId)) {
             state.messageHistory.push({ role: 'user', content: messageText || "" }); 
             if (state.messageHistory.length > MAX_STATE_HISTORY) {
@@ -467,7 +536,27 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
         }
 
+
         // ETAPA 2: Delegar para o Handler de Onboarding, se aplicável
+        // MUDANÇA PRINCIPAL AQUI:
+        // Priorize o onboarding do acesso compartilhado e de credenciais principais (passwordHash === null)
+        // Esta lógica deve ser a primeira a ser avaliada para garantir que o onboarding interativo aconteça.
+        if (state.isSharedAccessContext && actorClient.passwordHash === null) {
+            // Se o cliente é um convidado E não tem senha principal, sempre priorize o onboarding de credenciais.
+            const onboardingResult = await onboardingHandler.handleOnboardingStep(state, messageText, actorClient);
+            state = onboardingResult.updatedState;
+            actorClient = onboardingResult.updatedActorClient; // Atualiza actorClient com possíveis mudanças (nome, etc.)
+            if (onboardingResult.onboardingReply) {
+                state.messageHistory.push({ role: 'assistant', content: onboardingResult.onboardingReply });
+                await sendWhatsappMessage(senderPhone, onboardingResult.onboardingReply);
+            }
+            conversationState.set(senderPhone, state);
+            pushNameFromPayload = null;
+            return; // Termina o processamento aqui, pois o onboarding está em andamento.
+        }
+
+        // Se não é um caso de onboarding de acesso compartilhado com passwordHash nulo,
+        // então verifica os outros estágios de onboarding.
         if (state.data.onboardingStage !== 'onboarding_complete') {
             const onboardingResult = await onboardingHandler.handleOnboardingStep(state, messageText, actorClient);
             state = onboardingResult.updatedState;
@@ -478,9 +567,9 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
             conversationState.set(senderPhone, state);
             pushNameFromPayload = null;
-            return;
+            return; // Termina o processamento aqui, pois o onboarding está em andamento.
         }
-
+        
         // ETAPA 2.5: Tratamento de Respostas a Perguntas Diretas do Bot
         if (state.currentAction === 'awaiting_confirmation' && state.pendingConfirmation) {
             const pendingAction = state.pendingConfirmation;
@@ -611,7 +700,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
             for (const detectedAction of aiResponse.detected_actions) {
                 const actionName = detectedAction.action || detectedAction.action_type;
-                const ownerOnlyActions = ['CREATE_FINANCIAL_ACCOUNT', 'UPDATE_FINANCIAL_ACCOUNT', 'DELETE_FINANCIAL_ACCOUNT', 'GRANT_ACCESS', 'LIST_GRANTED_ACCESS', 'UPDATE_GRANTED_ACCESS', 'REVOKE_ACCESS'];
+                const ownerOnlyActions = ['CREATE_FINANCIAL_ACCOUNT', 'UPDATE_FINANCIAL_ACCOUNT', 'DELETE_FINANCIAL_ACCOUNT', 'GRANT_ACCESS', 'LIST_GRANTED_ACCESS', 'UPDATE_GRANTED_ACCESS', 'REVOKE_ACCESS', 'CREATE_FINANCIAL_CATEGORY', 'UPDATE_FINANCIAL_CATEGORY', 'DELETE_FINANCIAL_CATEGORY', 'GET_AFFILIATE_DASHBOARD', 'CREATE_MOTIVATIONAL_PHRASE', 'UPDATE_MOTIVATIONAL_PHRASE', 'DELETE_MOTIVATIONAL_PHRASE']; // Adicionando ações de motivação que são do owner
                 if (ownerOnlyActions.includes(actionName) && !isOwnerActingOnOwnBehalfGlobal) {
                     multipleActionBodiesList.push(`❌ Desculpe, ${state.clientName}, mas a ação de "${actionName.toLowerCase().replace(/_/g, " ")}" só pode ser realizada pelo proprietário da conta.`);
                     continue;
@@ -675,7 +764,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 const resourcesForButtons = mainActionResult?.resourceForButtonsContext?.resources || [];
                 const hasMultipleResources = resourcesForButtons.length > 1;
                 if (hasMultipleResources) {
-                    const blockId = Buffer.from(JSON.stringify(resourcesForButtons)).toString('base64');
+                    const blockId = Buffer.from(JSON.stringify(resources)).toString('base64');
                     const buttons = [
                         { id: `edit:multi_action_block:${blockId}`, label: '✏️ Editar este bloco' },
                         { id: `delete:multi_action_block:${blockId}`, label: '🗑️ Excluir algo' }
