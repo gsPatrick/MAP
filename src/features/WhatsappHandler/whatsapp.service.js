@@ -30,11 +30,10 @@ let pushNameFromPayload = null;
 // --- Funções de Controle de Fluxo e Estado (Core do Maestro) ---
 
 async function initializeOrUpdateState(client, sharedAccessRecord = null, existingState = null, clientAccountsFromDb = [], ownerAccountsIfShared = []) {
-    // MUDANÇA AQUI: Se o nome do cliente no DB for 'Convidado' (inicial),
-    // o nome usado nas mensagens será um genérico ou o que já estiver no estado.
+    // Ajuste aqui: clientName para mensagens não deve ser o pushName se o cliente ainda for 'Convidado'
     const clientName = (client.name && client.name.trim() !== "" && client.name.trim().toLowerCase() !== "unknown" && client.name.trim().toLowerCase() !== "null" && client.name.trim().toLowerCase() !== "convidado")
         ? client.name.split(" ")[0]
-        : (existingState?.clientName || "pessoa incrível"); // Se ainda for 'Convidado' no DB, use o nome do estado (se já foi atualizado) ou um genérico.
+        : (existingState?.clientName || "pessoa incrível"); // Se for convidado, use o nome do estado, senão um genérico
     
     let ownerClientIdForContext = client.id;
     let isSharedAccessContext = false;
@@ -102,8 +101,9 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
     // RE-AVALIAR onboardingStage com PRIORIDADE
     // Se for um contexto de acesso compartilhado E o ator não tem passwordHash principal
     if (isSharedAccessContext && client.passwordHash === null) {
-        if (client.name.toLowerCase() === 'convidado') { // Se o nome no DB ainda é 'Convidado'
-            onboardingStage = 'awaiting_shared_user_name'; // Força a coletar o nome primeiro
+        if (client.name === 'Convidado') {
+            // Se o nome ainda é 'Convidado', força para coletar o nome primeiro
+            onboardingStage = 'awaiting_shared_user_name';
         } else {
             // Se o nome já foi atualizado (não é mais 'Convidado') e o passwordHash ainda é null,
             // vai direto para coletar as credenciais principais.
@@ -226,6 +226,7 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
     return newState;
 }
 
+// REMOVIDA A DUPLICAÇÃO DA FUNÇÃO processIncomingAudioMessage
 async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, pushName, rawPayload) {
     const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
     if (!canonicalPhone) {
@@ -280,6 +281,9 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
     }
 }
 
+// =========================================================================================
+// <<< INÍCIO DA FUNÇÃO `processIncomingMessage` COM A LÓGICA CORRIGIDA >>>
+// =========================================================================================
 async function processIncomingMessage(senderPhoneRaw, messageText, pushName, rawPayload) {
     const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
     if (!canonicalPhone) {
@@ -353,8 +357,8 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             } else {
                 // CASO 3: Não é convidado nem cliente principal. É um usuário novo.
                 logger.info(`[WHATSAPP SERVICE] Telefone ${senderPhone} não reconhecido. Criando novo cliente para onboarding...`);
-                // MUDANÇA AQUI: Force o nome inicial para 'Convidado' para garantir que o onboarding peça o nome.
-                actorClient = await clientService.createClientContact({ phone: senderPhone, name: 'Convidado' }); 
+                // MUDANÇA AQUI: Force o nome inicial para 'Convidado' ou nulo para garantir que o onboarding peça o nome.
+                actorClient = await clientService.createClientContact({ phone: senderPhone, name: 'Convidado' }); // Use 'Convidado' para forçar a coleta de nome no onboarding
                 // <<< INÍCIO DA MUDANÇA NA MENSAGEM INICIAL DE NOVO USUÁRIO >>>
                 const welcomeMsg = onboardingHandler.getOnboardingWelcomeNoPlanMessage(actorClient.name ? actorClient.name.split(" ")[0] : (pushNameFromPayload || "você"));
                 await sendWhatsappMessage(senderPhone, welcomeMsg);
@@ -731,7 +735,9 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         pushNameFromPayload = null;
     }
 }
-
+// =========================================================================================
+// <<< FIM DA FUNÇÃO `processIncomingMessage` CORRIGIDA >>>
+// =========================================================================================
 
 module.exports = { 
     processIncomingMessage, 
