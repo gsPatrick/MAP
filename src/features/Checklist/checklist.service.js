@@ -1,7 +1,8 @@
 // src/features/Checklist/checklist.service.js
-const { DailyChecklist, ChecklistItem, FinancialAccount } = require('../../database');
+const { DailyChecklist, ChecklistItem, FinancialAccount, Client } = require('../../database');
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
+const { sendWhatsappMessage } = require('../../services/whatsappService');
 
 /**
  * Obtém ou cria o checklist para uma data específica.
