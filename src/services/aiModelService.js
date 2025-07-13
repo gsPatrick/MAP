@@ -1319,6 +1319,76 @@ Sua tarefa é criar uma FRASE DE INTRODUÇÃO para uma mensagem de alerta. Você
   }
 }
 
+async function generateChecklistCompletionMessage(clientName, completedTasks) {
+  if (!OPENAI_API_KEY) {
+    logger.error('[AI SERVICE - Checklist] OPENAI_API_KEY não configurada.');
+    return {
+      celebratory_intro: `Parabéns, ${clientName}! Você completou todas as suas tarefas de hoje!`,
+      task_comments: completedTasks.map(() => "Mandou muito bem!")
+    };
+  }
+
+  const systemPrompt = `
+Você é o "${ASSISTANT_NAME}", um assistente e coach de produtividade para WhatsApp. Sua personalidade é EXTREMAMENTE amigável, motivadora, comemorativa e um pouco brincalhona.
+
+Sua tarefa é receber o nome de um cliente e uma lista de tarefas que ele acabou de completar e gerar uma resposta JSON com duas partes:
+1.  **celebratory_intro:** Uma frase curta, criativa e animada parabenizando o cliente por ter zerado o checklist do dia. Use o nome do cliente.
+2.  **task_comments:** Um array de strings, onde cada string é um comentário **curto, único e espirituoso** sobre cada tarefa da lista, na mesma ordem. O comentário deve ser relevante ao texto da tarefa.
+
+**REGRAS DE OURO:**
+-   **Seja Específico e Criativo:** Para uma tarefa "Ligar para fornecedor", o comentário pode ser "Conexão feita e negócio encaminhado! 📞". Para "Enviar relatório de vendas", pode ser "Dados enviados e metas mais próximas! 📊".
+-   **Seja Variado:** NUNCA repita o mesmo estilo de comentário. Crie algo único para cada tarefa.
+-   **Formato da Resposta:** Sua resposta DEVE ser um objeto JSON com as chaves "celebratory_intro" e "task_comments". O array "task_comments" DEVE ter exatamente o mesmo número de elementos que a lista de tarefas recebida.
+
+**Exemplo de Entrada (Dados Simplificados):**
+{ "clientName": "Patrick", "tasks": ["Ligar para o fornecedor X", "Preparar apresentação para reunião"] }
+
+**Exemplo de Saída JSON Esperada:**
+{
+  "celebratory_intro": "ISSO AÍ, PATRICK! 🚀 Checklist zerado com sucesso! Dia produtivo é assim que se fala!",
+  "task_comments": [
+    "Mais um contato importante na rede! Boa!",
+    "A reunião de amanhã já começou com o pé direito!  презентация pronta!"
+  ]
+}
+`;
+
+  const userPrompt = `
+    Gere a mensagem de conclusão de checklist para o cliente '${clientName}' com a seguinte lista de tarefas concluídas:
+    ${JSON.stringify(completedTasks, null, 2)}
+  `;
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0.75, // Um pouco mais de criatividade
+      response_format: { type: "json_object" },
+    });
+
+    const aiResultContent = completion.choices[0].message.content;
+    const parsedResult = JSON.parse(aiResultContent);
+
+    // Validação para garantir que a resposta da IA está correta
+    if (parsedResult.task_comments && parsedResult.task_comments.length === completedTasks.length) {
+        return parsedResult;
+    } else {
+        throw new Error("A resposta da IA não continha o número correto de comentários de tarefas.");
+    }
+
+  } catch (error) {
+    logger.error(`[AI SERVICE - Checklist] Erro ao gerar mensagem de conclusão: ${error.message}`);
+    // Retorna um objeto de fallback em caso de erro
+    return {
+      celebratory_intro: `Parabéns, ${clientName}! Você completou todas as ${completedTasks.length} tarefas de hoje!`,
+      task_comments: completedTasks.map(() => "Mandou muito bem!")
+    };
+  }
+}
+
 
 
 module.exports = {
@@ -1333,5 +1403,6 @@ module.exports = {
   generateClientConfirmationMessage,     // <<< ADICIONE ESTA LINHA
   generateClientReminderMessage,         // <<< ADICIONE ESTA LINHA
   generateClientCancellationMessage,      // <<< ADICIONE ESTA LINHA
-generateAlertsIntro
+generateAlertsIntro,
+generateChecklistCompletionMessage
 };

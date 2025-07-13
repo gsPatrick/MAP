@@ -3,7 +3,7 @@ const { DailyChecklist, ChecklistItem, FinancialAccount, Client } = require('../
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 const { sendWhatsappMessage } = require('../../services/whatsappService');
-
+const aiModelService = require('../../services/aiModelService');
 /**
  * Obtém ou cria o checklist para uma data específica.
  * @param {number} financialAccountId O ID da conta financeira (PJ/MEI).
@@ -76,7 +76,7 @@ async function updateChecklistItem(financialAccountId, itemId, updateData) {
     include: [{ 
         model: DailyChecklist, 
         as: 'checklist', 
-        attributes: ['financialAccountId', 'date'] // <<<< MUDANÇA: Adiciona 'date' ao include
+        attributes: ['financialAccountId', 'date']
     }]
   });
 
@@ -87,17 +87,12 @@ async function updateChecklistItem(financialAccountId, itemId, updateData) {
     throw { statusCode: 403, message: 'Você não tem permissão para editar este item.' };
   }
 
-  // <<<< INÍCIO DA MUDANÇA >>>>
   const wasCompletedNow = updateData.completed === true && item.completed === false;
-  // <<<< FIM DA MUDANÇA >>>>
 
   await item.update(updateData);
   logger.info(`Item de checklist (ID: ${item.id}) atualizado para a conta ${financialAccountId}.`);
 
-  // <<<< INÍCIO DA MUDANÇA >>>>
-  // Verifica se a tarefa foi marcada como concluída NESTA atualização
   if (wasCompletedNow) {
-    // Busca todas as tarefas do mesmo checklist para verificar se todas estão concluídas
     const allItemsOfChecklist = await ChecklistItem.findAll({
         where: { dailyChecklistId: item.dailyChecklistId }
     });
@@ -105,7 +100,6 @@ async function updateChecklistItem(financialAccountId, itemId, updateData) {
     const allCompleted = allItemsOfChecklist.every(i => i.completed);
 
     if (allCompleted) {
-        // Se todas foram concluídas, busca o cliente para enviar a mensagem
         const financialAccount = await FinancialAccount.findByPk(financialAccountId, {
             include: [{ model: Client, as: 'ownerClient', attributes: ['id', 'name', 'phone'] }]
         });
@@ -113,16 +107,29 @@ async function updateChecklistItem(financialAccountId, itemId, updateData) {
         const client = financialAccount?.ownerClient;
         if (client && client.phone) {
             const clientFirstName = client.name ? client.name.split(' ')[0] : 'Você';
-            const congratulationsMessage = `*PARABÉNS, ${clientFirstName}!* 🏆 Você finalizou todas as tarefas do seu checklist de hoje! Momento de celebrar e relaxar!`;
             
-            // Envia a mensagem de forma assíncrona (não precisa esperar a resposta para retornar o item atualizado)
-            sendWhatsappMessage(client.phone, congratulationsMessage)
-                .then(() => logger.info(`[Checklist Service] Mensagem de conclusão de checklist enviada para ${client.phone}.`))
-                .catch(err => logger.error(`[Checklist Service] Erro ao enviar mensagem de conclusão de checklist: ${err.message}`));
+            // <<<< INÍCIO DA MUDANÇA >>>>
+            // Extrai os textos das tarefas para enviar à IA
+            const completedTaskTexts = allItemsOfChecklist.map(task => task.text);
+
+            // Chama a nova função da IA para obter a introdução e os comentários
+            const aiResponse = await aiModelService.generateChecklistCompletionMessage(clientFirstName, completedTaskTexts);
+            
+            // Monta a mensagem final e rica
+            let finalMessage = `${aiResponse.celebratory_intro}\n\n🏆 *Tarefas Concluídas Hoje:*\n`;
+
+            allItemsOfChecklist.forEach((task, index) => {
+                const comment = aiResponse.task_comments[index] || "Mandou bem!"; // Fallback
+                finalMessage += `\n> ✅ *${task.text}*\n> 💬 _${comment}_\n`;
+            });
+            // <<<< FIM DA MUDANÇA >>>>
+            
+            sendWhatsappMessage(client.phone, finalMessage)
+                .then(() => logger.info(`[Checklist Service] Mensagem de conclusão de checklist rica enviada para ${client.phone}.`))
+                .catch(err => logger.error(`[Checklist Service] Erro ao enviar mensagem de conclusão de checklist rica: ${err.message}`));
         }
     }
   }
-  // <<<< FIM DA MUDANÇA >>>>
 
   return item.toJSON();
 }
