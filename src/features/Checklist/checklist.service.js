@@ -72,7 +72,11 @@ async function addChecklistItem(financialAccountId, date, itemData) {
  */
 async function updateChecklistItem(financialAccountId, itemId, updateData) {
   const item = await ChecklistItem.findByPk(itemId, {
-    include: [{ model: DailyChecklist, as: 'checklist', attributes: ['financialAccountId'] }]
+    include: [{ 
+        model: DailyChecklist, 
+        as: 'checklist', 
+        attributes: ['financialAccountId', 'date'] // <<<< MUDANÇA: Adiciona 'date' ao include
+    }]
   });
 
   if (!item) {
@@ -82,10 +86,46 @@ async function updateChecklistItem(financialAccountId, itemId, updateData) {
     throw { statusCode: 403, message: 'Você não tem permissão para editar este item.' };
   }
 
+  // <<<< INÍCIO DA MUDANÇA >>>>
+  const wasCompletedNow = updateData.completed === true && item.completed === false;
+  // <<<< FIM DA MUDANÇA >>>>
+
   await item.update(updateData);
   logger.info(`Item de checklist (ID: ${item.id}) atualizado para a conta ${financialAccountId}.`);
+
+  // <<<< INÍCIO DA MUDANÇA >>>>
+  // Verifica se a tarefa foi marcada como concluída NESTA atualização
+  if (wasCompletedNow) {
+    // Busca todas as tarefas do mesmo checklist para verificar se todas estão concluídas
+    const allItemsOfChecklist = await ChecklistItem.findAll({
+        where: { dailyChecklistId: item.dailyChecklistId }
+    });
+
+    const allCompleted = allItemsOfChecklist.every(i => i.completed);
+
+    if (allCompleted) {
+        // Se todas foram concluídas, busca o cliente para enviar a mensagem
+        const financialAccount = await FinancialAccount.findByPk(financialAccountId, {
+            include: [{ model: Client, as: 'ownerClient', attributes: ['id', 'name', 'phone'] }]
+        });
+
+        const client = financialAccount?.ownerClient;
+        if (client && client.phone) {
+            const clientFirstName = client.name ? client.name.split(' ')[0] : 'Você';
+            const congratulationsMessage = `*PARABÉNS, ${clientFirstName}!* 🏆 Você finalizou todas as tarefas do seu checklist de hoje! Momento de celebrar e relaxar!`;
+            
+            // Envia a mensagem de forma assíncrona (não precisa esperar a resposta para retornar o item atualizado)
+            sendWhatsappMessage(client.phone, congratulationsMessage)
+                .then(() => logger.info(`[Checklist Service] Mensagem de conclusão de checklist enviada para ${client.phone}.`))
+                .catch(err => logger.error(`[Checklist Service] Erro ao enviar mensagem de conclusão de checklist: ${err.message}`));
+        }
+    }
+  }
+  // <<<< FIM DA MUDANÇA >>>>
+
   return item.toJSON();
 }
+
 
 /**
  * Exclui um item de checklist.
