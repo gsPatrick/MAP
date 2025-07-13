@@ -38,7 +38,12 @@ async function processAndSendBriefings() {
         if (clientAccounts.length === 0) continue;
 
         const accountIds = clientAccounts.map(acc => acc.id);
-        const businessAccount = clientAccounts.find(acc => ['PJ', 'MEI'].includes(acc.accountType));
+        
+        // <<<< INÍCIO DA MUDANÇA >>>>
+        // Em vez de buscar uma conta de negócio específica, agora busca a conta padrão do usuário
+        // ou, como fallback, a primeira conta ativa encontrada. Isso torna o checklist universal.
+        const mainAccountForChecklist = clientAccounts.find(acc => acc.isDefault) || clientAccounts[0];
+        // <<<< FIM DA MUDANÇA >>>>
 
         // --- BUSCA DE DADOS FINANCEIROS E DE AGENDA (EXISTENTE) ---
         const pendingTransactions = await FinancialTransaction.findAll({
@@ -72,20 +77,22 @@ async function processAndSendBriefings() {
             order: [['createdAt', 'DESC']],
         });
 
-        // --- INÍCIO DA NOVA LÓGICA DE CHECKLIST ---
+        // --- LÓGICA DE CHECKLIST MODIFICADA ---
         let checklistData = null;
-        if (businessAccount) {
+        // <<<< INÍCIO DA MUDANÇA >>>>
+        // A verificação agora é feita na 'mainAccountForChecklist', que pode ser de qualquer tipo.
+        if (mainAccountForChecklist) {
             const checklist = await DailyChecklist.findOne({
-                where: { financialAccountId: businessAccount.id, date: todayDateString },
+                where: { financialAccountId: mainAccountForChecklist.id, date: todayDateString },
                 include: [{ model: ChecklistItem, as: 'items', order: [['createdAt', 'ASC']] }] // Ordena as tarefas
             });
             // Estrutura os dados do checklist para enviar à IA
             checklistData = {
-                accountName: businessAccount.accountName,
+                accountName: mainAccountForChecklist.accountName, // Usa o nome da conta principal
                 items: checklist ? checklist.items.map(item => item.toJSON()) : [] // Garante que itens seja um array
             };
         }
-        // --- FIM DA NOVA LÓGICA DE CHECKLIST ---
+        // <<<< FIM DA MUDANÇA >>>>
 
         // Ação proativa de hidratação
         await hydrationService.logWaterIntake(client.id, 250, 'Registrado automaticamente pelo briefing matinal');

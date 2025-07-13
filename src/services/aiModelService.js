@@ -771,7 +771,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
 78. GET_PROVIDER_PUBLIC_INFO (SÓ PARA CONTAS PJ/MEI): (Obter o link e informações da página pública de agendamento)
     // Sem parâmetros
 
-  79. CREATE_CHECKLIST_ITEM (SÓ PARA CONTAS PJ/MEI): (Adicionar uma tarefa ao checklist do dia atual)
+  79. CREATE_CHECKLIST_ITEM: (Adicionar uma tarefa ao checklist do dia atual)
         - text: string (OBRIGATÓRIO)
         - priority: "low", "medium", "high" (opcional, default: "medium")    
     
@@ -818,14 +818,6 @@ Siga esta ordem de prioridade para decidir o que fazer. Esta é a regra mais imp
 
 **4. GERAÇÃO DA RESPOSTA FINAL:**
    - Se uma ação foi detectada no passo 3 (o que significa que todos os dados obrigatórios estavam presentes), gere a resposta criativa no \`overall_summary_suggestion\` seguindo as regras de "TOM E ESTILO DA CONVERSA".
-
-Contexto da Conta Ativa: ${accountCtx}
-Contexto de Edição (se houver): ID do recurso sendo editado: ${conversationContext.editingResource?.id || 'Nenhum'}, Tipo: ${conversationContext.editingResource?.type || 'Nenhum'}. Dados originais para edição de parcelamento (se houver): ${JSON.stringify(conversationContext.editingResource?.originalData) || 'Nenhum'}.
-Histórico da Conversa (últimas interações, a mais recente primeiro):
-{{CONVERSATION_HISTORY}}
-
-MENSAGEM DO USUÁRIO:
-"{{USER_MESSAGE}}"
 `;
   return prompt;
 }

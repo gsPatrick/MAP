@@ -1,4 +1,4 @@
-// src/features/Checklist/checklist.routes.js (Novo Arquivo)
+// src/features/Checklist/checklist.routes.js
 const { Router } = require('express');
 const checklistController = require('./checklist.controller');
 const { authorizeRole } = require('../../middlewares/authMiddleware');
@@ -6,14 +6,14 @@ const { authorizeRole } = require('../../middlewares/authMiddleware');
 const router = Router({ mergeParams: true });
 
 // Middleware para garantir que apenas perfis PJ/MEI acessem estas rotas
-const authorizeBusinessProfile = (req, res, next) => {
-    if (req.financialAccount && ['PJ', 'MEI'].includes(req.financialAccount.accountType)) {
-        return next();
-    }
-    return res.status(403).json({ status: 'fail', message: 'Checklist está disponível apenas para perfis de negócio (PJ/MEI).' });
-};
+// const authorizeBusinessProfile = (req, res, next) => {
+//     if (req.financialAccount && ['PJ', 'MEI'].includes(req.financialAccount.accountType)) {
+//         return next();
+//     }
+//     return res.status(403).json({ status: 'fail', message: 'Checklist está disponível apenas para perfis de negócio (PJ/MEI).' });
+// };
 
-router.use(authorizeBusinessProfile);
+// router.use(authorizeBusinessProfile); // <<<< ESTA LINHA SERÁ REMOVIDA/COMENTADA
 
 // Rotas
 router.get('/:date', checklistController.getChecklist);

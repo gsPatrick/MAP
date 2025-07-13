@@ -143,12 +143,14 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
-                     case 'CREATE_CHECKLIST_ITEM': {
+                    case 'CREATE_CHECKLIST_ITEM': {
                 try {
-                    // Garante que só contas de negócio podem usar
-                    if (!['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
-                        throw { statusCode: 403, message: "O checklist diário é uma funcionalidade para contas de negócio (PJ/MEI)." };
-                    }
+                    // <<<< INÍCIO DA MUDANÇA >>>>
+                    // REMOVIDO: Bloco que verificava o tipo da conta
+                    // if (!['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
+                    //     throw { statusCode: 403, message: "O checklist diário é uma funcionalidade para contas de negócio (PJ/MEI)." };
+                    // }
+                    // <<<< FIM DA MUDANÇA >>>>
 
                     const { text, priority } = detectedAction.parameters;
                     if (!text) {
@@ -170,11 +172,10 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui adicionar sua tarefa.\nDetalhe: ${e.message}`;
                 }
                 break;
-            } case 'COMPLETE_CHECKLIST_ITEM': {
+            
+            }            case 'COMPLETE_CHECKLIST_ITEM': {
                 try {
-                    if (!['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
-                        throw { statusCode: 403, message: "O checklist diário é uma funcionalidade para contas de negócio (PJ/MEI)." };
-                    }
+                    // A restrição que limitava o checklist a contas PJ/MEI foi removida daqui.
 
                     const { text } = detectedAction.parameters;
                     if (!text) {
@@ -184,14 +185,14 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const today = new Date().toISOString().split('T')[0];
                     const currentChecklist = await checklistService.getChecklistByDate(state.activeFinancialAccountId, today);
                     
-                    // Lógica para encontrar a tarefa mais provável
+                    // Lógica para encontrar a tarefa mais provável entre as pendentes
                     const pendingItems = currentChecklist.items.filter(item => !item.completed);
                     if (pendingItems.length === 0) {
                         formattedData = `🎉 Uau, você já tinha concluído tudo por hoje! Se quiser, pode adicionar mais tarefas.`;
                         break;
                     }
                     
-                    // Simplificando a busca: encontrar o item que mais se assemelha
+                    // Algoritmo de busca por "melhor correspondência"
                     let bestMatch = null;
                     let highestScore = 0;
                     const userWords = text.toLowerCase().split(' ');
@@ -218,8 +219,10 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const newPendingCount = updatedChecklist.items.filter(item => !item.completed).length;
 
                     if (newPendingCount === 0) {
+                         // Mensagem de parabéns ao concluir a última tarefa
                          formattedData += `\n\n*PARABÉNS!* 🏆 Você finalizou todas as tarefas de hoje! Momento de celebrar e relaxar!`;
                     } else {
+                         // Mensagem de incentivo se ainda houver tarefas
                          formattedData += `\n\nAgora faltam apenas *${newPendingCount}* tarefa(s). Continue assim! 💪`;
                     }
                     
@@ -228,7 +231,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui marcar sua tarefa como concluída.\nDetalhe: ${e.message}`;
                 }
                 break;
-            }    
+            } 
 
  case 'SCHEDULE_APPOINTMENT': {
                 try {
