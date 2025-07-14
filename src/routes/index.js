@@ -2,7 +2,7 @@
 const { Router } = require('express');
 const logger = require('../utils/logger');
 const { FinancialAccount } = require('../database');
-const { authenticateClientToken, authorizeFinancialAccountOwnership } = require('../middlewares/authMiddleware'); // IMPORTANTE: Autorização da propriedade da conta
+const { authenticateClientToken } = require('../middlewares/authMiddleware');
 
 // Importações dos Módulos de Rotas
 const userRoutes = require('../features/User/user.routes');
@@ -29,12 +29,12 @@ const hydrationRoutes = require('../features/Hydration/hydration.routes');
 const asaasWebhookRouter = require('../features/WebhookHandler/asaas.routes');
 const adminRoutes = require('../features/Admin/admin.routes');
 const serviceRoutes = require('../features/Service/service.routes');
-const availabilityRoutes = require('../features/Availability/availability.routes');
+const availabilityRoutes = require('../features/Availability/availability.routes'); // <<< JÁ ESTÁ IMPORTADO, ÓTIMO
 const publicBookingRoutes = require('../features/PublicBooking/publicBooking.routes');
 const financialController = require('../features/Financial/financial.controller');
 const affiliateRoutes = require('../features/Affiliate/affiliate.routes');
 const systemSupportBotRoutes = require ('../features/SystemSupportBot/systemSupportBot.routes')
-const checklistRoutes = require('../features/Checklist/checklist.routes'); // <-- IMPORTADO AQUI
+const checklistRoutes = require('../features/Checklist/checklist.routes'); // <<< ADICIONE ESTE IMPORT
 
 const mainApiRouter = Router();
 
@@ -66,11 +66,61 @@ mainApiRouter.use('/hydration', authenticateClientToken, hydrationRoutes);
 mainApiRouter.use('/', adminRoutes);
 mainApiRouter.use('/affiliate', authenticateClientToken, affiliateRoutes);
 
-// MONTAR AS ROTAS DE SERVIÇO E DISPONIBILIDADE DIRETAMENTE NO mainApiRouter
+// <<< MUDANÇA: MONTAR AS ROTAS DE SERVIÇO E DISPONIBILIDADE AQUI DIRETAMENTE >>>
 // Isso garante que as URLs sejam /api/services/:id e /api/availability/:id
 mainApiRouter.use('/services', serviceRoutes);
 mainApiRouter.use('/availability', availabilityRoutes);
 
+
+// --- Middleware para autorização de acesso à conta financeira ---
+async function authorizeFinancialAccountOwnership(req, res, next) {
+    // ... (código existente sem alteração)
+    try {
+        const clientForAuth = req.sharedAccessContext ? { id: req.sharedAccessContext.ownerClientId } : req.client;
+        const financialAccountIdFromParams = parseInt(req.params.financialAccountId, 10);
+
+        if (!clientForAuth || !clientForAuth.id) {
+            logger.error('[AUTH OWNERSHIP] Middleware chamado sem req.client ou ownerClient válido.');
+            return res.status(500).json({ status: 'error', message: 'Erro interno de autenticação.' });
+        }
+        if (isNaN(financialAccountIdFromParams)) {
+            return res.status(400).json({ status: 'fail', message: 'ID da Conta Financeira inválido na rota.' });
+        }
+
+        const financialAccount = await FinancialAccount.findOne({
+            where: { id: financialAccountIdFromParams, clientId: clientForAuth.id }
+        });
+
+        if (!financialAccount) {
+            logger.warn(`[AUTH OWNERSHIP] Cliente ${clientForAuth.id} tentou acessar FA ${financialAccountIdFromParams} que não lhe pertence ou não existe.`);
+            return res.status(403).json({ status: 'fail', message: 'Acesso negado a esta conta financeira.' });
+        }
+        if (!financialAccount.isActive) {
+            logger.warn(`[AUTH OWNERSHIP] Cliente ${clientForAuth.id} tentou acessar FA ${financialAccountIdFromParams} INATIVA.`);
+            return res.status(403).json({ status: 'fail', message: 'Esta conta financeira está inativa.' });
+        }
+        
+        if (req.sharedAccessContext) {
+            const { canAccessPersonalProfile, canAccessBusinessProfileId } = req.sharedAccessContext;
+            let isAllowedForShared = false;
+            if (financialAccount.accountType === 'PF' && canAccessPersonalProfile) {
+                isAllowedForShared = true;
+            } else if ((financialAccount.accountType === 'PJ' || financialAccount.accountType === 'MEI') && canAccessBusinessProfileId === financialAccount.id) {
+                isAllowedForShared = true;
+            }
+            if (!isAllowedForShared) {
+                logger.warn(`[AUTH OWNERSHIP - SHARED] Usuário compartilhado ${req.client.id} tentou acessar FA ${financialAccount.id} (${financialAccount.accountType}) do dono ${clientForAuth.id}, mas não tem permissão para este perfil específico.`);
+                return res.status(403).json({ status: 'fail', message: 'Acesso compartilhado negado para este perfil financeiro específico.' });
+            }
+        }
+        
+        req.financialAccount = financialAccount.toJSON();
+        next();
+    } catch (error) {
+        logger.error('[AUTH OWNERSHIP] Erro ao verificar propriedade da conta financeira:', { message: error.message, error });
+        return res.status(500).json({ status: 'error', message: 'Erro ao verificar permissões da conta.' });
+    }
+}
 
 // --- ROTAS PARA CLIENTS LOGADOS (com middleware de autorização de conta) ---
 const clientFinancialAccountRouter = Router({ mergeParams: true });
@@ -80,6 +130,7 @@ clientFinancialAccountRouter.get('/summary', financialController.getFinancialSum
 clientFinancialAccountRouter.get('/monthly-trend', financialController.getMonthlyTrend);
 clientFinancialAccountRouter.get('/expense-category-summary', financialController.getExpenseCategorySummary);
 clientFinancialAccountRouter.get('/income-category-summary', financialController.getIncomeCategorySummary);
+clientFinancialAccountRouter.use('/checklists', checklistRoutes); // <<< ADICIONE ESTA LINHA
 
 // Monta as sub-rotas no clientFinancialAccountRouter
 clientFinancialAccountRouter.use('/transactions', financialTransactionRoutes);
@@ -91,13 +142,15 @@ clientFinancialAccountRouter.use('/appointments', appointmentRoutes);
 clientFinancialAccountRouter.use('/categories', financialCategoryRoutes);
 clientFinancialAccountRouter.use('/kanban', kanbanRoutes);
 clientFinancialAccountRouter.use('/business-clients', businessClientRoutes);
-clientFinancialAccountRouter.use('/checklists', checklistRoutes); // <-- USANDO O ROUTER IMPORTADO
+// <<< MUDANÇA: REMOVER AS LINHAS ABAIXO DESTE ROTEADOR ANINHADO >>>
+// clientFinancialAccountRouter.use('/services', serviceRoutes);
+// clientFinancialAccountRouter.use('/availability-rules', availabilityRoutes);
 
 // Monta o router de conta financeira no router principal da API,
 // aplicando os middlewares NA ORDEM CORRETA.
 mainApiRouter.use('/financial-accounts/:financialAccountId',
     authenticateClientToken,           // 1. Autentica o token e define req.client
-    authorizeFinancialAccountOwnership,  // 2. Autoriza a posse da conta usando req.client (versão correta de authMiddleware)
+    authorizeFinancialAccountOwnership,  // 2. Autoriza a posse da conta usando req.client
     clientFinancialAccountRouter         // 3. Passa para as rotas específicas
 );
 
