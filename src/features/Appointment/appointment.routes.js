@@ -10,8 +10,10 @@ router.get('/agenda-view', appointmentController.getAgendaView);
 router.post('/', appointmentController.scheduleAppointment);
 
 // Rotas para listar todos os agendamentos (funciona com ou sem barra final)
-router.get('/', appointmentController.getAllAppointments); // Ex: /api/financial-accounts/:financialAccountId/appointments/
-router.get('', appointmentController.getAllAppointments); // Ex: /api/financial-accounts/:financialAccountId/appointments
+// Mapeia para: /api/financial-accounts/:financialAccountId/appointments/
+router.get('/', appointmentController.getAllAppointments); 
+// Mapeia para: /api/financial-accounts/:financialAccountId/appointments
+router.get('', appointmentController.getAllAppointments); 
 
 // Rotas para ações específicas do agendamento (confirmar, completar)
 router.post('/:appointmentId/confirm', appointmentController.confirmAppointment);
