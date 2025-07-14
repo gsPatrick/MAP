@@ -6,14 +6,18 @@ const router = Router({ mergeParams: true });
 
 router.get('/agenda-view', appointmentController.getAgendaView);
 
+// Rota para criar um novo agendamento
 router.post('/', appointmentController.scheduleAppointment);
-router.get('/', appointmentController.getAllAppointments);
 
-// <<< ADICIONE ESTAS NOVAS ROTAS DE AÇÃO AQUI >>>
+// Rotas para listar todos os agendamentos (funciona com ou sem barra final)
+router.get('/', appointmentController.getAllAppointments); // Ex: /api/financial-accounts/:financialAccountId/appointments/
+router.get('', appointmentController.getAllAppointments); // Ex: /api/financial-accounts/:financialAccountId/appointments
+
+// Rotas para ações específicas do agendamento (confirmar, completar)
 router.post('/:appointmentId/confirm', appointmentController.confirmAppointment);
 router.post('/:appointmentId/complete', appointmentController.completeAppointment);
-// <<< FIM DAS NOVAS ROTAS >>>
 
+// Rotas para um agendamento específico (obter, atualizar, cancelar, deletar)
 router.get('/:appointmentId', appointmentController.getAppointmentById);
 router.put('/:appointmentId', appointmentController.updateAppointment);
 router.patch('/:appointmentId/cancel', appointmentController.cancelAppointment);
