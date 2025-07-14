@@ -3,15 +3,16 @@
   "version": "1.0.0",
   "description": "",
   "main": "app.js",
- "scripts": {
+  "scripts": {
     "dev": "nodemon app.js",
-"start": "npx sequelize-cli db:migrate --env production && node app.js",
+    "start": "npx sequelize-cli db:migrate --env production && node app.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@ant-design/charts": "^2.6.0",
     "axios": "^1.9.0",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",

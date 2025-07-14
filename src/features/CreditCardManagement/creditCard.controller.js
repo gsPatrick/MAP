@@ -155,6 +155,26 @@ async function payCreditCardInvoice(req, res, next) {
     }
 }
 
+// NEW CONTROLLER FUNCTION: Settle Open Invoice
+async function settleOpenCreditCardInvoice(req, res, next) {
+    try {
+        const financialAccountId = getFinancialAccountIdFromRequest(req);
+        const cardId = getCardIdFromRequest(req);
+        const { paymentDate, originatingAccountDescription, financialCategoryId } = req.body; // These are optional for this call
+
+        const paymentResult = await creditCardService.settleOpenCreditCardInvoice(
+            financialAccountId,
+            cardId,
+            paymentDate || null, // Pass null if not provided
+            originatingAccountDescription || null,
+            financialCategoryId ? parseInt(financialCategoryId, 10) : null
+        );
+        res.status(200).json({ status: 'success', data: paymentResult }); // 200 OK because it's a liquidation action
+    } catch (error) {
+        next(error);
+    }
+}
+
 
 module.exports = {
   createCreditCard,
@@ -166,4 +186,5 @@ module.exports = {
   getAvailableInvoicePeriods,
   getAvailableCreditLimit,
   payCreditCardInvoice,
+  settleOpenCreditCardInvoice, // Export the new function
 };

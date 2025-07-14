@@ -504,7 +504,12 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - isDefault: boolean (opcional)
     - isActive: boolean (opcional)
 
-26. UPDATE_RECURRING_RULE: (Editar regra de recorrência existente)
+26. SETTLE_OPEN_CREDIT_CARD_INVOICE: (Liquidar a fatura aberta do cartão)
+    - creditCardName: string (OBRIGATÓRIO. O nome do cartão cuja fatura aberta será quitada.)
+    * Nota: Esta ação registrará um pagamento para o valor total da fatura aberta do cartão, na data atual.
+
+
+26.1 - UPDATE_RECURRING_RULE: (Editar regra de recorrência existente)
     - ruleIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto de edição)
     - description: string (opcional)
     - type: "Saída" ou "Entrada" (opcional)

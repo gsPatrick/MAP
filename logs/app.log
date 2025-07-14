@@ -2592,3 +2592,9 @@ Error
 2025-06-20T16:46:06.365Z [INFO]: Iniciando configuração e agendamento de todos os Jobs...
 2025-06-20T16:50:23.275Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
 2025-06-20T16:50:26.784Z [INFO]: Iniciando configuração e agendamento de todos os Jobs...
+2025-07-14T22:07:10.520Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
+2025-07-14T22:07:10.613Z [INFO]: [SUPPORT BOT ROUTES] Configurando rota POST para o webhook do bot de suporte: /webhook-support
+2025-07-14T22:07:14.732Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
+2025-07-14T22:07:14.793Z [INFO]: [SUPPORT BOT ROUTES] Configurando rota POST para o webhook do bot de suporte: /webhook-support
+2025-07-14T22:17:16.674Z [INFO]: [CryptoUtils] Chaves de criptografia inicializadas com sucesso.
+2025-07-14T22:17:16.754Z [INFO]: [SUPPORT BOT ROUTES] Configurando rota POST para o webhook do bot de suporte: /webhook-support

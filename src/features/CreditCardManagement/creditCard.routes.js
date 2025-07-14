@@ -21,6 +21,7 @@ router.get('/:cardId/invoice', creditCardController.getCreditCardInvoiceDetails)
 router.get('/:cardId/available-periods', creditCardController.getAvailableInvoicePeriods);
 router.get('/:cardId/available-limit', creditCardController.getAvailableCreditLimit); // Rota para limite se não vier na listagem
 router.post('/:cardId/pay-invoice', creditCardController.payCreditCardInvoice); // Rota para pagar fatura
+router.post('/:cardId/settle-invoice', creditCardController.settleOpenCreditCardInvoice); // NOVA ROTA AQUI
 
 
 module.exports = router;

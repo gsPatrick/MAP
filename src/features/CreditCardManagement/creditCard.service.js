@@ -17,6 +17,68 @@ async function validateOwningFinancialAccount(financialAccountId, transaction = 
   return account;
 }
 
+/**
+ * Liquida a fatura aberta de um cartão de crédito, registrando um pagamento para o valor total devido.
+ * @param {number} financialAccountId - ID da conta financeira.
+ * @param {number} creditCardId - ID do cartão de crédito.
+ * @param {string} [paymentDate=currentDate] - Data do pagamento (YYYY-MM-DD). Default é hoje.
+ * @param {string} [originatingAccountDescription=null] - Descrição da conta de origem do pagamento.
+ * @param {number} [financialCategoryId=null] - ID da categoria financeira para o pagamento da fatura.
+ * @param {number} [actorClientId=null] - ID do cliente que realizou a ação.
+ * @returns {Promise<object>} A transação de pagamento criada.
+ */
+async function settleOpenCreditCardInvoice(financialAccountId, creditCardId, paymentDate = null, originatingAccountDescription = null, financialCategoryId = null, actorClientId = null) {
+    const t = await sequelize.transaction();
+    try {
+        await validateOwningFinancialAccount(financialAccountId, t);
+        const card = await CreditCard.findOne({ where: { id: creditCardId, financialAccountId }, transaction: t });
+
+        if (!card) {
+            await t.rollback();
+            const error = new Error(`Cartão ID ${creditCardId} não encontrado ou não pertence à conta ${financialAccountId}.`);
+            error.statusCode = 404; error.status = 'fail'; throw error;
+        }
+
+        if (!card.isActive) {
+            await t.rollback();
+            const error = new Error(`Cartão "${card.name}" está inativo e não pode ter a fatura liquidada.`);
+            error.statusCode = 400; error.status = 'fail'; throw error;
+        }
+
+        // 1. Obter o valor da fatura aberta
+        const invoiceDetails = await getCreditCardInvoiceDetails(financialAccountId, creditCardId, { type: 'aberta' });
+        const amountDue = parseFloat(invoiceDetails.totalAmount);
+
+        if (amountDue <= 0) {
+            await t.rollback();
+            const error = new Error(`A fatura aberta do cartão "${card.name}" já está paga ou possui crédito (Valor: ${formatCurrency(amountDue)}). Nenhuma ação necessária.`);
+            error.statusCode = 400; error.status = 'fail'; throw error;
+        }
+
+        // 2. Registrar o pagamento utilizando a função existente
+        const paymentTx = await payCreditCardInvoice(
+            financialAccountId,
+            creditCardId,
+            amountDue,
+            paymentDate || new Date().toISOString().split('T')[0], // Usa a data fornecida ou a data atual
+            originatingAccountDescription,
+            financialCategoryId,
+            actorClientId
+        );
+
+        await t.commit();
+        logger.info(`Fatura aberta do cartão ID ${creditCardId} (${card.name}) liquidada com sucesso. Valor: ${formatCurrency(amountDue)}.`);
+        return paymentTx;
+
+    } catch (error) {
+        if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
+        logger.error(`Erro ao liquidar fatura aberta do cartão ID ${creditCardId} (Conta: ${financialAccountId}): ${error.message}`, { error });
+        if (!error.statusCode) error.statusCode = 500;
+        throw error;
+    }
+}
+
+
 async function findCreditCardByName(financialAccountId, cardName, transaction = null) {
     if (!cardName || typeof cardName !== 'string' || cardName.trim() === '') {
         logger.warn(`[SERVICE] Tentativa de buscar cartão com nome inválido/vazio para conta ${financialAccountId}.`);

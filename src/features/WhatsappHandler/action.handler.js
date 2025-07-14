@@ -233,6 +233,49 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             } 
 
+            case 'SETTLE_OPEN_CREDIT_CARD_INVOICE': {
+                try {
+                    const cardNameToSettle = params.creditCardName;
+                    if (!cardNameToSettle) {
+                        throw { statusCode: 400, message: "Preciso do nome do cartão para liquidar a fatura." };
+                    }
+                    const cardIdToSettle = await findCreditCardIdByName(cardNameToSettle, state.activeFinancialAccountId);
+                    if (!cardIdToSettle) {
+                        throw { statusCode: 404, message: `Não encontrei um cartão chamado "${cardNameToSettle}". Verifique o nome ou cadastre o cartão.` };
+                    }
+
+                    // Chama a nova função de serviço
+                    const paymentTransaction = await creditCardService.settleOpenCreditCardInvoice(
+                        state.activeFinancialAccountId,
+                        cardIdToSettle,
+                        new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0], // Data de hoje
+                        null, // originatingAccountDescription não é fornecido via comando direto
+                        null, // financialCategoryId não é fornecido via comando direto
+                        actorId
+                    );
+                    
+                    formattedData = `🎉 A fatura aberta do cartão "${cardNameToSettle}" foi liquidada com sucesso! ` +
+                                    `Um pagamento de *${formatter.formatCurrency(paymentTransaction.value)}* foi registrado.`;
+
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em SETTLE_OPEN_CREDIT_CARD_INVOICE: ${e.message}`, { error: e, paramsUsed: params });
+                    let intro = `❌ Ops, ${clientNameToUse}! Não consegui liquidar a fatura.`;
+                    let body = `Detalhe: ${e.message}`;
+
+                    if (e.statusCode === 404 && e.message.includes('Cartão de crédito')) {
+                        intro = `Hum, não encontrei o cartão "${params.creditCardName}" que você mencionou, ${clientNameToUse}.`;
+                        const { cards: existingCards } = await creditCardService.getAllCreditCards(state.activeFinancialAccountId, { isActive: true });
+                        if (existingCards && existingCards.length > 0) {
+                            body = `Seus cartões cadastrados são: *${existingCards.map(c => c.name).join(', ')}*.\n\nVocê quis dizer um deles?`;
+                        } else {
+                            body = `Parece que você ainda não tem nenhum cartão cadastrado.`;
+                        }
+                    }
+                    formattedData = `${intro}\n${body}`;
+                }
+                break;
+            }
+
  case 'SCHEDULE_APPOINTMENT': {
                 try {
                     if (!params.title || !params.eventDateTime) {
