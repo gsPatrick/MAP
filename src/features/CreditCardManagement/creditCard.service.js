@@ -800,7 +800,7 @@ async function getAvailableInvoicePeriods(financialAccountId, creditCardId) {
         throw error;
     }
 }
-async function payCreditCardInvoice(financialAccountId, creditCardId, paymentAmount, paymentDate, originatingAccountDescription = null, financialCategoryId = null, actorClientId = null) {
+async function payCreditCardInvoice(financialAccountId, creditCardId, paymentAmount, paymentDate, originatingAccountDescription = null, financialCategoryId = null, actorClientId = null, invoiceReferenceMonthYear = null) {
     const t = await sequelize.transaction();
     try {
         const financialAccount = await validateOwningFinancialAccount(financialAccountId, t);
@@ -812,38 +812,28 @@ async function payCreditCardInvoice(financialAccountId, creditCardId, paymentAmo
             error.statusCode = 404; error.status = 'fail'; throw error;
         }
 
-        let referenceMonthDescription = "";
-        try {
-            // Tenta obter o mês/ano da fatura que está sendo paga.
-            // Esta lógica assume que o pagamento é referente à fatura que contém a `paymentDate`
-            // ou a fatura que acabou de fechar antes da `paymentDate`.
-            const paymentDateObj = new Date(paymentDate + 'T00:00:00.000Z'); // Tratar como data local para UTC
-            let invoiceClosingYear = paymentDateObj.getUTCFullYear();
-            let invoiceClosingMonthZeroBased = paymentDateObj.getUTCMonth();
+        // --- INÍCIO DA CORREÇÃO ---
+        let finalInvoiceReferenceMonthYear = invoiceReferenceMonthYear; // Usa o valor passado pelo frontend
 
-            // Se a data de pagamento é DEPOIS do dia de fechamento do cartão no mês atual,
-            // a fatura paga é a que fechou NESTE mês.
-            // Ex: Cartão fecha dia 10. Pagamento dia 15/Maio -> Fatura de Maio (que fechou dia 10/Maio). Mês de ref: Maio.
-            // Se a data de pagamento é ANTES ou NO dia de fechamento do cartão no mês atual,
-            // a fatura paga é a que fechou no MÊS ANTERIOR.
-            // Ex: Cartão fecha dia 10. Pagamento dia 05/Maio -> Fatura de Abril (que fechou dia 10/Abril). Mês de ref: Abril.
-            if (paymentDateObj.getUTCDate() <= card.closingDay) {
-                invoiceClosingMonthZeroBased -= 1; // Mês de fechamento foi o anterior
-                if (invoiceClosingMonthZeroBased < 0) {
-                    invoiceClosingMonthZeroBased = 11; // Dezembro
-                    invoiceClosingYear -= 1;
-                }
+        // Se o frontend NÃO passou o invoiceReferenceMonthYear (fallback), tenta calcular um valor razoável.
+        // Esta é uma lógica de contingência, o ideal é que o frontend sempre passe.
+        if (!finalInvoiceReferenceMonthYear) {
+            const paymentDateObj = new Date(paymentDate + 'T00:00:00.000Z'); // Tratar como UTC
+            let targetMonth = paymentDateObj.getUTCMonth();
+            let targetYear = paymentDateObj.getUTCFullYear();
+
+            // Lógica para determinar o mês de referência da fatura que o pagamento está quitando
+            // Se o pagamento é feito antes ou no dia de fechamento do cartão, ele se refere à fatura que fecha naquele mês.
+            // Se é feito depois, já se refere à fatura do próximo mês.
+            if (paymentDateObj.getUTCDate() > card.closingDay) {
+                targetMonth += 1;
+                if (targetMonth > 11) { targetMonth = 0; targetYear += 1; }
             }
-            // Agora, invoiceClosingMonthZeroBased e invoiceClosingYear apontam para o mês e ano em que a fatura FECHOU.
-            // O mês de referência da fatura é esse mês de fechamento.
-            const referenceDateForDescription = new Date(Date.UTC(invoiceClosingYear, invoiceClosingMonthZeroBased, 1));
-            referenceMonthDescription = referenceDateForDescription.toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-
-        } catch (dateError) {
-            logger.warn(`[payCreditCardInvoice] Erro ao calcular mês de referência para descrição: ${dateError.message}. Usando descrição genérica.`);
-            referenceMonthDescription = "Mês Corrente"; // Fallback
+            // O mês de referência da fatura é o mês em que ela FECHA.
+            finalInvoiceReferenceMonthYear = new Date(Date.UTC(targetYear, targetMonth, 1)).toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+            logger.warn(`[payCreditCardInvoice] invoiceReferenceMonthYear não fornecido no payload. Recalculando como fallback para: ${finalInvoiceReferenceMonthYear}`);
         }
-
+        // --- FIM DA CORREÇÃO ---
 
         let categoryId = financialCategoryId;
         if (!categoryId) {
@@ -877,7 +867,8 @@ async function payCreditCardInvoice(financialAccountId, creditCardId, paymentAmo
             }
         }
 
-        const transactionDescription = `Pagamento Fatura ${card.name} (${referenceMonthDescription})${originatingAccountDescription ? ` - Origem: ${originatingAccountDescription}` : ''}`;
+        // Usa o finalInvoiceReferenceMonthYear na descrição da transação
+        const transactionDescription = `Pagamento Fatura ${card.name} (${finalInvoiceReferenceMonthYear})${originatingAccountDescription ? ` - Origem: ${originatingAccountDescription}` : ''}`;
 
         const paymentTransaction = await FinancialTransaction.create({
             financialAccountId,
@@ -891,7 +882,7 @@ async function payCreditCardInvoice(financialAccountId, creditCardId, paymentAmo
         }, { transaction: t });
 
         await t.commit();
-        logger.info(`Pagamento de ${formatCurrency(paymentAmount)} para fatura do cartão ID ${creditCardId} (${card.name}) registrado. TX ID: ${paymentTransaction.id}. Mês Ref: ${referenceMonthDescription}`);
+        logger.info(`Pagamento de ${formatCurrency(paymentAmount)} para fatura do cartão ID ${creditCardId} (${card.name}) registrado. TX ID: ${paymentTransaction.id}. Mês Ref: ${finalInvoiceReferenceMonthYear}`);
         const reloadedPaymentTx = await FinancialTransaction.findByPk(paymentTransaction.id, {
             include: [{model: FinancialCategory, as: 'category', attributes: ['id', 'name']}]
         });
