@@ -581,9 +581,26 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             if (!state.activeFinancialAccountId) return;
         }
 
-        // ETAPA 4: Delegar para a IA e para o Action Handler
+               // ETAPA 4: Delegar para a IA e para o Action Handler
         const availableFinancialCategoriesForAI = await financialCategoryService.getAllCategoriesForAccountAI(state.activeFinancialAccountId);
         const availableCreditCardsForAI = await creditCardService.getActiveCreditCardsForAI(state.activeFinancialAccountId);
+        
+        // <<< INÍCIO DA MUDANÇA >>>
+        // Busca as contas acessíveis para injetar no contexto da IA
+        let accountsForAiContext = [];
+        if (state.isSharedAccessContext) {
+            // No modo compartilhado, as contas já foram pré-carregadas no estado
+            const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true });
+            accountsForAiContext = ownerAccounts.filter(acc => {
+                if (acc.accountType === 'PF') return state.sharedAccessPermissions.canAccessPersonalProfile;
+                if (acc.accountType === 'PJ' || acc.accountType === 'MEI') return state.sharedAccessPermissions.canAccessBusinessProfileId === acc.id;
+                return false;
+            });
+        } else {
+            // Para o dono, busca as próprias contas
+            accountsForAiContext = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
+        }
+        // <<< FIM DA MUDANÇA >>>
 
         const aiContext = {
             currentFinancialAccountId: state.activeFinancialAccountId,
@@ -595,6 +612,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             editingResource: state.editingResource,
             availableFinancialCategories: availableFinancialCategoriesForAI,
             availableCreditCards: availableCreditCardsForAI,
+            availableFinancialAccounts: accountsForAiContext, // <<< ADICIONADO AQUI
             pendingAction: state.currentAction === 'awaiting_clarification_response' ? state.pendingConfirmation : null
         };
 

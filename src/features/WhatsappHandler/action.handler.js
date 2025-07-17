@@ -841,6 +841,34 @@ case 'GET_PROVIDER_PUBLIC_INFO': {
                 break;
             }
 
+             case 'LIST_FINANCIAL_ACCOUNTS': {
+                try {
+                    let accessibleAccounts = [];
+                    const ownerNameForMsg = state.isSharedAccessContext ? state.ownerClientNameForContext : null;
+                    
+                    if (state.isSharedAccessContext) {
+                        const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true });
+                        accessibleAccounts = ownerAccounts.filter(acc => {
+                            if (acc.accountType === 'PF') return state.sharedAccessPermissions.canAccessPersonalProfile;
+                            if (acc.accountType === 'PJ' || acc.accountType === 'MEI') return state.sharedAccessPermissions.canAccessBusinessProfileId === acc.id;
+                            return false;
+                        });
+                    } else {
+                        accessibleAccounts = await clientService.getClientFinancialAccounts(actorId, { isActive: true });
+                    }
+
+                    if (accessibleAccounts.length === 0) {
+                        formattedData = `Você não possui contas financeiras acessíveis no momento, ${clientNameToUse}.`;
+                    } else {
+                        formattedData = formatter.formatListClientAccountsDataStructure(accessibleAccounts, state.activeFinancialAccountId, ownerNameForMsg);
+                    }
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em LIST_FINANCIAL_ACCOUNTS: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui listar suas contas.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
+
 case 'LIST_APPOINTMENTS': {
     try {
         const filterParamsAppt = {
@@ -2236,7 +2264,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
             }
 
           // AÇÕES DE SISTEMA, ESTADO E PREFERÊNCIAS
-            case 'SWITCH_FINANCIAL_ACCOUNT': {
+                  case 'SWITCH_FINANCIAL_ACCOUNT': {
                 try {
                     const targetAccountIdentifier = params.targetAccountNameOrType;
                     if (!targetAccountIdentifier) {
@@ -2258,24 +2286,46 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         throw { statusCode: 404, message: `Você não tem nenhuma conta ${state.isSharedAccessContext ? `de ${state.ownerClientNameForContext} ` : ''}acessível no momento.` };
                     }
                     
-                    let foundAccount = accessibleAccounts.find(acc =>
-                        (acc.accountName || acc.name).toLowerCase() === targetAccountIdentifier.toLowerCase() ||
-                        (acc.accountType || acc.type).toLowerCase() === targetAccountIdentifier.toLowerCase()
-                    );
-                    if (!foundAccount) {
-                        foundAccount = accessibleAccounts.find(acc => (acc.accountName || acc.name).toLowerCase().includes(targetAccountIdentifier.toLowerCase()));
+                    // Lógica de busca flexível
+                    const targetLower = targetAccountIdentifier.toLowerCase();
+                    const potentialMatches = accessibleAccounts.filter(acc => {
+                        const nameLower = (acc.accountName || acc.name).toLowerCase();
+                        const typeLower = (acc.accountType || acc.type).toLowerCase();
+                        return nameLower.includes(targetLower) ||
+                               typeLower.includes(targetLower) ||
+                               (targetLower.includes('pessoal') && typeLower === 'pf') ||
+                               ((targetLower.includes('empresa') || targetLower.includes('negócio') || targetLower.includes('pj') || targetLower.includes('mei')) && (typeLower === 'pj' || typeLower === 'mei'));
+                    });
+
+                    let foundAccount = null;
+                    if (potentialMatches.length === 1) {
+                        foundAccount = potentialMatches[0];
                     }
 
+                    // Lógica de decisão
                     if (foundAccount && foundAccount.id !== state.activeFinancialAccountId) {
                         formattedData = `Prontinho! Mudei para a conta *"${foundAccount.accountName}"* (${foundAccount.accountType}).\n\nO que vamos fazer por aqui agora?`;
                         resourceForButtonsContext = { type: 'system_action', id: 'account_switched', description: 'Troca de conta realizada', data: foundAccount };
-
                     } else if (foundAccount && foundAccount.id === state.activeFinancialAccountId) {
                         formattedData = `Você já está na conta "${state.activeFinancialAccountName}", ${clientNameToUse}! 😉`;
                     } else {
-                        let accountListForMsg = "Suas opções são:\n";
-                        accessibleAccounts.forEach(a => accountListForMsg += `\n- *${a.name || a.accountName}* (${a.type || a.accountType})`);
-                        throw { statusCode: 404, message: `Não encontrei uma conta acessível chamada ou do tipo "${targetAccountIdentifier}".\n\n${accountListForMsg}` };
+                        // Se não encontrou ou encontrou múltiplos, lista as opções
+                        const ownerNameForMsg = state.isSharedAccessContext ? state.ownerClientNameForContext : null;
+                        const accountOptionsText = formatter.formatListClientAccountsDataStructure(accessibleAccounts, null, ownerNameForMsg);
+
+                        let introMessage = "Não encontrei uma conta exata com esse nome. ";
+                        if (potentialMatches.length > 1) {
+                            introMessage = "Encontrei algumas opções! ";
+                        }
+                        
+                        formattedData = `${introMessage}Para qual das seguintes contas você gostaria de mudar?\n\n${accountOptionsText}`;
+                        
+                        // Sinaliza para o serviço principal que estamos aguardando uma seleção
+                        resourceForButtonsContext = { 
+                            type: 'system_action', 
+                            id: 'awaiting_account_selection', 
+                            description: 'Aguardando seleção de conta pelo usuário' 
+                        };
                     }
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em SWITCH_FINANCIAL_ACCOUNT: ${e.message}`, { error: e, paramsUsed: params });
