@@ -603,8 +603,10 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
 37. LIST_RECEIVED_ACCESS (Ação do usuário logado, lista convites que ELE recebeu):
     - status: "Ativo", "Pendente", "Inativo" (opcional, default: "Pendente")
 
+// <<< ADICIONE O BLOCO ABAIXO >>>
+37.1. LIST_FINANCIAL_ACCOUNTS: (Listar todas as contas financeiras que o usuário pode acessar no momento)
+    // Sem parâmetros
 
-    
 38. UPDATE_GRANTED_ACCESS (Ação do DONO da conta):
     - sharedAccessIdOrUserIdentifier: string (OBRIGATÓRIO, ID do compartilhamento ou telefone/email do convidado para identificar o acesso a ser atualizado)
     - profileNameShared: string (opcional, para desambiguar se o usuário tem múltiplos acessos compartilhados com a mesma pessoa para perfis diferentes)
