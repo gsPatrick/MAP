@@ -795,21 +795,28 @@ case 'GET_AVAILABLE_TIME_SLOTS': {
             // =================================================================
 
 case 'GET_PROVIDER_PUBLIC_INFO': {
-    try {
-        if (!['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
-            throw { statusCode: 403, message: "Esta funcionalidade está disponível apenas para contas do tipo PJ ou MEI." };
-        }
+                try {
+                    // Busca TODAS as contas do usuário logado, não apenas a ativa
+                    const allUserAccounts = await clientService.getClientFinancialAccounts(actorId, { isActive: true });
+                    const businessAccount = allUserAccounts.find(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
 
-        const publicInfo = await publicBookingService.getProviderPublicInfo(state.activeFinancialAccountId);
-        const publicBookingUrl = `http://map-nocontrole.com.br/agendar/${state.activeFinancialAccountId}`;
-        
-        formattedData = formatter.formatProviderPublicInfoDataStructure(publicInfo, publicBookingUrl);
-    } catch (e) {
-        logger.error(`[ACTION HANDLER] Erro em GET_PROVIDER_PUBLIC_INFO: ${e.message}`, { error: e, paramsUsed: params });
-        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui buscar as informações da sua página pública.\nDetalhe: ${e.message}`;
-    }
-    break;
-}
+                    if (!businessAccount) {
+                        throw { statusCode: 404, message: "Você não possui uma conta de negócios (PJ/MEI) para ter uma página pública de agendamento. Você pode criar uma a qualquer momento!" };
+                    }
+
+                    const businessAccountId = businessAccount.id;
+                    const publicInfo = await publicBookingService.getProviderPublicInfo(businessAccountId);
+                    
+                    // Constrói a URL pública baseada no ID da conta de negócios
+                    const publicBookingUrl = `https://www.map-nocontrole.com.br/agendar/${businessAccountId}`;
+                    
+                    formattedData = formatter.formatProviderPublicInfoDataStructure(publicInfo, publicBookingUrl);
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em GET_PROVIDER_PUBLIC_INFO: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui buscar as informações da sua página pública.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
 
 
             case 'GET_FINANCIAL_SUMMARY': {

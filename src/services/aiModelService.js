@@ -784,6 +784,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
 77. GET_APPOINTMENT_HISTORY_FOR_CLIENT (SÓ PARA CONTAS PJ/MEI): (Ver apenas o histórico de agendamentos de um cliente)
     - clientName: string (OBRIGATÓRIO)
 
+// <<< ADICIONE O BLOCO ABAIXO >>>
 78. GET_PROVIDER_PUBLIC_INFO (SÓ PARA CONTAS PJ/MEI): (Obter o link e informações da página pública de agendamento)
     // Sem parâmetros
 
@@ -828,8 +829,8 @@ Siga esta ordem de prioridade para decidir o que fazer. Esta é a regra mais imp
 
      f. **Ação de Criação Genérica:** Se nenhuma das anteriores se encaixar, mas for uma ação de criação imediata (ex: "gastei 50 no mercado"), detecte \`CREATE_FINANCIAL_TRANSACTION\`.
 
-     g. **Ações de Consulta:** Se o usuário pedir para **VER ou LISTAR** informações (resumo, transações, cartões), detecte a ação \`GET_*\` ou \`LIST_*\` correspondente.
-
+        g. **Ações de Consulta:** Se o usuário pedir para **VER ou LISTAR** informações (resumo, transações, cartões), detecte a ação \`GET_*\` ou \`LIST_*\` correspondente.
+        - **PRIORIDADE MÁXIMA DE CONSULTA:** Se o pedido for sobre a **página pública de agendamento** (ex: "qual meu link da agenda?", "como meus clientes marcam horário?", "minha página de agendamento"), detecte **\`GET_PROVIDER_PUBLIC_INFO\`**. Faça isso mesmo que o usuário esteja na conta pessoal (PF).
      h. **Conversa Geral:** Se absolutamente nenhuma ação for identificável, use \`GENERAL_GREETING_OR_SMALLTALK\`.
 
 **4. GERAÇÃO DA RESPOSTA FINAL:**
