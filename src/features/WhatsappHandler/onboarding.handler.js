@@ -15,15 +15,29 @@ function getOnboardingWelcomeNoPlanMessage(clientName) {
     return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
 }
 
-function getOnboardingAskForCredentialsMessage(clientName) {
+// ============================================================================
+// === INÍCIO DAS NOVAS FUNÇÕES DE MENSAGEM PARA O FLUXO ETAPA-POR-ETAPA ===
+// ============================================================================
+
+function getOnboardingAskForEmailMessage(clientName) {
     const greeting = clientName ? `Olá, ${clientName}! 👋` : 'Olá! 👋';
     const message = `${greeting} Notei que seu plano já está ativo (que demais!), mas ainda não definimos suas credenciais de acesso para o painel web.\n\n` +
-                    `Para continuarmos, por favor, me diga seu *email* e a *senha* que você gostaria de usar.\n\n` +
-                    `Pode ser assim: *meu email é cliente@email.com e minha senha é SenhaForte123*`;
+                    `Para começarmos, qual é o seu melhor *e-mail*?`;
     return message;
 }
 
+function getOnboardingAskForPasswordMessage() {
+    const message = `Perfeito, e-mail anotado! ✅\n\n` +
+                    `Agora, por favor, crie uma *senha* para seu acesso (ela deve ter no mínimo 6 caracteres).`;
+    return message;
+}
+
+// ============================================================================
+// === FIM DAS NOVAS FUNÇÕES DE MENSAGEM ===
+// ============================================================================
+
 function getOnboardingAskForFullNameMessage(clientName, isSharedContext = false, ownerName = 'O proprietário') {
+    // ... (esta função permanece a mesma)
     if (isSharedContext) {
         const aiIntro = `Olá, ${clientName}! 👋 Bem-vindo(a) ao Acesso Compartilhado do NoControle! Que legal ter você por aqui para ajudar a gerenciar as contas de *${ownerName}*. 🤝`;
         const dataStructure = `*O que isso significa?*\n`+
@@ -49,6 +63,7 @@ function getOnboardingAskForPFAccountNameMessage(clientName) {
     return `${aiIntro}\n\n${dataStructure}`;
 }
 
+// ... (outras funções de mensagem 'get...' permanecem as mesmas) ...
 function getOnboardingConfirmPJAccountSetupMessage(clientName, pfAccountName, planDetailsText) {
     const aiIntro = `🏦 Conta Pessoal "${pfAccountName}" criada com sucesso, ${clientName}! 🎉 Ela já está selecionada para você começar a usar.`;
     const dataStructure = `🚀 Próximo passo:\n\n` +
@@ -112,55 +127,68 @@ async function handleOnboardingStep(state, messageText, actorClient) {
                 onboardingReply = getOnboardingWelcomeNoPlanMessage(clientNameForMessages);
             }
             state.currentAction = 'awaiting_plan_interest_generic';
-            
+        
         // ============================================================================
-        // === INÍCIO DA MUDANÇA: Lógica de Extração Flexível ===
+        // === INÍCIO DA LÓGICA REESTRUTURADA PARA CADASTRO EM ETAPAS ===
         // ============================================================================
         } else if (state.data.onboardingStage === 'setting_up_credentials_email') {
-            if (state.currentAction !== 'awaiting_email_and_password') {
-                onboardingReply = getOnboardingAskForCredentialsMessage(clientNameForMessages);
-                state.currentAction = 'awaiting_email_and_password';
-            } else {
-                // Lógica de extração mais flexível
+            
+            // ETAPA 1: Pedir o E-mail
+            if (state.currentAction !== 'awaiting_email' && state.currentAction !== 'awaiting_password') {
+                onboardingReply = getOnboardingAskForEmailMessage(clientNameForMessages);
+                state.currentAction = 'awaiting_email';
+            
+            // ETAPA 2: Processar o E-mail e Pedir a Senha
+            } else if (state.currentAction === 'awaiting_email') {
                 const emailRegex = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
-                const passwordRegex = /(?:senha|password|senha é|senha e)\s*([^\s]+)/i;
-
                 const emailMatch = messageText.match(emailRegex);
-                const passwordMatch = messageText.match(passwordRegex);
-
                 const email = emailMatch ? emailMatch[0] : null;
-                const password = passwordMatch ? passwordMatch[1] : null;
-                
-                if (email && password) {
-                    if (password.length < 6) {
-                        onboardingReply = 'A senha precisa ter pelo menos 6 caracteres. O e-mail eu já anotei. Qual seria a senha?';
-                    } else {
-                        try {
-                            const currentName = actorClient.name === 'Convidado' ? (state.pushNameFromPayload || 'Cliente') : actorClient.name;
-                            await clientAuthService.setClientCredentials(actorClient.phone, password, currentName, email);
-                            
-                            state.data.onboardingStage = 'setting_up_pf_account_name'; 
-                            state.currentAction = 'awaiting_input_pf_name';
-                            
-                            const finalNameForMessage = currentName.split(' ')[0];
-                            onboardingReply = getOnboardingAskForPFAccountNameMessage(finalNameForMessage);
-                            
-                        } catch (e) {
-                            logger.error(`[ONBOARDING HANDLER] Erro ao salvar credenciais para ${actorClient.phone}: ${e.message}`);
-                            onboardingReply = `Opa! Tive um problema para salvar seus dados: ${e.message}. Poderia tentar novamente?`;
-                        }
-                    }
+
+                if (email) {
+                    // Armazena o e-mail temporariamente no estado da conversa
+                    state.data.tempEmail = email;
+                    onboardingReply = getOnboardingAskForPasswordMessage();
+                    // Avança para a próxima sub-etapa
+                    state.currentAction = 'awaiting_password';
                 } else {
-                    let missingInfo = [];
-                    if (!email) missingInfo.push("e-mail");
-                    if (!password) missingInfo.push("senha");
-                    
-                    onboardingReply = `Hum, não consegui identificar seu ${missingInfo.join(' e ')}. ` +
-                                      `Por favor, tente novamente. Lembre-se de incluir a palavra "senha" antes da sua senha. 😉`;
+                    onboardingReply = "Hum, isso não parece um e-mail válido. 😅 Por favor, tente me enviar seu e-mail novamente.";
+                    // Mantém a ação como 'awaiting_email' para a próxima tentativa
+                }
+
+            // ETAPA 3: Processar a Senha e Finalizar
+            } else if (state.currentAction === 'awaiting_password') {
+                const password = messageText.trim();
+                const email = state.data.tempEmail; // Recupera o e-mail salvo
+
+                if (!email) { // Verificação de segurança, caso o estado se perca
+                    logger.error(`[ONBOARDING] Chegou na etapa de senha sem um e-mail salvo no estado para o cliente ${actorClient.phone}. Reiniciando.`);
+                    onboardingReply = "Opa, me perdi um pouco. Vamos começar de novo. Qual é o seu e-mail, por favor?";
+                    state.currentAction = 'awaiting_email';
+                    delete state.data.tempEmail;
+                } else if (password.length < 6) {
+                    onboardingReply = "A senha precisa ter pelo menos 6 caracteres. Por favor, escolha uma senha um pouco mais forte.";
+                    // Mantém a ação como 'awaiting_password'
+                } else {
+                    try {
+                        const currentName = actorClient.name === 'Convidado' ? (state.pushNameFromPayload || 'Cliente') : actorClient.name;
+                        await clientAuthService.setClientCredentials(actorClient.phone, password, currentName, email);
+                        
+                        // Limpa os dados temporários e avança no onboarding
+                        delete state.data.tempEmail;
+                        state.data.onboardingStage = 'setting_up_pf_account_name'; 
+                        state.currentAction = 'awaiting_input_pf_name';
+                        
+                        const finalNameForMessage = currentName.split(' ')[0];
+                        onboardingReply = getOnboardingAskForPFAccountNameMessage(finalNameForMessage);
+                        
+                    } catch (e) {
+                        logger.error(`[ONBOARDING HANDLER] Erro ao salvar credenciais para ${actorClient.phone}: ${e.message}`);
+                        onboardingReply = `Opa! Tive um problema para salvar seus dados: ${e.message}. Poderia tentar novamente?`;
+                    }
                 }
             }
         // ============================================================================
-        // === FIM DA MUDANÇA ===
+        // === FIM DA LÓGICA REESTRUTURADA ===
         // ============================================================================
         
         } else if (state.data.onboardingStage === 'setting_up_pf_account_name') {
