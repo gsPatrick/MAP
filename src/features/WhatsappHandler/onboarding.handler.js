@@ -15,8 +15,31 @@ function getOnboardingWelcomeNoPlanMessage(clientName) {
     return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
 }
 
+// ============================================================================
+// === INÍCIO DA MUDANÇA: Saudação Genérica ===
+// ============================================================================
+
+// NOVA FUNÇÃO DE MENSAGEM PARA CREDENCIAIS
+function getOnboardingAskForCredentialsMessage(clientName) {
+    // Se um nome for fornecido (não será neste estágio), a saudação é pessoal.
+    // Se o nome for nulo (como será o caso), a saudação é genérica.
+    const greeting = clientName ? `Olá, ${clientName}! 👋` : 'Olá! 👋';
+    
+    const message = `${greeting} Notei que seu plano já está ativo (que demais!), mas ainda não definimos suas credenciais de acesso para o painel web.\n\n` +
+                    `Para continuarmos, por favor, me diga seu *email* e a *senha* que você gostaria de usar.\n\n` +
+                    `Pode ser assim: *meu email é cliente@email.com e minha senha é SenhaForte123*`;
+    
+    return message;
+}
+
+// ============================================================================
+// === FIM DA MUDANÇA ===
+// ============================================================================
+
+
 function getOnboardingAskForFullNameMessage(clientName, isSharedContext = false, ownerName = 'O proprietário') {
     if (isSharedContext) {
+        // Para acesso compartilhado, a saudação ainda faz sentido ser pessoal, usando o nome do WhatsApp
         const aiIntro = `Olá, ${clientName}! 👋 Bem-vindo(a) ao Acesso Compartilhado do NoControle! Que legal ter você por aqui para ajudar a gerenciar as contas de *${ownerName}*. 🤝`;
         
         const dataStructure = `*O que isso significa?*\n`+
@@ -83,12 +106,33 @@ function getOnboardingCompanyCreatedMessage(clientName, companyType, companyName
  */
 async function handleOnboardingStep(state, messageText, actorClient) {
     let onboardingReply = "";
-    const clientNameForMessages = (actorClient.name && actorClient.name.toLowerCase() !== 'convidado')
+
+    // ============================================================================
+    // === INÍCIO DA MUDANÇA: Lógica de Nome para Mensagens ===
+    // ============================================================================
+    const nameFromDb = (actorClient.name && actorClient.name.toLowerCase() !== 'convidado')
         ? actorClient.name.split(" ")[0]
-        : (state.pushNameFromPayload || "você");
+        : null;
+
+    let clientNameForMessages;
+
+    // Se o estágio for de coleta inicial de dados, não usamos nenhum nome.
+    if (state.data.onboardingStage === 'setting_up_credentials_email' || 
+        state.data.onboardingStage === 'awaiting_shared_user_name') {
+        
+        clientNameForMessages = null; // A variável será nula, resultando na saudação genérica
+    } else {
+        // Para os outros estágios, mantemos a lógica anterior.
+        clientNameForMessages = nameFromDb || state.pushNameFromPayload || "você";
+    }
+    // ============================================================================
+    // === FIM DA MUDANÇA ===
+    // ============================================================================
 
     const lowerMessageText = (messageText || "").toLowerCase().trim();
     const isSharedContext = state.isSharedAccessContext;
+
+    // ... (O restante da lógica para acesso compartilhado permanece o mesmo) ...
 
     if (isSharedContext && actorClient.name.toLowerCase() === 'convidado') {
         if (state.currentAction === 'awaiting_shared_user_name') {
@@ -114,8 +158,9 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             }
         } else {
             state.currentAction = 'awaiting_shared_user_name';
-            const initialPromptName = 'você';
-            onboardingReply = getOnboardingAskForFullNameMessage(initialPromptName, true, state.ownerClientNameForContext);
+            // Para o prompt de nome de convidado, usamos o nome do WhatsApp se disponível.
+            const guestPromptName = state.pushNameFromPayload || "você"; 
+            onboardingReply = getOnboardingAskForFullNameMessage(guestPromptName, true, state.ownerClientNameForContext);
         }
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
@@ -159,19 +204,18 @@ async function handleOnboardingStep(state, messageText, actorClient) {
                 onboardingReply = getOnboardingWelcomeNoPlanMessage(clientNameForMessages);
             }
             state.currentAction = 'awaiting_plan_interest_generic';
-            
-        // ============================================================================
-        // === INÍCIO DO NOVO BLOCO DE CÓDIGO PARA TRATAR O CADASTRO DE CREDENCIAIS ===
-        // ============================================================================
         } else if (state.data.onboardingStage === 'setting_up_credentials_email') {
-            // Se esta é a primeira vez que chegamos aqui, enviamos a mensagem pedindo os dados.
             if (state.currentAction !== 'awaiting_email_and_password') {
-                onboardingReply = `Olá, ${clientNameForMessages}! 👋 Notei que seu plano já está ativo (que demais!), mas ainda não definimos suas credenciais de acesso para o painel web.\n\n` +
-                                  `Para continuarmos, por favor, me diga seu *email* e a *senha* que você gostaria de usar.\n\n` +
-                                  `Pode ser assim: *meu email é cliente@email.com e minha senha é SenhaForte123*`;
+                // ============================================================================
+                // === INÍCIO DA MUDANÇA: Usando a nova função de mensagem ===
+                // ============================================================================
+                // Chama a nova função. Como clientNameForMessages será null, ela gerará a saudação genérica.
+                onboardingReply = getOnboardingAskForCredentialsMessage(clientNameForMessages);
+                // ============================================================================
+                // === FIM DA MUDANÇA ===
+                // ============================================================================
                 state.currentAction = 'awaiting_email_and_password';
             } else {
-                // Se já pedimos os dados, agora vamos processar a resposta do usuário.
                 const match = messageText.match(/email é\s*([^\s,]+@[^\s,]+\.[a-zA-Z]{2,})\s*e.*?senha é\s*(\S+)/i);
                 
                 if (match && match[1] && match[2]) {
@@ -182,15 +226,12 @@ async function handleOnboardingStep(state, messageText, actorClient) {
                         onboardingReply = 'A senha precisa ter pelo menos 6 caracteres. Vamos tentar de novo?';
                     } else {
                         try {
-                            // Chama o serviço para salvar o email e a senha no banco de dados.
                             await clientAuthService.setClientCredentials(actorClient.phone, password, actorClient.name, email);
                             
-                            // Avança para o próximo estágio do onboarding.
                             state.data.onboardingStage = 'setting_up_pf_account_name'; 
                             state.currentAction = 'awaiting_input_pf_name';
                             
-                            // Chama a função que gera a próxima mensagem do fluxo.
-                            onboardingReply = getOnboardingAskForPFAccountNameMessage(clientNameForMessages);
+                            onboardingReply = getOnboardingAskForPFAccountNameMessage(clientNameForMessages || "você");
                             
                         } catch (e) {
                             logger.error(`[ONBOARDING HANDLER] Erro ao salvar credenciais para ${actorClient.phone}: ${e.message}`);
@@ -201,10 +242,6 @@ async function handleOnboardingStep(state, messageText, actorClient) {
                     onboardingReply = `Não consegui entender seu email e senha. Por favor, use o formato: *meu email é email@exemplo.com e minha senha é Senha123*`;
                 }
             }
-        // ============================================================================
-        // === FIM DO NOVO BLOCO DE CÓDIGO ===
-        // ============================================================================
-        
         } else if (state.data.onboardingStage === 'setting_up_pf_account_name') {
              if (isSharedContext) { 
                 state.data.onboardingStage = 'onboarding_complete'; state.currentAction = null;
