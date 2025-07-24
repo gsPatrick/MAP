@@ -164,52 +164,148 @@ async function getIncomeCategorySummary(req, res, next) {
     next(error);
   }
 
-  async function getFilteredTransactions(req, res, next) {
+async function getFilteredTransactions(financialAccountId, filters = {}) {
   try {
-    const financialAccountId = getFinancialAccountIdFromRequest(req);
-    const { 
-      type, // 'Entrada' ou 'Saída'
-      financialCategoryId, 
-      creditCardId, 
-      dateStart, // Formato YYYY-MM-DD
-      dateEnd,   // Formato YYYY-MM-DD
-      isPayableOrReceivable, 
-      isPaidOrReceived,
-      search, // Campo de busca geral
-      sortBy = 'transactionDate', 
-      sortOrder = 'DESC',
-      page = 1, 
-      limit = 10
-    } = req.query;
+    const account = await validateAndGetFinancialAccount(financialAccountId); // Valida a conta
 
-    // Validações básicas de data (podem ser mais robustas)
-    if ((dateStart && !/^\d{4}-\d{2}-\d{2}$/.test(dateStart)) || (dateEnd && !/^\d{4}-\d{2}-\d{2}$/.test(dateEnd))) {
-        const error = new Error("Formato de data inválido. Use YYYY-MM-DD.");
-        error.statusCode = 400; error.status = 'fail'; return next(error);
+    const whereConditions = { financialAccountId };
+
+    if (filters.type) whereConditions.type = filters.type;
+    if (filters.financialCategoryId) whereConditions.financialCategoryId = filters.financialCategoryId;
+    if (filters.creditCardId) whereConditions.creditCardId = filters.creditCardId;
+
+    // Filtros de data
+    if (filters.dateStart) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.gte]: filters.dateStart };
+    if (filters.dateEnd) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.lte]: filters.dateEnd };
+
+    // Filtros booleanos
+    if (filters.isPayableOrReceivable !== undefined) {
+      whereConditions.isPayableOrReceivable = filters.isPayableOrReceivable;
+      if (filters.isPaidOrReceived !== undefined) {
+        whereConditions.isPaidOrReceived = filters.isPaidOrReceived;
+      }
+      if (filters.dueBefore) whereConditions.dueDate = { ...whereConditions.dueDate, [Op.lte]: filters.dueBefore };
+      if (filters.dueAfter) whereConditions.dueDate = { ...whereConditions.dueDate, [Op.gte]: filters.dueAfter };
     }
 
-    const filters = {
-      type,
-      financialCategoryId,
-      creditCardId,
-      dateStart,
-      dateEnd,
-      isPayableOrReceivable: isPayableOrReceivable !== undefined ? isPayableOrReceivable === 'true' : undefined,
-      isPaidOrReceived: isPaidOrReceived !== undefined ? isPaidOrReceived === 'true' : undefined,
-      search,
-      sortBy,
-      sortOrder,
-      page,
-      limit
-    };
+    // Campo de busca
+    if (filters.search) {
+      whereConditions[Op.or] = [
+        { description: { [Op.iLike]: `%${filters.search}%` } },
+        { notes: { [Op.iLike]: `%${filters.search}%` } }
+      ];
+    }
 
-    const result = await financialService.getFilteredTransactions(financialAccountId, filters);
-    res.status(200).json({ status: 'success', ...result });
+    // Ordenação
+    const validSortOrders = ['ASC', 'DESC'];
+    let sortField = filters.sortBy || 'transactionDate';
+    let sortDirection = validSortOrders.includes(filters.sortOrder?.toUpperCase()) ? filters.sortOrder.toUpperCase() : 'DESC';
+
+    const order = [[sortField, sortDirection]];
+    // Adicionar um desempate por data de criação ou ID para garantir consistência
+    if (sortField !== 'createdAt') order.push(['createdAt', 'DESC']); 
+
+    // Paginação
+    const page = parseInt(filters.page, 10) || 1;
+    const limit = parseInt(filters.limit, 10) || 10;
+    const offset = (page - 1) * limit;
+
+    const { count, rows } = await FinancialTransaction.findAndCountAll({
+      where: whereConditions,
+      include: [
+        { model: FinancialCategory, as: 'category', attributes: ['id', 'name'] },
+        { model: CreditCard, as: 'creditCard', attributes: ['id', 'name', 'lastFourDigits'] },
+      ],
+      limit: limit,
+      offset: offset,
+      order: order,
+      distinct: true, // Conta corretamente o total de itens
+    });
+
+    logger.info(`Filtradas ${rows.length} transações para FinancialAccount ID ${financialAccountId} (Total: ${count}).`);
+    return {
+      totalItems: count,
+      totalPages: Math.ceil(count / limit),
+      currentPage: page,
+      transactions: rows.map(t => t.toJSON()),
+    };
   } catch (error) {
-    next(error);
+    logger.error(`Erro ao filtrar transações para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error, filters });
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
   }
 }
 
+async function getFilteredTransactions(financialAccountId, filters = {}) {
+  try {
+    const account = await validateAndGetFinancialAccount(financialAccountId); // Valida a conta
+
+    const whereConditions = { financialAccountId };
+
+    if (filters.type) whereConditions.type = filters.type;
+    if (filters.financialCategoryId) whereConditions.financialCategoryId = filters.financialCategoryId;
+    if (filters.creditCardId) whereConditions.creditCardId = filters.creditCardId;
+
+    // Filtros de data
+    if (filters.dateStart) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.gte]: filters.dateStart };
+    if (filters.dateEnd) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.lte]: filters.dateEnd };
+
+    // Filtros booleanos
+    if (filters.isPayableOrReceivable !== undefined) {
+      whereConditions.isPayableOrReceivable = filters.isPayableOrReceivable;
+      if (filters.isPaidOrReceived !== undefined) {
+        whereConditions.isPaidOrReceived = filters.isPaidOrReceived;
+      }
+      if (filters.dueBefore) whereConditions.dueDate = { ...whereConditions.dueDate, [Op.lte]: filters.dueBefore };
+      if (filters.dueAfter) whereConditions.dueDate = { ...whereConditions.dueDate, [Op.gte]: filters.dueAfter };
+    }
+
+    // Campo de busca
+    if (filters.search) {
+      whereConditions[Op.or] = [
+        { description: { [Op.iLike]: `%${filters.search}%` } },
+        { notes: { [Op.iLike]: `%${filters.search}%` } }
+      ];
+    }
+
+    // Ordenação
+    const validSortOrders = ['ASC', 'DESC'];
+    let sortField = filters.sortBy || 'transactionDate';
+    let sortDirection = validSortOrders.includes(filters.sortOrder?.toUpperCase()) ? filters.sortOrder.toUpperCase() : 'DESC';
+
+    const order = [[sortField, sortDirection]];
+    // Adicionar um desempate por data de criação ou ID para garantir consistência
+    if (sortField !== 'createdAt') order.push(['createdAt', 'DESC']); 
+
+    // Paginação
+    const page = parseInt(filters.page, 10) || 1;
+    const limit = parseInt(filters.limit, 10) || 10;
+    const offset = (page - 1) * limit;
+
+    const { count, rows } = await FinancialTransaction.findAndCountAll({
+      where: whereConditions,
+      include: [
+        { model: FinancialCategory, as: 'category', attributes: ['id', 'name'] },
+        { model: CreditCard, as: 'creditCard', attributes: ['id', 'name', 'lastFourDigits'] },
+      ],
+      limit: limit,
+      offset: offset,
+      order: order,
+      distinct: true, // Conta corretamente o total de itens
+    });
+
+    logger.info(`Filtradas ${rows.length} transações para FinancialAccount ID ${financialAccountId} (Total: ${count}).`);
+    return {
+      totalItems: count,
+      totalPages: Math.ceil(count / limit),
+      currentPage: page,
+      transactions: rows.map(t => t.toJSON()),
+    };
+  } catch (error) {
+    logger.error(`Erro ao filtrar transações para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error, filters });
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
 }
 
 
