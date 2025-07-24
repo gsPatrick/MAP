@@ -19,6 +19,11 @@ router.get('/:transactionId', financialController.getTransactionById);
 router.patch('/:transactionId', financialController.updateTransaction);
 router.delete('/:transactionId', financialController.deleteTransaction);
 router.post('/:transactionId/settle', financialController.markAsPaidOrReceived);
+// ... outros imports e rotas ...
 
+// Nova rota para buscar transações com filtros avançados
+router.get('/transactions/filtered', financialController.getFilteredTransactions);
+
+// ... o resto do arquivo ...
 
 module.exports = router;

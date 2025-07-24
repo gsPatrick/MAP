@@ -958,8 +958,8 @@ async function getIncomeCategorySummary(financialAccountId, dateStart, dateEnd) 
         if (!error.statusCode) error.statusCode = 500;
         throw error;
     }
-
-    async function getFilteredTransactions(financialAccountId, filters = {}) {
+}
+async function getFilteredTransactions(financialAccountId, filters = {}) {
   try {
     const account = await validateAndGetFinancialAccount(financialAccountId); // Valida a conta
 
@@ -1031,9 +1031,6 @@ async function getIncomeCategorySummary(financialAccountId, dateStart, dateEnd) 
   }
 }
 
-}
-
-
 module.exports = {
   createTransaction,
   createParcelledAccount,
@@ -1049,6 +1046,7 @@ module.exports = {
   recreateParcelledAccount,
   getMonthlyTrend,
   getExpenseCategorySummary,
-  getIncomeCategorySummary
+  getIncomeCategorySummary,
+  getFilteredTransactions
 
 };

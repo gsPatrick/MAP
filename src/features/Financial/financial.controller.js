@@ -237,6 +237,51 @@ async function getFilteredTransactions(financialAccountId, filters = {}) {
 }
 
 }
+async function getFilteredTransactions(req, res, next) {
+  try {
+    const financialAccountId = getFinancialAccountIdFromRequest(req);
+    const { 
+      type, // 'Entrada' ou 'Saída'
+      financialCategoryId, 
+      creditCardId, 
+      dateStart, // Formato YYYY-MM-DD
+      dateEnd,   // Formato YYYY-MM-DD
+      isPayableOrReceivable, 
+      isPaidOrReceived,
+      search, // Campo de busca geral
+      sortBy = 'transactionDate', 
+      sortOrder = 'DESC',
+      page = 1, 
+      limit = 10
+    } = req.query;
+
+    // Validações básicas de data (podem ser mais robustas)
+    if ((dateStart && !/^\d{4}-\d{2}-\d{2}$/.test(dateStart)) || (dateEnd && !/^\d{4}-\d{2}-\d{2}$/.test(dateEnd))) {
+        const error = new Error("Formato de data inválido. Use YYYY-MM-DD.");
+        error.statusCode = 400; error.status = 'fail'; return next(error);
+    }
+
+    const filters = {
+      type,
+      financialCategoryId,
+      creditCardId,
+      dateStart,
+      dateEnd,
+      isPayableOrReceivable: isPayableOrReceivable !== undefined ? isPayableOrReceivable === 'true' : undefined,
+      isPaidOrReceived: isPaidOrReceived !== undefined ? isPaidOrReceived === 'true' : undefined,
+      search,
+      sortBy,
+      sortOrder,
+      page,
+      limit
+    };
+
+    const result = await financialService.getFilteredTransactions(financialAccountId, filters);
+    res.status(200).json({ status: 'success', ...result });
+  } catch (error) {
+    next(error);
+  }
+}
 
 
 
@@ -255,6 +300,7 @@ module.exports = {
   getMonthlyTrend,
   getExpenseCategorySummary,
   getIncomeCategorySummary,
+  getFilteredTransactions,
   getFilteredTransactions
   // ... controllers para RecurringTransactionRule e CreditCard
 };
