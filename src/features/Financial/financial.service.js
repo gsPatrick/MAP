@@ -958,6 +958,79 @@ async function getIncomeCategorySummary(financialAccountId, dateStart, dateEnd) 
         if (!error.statusCode) error.statusCode = 500;
         throw error;
     }
+
+    async function getFilteredTransactions(financialAccountId, filters = {}) {
+  try {
+    const account = await validateAndGetFinancialAccount(financialAccountId); // Valida a conta
+
+    const whereConditions = { financialAccountId };
+
+    if (filters.type) whereConditions.type = filters.type;
+    if (filters.financialCategoryId) whereConditions.financialCategoryId = filters.financialCategoryId;
+    if (filters.creditCardId) whereConditions.creditCardId = filters.creditCardId;
+
+    // Filtros de data
+    if (filters.dateStart) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.gte]: filters.dateStart };
+    if (filters.dateEnd) whereConditions.transactionDate = { ...whereConditions.transactionDate, [Op.lte]: filters.dateEnd };
+
+    // Filtros booleanos
+    if (filters.isPayableOrReceivable !== undefined) {
+      whereConditions.isPayableOrReceivable = filters.isPayableOrReceivable;
+      if (filters.isPaidOrReceived !== undefined) {
+        whereConditions.isPaidOrReceived = filters.isPaidOrReceived;
+      }
+      if (filters.dueBefore) whereConditions.dueDate = { ...whereConditions.dueDate, [Op.lte]: filters.dueBefore };
+      if (filters.dueAfter) whereConditions.dueDate = { ...whereConditions.dueDate, [Op.gte]: filters.dueAfter };
+    }
+
+    // Campo de busca
+    if (filters.search) {
+      whereConditions[Op.or] = [
+        { description: { [Op.iLike]: `%${filters.search}%` } },
+        { notes: { [Op.iLike]: `%${filters.search}%` } }
+      ];
+    }
+
+    // Ordenação
+    const validSortOrders = ['ASC', 'DESC'];
+    let sortField = filters.sortBy || 'transactionDate';
+    let sortDirection = validSortOrders.includes(filters.sortOrder?.toUpperCase()) ? filters.sortOrder.toUpperCase() : 'DESC';
+
+    const order = [[sortField, sortDirection]];
+    // Adicionar um desempate por data de criação ou ID para garantir consistência
+    if (sortField !== 'createdAt') order.push(['createdAt', 'DESC']); 
+
+    // Paginação
+    const page = parseInt(filters.page, 10) || 1;
+    const limit = parseInt(filters.limit, 10) || 10;
+    const offset = (page - 1) * limit;
+
+    const { count, rows } = await FinancialTransaction.findAndCountAll({
+      where: whereConditions,
+      include: [
+        { model: FinancialCategory, as: 'category', attributes: ['id', 'name'] },
+        { model: CreditCard, as: 'creditCard', attributes: ['id', 'name', 'lastFourDigits'] },
+      ],
+      limit: limit,
+      offset: offset,
+      order: order,
+      distinct: true, // Conta corretamente o total de itens
+    });
+
+    logger.info(`Filtradas ${rows.length} transações para FinancialAccount ID ${financialAccountId} (Total: ${count}).`);
+    return {
+      totalItems: count,
+      totalPages: Math.ceil(count / limit),
+      currentPage: page,
+      transactions: rows.map(t => t.toJSON()),
+    };
+  } catch (error) {
+    logger.error(`Erro ao filtrar transações para FinancialAccount ID ${financialAccountId}: ${error.message}`, { error, filters });
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
+}
+
 }
 
 
@@ -977,5 +1050,5 @@ module.exports = {
   getMonthlyTrend,
   getExpenseCategorySummary,
   getIncomeCategorySummary
-
+getFilteredTransactions
 };
