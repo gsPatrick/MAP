@@ -1049,6 +1049,6 @@ module.exports = {
   recreateParcelledAccount,
   getMonthlyTrend,
   getExpenseCategorySummary,
-  getIncomeCategorySummary
+  getIncomeCategorySummary,
 getFilteredTransactions
 };
