@@ -16,8 +16,8 @@ const { sendWhatsappMessage, sendButtonListMessage, downloadZapiMedia } = requir
 const aiModelService = require('../../services/aiModelService');
 const logger = require('../../utils/logger');
 const path = require('path');
-const hydrationService = require('../Hydration/hydration.service'); // Adicionar import do serviço de hidratação
-const systemService = require('../System/system.service'); // Adicionar import do serviço de sistema para formatar a resposta
+const hydrationService = require('../Hydration/hydration.service');
+const systemService = require('../System/system.service');
 
 
 // --- Gerenciamento de Estado da Conversa ---
@@ -30,10 +30,9 @@ let pushNameFromPayload = null;
 // --- Funções de Controle de Fluxo e Estado (Core do Maestro) ---
 
 async function initializeOrUpdateState(client, sharedAccessRecord = null, existingState = null, clientAccountsFromDb = [], ownerAccountsIfShared = []) {
-    // Ajuste aqui: clientName para mensagens não deve ser o pushName se o cliente ainda for 'Convidado'
     const clientName = (client.name && client.name.trim() !== "" && client.name.trim().toLowerCase() !== "unknown" && client.name.trim().toLowerCase() !== "null" && client.name.trim().toLowerCase() !== "convidado")
         ? client.name.split(" ")[0]
-        : (existingState?.clientName || "pessoa incrível"); // Se for convidado, use o nome do estado, senão um genérico
+        : (existingState?.clientName || "pessoa incrível");
     
     let ownerClientIdForContext = client.id;
     let isSharedAccessContext = false;
@@ -69,8 +68,6 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
     let clientAccessLevel = ownerClientForContext.accessLevel || 'gratuito';
     let clientAccessExpiresAt = ownerClientForContext.accessExpiresAt;
     let accessLevelTextForUser = "Nenhum plano ativo";
-    // Sempre assume o onboardingStage do estado existente para manter o progresso,
-    // a menos que haja uma razão forte para sobrescrever (como a lógica abaixo).
     let onboardingStage = existingState?.data?.onboardingStage;
 
 
@@ -98,25 +95,18 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
    
     const accountsForOperation = isSharedAccessContext ? ownerAccountsIfShared : clientAccountsFromDb;
    
-    // RE-AVALIAR onboardingStage com PRIORIDADE
-    // Se for um contexto de acesso compartilhado E o ator não tem passwordHash principal
     if (isSharedAccessContext && client.passwordHash === null) {
         if (client.name === 'Convidado') {
-            // Se o nome ainda é 'Convidado', força para coletar o nome primeiro
             onboardingStage = 'awaiting_shared_user_name';
         } else {
-            // Se o nome já foi atualizado (não é mais 'Convidado') e o passwordHash ainda é null,
-            // vai direto para coletar as credenciais principais.
             onboardingStage = 'setting_up_main_client_credentials';
         }
     } else if (!onboardingStage || onboardingStage === 'awaiting_plan_confirmation' || (existingState && !existingState.hasPaidAccess_whenStageLastSet) ) {
-        // Se ainda não há um estágio definido ou está no estágio inicial de plano,
-        // ou se o plano pago do dono foi desativado/expirado, reavalia o onboarding padrão.
         if (hasPaidAccess) {
             if (!client.email || !client.passwordHash) {
                 onboardingStage = 'setting_up_credentials_email';
             } else { 
-                if (!isSharedAccessContext) { // Onboarding padrão para PF/PJ só se não for acesso compartilhado.
+                if (!isSharedAccessContext) {
                     const hasPfActor = accountsForOperation.some(acc => acc.accountType === 'PF');
                     if (!hasPfActor) {
                          onboardingStage = 'setting_up_pf_account_name';
@@ -133,17 +123,13 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
                          }
                     }
                 } else { 
-                    // Para acesso compartilhado, se chegou aqui e o owner tem acesso pago,
-                    // e o convidado já tem credenciais principais, o onboarding está completo.
                     onboardingStage = 'onboarding_complete';
                 }
             }
         } else { 
-            onboardingStage = 'awaiting_plan_confirmation'; // Sem plano pago, vai para o estágio de convite de plano.
+            onboardingStage = 'awaiting_plan_confirmation';
         }
     } else if (onboardingStage === 'onboarding_complete' && isSharedAccessContext && client.passwordHash === null) {
-        // REFORÇO: Se de alguma forma o estágio foi marcado como completo, mas o passwordHash ainda é null e é acesso compartilhado,
-        // força de volta para o onboarding de credenciais.
         onboardingStage = 'setting_up_main_client_credentials';
     }
 
@@ -162,7 +148,14 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
     }
 
     if (existingState) {
-        existingState.clientName = clientName; // Usar o nome determinado acima
+        // <<< INÍCIO DA MODIFICAÇÃO >>>
+        // Detecta se o usuário acabou de reativar o plano
+        if (!existingState.hasPaidAccess && hasPaidAccess) {
+            existingState.justReactivated = true;
+        }
+        // <<< FIM DA MODIFICAÇÃO >>>
+
+        existingState.clientName = clientName;
         existingState.ownerClientIdForContext = ownerClientIdForContext;
         existingState.ownerClientNameForContext = ownerClientNameForContext;
         existingState.isSharedAccessContext = isSharedAccessContext;
@@ -171,8 +164,6 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
         existingState.accessExpiresAt = clientAccessExpiresAt;
         existingState.hasPaidAccess = hasPaidAccess;
         existingState.accessLevelTextForUser = accessLevelTextForUser;
-        // Se o stage mudou (ex: de 'awaiting_shared_user_name' para 'setting_up_main_client_credentials'),
-        // ou de qualquer estágio para 'onboarding_complete', resetar currentAction
         if (existingState.data.onboardingStage !== onboardingStage || onboardingStage === 'onboarding_complete') {
             existingState.currentAction = null;
         }
@@ -185,7 +176,7 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
                 existingState.activeFinancialAccountName = defaultAccount.accountName || defaultAccount.name;
                 existingState.activeFinancialAccountType = defaultAccount.accountType || defaultAccount.type;
             } else if (!currentActiveStillValid && accountsForOperation.length > 0) {
-                existingState.activeFinancialAccountId = null; // Força re-seleção se a conta ativa não for mais válida
+                existingState.activeFinancialAccountId = null;
                 existingState.activeFinancialAccountName = null;
                 existingState.activeFinancialAccountType = null;
             } else if (!currentActiveStillValid && accountsForOperation.length === 0) {
@@ -211,13 +202,14 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
         activeFinancialAccountId: defaultAccount ? defaultAccount.id : null,
         activeFinancialAccountName: defaultAccount ? (defaultAccount.accountName || defaultAccount.name) : null,
         activeFinancialAccountType: defaultAccount ? (defaultAccount.accountType || defaultAccount.type) : null,
-        clientName: clientName, // Usar o nome determinado acima
+        clientName: clientName,
         ownerClientIdForContext: ownerClientIdForContext, ownerClientNameForContext: ownerClientNameForContext,
         isSharedAccessContext: isSharedAccessContext, sharedAccessPermissions: sharedAccessPermissions,
         messageHistory: [], pendingConfirmation: null, editingResource: null, lastAiResponse: null,
         currentAccessLevel: clientAccessLevel, accessExpiresAt: clientAccessExpiresAt,
         hasPaidAccess: hasPaidAccess, accessLevelTextForUser: accessLevelTextForUser,
         hasPaidAccess_whenStageLastSet: hasPaidAccess,
+        justReactivated: false, // <<< ADICIONADO AQUI
     };
     logger.debug(`[WHATSAPP SERVICE - InitializeState] Novo estado criado para ator ${client.id}: `, {
         onboardingStage: newState.data.onboardingStage, hasPaidAccessDono: newState.hasPaidAccess,
@@ -226,7 +218,7 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
     return newState;
 }
 
-// REMOVIDA A DUPLICAÇÃO DA FUNÇÃO processIncomingAudioMessage
+// ... (função processIncomingAudioMessage permanece a mesma) ...
 async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, pushName, rawPayload) {
     const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
     if (!canonicalPhone) {
@@ -281,9 +273,6 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
     }
 }
 
-// =========================================================================================
-// <<< INÍCIO DA FUNÇÃO `processIncomingMessage` COM A LÓGICA CORRIGIDA >>>
-// =========================================================================================
 async function processIncomingMessage(senderPhoneRaw, messageText, pushName, rawPayload) {
     const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
     if (!canonicalPhone) {
@@ -291,29 +280,22 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         return;
     }
     const senderPhone = canonicalPhone;
-    // O pushNameFromPayload só deve ser usado como fallback se o cliente não tiver nome no DB.
-    // Não deve ser a primeira opção, para forçar o onboarding a pedir o nome.
     if (!pushNameFromPayload && pushName) { 
         pushNameFromPayload = pushName;
     }
     const startTime = Date.now();
     let state;
-
-    // Adicione a declaração de actorClient aqui para garantir que esteja sempre definida
     let actorClient = null; 
 
     try {
-        // ETAPA 1: Obter Cliente e Estado da Sessão - LÓGICA DE IDENTIFICAÇÃO CORRIGIDA
+        // ETAPA 1: Obter Cliente e Estado da Sessão
         let sharedAccessRecord = null;
         let clientAccountsForOnboarding = [];
         let ownerAccountsIfShared = [];
 
-        // <<< MUDANÇA CRUCIAL: PRIMEIRO, VERIFICA SE O NÚMERO É DE UM CONVIDADO >>>
-        logger.info(`[WHATSAPP SERVICE] Verificando se ${senderPhone} é um convidado (SharedAccess)...`);
         sharedAccessRecord = await sharedAccessService.findActiveSharedAccessByPhone(senderPhone);
 
         if (sharedAccessRecord && sharedAccessRecord.sharedWithClient) {
-            // CASO 1: É um convidado com acesso compartilhado ativo!
             actorClient = sharedAccessRecord.sharedWithClient;
             const ownerClientIdForContext = sharedAccessRecord.ownerClientId;
             logger.info(`[WHATSAPP SERVICE] Identificado ACESSO COMPARTILHADO. Ator: ${actorClient.name} (ID: ${actorClient.id}), Dono: ${ownerClientIdForContext}`);
@@ -346,23 +328,16 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 return;
             }
         } else {
-            // CASO 2: Não é um convidado. AGORA, VERIFICA SE É UM CLIENTE PRINCIPAL.
-            logger.info(`[WHATSAPP SERVICE] ${senderPhone} não é um convidado. Verificando se é um cliente principal...`);
             actorClient = await clientService.findClientByPhone(senderPhone);
 
             if (actorClient) {
-                // CASO 2.1: O número de telefone pertence a um cliente principal.
                 logger.info(`[WHATSAPP SERVICE] Identificado CLIENTE PRINCIPAL: ${actorClient.name} (ID: ${actorClient.id}) pelo telefone ${senderPhone}.`);
                 clientAccountsForOnboarding = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
             } else {
-                // CASO 3: Não é convidado nem cliente principal. É um usuário novo.
                 logger.info(`[WHATSAPP SERVICE] Telefone ${senderPhone} não reconhecido. Criando novo cliente para onboarding...`);
-                // MUDANÇA AQUI: Force o nome inicial para 'Convidado' ou nulo para garantir que o onboarding peça o nome.
-                actorClient = await clientService.createClientContact({ phone: senderPhone, name: 'Convidado' }); // Use 'Convidado' para forçar a coleta de nome no onboarding
-                // <<< INÍCIO DA MUDANÇA NA MENSAGEM INICIAL DE NOVO USUÁRIO >>>
+                actorClient = await clientService.createClientContact({ phone: senderPhone, name: 'Convidado' });
                 const welcomeMsg = onboardingHandler.getOnboardingWelcomeNoPlanMessage(actorClient.name ? actorClient.name.split(" ")[0] : (pushNameFromPayload || "você"));
                 await sendWhatsappMessage(senderPhone, welcomeMsg);
-                // <<< FIM DA MUDANÇA NA MENSAGEM INICIAL DE NOVO USUÁRIO >>>
                 const tempStateForNewUser = await initializeOrUpdateState(actorClient, null, null, [], []);
                 tempStateForNewUser.data.onboardingStage = 'awaiting_plan_confirmation';
                 tempStateForNewUser.currentAction = 'awaiting_plan_interest_generic';
@@ -372,23 +347,44 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
         }
         
-        // A partir daqui, 'actorClient' está definido, e 'sharedAccessRecord' também se for um convidado.
         const existingState = conversationState.get(senderPhone);
         state = await initializeOrUpdateState(actorClient, sharedAccessRecord, existingState, clientAccountsForOnboarding, ownerAccountsIfShared);
         state.isNewUserForSessionLogic = !existingState;
-        // Passe o pushNameFromPayload para o estado para ser usado no onboarding.handler como fallback inicial
         state.pushNameFromPayload = pushNameFromPayload; 
 
+        // <<< INÍCIO DA MODIFICAÇÃO >>>
+        // ETAPA 1.1: Tratar reativação de plano
+        if (state.justReactivated) {
+            const welcomeBackMessage = `🎉 Eba, que bom te ver de volta, ${state.clientName}! Sua assinatura foi reativada com sucesso e tudo está pronto para você continuar de onde parou. O que vamos organizar primeiro? 💪`;
+            await sendWhatsappMessage(senderPhone, welcomeBackMessage);
+            state.justReactivated = false; // Reseta a flag para não mostrar de novo
+            // Continua o fluxo para processar a mensagem original do usuário
+        }
+
+        // ETAPA 1.2: Interceptar mensagens se o plano estiver expirado
+        // Apenas para donos de conta (não para convidados) que já completaram o onboarding.
+        if (!state.isSharedAccessContext && state.data.onboardingStage === 'onboarding_complete' && !state.hasPaidAccess) {
+            logger.info(`[WHATSAPP HANDLER] Bloqueando ação para ${senderPhone} devido à assinatura expirada.`);
+            const PLAN_SITE_URL = process.env.PLAN_SITE_URL || "https://map-nocontrole.com.br/#planos";
+            const expiredMessage = `Olá, ${state.clientName}! 👋\n\n` +
+                                   `Sua assinatura do MAP no Controle não está ativa no momento. Para voltar a usar todas as funcionalidades, por favor, renove seu plano.\n\n` +
+                                   `👉 Renove agora: ${PLAN_SITE_URL}\n\n` +
+                                   `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
+            await sendWhatsappMessage(senderPhone, expiredMessage);
+            conversationState.set(senderPhone, state);
+            pushNameFromPayload = null;
+            return; // Interrompe o processamento da mensagem
+        }
+        // <<< FIM DA MODIFICAÇÃO >>>
+
         // ETAPA 1.5: Tratamento de Comandos Diretos (Botões)
-        // MUDANÇA: Se é um clique de botão de hidratação, tratar primeiro
         if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
             const buttonId = rawPayload.selectedButtonId;
             logger.info(`[MAESTRO] Botão clicado por ${senderPhone}: ID '${buttonId}'`);
             
-            // Tratamento específico para botões de hidratação
             if (buttonId.startsWith('water_intake:')) {
                 const parts = buttonId.split(':');
-                const actionType = parts[1]; // 'bebi' ou 'nao_bebi'
+                const actionType = parts[1];
                 const logId = parseInt(parts[2], 10);
 
                 if (isNaN(logId)) {
@@ -402,7 +398,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 if (actionType === 'bebi') {
                     await hydrationService.updateLogStatus(actorClient.id, logId, 'completed');
                     const logs = await hydrationService.getTodaysLogsByClient(actorClient.id);
-                    const prefs = await systemService.getSystemPreferences(); // Busca as preferências para formatar a mensagem
+                    const prefs = await systemService.getSystemPreferences();
                     const hydrationSummary = formatter.formatHydrationLogDataStructure(logs, prefs, state.clientName);
                     await sendWhatsappMessage(senderPhone, `🎉 Boa, ${state.clientName}! Seu copo de água foi registrado! ${hydrationSummary}`);
                     conversationState.set(senderPhone, state);
@@ -417,7 +413,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 }
             }
 
-            // Se não for um botão de hidratação, processa como um botão genérico
             const buttonResult = await actionHandler.handleButtonInteraction(state, buttonId, senderPhone);
             if (buttonResult.stateUpdated) {
                 conversationState.set(senderPhone, buttonResult.newState);
@@ -434,8 +429,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
         }
 
-        // Adiciona a mensagem do usuário ao histórico antes de qualquer processamento
-        // EXCETO se for um botão (já tratado acima e pode levar a um reprompt)
         if (!(rawPayload && rawPayload.selectedButtonId)) {
             state.messageHistory.push({ role: 'user', content: messageText || "" }); 
             if (state.messageHistory.length > MAX_STATE_HISTORY) {
@@ -443,30 +436,23 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
         }
 
-
         // ETAPA 2: Delegar para o Handler de Onboarding, se aplicável
-        // MUDANÇA PRINCIPAL AQUI:
-        // Priorize o onboarding do acesso compartilhado e de credenciais principais (passwordHash === null)
-        // Esta lógica deve ser a primeira a ser avaliada para garantir que o onboarding interativo aconteça.
-        // A condição foi ajustada para ser MAIS ESPECÍFICA para o onboarding de credenciais.
         if (state.isSharedAccessContext && actorClient.passwordHash === null && 
             (state.data.onboardingStage === 'awaiting_shared_user_name' || state.data.onboardingStage === 'setting_up_main_client_credentials')) {
             
             logger.info(`[WHATSAPP SERVICE] Priorizando onboarding de acesso compartilhado para ${senderPhone}, stage: ${state.data.onboardingStage}`);
             const onboardingResult = await onboardingHandler.handleOnboardingStep(state, messageText, actorClient);
             state = onboardingResult.updatedState;
-            actorClient = onboardingResult.updatedActorClient; // Atualiza actorClient com possíveis mudanças (nome, etc.)
+            actorClient = onboardingResult.updatedActorClient;
             if (onboardingResult.onboardingReply) {
                 state.messageHistory.push({ role: 'assistant', content: onboardingResult.onboardingReply });
                 await sendWhatsappMessage(senderPhone, onboardingResult.onboardingReply);
             }
             conversationState.set(senderPhone, state);
             pushNameFromPayload = null;
-            return; // Termina o processamento aqui, pois o onboarding está em andamento.
+            return;
         }
 
-        // Se não é um caso de onboarding de acesso compartilhado com passwordHash nulo que precisa de atenção,
-        // então verifica os outros estágios de onboarding.
         if (state.data.onboardingStage !== 'onboarding_complete') {
             logger.info(`[WHATSAPP SERVICE] Processando onboarding padrão para ${senderPhone}, stage: ${state.data.onboardingStage}`);
             const onboardingResult = await onboardingHandler.handleOnboardingStep(state, messageText, actorClient);
@@ -478,9 +464,10 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
             conversationState.set(senderPhone, state);
             pushNameFromPayload = null;
-            return; // Termina o processamento aqui, pois o onboarding está em andamento.
+            return;
         }
         
+        // ... (o restante do arquivo, da ETAPA 2.5 em diante, permanece exatamente o mesmo) ...
         // ETAPA 2.5: Tratamento de Respostas a Perguntas Diretas do Bot
         if (state.currentAction === 'awaiting_confirmation' && state.pendingConfirmation) {
             const pendingAction = state.pendingConfirmation;
@@ -529,7 +516,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         }
         
         // ETAPA 3: Lógica de Fluxo Pós-Onboarding (Seleção de Conta)
-        // Esta etapa só deve ser atingida se o onboarding estiver realmente completo.
         if (!state.activeFinancialAccountId) {
             const accountsForSelection = state.isSharedAccessContext
                 ? ownerAccountsIfShared
@@ -581,15 +567,12 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             if (!state.activeFinancialAccountId) return;
         }
 
-               // ETAPA 4: Delegar para a IA e para o Action Handler
+        // ETAPA 4: Delegar para a IA e para o Action Handler
         const availableFinancialCategoriesForAI = await financialCategoryService.getAllCategoriesForAccountAI(state.activeFinancialAccountId);
         const availableCreditCardsForAI = await creditCardService.getActiveCreditCardsForAI(state.activeFinancialAccountId);
         
-        // <<< INÍCIO DA MUDANÇA >>>
-        // Busca as contas acessíveis para injetar no contexto da IA
         let accountsForAiContext = [];
         if (state.isSharedAccessContext) {
-            // No modo compartilhado, as contas já foram pré-carregadas no estado
             const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true });
             accountsForAiContext = ownerAccounts.filter(acc => {
                 if (acc.accountType === 'PF') return state.sharedAccessPermissions.canAccessPersonalProfile;
@@ -597,10 +580,17 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 return false;
             });
         } else {
-            // Para o dono, busca as próprias contas
             accountsForAiContext = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
         }
-        // <<< FIM DA MUDANÇA >>>
+        
+        // <<< INÍCIO DA MODIFICAÇÃO >>>
+        // Adiciona a lista de clientes de negócio ao contexto da IA
+        let businessClientsForAI = [];
+        if (['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
+            const { businessClients } = await businessClientService.getAllBusinessClients(state.activeFinancialAccountId, { isActive: true, limit: 50 });
+            businessClientsForAI = businessClients;
+        }
+        // <<< FIM DA MODIFICAÇÃO >>>
 
         const aiContext = {
             currentFinancialAccountId: state.activeFinancialAccountId,
@@ -612,7 +602,8 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             editingResource: state.editingResource,
             availableFinancialCategories: availableFinancialCategoriesForAI,
             availableCreditCards: availableCreditCardsForAI,
-            availableFinancialAccounts: accountsForAiContext, // <<< ADICIONADO AQUI
+            availableFinancialAccounts: accountsForAiContext,
+            availableBusinessClients: businessClientsForAI, // <<< ADICIONADO AQUI
             pendingAction: state.currentAction === 'awaiting_clarification_response' ? state.pendingConfirmation : null
         };
 
@@ -630,7 +621,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
             for (const detectedAction of aiResponse.detected_actions) {
                 const actionName = detectedAction.action || detectedAction.action_type;
-                const ownerOnlyActions = ['CREATE_FINANCIAL_ACCOUNT', 'UPDATE_FINANCIAL_ACCOUNT', 'DELETE_FINANCIAL_ACCOUNT', 'GRANT_ACCESS', 'LIST_GRANTED_ACCESS', 'UPDATE_GRANTED_ACCESS', 'REVOKE_ACCESS', 'CREATE_FINANCIAL_CATEGORY', 'UPDATE_FINANCIAL_CATEGORY', 'DELETE_FINANCIAL_CATEGORY', 'GET_AFFILIATE_DASHBOARD', 'CREATE_MOTIVATIONAL_PHRASE', 'UPDATE_MOTIVATIONAL_PHRASE', 'DELETE_MOTIVATIONAL_PHRASE']; // Adicionando ações de motivação que são do owner
+                const ownerOnlyActions = ['CREATE_FINANCIAL_ACCOUNT', 'UPDATE_FINANCIAL_ACCOUNT', 'DELETE_FINANCIAL_ACCOUNT', 'GRANT_ACCESS', 'LIST_GRANTED_ACCESS', 'UPDATE_GRANTED_ACCESS', 'REVOKE_ACCESS', 'CREATE_FINANCIAL_CATEGORY', 'UPDATE_FINANCIAL_CATEGORY', 'DELETE_FINANCIAL_CATEGORY', 'GET_AFFILIATE_DASHBOARD', 'CREATE_MOTIVATIONAL_PHRASE', 'UPDATE_MOTIVATIONAL_PHRASE', 'DELETE_MOTIVATIONAL_PHRASE'];
                 if (ownerOnlyActions.includes(actionName) && !isOwnerActingOnOwnBehalfGlobal) {
                     multipleActionBodiesList.push(`❌ Desculpe, ${state.clientName}, mas a ação de "${actionName.toLowerCase().replace(/_/g, " ")}" só pode ser realizada pelo proprietário da conta.`);
                     continue;
@@ -753,9 +744,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         pushNameFromPayload = null;
     }
 }
-// =========================================================================================
-// <<< FIM DA FUNÇÃO `processIncomingMessage` CORRIGIDA >>>
-// =========================================================================================
 
 module.exports = { 
     processIncomingMessage, 
