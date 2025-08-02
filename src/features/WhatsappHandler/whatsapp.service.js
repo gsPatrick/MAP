@@ -6,6 +6,7 @@ const sharedAccessService = require('../SharedAccess/sharedAccess.service');
 const financialCategoryService = require('../FinancialCategory/financialCategory.service');
 const financialService = require('../Financial/financial.service');
 const creditCardService = require('../CreditCardManagement/creditCard.service');
+const businessClientService = require('../BusinessClient/BusinessClient.service'); // <<< ADICIONE ESTA LINHA
 
 // --- Imports dos Novos Especialistas e Utilitários ---
 const onboardingHandler = require('./onboarding.handler');
