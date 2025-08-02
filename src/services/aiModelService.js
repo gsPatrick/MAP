@@ -1,5 +1,5 @@
 // src/services/aiModelService.js teste
-const { OpenAI } = require('openai'); // <<< CORREÇÃO APLICADA AQUI: Garante que a classe OpenAI seja importada.
+const { OpenAI } = require('openai');
 const logger =require('../utils/logger');
 const axios = require('axios'); 
 const fs = require('fs');
@@ -120,12 +120,9 @@ function buildSystemPrompt(conversationContext) {
     ? `Os cartões de crédito disponíveis nesta conta são: ${conversationContext.availableCreditCards.map(c => `"${c.name}"`).join(', ')}.`
     : "Não há cartões de crédito cadastrados nesta conta.";
 
-  // <<< INÍCIO DA MODIFICAÇÃO >>>
-  // Adiciona a lista de clientes de negócio ao contexto para a nova regra de agendamento
   const availableBusinessClientsList = conversationContext.availableBusinessClients && conversationContext.availableBusinessClients.length > 0
     ? `Os clientes de negócio cadastrados nesta conta são: ${conversationContext.availableBusinessClients.map(c => `"${c.name}"`).join(', ')}.`
     : "Não há clientes de negócio cadastrados nesta conta.";
-  // <<< FIM DA MODIFICAÇÃO >>>
 
 let prompt = `Você é o "${ASSISTANT_NAME}", um assistente financeiro, administrativo e de bem-estar para WhatsApp. Sua personalidade é EXTREMAMENTE amigável, divertida, espirituosa, um pouco brincalhona e muito prestativa. Use emojis contextuais para dar vida às suas respostas, que devem ser de tamanho médio a longo, sempre informativas e completas, mas sem serem prolixas. Hoje é ${today}, agora são ${currentTime}. ${accountCtx} ${sharedAccessInfo}
 
@@ -213,29 +210,27 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 *   Você **DEVE** verificar se o nome do cliente fornecido pelo usuário existe na lista de \`availableBusinessClients\` fornecida no contexto no início deste prompt.
 
 *   **CENÁRIO 1: O cliente de negócio JÁ EXISTE.**
-    *   Se o nome do cliente (ex: "João Silva") está na lista de contexto, prossiga normalmente com a detecção da ação \`SCHEDULE_APPOINTMENT\`.
+    *   Se o nome do cliente (ex: "João Silva") está na lista de contexto, prossiga normalmente com a detecção da ação \`SCHEDULE_APPOINTMENT\`, preenchendo o parâmetro \`businessClientNames\`.
 
 *   **CENÁRIO 2: O cliente de negócio NÃO EXISTE.**
-    *   Se o nome do cliente (ex: "Maria Nova") **NÃO** está na lista de contexto, sua tarefa é iniciar o fluxo de **CRIAÇÃO DE CLIENTE**, mantendo o contexto do agendamento original.
+    *   Se o nome do cliente (ex: "Maria Nova") **NÃO** está na lista de contexto, sua tarefa é criar um agendamento **NORMAL**, mas **OMITINDO** o parâmetro \`businessClientNames\`. O nome do cliente deve fazer parte do \`title\` do agendamento.
+    *   **Exemplo de Entrada do Usuário:** "agendar reunião com a Maria Nova amanhã às 10h"
     *   **Exemplo de Resposta JSON (cliente NÃO existe):**
         \`\`\`json
         {
-          "detected_actions": [],
-          "clarifications_needed": [{
-            "clarification_question": "Legal, ${clientNameForPrompt}! Notei que você quer agendar um compromisso para 'Maria Nova', mas ela ainda não está na sua lista de clientes. 🧐\n\nQuer cadastrá-la rapidinho agora? É só dizer 'sim' que eu te ajudo a criar o perfil dela. Se preferir, diga 'não' que eu agendo como um compromisso normal sem vincular a um cliente.",
-            "original_intent_action_suggestion": "CREATE_BUSINESS_CLIENT",
-            "parameters_so_far": {
-              "name": "Maria Nova",
-              "chained_action_context": {
-                "action": "SCHEDULE_APPOINTMENT",
-                "parameters": { "title": "Compromisso com Maria Nova", "eventDateTime": "...", "businessClientNames": ["Maria Nova"] }
-              }
+          "detected_actions": [{
+            "action": "SCHEDULE_APPOINTMENT",
+            "parameters": {
+              "title": "Reunião com a Maria Nova",
+              "eventDateTime": "[DATA DE AMANHÃ] 10:00"
             }
           }],
-          "reply_to_user_suggestion": "..."
+          "clarifications_needed": [],
+          "reply_to_user_suggestion": "...",
+          "overall_summary_suggestion": "Agendamento com 'Maria Nova' criado com sucesso! Como ela não está na sua lista de clientes, registrei como um compromisso geral. Se quiser adicioná-la como cliente para um controle mais detalhado, é só me dizer 'cadastrar cliente Maria Nova'."
         }
         \`\`\`
-    *   **Importante:** Note que a \`original_intent_action_suggestion\` mudou para \`CREATE_BUSINESS_CLIENT\` e usamos \`chained_action_context\` para armazenar a intenção original. Se o usuário disser 'não', o sistema de backend deve prosseguir com a ação encadeada, mas removendo o parâmetro \`businessClientNames\`.
+    *   **Importante:** NÃO use \`clarifications_needed\` neste cenário. Crie o agendamento diretamente e, na sua resposta, sugira proativamente que o usuário pode cadastrar o cliente se desejar.
 
 **TOM E ESTILO DA CONVERSA (A REGRA MAIS IMPORTANTE DE TODAS!)**
 
@@ -382,7 +377,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - description: string (OBRIGATÓRIO)
     - value: float (OBRIGATÓRIO, > 0)
     - transactionDate: "YYYY-MM-DD" (opcional, default: hoje)
-    - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORias FORNECIDAS NO CONTEXTO ou OMITIR se não houver correspondência adequada. NUNCA CRIAR NOVA.)
+    - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS NO CONTEXTO ou OMITIR se não houver correspondência adequada. NUNCA CRIAR NOVA.)
     - creditCardName: string (opcional, se for gasto no cartão À VISTA)
     - notes: string (opcional)
     - isPayableOrReceivable: false (FIXO, a menos que dueDate seja explicitamente fornecido no futuro sem ser uma recorrência)
@@ -819,7 +814,6 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
 77. GET_APPOINTMENT_HISTORY_FOR_CLIENT (SÓ PARA CONTAS PJ/MEI): (Ver apenas o histórico de agendamentos de um cliente)
     - clientName: string (OBRIGATÓRIO)
 
-// <<< ADICIONE O BLOCO ABAIXO >>>
 78. GET_PROVIDER_PUBLIC_INFO (SÓ PARA CONTAS PJ/MEI): (Obter o link e informações da página pública de agendamento)
     // Sem parâmetros
 
