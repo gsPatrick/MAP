@@ -112,8 +112,6 @@ function buildSystemPrompt(conversationContext) {
           conversationContext.availableFinancialCategories.map(cat => `"${cat.name}" (ID: ${cat.id})`).join(', ') + ".";
   }
 
-  // <<< INÍCIO DA CORREÇÃO >>>
-  // Definindo AMBAS as variáveis de contexto aqui
   const availableFinancialAccountsList = conversationContext.availableFinancialAccounts && conversationContext.availableFinancialAccounts.length > 0
     ? `As contas financeiras que você pode gerenciar para este usuário são: ${conversationContext.availableFinancialAccounts.map(acc => `"${acc.accountName || acc.name}" (do tipo ${acc.accountType || acc.type})`).join(', ')}.`
     : "Nenhuma conta financeira acessível foi encontrada para este usuário.";
@@ -121,7 +119,13 @@ function buildSystemPrompt(conversationContext) {
   const availableCreditCardsList = conversationContext.availableCreditCards && conversationContext.availableCreditCards.length > 0
     ? `Os cartões de crédito disponíveis nesta conta são: ${conversationContext.availableCreditCards.map(c => `"${c.name}"`).join(', ')}.`
     : "Não há cartões de crédito cadastrados nesta conta.";
-  // <<< FIM DA CORREÇÃO >>>
+
+  // <<< INÍCIO DA MODIFICAÇÃO >>>
+  // Adiciona a lista de clientes de negócio ao contexto para a nova regra de agendamento
+  const availableBusinessClientsList = conversationContext.availableBusinessClients && conversationContext.availableBusinessClients.length > 0
+    ? `Os clientes de negócio cadastrados nesta conta são: ${conversationContext.availableBusinessClients.map(c => `"${c.name}"`).join(', ')}.`
+    : "Não há clientes de negócio cadastrados nesta conta.";
+  // <<< FIM DA MODIFICAÇÃO >>>
 
 let prompt = `Você é o "${ASSISTANT_NAME}", um assistente financeiro, administrativo e de bem-estar para WhatsApp. Sua personalidade é EXTREMAMENTE amigável, divertida, espirituosa, um pouco brincalhona e muito prestativa. Use emojis contextuais para dar vida às suas respostas, que devem ser de tamanho médio a longo, sempre informativas e completas, mas sem serem prolixas. Hoje é ${today}, agora são ${currentTime}. ${accountCtx} ${sharedAccessInfo}
 
@@ -130,6 +134,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 **CONTEXTO ADICIONAL FORNECIDO PELO SISTEMA:**
 *   ${availableFinancialAccountsList}
 *   ${availableCreditCardsList}
+*   ${availableBusinessClientsList}
 
 **AGRUPAMENTO DE INTENÇÕES SIMILARES:**
 *   Se o usuário disser múltiplas frases que significam a mesma coisa em sequência (ex: "bebi água, anota aí, mais 200ml"), você deve detectar apenas UMA ação. Agrupe a intenção em uma única ação \`LOG_WATER_INTAKE\` com o parâmetro mais específico fornecido (neste caso, \`amountInMl: 200\`).
@@ -202,6 +207,35 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
         }
         \`\`\`
     *   **Importante:** Note que a \`original_intent_action_suggestion\` mudou para \`CREATE_CREDIT_CARD\` e usamos \`chained_action_context\` para armazenar a intenção original do usuário. O sistema de backend usará isso para encadear as ações.
+
+**REGRA DE NEGÓCIO: AGENDAMENTO PARA CLIENTES DE NEGÓCIO (PJ/MEI)**
+*   Esta regra se aplica quando o usuário tenta agendar um compromisso para um cliente de negócio (usando o parâmetro \`businessClientNames\` na ação \`SCHEDULE_APPOINTMENT\`).
+*   Você **DEVE** verificar se o nome do cliente fornecido pelo usuário existe na lista de \`availableBusinessClients\` fornecida no contexto no início deste prompt.
+
+*   **CENÁRIO 1: O cliente de negócio JÁ EXISTE.**
+    *   Se o nome do cliente (ex: "João Silva") está na lista de contexto, prossiga normalmente com a detecção da ação \`SCHEDULE_APPOINTMENT\`.
+
+*   **CENÁRIO 2: O cliente de negócio NÃO EXISTE.**
+    *   Se o nome do cliente (ex: "Maria Nova") **NÃO** está na lista de contexto, sua tarefa é iniciar o fluxo de **CRIAÇÃO DE CLIENTE**, mantendo o contexto do agendamento original.
+    *   **Exemplo de Resposta JSON (cliente NÃO existe):**
+        \`\`\`json
+        {
+          "detected_actions": [],
+          "clarifications_needed": [{
+            "clarification_question": "Legal, ${clientNameForPrompt}! Notei que você quer agendar um compromisso para 'Maria Nova', mas ela ainda não está na sua lista de clientes. 🧐\n\nQuer cadastrá-la rapidinho agora? É só dizer 'sim' que eu te ajudo a criar o perfil dela. Se preferir, diga 'não' que eu agendo como um compromisso normal sem vincular a um cliente.",
+            "original_intent_action_suggestion": "CREATE_BUSINESS_CLIENT",
+            "parameters_so_far": {
+              "name": "Maria Nova",
+              "chained_action_context": {
+                "action": "SCHEDULE_APPOINTMENT",
+                "parameters": { "title": "Compromisso com Maria Nova", "eventDateTime": "...", "businessClientNames": ["Maria Nova"] }
+              }
+            }
+          }],
+          "reply_to_user_suggestion": "..."
+        }
+        \`\`\`
+    *   **Importante:** Note que a \`original_intent_action_suggestion\` mudou para \`CREATE_BUSINESS_CLIENT\` e usamos \`chained_action_context\` para armazenar a intenção original. Se o usuário disser 'não', o sistema de backend deve prosseguir com a ação encadeada, mas removendo o parâmetro \`businessClientNames\`.
 
 **TOM E ESTILO DA CONVERSA (A REGRA MAIS IMPORTANTE DE TODAS!)**
 
@@ -340,6 +374,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
         \`\`\`
 
 *   **REGRA 3: Criar Pausa ou Bloqueio (break):** Se o usuário disser "quero bloquear as tardes de sexta", você **DEVE** usar \`clarifications_needed\` para perguntar o título e o horário exato (ex: 'das 13h às 18h').
+
 **AÇÕES E PARÂMETROS:** 
 
 1.  CREATE_FINANCIAL_TRANSACTION: (Registros financeiros IMEDIATOS/PASSADOS, NÃO PARCELADOS NO CARTÃO)
@@ -347,14 +382,14 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - description: string (OBRIGATÓRIO)
     - value: float (OBRIGATÓRIO, > 0)
     - transactionDate: "YYYY-MM-DD" (opcional, default: hoje)
-    - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS NO CONTEXTO ou OMITIR se não houver correspondência adequada. NUNCA CRIAR NOVA.)
+    - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORias FORNECIDAS NO CONTEXTO ou OMITIR se não houver correspondência adequada. NUNCA CRIAR NOVA.)
     - creditCardName: string (opcional, se for gasto no cartão À VISTA)
     - notes: string (opcional)
     - isPayableOrReceivable: false (FIXO, a menos que dueDate seja explicitamente fornecido no futuro sem ser uma recorrência)
     - dueDate: null (FIXO, a menos que explicitamente fornecido no futuro sem ser recorrência)
     - isPaidOrReceived: true (FIXO, a menos que dueDate seja explicitamente fornecido no futuro sem ser recorrência)
 
-2.  SCHEDULE_APPOINTMENT: (Compromissos gerais E LEMBRETES DE PAGAMENTOS/RECEBIMENTOS FUTUROS ÚNICOS, NÃO COMPRAS PARCELADAS NO CARTÃO NEM RECORRÊNCIAS CLARAS)
+2.  SCHEDULE_APPOINTMENT: (Compromissos gerais, como 'consulta médica', 'reunião', E LEMBRETES DE PAGAMENTOS FUTUROS. Se o usuário mencionar um serviço que ele oferece, como "agendar corte de cabelo", o nome do serviço deve fazer parte do \`title\`, mas o parâmetro \`serviceNames\` NUNCA deve ser usado.)
     - title: string (OBRIGATÓRIO)
     - eventDateTime: "YYYY-MM-DD HH:MM" (OBRIGATÓRIO)
     - durationMinutes: integer (opcional)
@@ -364,7 +399,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - associatedTransactionType: "Entrada" ou "Saída" (OBRIGATÓRIO para lembretes financeiros, inferir do contexto. Se não claro, pedir. Exemplo: "Esse valor para '[TÍTULO DO LEMBRETE]' será uma entrada ou uma saída?")
     - notes: string (opcional)
     - businessClientNames: [string] (opcional, APENAS para contas PJ/MEI, nomes de clientes do negócio associados ao compromisso)
-    - serviceNames: [string] (opcional, APENAS para contas PJ/MEI, nomes dos serviços a serem agendados)
+    - serviceNames: [string] (**NUNCA USE ESTE PARÂMETRO**. O agendamento de serviços é feito por outra interface, não pelo chat.)
 
 3.  CREATE_PARCELLED_ACCOUNT: (COMPRAS PARCELADAS NO CARTÃO DE CRÉDITO ou outras contas parceladas)
     - description: string (OBRIGATÓRIO)
@@ -1414,12 +1449,11 @@ module.exports = {
   transcribeAudioStream, 
   generateMorningBriefingMessage,
   generateCreativeAgendaResponse,
-   generateNewBookingNotification,    // <<< ADICIONE ESTA LINHA
+   generateNewBookingNotification,
   generateBookingConfirmationResponse,
-    generateBookingConfirmationResponse,
-  generateClientConfirmationMessage,     // <<< ADICIONE ESTA LINHA
-  generateClientReminderMessage,         // <<< ADICIONE ESTA LINHA
-  generateClientCancellationMessage,      // <<< ADICIONE ESTA LINHA
-generateAlertsIntro,
-generateChecklistCompletionMessage
+  generateClientConfirmationMessage,
+  generateClientReminderMessage,
+  generateClientCancellationMessage,
+  generateAlertsIntro,
+  generateChecklistCompletionMessage
 };

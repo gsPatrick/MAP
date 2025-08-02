@@ -1,3 +1,4 @@
+
 // src/features/WhatsappHandler/action.handler.js
 const financialService = require('../Financial/financial.service');
 const productService = require('../Product/product.service');
@@ -10,9 +11,9 @@ const sharedAccessService = require('../SharedAccess/sharedAccess.service');
 const systemService = require('../System/system.service');
 const clientService = require('../Client/client.service');
 const financialCategoryService = require('../FinancialCategory/financialCategory.service');
-const affiliateService = require('../Affiliate/affiliate.service'); // <<< ADICIONE ESTA LINHA
-const hydrationService = require('../Hydration/hydration.service'); // <<< ADICIONE ESTA LINHA
-const subscriptionService = require('../Subscription/subscription.service'); // <<< ADICIONE ESTA LINHA
+const affiliateService = require('../Affiliate/affiliate.service');
+const hydrationService = require('../Hydration/hydration.service');
+const subscriptionService = require('../Subscription/subscription.service');
 const availabilityService = require('../Availability/availability.service');
 const serviceService = require('../Service/service.service');
 const publicBookingService = require('../PublicBooking/publicBooking.service');
@@ -20,7 +21,7 @@ const logger = require('../../utils/logger');
 const formatter = require('./response.formatter'); // Importa o novo formatador
 const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
 const aiModelService = require('../../services/aiModelService');
-const checklistService = require('../Checklist/checklist.service'); // <<< ADICIONE ESTA LINHA AQUI
+const checklistService = require('../Checklist/checklist.service');
 
 // Helpers que antes estavam no whatsapp.service
 async function findCreditCardIdByName(name, financialAccountId) {
@@ -117,10 +118,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, newTx.id);
                     
                     formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx);
-                    // <<< INÍCIO DA MUDANÇA >>>
-                    // Remove a condição 'isOwnerActingOnOwnBehalfGlobal' para que convidados também recebam os botões.
                     resourceForButtonsContext.resources.push({ type: 'transaction', id: newTx.id, description: newTx.description });
-                    // <<< FIM DA MUDANÇA >>>
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_FINANCIAL_TRANSACTION: ${e.message}`, { error: e, paramsUsed: params });
                     let intro = `Ops, ${clientNameToUse}! 😬 Tive um problema ao registrar sua transação.`;
@@ -145,13 +143,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
             }
                     case 'CREATE_CHECKLIST_ITEM': {
                 try {
-                    // <<<< INÍCIO DA MUDANÇA >>>>
-                    // REMOVIDO: Bloco que verificava o tipo da conta
-                    // if (!['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
-                    //     throw { statusCode: 403, message: "O checklist diário é uma funcionalidade para contas de negócio (PJ/MEI)." };
-                    // }
-                    // <<<< FIM DA MUDANÇA >>>>
-
                     const { text, priority } = detectedAction.parameters;
                     if (!text) {
                         throw { statusCode: 400, message: "Para adicionar uma tarefa, preciso que me diga o que fazer. Ex: 'adicionar tarefa Falar com fornecedor'." };
@@ -162,7 +153,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     formattedData = `✅ Tarefa adicionada ao seu checklist de hoje!\n\n> *"${newItem.text}"* (Prioridade: ${priority || 'Média'})`;
 
-                    // Pega o checklist atualizado para dar um mini-resumo
                     const currentChecklist = await checklistService.getChecklistByDate(state.activeFinancialAccountId, today);
                     const pendingCount = currentChecklist.items.filter(item => !item.completed).length;
 
@@ -175,7 +165,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
             
             }            case 'COMPLETE_CHECKLIST_ITEM': {
                 try {
-                    // A restrição que limitava o checklist a contas PJ/MEI foi removida daqui.
 
                     const { text } = detectedAction.parameters;
                     if (!text) {
@@ -185,14 +174,12 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const today = new Date().toISOString().split('T')[0];
                     const currentChecklist = await checklistService.getChecklistByDate(state.activeFinancialAccountId, today);
                     
-                    // Lógica para encontrar a tarefa mais provável entre as pendentes
                     const pendingItems = currentChecklist.items.filter(item => !item.completed);
                     if (pendingItems.length === 0) {
                         formattedData = `🎉 Uau, você já tinha concluído tudo por hoje! Se quiser, pode adicionar mais tarefas.`;
                         break;
                     }
                     
-                    // Algoritmo de busca por "melhor correspondência"
                     let bestMatch = null;
                     let highestScore = 0;
                     const userWords = text.toLowerCase().split(' ');
@@ -214,15 +201,12 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     formattedData = `✅ Mandou bem! Marquei a tarefa *"${updatedItem.text}"* como concluída.`;
 
-                    // Pega o checklist atualizado para dar um novo resumo de progresso
                     const updatedChecklist = await checklistService.getChecklistByDate(state.activeFinancialAccountId, today);
                     const newPendingCount = updatedChecklist.items.filter(item => !item.completed).length;
 
                     if (newPendingCount === 0) {
-                         // Mensagem de parabéns ao concluir a última tarefa
                          formattedData += `\n\n*PARABÉNS!* 🏆 Você finalizou todas as tarefas de hoje! Momento de celebrar e relaxar!`;
                     } else {
-                         // Mensagem de incentivo se ainda houver tarefas
                          formattedData += `\n\nAgora faltam apenas *${newPendingCount}* tarefa(s). Continue assim! 💪`;
                     }
                     
@@ -244,13 +228,12 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 404, message: `Não encontrei um cartão chamado "${cardNameToSettle}". Verifique o nome ou cadastre o cartão.` };
                     }
 
-                    // Chama a nova função de serviço
                     const paymentTransaction = await creditCardService.settleOpenCreditCardInvoice(
                         state.activeFinancialAccountId,
                         cardIdToSettle,
-                        new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0], // Data de hoje
-                        null, // originatingAccountDescription não é fornecido via comando direto
-                        null, // financialCategoryId não é fornecido via comando direto
+                        new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0],
+                        null,
+                        null,
                         actorId
                     );
                     
@@ -276,7 +259,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
- case 'SCHEDULE_APPOINTMENT': {
+            case 'SCHEDULE_APPOINTMENT': {
                 try {
                     if (!params.title || !params.eventDateTime) {
                         throw { statusCode: 400, message: "Título e data/hora são obrigatórios para agendar." };
@@ -288,10 +271,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         durationMinutes: params.durationMinutes ? parseInt(params.durationMinutes) : null,
                         location: params.location,
                         notes: params.notes,
-                        // --- Campos PF ---
                         reminderLeadTimeMinutes: params.reminderLeadTimeMinutes,
                         reminderEnabled: params.reminderEnabled,
-                        // --- Campos PJ/MEI ---
                         businessClientIds: [],
                         serviceIds: [],
                     };
@@ -300,22 +281,12 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         if (params.businessClientNames && Array.isArray(params.businessClientNames)) {
                             for (const name of params.businessClientNames) {
                                 const bcId = await findBusinessClientIdByName(name, state.activeFinancialAccountId);
-                                if (bcId) appointmentData.businessClientIds.push(bcId);
-                            }
-                        }
-                        
-                        if (params.serviceNames && Array.isArray(params.serviceNames)) {
-                             for (const name of params.serviceNames) {
-                                const { services } = await serviceService.getAllServices(state.activeFinancialAccountId, { search: name, limit: 1, isActive: true });
-                                if (services && services.length > 0) {
-                                    appointmentData.serviceIds.push(services[0].id);
-                                } else {
-                                    logger.warn(`[ACTION HANDLER] Serviço "${name}" não encontrado para agendamento na conta ${state.activeFinancialAccountId}.`);
+                                if (bcId) {
+                                    appointmentData.businessClientIds.push(bcId);
                                 }
+                                // Se bcId for nulo, a IA já tratou o fluxo de criação de cliente,
+                                // ou o usuário optou por não criar, então o agendamento é criado sem associação.
                             }
-                        }
-                         if (appointmentData.serviceIds.length === 0) {
-                            throw { statusCode: 400, message: 'Para agendar um serviço, você precisa me dizer qual serviço é. Ex: "agendar corte de cabelo".' };
                         }
                     }
 
@@ -329,8 +300,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
-
-
 
             case 'CREATE_PARCELLED_ACCOUNT': {
                 try {
