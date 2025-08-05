@@ -2,6 +2,23 @@
 const adminService = require('./admin.service');
 const clientService = require('../Client/client.service');
 
+
+const changeClientPhone = (req, res, next) => {
+    const clientId = parseInt(req.params.clientId, 10);
+    const { newPhoneNumber } = req.body;
+
+    if (isNaN(clientId)) {
+        return res.status(400).json({ status: 'fail', message: 'ID do cliente inválido.' });
+    }
+    if (!newPhoneNumber) {
+        return res.status(400).json({ status: 'fail', message: 'O campo "newPhoneNumber" é obrigatório.' });
+    }
+
+    adminService.changeClientPhoneNumber(clientId, newPhoneNumber)
+        .then(updatedClient => res.status(200).json({ status: 'success', data: updatedClient }))
+        .catch(next);
+};
+
 // --- CRUD de Clientes (reutilizando clientService) ---
 const getAllClients = (req, res, next) => clientService.getAllClientContacts(req.query)
   .then(result => res.status(200).json({ status: 'success', ...result }))
@@ -84,6 +101,7 @@ module.exports = {
   sendBroadcastMessage,
   getAffiliatesDashboard,
   getAllPlans,
+  changeClientPhone,
   updatePlan,
   clearClientBalance // EXPORTE A NOVA FUNÇÃO AQUI
 };

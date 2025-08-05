@@ -28,4 +28,7 @@ router.post('/admin/broadcast', adminController.sendBroadcastMessage);
 router.get('/admin/plans', adminController.getAllPlans);
 router.put('/admin/plans/:planId', adminController.updatePlan);
 
+router.put('/admin/clients/:clientId/change-phone', adminController.changeClientPhone);
+
+
 module.exports = router;

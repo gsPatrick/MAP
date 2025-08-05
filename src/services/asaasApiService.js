@@ -1,168 +1,151 @@
-// src/services/asaasApiService.js
-const axios = require('axios');
-const { Client, Plan, Subscription } = require('../database');
-const logger = require('../utils/logger');
-const subscriptionService = require('../features/Subscription/subscription.service');
+// src/features/WebhookHandler/asaas.service.js
+const { Client, Plan, Subscription, sequelize } = require('../../database');
+const clientService = require('../Client/client.service');
+const subscriptionService = require('../Subscription/subscription.service');
+const asaasApiService = require('../../services/asaasApiService');
+const logger = require('../../utils/logger');
+const { Op } = require('sequelize');
 
-const asaasAPI = axios.create({
-  baseURL: 'https://api.asaas.com/v3', // Aponta para o ambiente de sandbox
-  headers: {
-    'access_token': process.env.ASAAS_API_KEY,
-    'Content-Type': 'application/json'
-  }
-});
-
-
+// <<< [CORREÇÃO PRINCIPAL] Importa a função de normalização de telefone >>>
+const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 
 /**
- * Simula o recebimento de um pagamento em dinheiro para uma cobrança específica.
- * Isso força a cobrança a ser marcada como 'RECEIVED' e dispara o webhook.
- * @param {string} paymentId - O ID da cobrança (ex: 'payment_1234567890').
- * @param {number} value - O valor exato da cobrança.
- * @returns {Promise<object>} A resposta da API do ASAAS.
+ * Processa um evento de webhook recebido do ASAAS.
+ * @param {object} eventData - O payload do evento do webhook.
  */
-async function simulatePayment(paymentId, value) {
+async function processWebhookEvent(eventData) {
+  const { event, payment } = eventData;
+
+  // Filtra apenas os eventos que nos interessam (pagamento recebido ou confirmado)
+  if (event !== 'PAYMENT_RECEIVED' && event !== 'PAYMENT_CONFIRMED') {
+    logger.info(`[ASAAS SVC] Evento '${event}' recebido e ignorado por não ser relevante para ativação.`);
+    return;
+  }
+
+  // Validação essencial do payload
+  if (!payment || !payment.customer || !payment.subscription) {
+    logger.error('[ASAAS SVC] Payload de pagamento recebido incompleto (faltando customer ou subscription ID).', eventData);
+    return;
+  }
+
+  const asaasCustomerId = payment.customer;
+  const externalSubscriptionId = payment.subscription;
+
+  const t = await sequelize.transaction();
   try {
-    if (process.env.NODE_ENV !== 'development') {
-      logger.error('[ASAAS API SVC] A simulação de pagamento só é permitida em ambiente de desenvolvimento.');
-      throw new Error('Operação não permitida em produção.');
-    }
-
-    logger.info(`[ASAAS API SVC] Simulando pagamento para a cobrança ID: ${paymentId}`);
-    
-    const endpoint = `/payments/${paymentId}/receiveInCash`;
-    const payload = {
-      paymentDate: new Date().toISOString().split('T')[0], // Data de hoje
-      value: value,
-      notifyCustomer: false
-    };
-
-    const { data } = await asaasAPI.post(endpoint, payload);
-    
-    logger.info(`[ASAAS API SVC] Pagamento para a cobrança ${paymentId} simulado com sucesso. Status agora é: ${data.status}`);
-    return data;
-
-  } catch (error) {
-    logger.error(`[ASAAS API SVC] Falha ao simular pagamento para ${paymentId}:`, error.response ? error.response.data : error.message);
-    throw new Error('Falha ao simular pagamento no ASAAS.');
-  }
-}
-
-
-/**
- * Cria ou obtém um cliente no ASAAS e armazena o ID.
- * @param {number} clientId - O ID do seu cliente local.
- * @returns {Promise<string>} O ID do cliente no ASAAS (asaasCustomerId).
- */
-async function findOrCreateAsaasCustomer(clientId) {
-    const client = await Client.findByPk(clientId);
-    if (!client) throw new Error('Cliente local não encontrado.');
-
-    if (client.asaasCustomerId) {
-        logger.info(`[ASAAS API] Cliente ASAAS já existe para o cliente local ID ${clientId}. ID: ${client.asaasCustomerId}`);
-        return client.asaasCustomerId;
-    }
-
-    logger.info(`[ASAAS API] Criando novo cliente no ASAAS para o cliente local ID ${clientId}.`);
-    const { data: newAsaasCustomer } = await asaasAPI.post('/customers', {
-        name: client.name,
-        email: client.email,
-        mobilePhone: client.phone,
-        // cpfCnpj: client.cpf // Se você tiver essa informação
+    // Otimização: Se já existe uma assinatura ATIVA para este ID externo, não faz nada.
+    // Isso previne reprocessamento desnecessário.
+    const existingActiveSubscription = await Subscription.findOne({
+      where: { externalSubscriptionId, status: 'Ativa' },
+      transaction: t
     });
 
-    await client.update({ asaasCustomerId: newAsaasCustomer.id });
-    logger.info(`[ASAAS API] Cliente ASAAS criado com ID ${newAsaasCustomer.id} e vinculado ao cliente local ID ${clientId}.`);
-    
-    return newAsaasCustomer.id;
-}
-
-/**
- * Cria uma nova assinatura no ASAAS para um cliente e plano.
- * @param {number} clientId - ID do seu cliente local.
- * @param {number} planId - ID do seu plano local.
- * @returns {Promise<object>} O objeto da assinatura criada no ASAAS (inclui link de pagamento, etc.).
- */
-async function createAsaasSubscription(clientId, planId) {
-    const plan = await Plan.findByPk(planId);
-    if (!plan || !plan.asaasProductId) {
-        throw new Error('Plano não encontrado ou não configurado para o ASAAS.');
+    if (existingActiveSubscription) {
+      logger.info(`[ASAAS SVC] A assinatura para o ID externo ${externalSubscriptionId} já está ATIVA. Webhook ignorado para evitar duplicidade.`);
+      await t.commit();
+      return;
     }
 
-    const asaasCustomerId = await findOrCreateAsaasCustomer(clientId);
+    // Busca os dados completos do cliente na API do Asaas para obter telefone, nome, etc.
+    const customerData = await asaasApiService.getCustomerById(asaasCustomerId);
+    const clientRawPhone = customerData.mobilePhone || customerData.phone;
 
-    const subscriptionPayload = {
-        customer: asaasCustomerId,
-        billingType: 'UNDEFINED', // Deixa o cliente escolher (Boleto, Cartão)
-        nextDueDate: new Date(new Date().setDate(new Date().getDate() + 3)).toISOString().split('T')[0], // Próximo vencimento (ex: 3 dias)
-        value: plan.price,
-        cycle: plan.durationDays === 30 ? 'MONTHLY' : 'YEARLY', // Adapte conforme seus planos
-        description: `Assinatura do plano ${plan.name}`,
-        // externalReference: `client-${clientId}-plan-${planId}` // Referência interna
-    };
-
-    const { data: newAsaasSubscription } = await asaasAPI.post('/subscriptions', subscriptionPayload);
-    
-    logger.info(`[ASAAS API] Assinatura ${newAsaasSubscription.id} criada no ASAAS para o cliente ${asaasCustomerId}.`);
-
-    // Pré-cria a assinatura local como "Pendente" para vincular ao webhook
-    await subscriptionService.createSubscription(
-        clientId,
-        planId,
-        new Date().toISOString().split('T')[0],
-        'Pendente', // Status inicial
-        newAsaasSubscription.id // ID externo do ASAAS
-    );
-
-    return newAsaasSubscription; // Retorne isso para o seu controller/frontend
-}
-
-/**
- * Busca os dados completos de um cliente no ASAAS usando seu ID.
- * @param {string} customerId - O ID do cliente no ASAAS (ex: 'cus_123').
- * @returns {Promise<object>} Os dados do cliente.
- */
-async function getCustomerById(customerId) {
-  try {
-    logger.info(`[ASAAS API SVC] Buscando dados do cliente ASAAS ID: ${customerId}`);
-    const { data } = await asaasAPI.get(`/customers/${customerId}`);
-    return data;
-  } catch (error) {
-    logger.error(`[ASAAS API SVC] Falha ao buscar cliente ${customerId}:`, error.response ? error.response.data : error.message);
-    throw new Error(`Falha ao buscar dados do cliente ${customerId} no ASAAS.`);
-  }
-}
-
-/**
- * Simula o recebimento de um pagamento em dinheiro para uma cobrança específica.
- * (Esta função continua a mesma)
- */
-async function simulatePayment(paymentId, value) {
-  // ... (código da função simulatePayment continua aqui, sem alterações)
-  try {
-    if (process.env.NODE_ENV !== 'development') {
-      logger.error('[ASAAS API SVC] A simulação de pagamento só é permitida em ambiente de desenvolvimento.');
-      throw new Error('Operação não permitida em produção.');
+    if (!clientRawPhone) {
+      logger.error(`[ASAAS SVC] CRÍTICO: Telefone não encontrado para o cliente ASAAS ID ${asaasCustomerId}. Não é possível prosseguir com a ativação.`);
+      await t.rollback();
+      return;
     }
-    logger.info(`[ASAAS API SVC] Simulando pagamento para a cobrança ID: ${paymentId}`);
-    const endpoint = `/payments/${paymentId}/receiveInCash`;
-    const payload = {
-      paymentDate: new Date().toISOString().split('T')[0],
-      value: value,
-      notifyCustomer: false
-    };
-    const { data } = await asaasAPI.post(endpoint, payload);
-    logger.info(`[ASAAS API SVC] Pagamento para a cobrança ${paymentId} simulado com sucesso. Status agora é: ${data.status}`);
-    return data;
+
+    // <<< [CORREÇÃO APLICADA] Normaliza o número de telefone vindo do Asaas >>>
+    const clientPhone = normalizePhoneNumberToCanonical(clientRawPhone);
+    const clientName = customerData.name || `Cliente ${clientPhone}`;
+    const clientEmail = customerData.email || null;
+
+    let localClient;
+
+    // Tenta encontrar o cliente local pelo telefone normalizado (principal) ou pelo email (secundário)
+    if (clientPhone) {
+      localClient = await Client.findOne({ where: { phone: clientPhone }, transaction: t });
+    }
+    if (!localClient && clientEmail) {
+      localClient = await Client.findOne({ where: { email: clientEmail }, transaction: t });
+    }
+
+    // Se o cliente já existe, atualiza os dados se necessário (ex: vincula o asaasCustomerId)
+    if (localClient) {
+      logger.info(`[ASAAS SVC] Cliente local encontrado (ID: ${localClient.id}). Verificando e vinculando dados...`);
+      const updates = {};
+      if (!localClient.asaasCustomerId) updates.asaasCustomerId = asaasCustomerId;
+      if ((!localClient.name || localClient.name === 'Convidado') && clientName) updates.name = clientName;
+      if (!localClient.email && clientEmail) updates.email = clientEmail;
+      
+      if (Object.keys(updates).length > 0) {
+        await localClient.update(updates, { transaction: t });
+        logger.info(`[ASAAS SVC] Dados do cliente local (ID: ${localClient.id}) foram atualizados.`);
+      }
+    } else {
+      // Se não encontrou, cria um novo cliente no nosso banco de dados
+      logger.info(`[ASAAS SVC] Nenhum cliente existente encontrado para tel:${clientPhone} ou email:${clientEmail}. Criando novo cliente...`);
+      const newClientData = {
+        name: clientName, // <<<<<<< [BUGFIX] Garante que o nome do Asaas seja usado na criação
+        email: clientEmail,
+        phone: clientPhone,
+        asaasCustomerId: asaasCustomerId,
+        status: 'Ativo'
+      };
+      // Usamos o client.service para garantir que as regras de negócio (como criar conta PF padrão) sejam aplicadas
+      localClient = await clientService.createClientContact(newClientData, { transaction: t });
+      logger.info(`[ASAAS SVC] Novo cliente criado (ID: ${localClient.id}).`);
+    }
+
+    // Encontra o plano local correspondente ao valor pago
+    const planValue = parseFloat(payment.value);
+    const localPlan = await Plan.findOne({
+      where: { price: { [Op.eq]: planValue } },
+      transaction: t
+    });
+
+    if (!localPlan) {
+      await t.rollback();
+      logger.error(`[ASAAS SVC] CRÍTICO: Nenhum plano encontrado no sistema com o valor R$${planValue}. O pagamento não pode ser associado.`);
+      throw new Error(`Plano com valor ${planValue} não configurado.`);
+    }
+    logger.info(`[ASAAS SVC] Plano "${localPlan.name}" corresponde ao valor pago.`);
+
+    // Calcula a data de expiração da assinatura
+    const endDate = payment.nextDueDate || new Date(new Date().setDate(new Date().getDate() + localPlan.durationDays)).toISOString().split('T')[0];
+    
+    // Garante que um registro de assinatura (mesmo que pendente) exista para ser atualizado
+    await Subscription.findOrCreate({
+      where: { externalSubscriptionId: externalSubscriptionId },
+      defaults: {
+        clientId: localClient.id,
+        planId: localPlan.id,
+        startDate: payment.paymentDate ? new Date(payment.paymentDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+        endDate: endDate,
+        status: 'Pendente', // Começa como pendente e será ativada pelo serviço
+      },
+      transaction: t
+    });
+
+    await t.commit(); // Confirma todas as operações no banco
+
+    // Delega a lógica de ativação (que atualiza o status no Client e na Subscription) para o serviço especializado
+    logger.info(`[ASAAS SVC] Delegando ativação da assinatura ${externalSubscriptionId} para o Subscription Service.`);
+    await subscriptionService.updateSubscriptionStatusByExternalId(externalSubscriptionId, 'Ativa', endDate);
+
+    logger.info(`[ASAAS SVC] Processo de webhook concluído com sucesso para o pagamento ${payment.id}.`);
+
   } catch (error) {
-    logger.error(`[ASAAS API SVC] Falha ao simular pagamento para ${paymentId}:`, error.response ? error.response.data : error.message);
-    throw new Error('Falha ao simular pagamento no ASAAS.');
+    // Garante que a transação seja desfeita em caso de erro
+    if (t.finished !== 'commit' && t.finished !== 'rollback') {
+      await t.rollback();
+    }
+    logger.error(`[ASAAS SVC] Erro CRÍTICO ao processar webhook de pagamento: ${error.message}`, { stack: error.stack, eventData });
+    throw error; // Propaga o erro para o controller responder 500 ao Asaas
   }
 }
 
 module.exports = {
-    simulatePayment,
-    getCustomerById,
-  findOrCreateAsaasCustomer,
-  createAsaasSubscription
+  processWebhookEvent,
 };

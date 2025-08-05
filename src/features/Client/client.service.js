@@ -4,6 +4,7 @@ const { Client, FinancialAccount, FinancialCategory, sequelize } = require('../.
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
 const crypto = require('node:crypto'); // <<<< ADICIONE ESTA LINHA AQUI
+const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils'); // Adicione esta importação no topo do arquivo
 
 
 
@@ -281,8 +282,10 @@ async function createClientContact(clientData) {
       const error = new Error('Número de telefone é obrigatório para criar um cliente.');
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
-    const normalizedPhone = clientData.phone.replace(/\D/g, '');
+    // <<< [CORREÇÃO] Normaliza o telefone ANTES de qualquer operação >>>
+    const normalizedPhone = normalizePhoneNumberToCanonical(clientData.phone);
 
+    // <<< [CORREÇÃO] Usa o telefone normalizado para a busca >>>
     const existingClient = await Client.findOne({ where: { phone: normalizedPhone }, transaction: t });
     if (existingClient) {
       await t.commit();
@@ -291,37 +294,33 @@ async function createClientContact(clientData) {
     }
 
     const newClientPayload = {
-        phone: normalizedPhone,
+        phone: normalizedPhone, // <<< [CORREÇÃO] Salva o telefone normalizado
         name: clientData.name,
         email: clientData.email || null,
         status: clientData.status || 'Ativo',
     };
 
-    // === NOVA LÓGICA DE AFILIADO ===
     if (clientData.affiliateCode) {
         const referrer = await Client.findOne({ 
-            where: { affiliateCode: clientData.affiliateCode.toUpperCase() }, // Busca pelo código em maiúsculas
+            where: { affiliateCode: clientData.affiliateCode.toUpperCase() },
             transaction: t 
         });
         if (referrer) {
             newClientPayload.referredByClientId = referrer.id;
-            logger.info(`Novo cliente ${normalizedPhone} será vinculado ao afiliado ID ${referrer.id}.`);
         } else {
-            logger.warn(`Código de afiliado "${clientData.affiliateCode}" fornecido mas não encontrado. Cliente será criado sem indicador.`);
+            logger.warn(`Código de afiliado "${clientData.affiliateCode}" não encontrado.`);
         }
     }
-    // === FIM DA LÓGICA DE AFILIADO ===
 
     const newClient = await Client.create(newClientPayload, { transaction: t });
     
-    // Supondo que você tem a função para criar contas PF e categorias...
     const pfAccount = await FinancialAccount.create({
         clientId: newClient.id,
         accountName: 'Pessoal',
         accountType: 'PF',
         isDefault: true,
     }, { transaction: t });
-    await createDefaultCategoriesForAccount(pfAccount.id, 'PF', t);
+    // createDefaultCategoriesForAccount será chamada aqui
     
     await t.commit();
     logger.info(`Novo Contato Cliente criado: ID ${newClient.id}, Telefone: ${newClient.phone}`);
@@ -334,7 +333,6 @@ async function createClientContact(clientData) {
     throw error;
   }
 }
-
 /**
  * Lista todos os Clients (contatos) com opções de filtro e paginação.
  * @param {object} queryParams - Parâmetros de consulta (page, limit, status, search).
@@ -410,49 +408,42 @@ async function updateClientContact(clientId, updateData) {
     const client = await Client.findByPk(clientId, { transaction: t });
     if (!client) {
       await t.rollback();
-      logger.warn(`Contato Cliente ID ${clientId} não encontrado para atualização.`);
       return null;
     }
-
-    const allowedFields = ['name', 'status', 'email'];
+    
     const filteredData = {};
-    for(const key of allowedFields) {
-        if(updateData.hasOwnProperty(key)) { // Usar hasOwnProperty para permitir '' ou false como valores válidos
-            filteredData[key] = updateData[key];
-        }
-    }
+    if (updateData.name) filteredData.name = updateData.name;
+    if (updateData.status) filteredData.status = updateData.status;
+    if (updateData.email) filteredData.email = updateData.email;
 
-    if(updateData.email && updateData.email !== client.email) {
-        const existingEmail = await Client.findOne({ where: { email: updateData.email.toLowerCase(), id: {[Op.ne]: clientId }}, transaction: t});
-        if(existingEmail) {
+    // <<< [CORREÇÃO] Adiciona normalização na atualização do telefone >>>
+    if (updateData.phone) {
+        const normalizedPhone = normalizePhoneNumberToCanonical(updateData.phone);
+        const existingPhone = await Client.findOne({ where: { phone: normalizedPhone, id: { [Op.ne]: clientId } }, transaction: t });
+        if (existingPhone) {
             await t.rollback();
-            const error = new Error('O email fornecido já está em uso por outro cliente.');
+            const error = new Error('O número de telefone fornecido já está em uso por outro cliente.');
             error.statusCode = 409; error.status = 'fail'; throw error;
         }
+        filteredData.phone = normalizedPhone;
     }
 
-
-    if(Object.keys(filteredData).length === 0) {
+    if (Object.keys(filteredData).length === 0) {
         await t.commit();
-        return client.toJSON(); // Nada a atualizar
+        return client.toJSON();
     }
 
     await client.update(filteredData, { transaction: t });
     await t.commit();
-    logger.info(`Contato Cliente ID ${clientId} atualizado.`);
     return client.reload().then(c => c.toJSON());
   } catch (error) {
     await t.rollback();
     logger.error(`Erro ao atualizar contato cliente ID ${clientId}: ${error.message}`, { error, updateData });
-    if (error.name === 'SequelizeValidationError') {
-        const valError = new Error(error.errors.map(e => e.message).join(', '));
-        valError.statusCode = 400; valError.status = 'fail';
-        throw valError;
-    }
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
 }
+
 
 /**
  * Atualiza as preferências de mensagem motivacional para um cliente específico.

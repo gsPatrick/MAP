@@ -5,10 +5,59 @@ const logger = require('../../utils/logger');
 const clientService = require('../Client/client.service');
 const subscriptionService = require('../Subscription/subscription.service');
 const { sendWhatsappMessage } = require('../../services/whatsappService');
+const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils'); // Adicione esta importação no topo do arquivo
 
 /**
  * Obtém estatísticas sobre a distribuição de clientes por plano/status.
  */
+
+/**
+ * Altera o número de telefone de um cliente. (Função de Admin)
+ * @param {number} clientId - ID do cliente a ser alterado.
+ * @param {string} newPhoneNumber - O novo número de telefone.
+ * @returns {Promise<object>} O objeto do cliente atualizado.
+ */
+async function changeClientPhoneNumber(clientId, newPhoneNumber) {
+    const t = await sequelize.transaction();
+    try {
+        const client = await Client.findByPk(clientId, { transaction: t });
+        if (!client) {
+            throw { statusCode: 404, message: 'Cliente não encontrado.' };
+        }
+
+        if (!newPhoneNumber || typeof newPhoneNumber !== 'string') {
+            throw { statusCode: 400, message: 'O novo número de telefone é obrigatório e deve ser uma string.' };
+        }
+
+        const normalizedPhone = normalizePhoneNumberToCanonical(newPhoneNumber);
+        if (!normalizedPhone || normalizedPhone.length < 12) {
+             throw { statusCode: 400, message: `O número de telefone "${newPhoneNumber}" parece inválido.` };
+        }
+
+        // Verifica se o novo número já está em uso por OUTRO cliente
+        const existingClientWithPhone = await Client.findOne({
+            where: {
+                phone: normalizedPhone,
+                id: { [Op.ne]: clientId } // Exclui o próprio cliente da busca
+            },
+            transaction: t
+        });
+
+        if (existingClientWithPhone) {
+            throw { statusCode: 409, message: `O número de telefone ${normalizedPhone} já está em uso pelo cliente ID ${existingClientWithPhone.id}.` };
+        }
+
+        await client.update({ phone: normalizedPhone }, { transaction: t });
+        await t.commit();
+
+        logger.info(`[AdminService] Telefone do cliente ID ${clientId} alterado para ${normalizedPhone} por um administrador.`);
+        return client.toJSON();
+
+    } catch (error) {
+        await t.rollback();
+        logger.error(`[AdminService] Erro ao alterar telefone do cliente ID ${clientId}: ${error.message}`, error);
+        throw error;
+    }
 
 async function getAllPlans(queryParams = {}) {
   try {
@@ -342,5 +391,6 @@ module.exports = {
   getAffiliatesDashboard,
   getAllPlans,
   updatePlan,
-  clearClientBalance // EXPORTE A NOVA FUNÇÃO AQUI
+  clearClientBalance,
+  changeClientPhoneNumber 
 };

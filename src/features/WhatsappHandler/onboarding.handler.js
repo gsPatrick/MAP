@@ -94,7 +94,7 @@ function getOnboardingCompanyCreatedMessage(clientName, companyType, companyName
     return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
 }
 
-async function handleOnboardingStep(state, messageText, actorClient) {
+ async function handleOnboardingStep(state, messageText, actorClient) {
     let onboardingReply = "";
     const nameFromDb = (actorClient.name && actorClient.name.toLowerCase() !== 'convidado')
         ? actorClient.name.split(" ")[0]
@@ -128,9 +128,6 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             }
             state.currentAction = 'awaiting_plan_interest_generic';
         
-        // ============================================================================
-        // === INÍCIO DA LÓGICA REESTRUTURADA PARA CADASTRO EM ETAPAS ===
-        // ============================================================================
         } else if (state.data.onboardingStage === 'setting_up_credentials_email') {
             
             // ETAPA 1: Pedir o E-mail
@@ -183,13 +180,20 @@ async function handleOnboardingStep(state, messageText, actorClient) {
                         
                     } catch (e) {
                         logger.error(`[ONBOARDING HANDLER] Erro ao salvar credenciais para ${actorClient.phone}: ${e.message}`);
-                        onboardingReply = `Opa! Tive um problema para salvar seus dados: ${e.message}. Poderia tentar novamente?`;
+                        
+                        // [CORREÇÃO APLICADA AQUI]
+                        // Se o erro for de email duplicado (código 409), volta para a etapa de email
+                        if (e.statusCode === 409) {
+                            onboardingReply = `Opa! Tive um problema para salvar seus dados: ${e.message}. Poderia tentar com outro e-mail, por favor?`;
+                            state.currentAction = 'awaiting_email'; // Volta para a etapa de pedir e-mail
+                            delete state.data.tempEmail; // Limpa o e-mail inválido que estava salvo
+                        } else {
+                            // Para outros erros, informa o usuário e permite que ele tente a senha novamente
+                            onboardingReply = `Opa! Tive um problema técnico para salvar seus dados: ${e.message}. Poderia tentar novamente?`;
+                        }
                     }
                 }
             }
-        // ============================================================================
-        // === FIM DA LÓGICA REESTRUTURADA ===
-        // ============================================================================
         
         } else if (state.data.onboardingStage === 'setting_up_pf_account_name') {
              if (isSharedContext) { 
