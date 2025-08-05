@@ -407,6 +407,7 @@ async function clearClientBalance(clientId) {
     }
 }
 
+}
 
 module.exports = {
   getDashboardMetrics,
