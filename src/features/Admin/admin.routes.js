@@ -6,6 +6,7 @@ const { authenticateToken, authorizeRole } = require('../../middlewares/authMidd
 const router = Router();
 
 // Aplica autenticação de admin para todas as rotas deste arquivo
+// A linha abaixo protege TODAS as rotas que começam com '/admin'
 router.use('/admin', authenticateToken, authorizeRole(['admin']));
 
 // --- Rotas de Métricas e Dashboards ---
@@ -16,22 +17,21 @@ router.get('/admin/dashboard/affiliates', adminController.getAffiliatesDashboard
 router.get('/admin/clients', adminController.getAllClients);
 router.post('/admin/clients', adminController.createClient);
 router.put('/admin/clients/:clientId', adminController.updateClient);
-router.delete('/admin/clients/:clientId', adminController.deleteClient);
+router.put('/admin/clients/:clientId/change-phone', adminController.changeClientPhone);
 router.post('/admin/clients/change-plan', adminController.changeUserPlan);
-router.put('/admin/clients/:clientId/clear-balance', adminController.clearClientBalance); // NOVA ROTA AQUI
+router.put('/admin/clients/:clientId/clear-balance', adminController.clearClientBalance);
+
+// <<< [ROTA DE EXCLUSÃO CORRIGIDA E ÚNICA] >>>
+// Esta é a única rota DELETE para clientes neste arquivo.
+// Ela chama o controller correto que por sua vez chama o admin.service.
+router.delete('/admin/clients/:clientId', adminController.deleteClientAsAdmin);
 
 // --- Rotas de Gerenciamento de Planos ---
 router.post('/admin/plans/custom', adminController.createCustomPlan);
-
-// --- Rotas de Comunicação ---
-router.post('/admin/broadcast', adminController.sendBroadcastMessage);
 router.get('/admin/plans', adminController.getAllPlans);
 router.put('/admin/plans/:planId', adminController.updatePlan);
 
-router.put('/admin/clients/:clientId/change-phone', adminController.changeClientPhone);
-
-
-router.delete('/admin/clients/:clientId', adminController.deleteClientAsAdmin);
-
+// --- Rotas de Comunicação ---
+router.post('/admin/broadcast', adminController.sendBroadcastMessage);
 
 module.exports = router;
