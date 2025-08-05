@@ -1,5 +1,5 @@
 // src/features/WebhookHandler/asaas.service.js
-const { Client, Plan, Subscription, sequelize } = require('../../database');
+const { Client, Plan, Subscription, sequelize } = require('../database/index');
 const clientService = require('../Client/client.service');
 const subscriptionService = require('../Subscription/subscription.service');
 const asaasApiService = require('../../services/asaasApiService');

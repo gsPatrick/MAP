@@ -117,5 +117,6 @@ module.exports = {
   getAllPlans,
   changeClientPhone,
   updatePlan,
+  deleteClientAsAdmin,
   clearClientBalance // EXPORTE A NOVA FUNÇÃO AQUI
 };
