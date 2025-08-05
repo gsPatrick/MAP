@@ -31,4 +31,7 @@ router.put('/admin/plans/:planId', adminController.updatePlan);
 router.put('/admin/clients/:clientId/change-phone', adminController.changeClientPhone);
 
 
+router.delete('/admin/clients/:clientId', adminController.deleteClientAsAdmin);
+
+
 module.exports = router;

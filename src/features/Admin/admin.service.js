@@ -355,6 +355,31 @@ async function updatePlan(planId, updateData) {
   }
 }
 
+async function deleteClientByUser(clientId) {
+    logger.warn(`[ADMIN SERVICE] Início da solicitação de EXCLUSÃO PERMANENTE para o Cliente ID: ${clientId}.`);
+    const t = await sequelize.transaction();
+    try {
+        const client = await Client.findByPk(clientId, { transaction: t });
+        if (!client) {
+            await t.rollback();
+            throw { statusCode: 404, message: 'Cliente não encontrado para exclusão.' };
+        }
+        
+        // O método destroy() acionará o 'cascade delete' definido no modelo,
+        // removendo contas financeiras, assinaturas, etc.
+        await client.destroy({ transaction: t });
+        
+        await t.commit();
+        logger.info(`[ADMIN SERVICE] Cliente ID ${clientId} (${client.name || client.phone}) e todos os dados associados foram excluídos com sucesso por um administrador.`);
+        return true;
+    } catch (error) {
+        await t.rollback();
+        logger.error(`[ADMIN SERVICE] Erro CRÍTICO ao excluir cliente ID ${clientId}: ${error.message}`, { error });
+        // Lança o erro para ser capturado pelo controller e errorHandler
+        throw error;
+    }
+}
+
 // NOVA FUNÇÃO AQUI
 async function clearClientBalance(clientId) {
     const t = await sequelize.transaction();
@@ -392,5 +417,6 @@ module.exports = {
   getAllPlans,
   updatePlan,
   clearClientBalance,
-  changeClientPhoneNumber 
+  changeClientPhoneNumber,
+  deleteClientByUser
 };

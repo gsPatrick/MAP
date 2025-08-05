@@ -89,6 +89,20 @@ const clearClientBalance = (req, res, next) => {
         .catch(next);
 };
 
+const deleteClientAsAdmin = (req, res, next) => {
+    const clientId = parseInt(req.params.clientId, 10);
+    if (isNaN(clientId)) {
+        return res.status(400).json({ status: 'fail', message: 'ID do cliente inválido.' });
+    }
+    
+    adminService.deleteClientByUser(clientId)
+        .then(() => {
+            // Para DELETE, a resposta de sucesso padrão é 204 No Content
+            res.status(204).send();
+        })
+        .catch(next); // Passa qualquer erro para o errorHandler
+};
+
 
 module.exports = {
   getAllClients,
