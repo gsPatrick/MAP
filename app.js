@@ -9,7 +9,7 @@ const { sequelize } = require('./src/database');
 const errorHandler = require('./src/middlewares/errorHandler');
 const { startJobs } = require('./src/jobs');
 const mainApiRouter = require('./src/routes');
-const { initializeBasePlans } = require('./scripts/initializePlans'); // <<< ADICIONE ESTA LINHA
+const { initializeBasePlans } = require('./src/scripts/initializePlans'); // <<< ADICIONE ESTA LINHA
 
 
 async function initializeDatabaseAndJobs() {
