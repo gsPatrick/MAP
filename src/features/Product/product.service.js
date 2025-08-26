@@ -276,10 +276,19 @@ async function deleteProduct(financialAccountId, productId) {
   }
 }
 
+async function findProductByNameOrCodeForSale(financialAccountId, nameOrCode) {
+    const { products } = await getAllProducts(financialAccountId, { search: nameOrCode, limit: 1, isActive: true });
+    if (products && products.length > 0) {
+        return products[0]; // Retorna o objeto completo do produto
+    }
+    return null;
+}
+
 module.exports = {
   createProduct,
   getAllProducts,
   getProductById,
   updateProduct,
   deleteProduct,
+  findProductByNameOrCodeForSale
 };

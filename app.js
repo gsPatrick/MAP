@@ -9,6 +9,7 @@ const { sequelize } = require('./src/database');
 const errorHandler = require('./src/middlewares/errorHandler');
 const { startJobs } = require('./src/jobs');
 const mainApiRouter = require('./src/routes');
+const { initializeBasePlans } = require('./scripts/initializePlans'); // <<< ADICIONE ESTA LINHA
 
 
 async function initializeDatabaseAndJobs() {
@@ -55,6 +56,7 @@ async function initializeDatabaseAndJobs() {
 
       }
     }
+    await initializeBasePlans();
 
     // Inicia os jobs agendados após a confirmação da conexão com o banco.
     console.log('Iniciando agendamento de jobs...');

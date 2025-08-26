@@ -35,6 +35,7 @@ const financialController = require('../features/Financial/financial.controller'
 const affiliateRoutes = require('../features/Affiliate/affiliate.routes');
 const systemSupportBotRoutes = require ('../features/SystemSupportBot/systemSupportBot.routes')
 const checklistRoutes = require('../features/Checklist/checklist.routes'); // <<< ADICIONE ESTE IMPORT
+const mercadoPagoRoutes = require('./features/MercadoPago/mercadoPago.routes'); // <-- Adicione este import
 
 const mainApiRouter = Router();
 
@@ -54,6 +55,8 @@ mainApiRouter.use('/auth/google', googleAuthRoutes);
 mainApiRouter.use('/webhooks/google-calendar', googleWebhookRoutes);
 mainApiRouter.use('/public/booking', publicBookingRoutes);
 mainApiRouter.use('/system-support-bot', systemSupportBotRoutes);
+mainApiRouter.use('/mercado-pago', mercadoPagoRoutes); // <<< ADICIONE ESTA LINHA
+
 
 // --- ROTAS DE ADMINISTRAÇÃO DO SISTEMA ---
 mainApiRouter.use('/users', userRoutes);

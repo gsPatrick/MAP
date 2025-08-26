@@ -17,8 +17,8 @@ const openai = new OpenAI({
 
 const ASSISTANT_NAME = "MAP no Controle";
 
+// CÓDIGO MODIFICADO E OTIMIZADO da função transcribeAudioStream
 async function transcribeAudioStream(audioStream, inputFilename) {
-  // ... (código da função transcribeAudioStream permanece o mesmo da resposta anterior)
   if (!OPENAI_API_KEY) {
     logger.error('[AI SERVICE - WHISPER] OPENAI_API_KEY não configurada.');
     throw new Error('Configuração da API da OpenAI ausente para transcrição.');
@@ -27,36 +27,18 @@ async function transcribeAudioStream(audioStream, inputFilename) {
     logger.error('[AI SERVICE - WHISPER] Stream de áudio não fornecido.');
     throw new Error('Stream de áudio é necessário para transcrição.');
   }
+  // O nome do arquivo com a extensão correta é importante para o Whisper.
   if (!inputFilename) {
-    logger.warn('[AI SERVICE - WHISPER] inputFilename não fornecido para o stream de áudio. Usando "audio.unknown".');
-    inputFilename = 'audio.unknown';
+    logger.warn('[AI SERVICE - WHISPER] inputFilename não fornecido. Usando "audio.ogg".');
+    inputFilename = 'audio.ogg';
   }
 
-  let tempFilePath = null;
   try {
-    tempFilePath = path.join(os.tmpdir(), `whisper_${Date.now()}_${path.basename(inputFilename)}`);
-    
-    logger.info(`[AI SERVICE - WHISPER] Salvando stream de áudio em arquivo temporário: ${tempFilePath}`);
-    const writer = fs.createWriteStream(tempFilePath);
-    audioStream.pipe(writer);
+    logger.info(`[AI SERVICE - WHISPER] Enviando stream de áudio (${inputFilename}) diretamente para transcrição...`);
 
-    await new Promise((resolve, reject) => {
-      writer.on('finish', resolve);
-      writer.on('error', (err) => {
-        logger.error(`[AI SERVICE - WHISPER] Erro ao salvar áudio temporário do stream: ${err.message}`);
-        reject(new Error(`Erro ao escrever stream de áudio em arquivo temporário: ${err.message}`));
-      });
-      audioStream.on('error', (err) => { 
-        logger.error(`[AI SERVICE - WHISPER] Erro no stream de áudio de origem: ${err.message}`);
-        writer.end(); 
-        reject(new Error(`Erro no stream de áudio de origem: ${err.message}`));
-      });
-    });
-
-    logger.info(`[AI SERVICE - WHISPER] Áudio salvo temporariamente. Enviando para transcrição Whisper...`);
-
+    // A mágica acontece aqui: passamos o stream de download diretamente para a API.
     const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(tempFilePath), 
+      file: audioStream, // O stream é passado diretamente
       model: "whisper-1",
       language: "pt", 
       response_format: "text" 
@@ -82,15 +64,10 @@ async function transcribeAudioStream(audioStream, inputFilename) {
         errorMessage += `: ${error.message}`;
     }
     throw new Error(errorMessage);
-  } finally {
-    if (tempFilePath) {
-      fs.unlink(tempFilePath, (err) => {
-        if (err) logger.error(`[AI SERVICE - WHISPER] Falha ao deletar arquivo de áudio temporário ${tempFilePath}: ${err.message}`);
-        else logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário ${tempFilePath} deletado.`);
-      });
-    }
   }
+  // A cláusula 'finally' e a exclusão do arquivo temporário não são mais necessárias.
 }
+
 function buildSystemPrompt(conversationContext) {
   const now = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
   const today = now.toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -231,6 +208,10 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
         }
         \`\`\`
     *   **Importante:** NÃO use \`clarifications_needed\` neste cenário. Crie o agendamento diretamente e, na sua resposta, sugira proativamente que o usuário pode cadastrar o cliente se desejar.
+
+**DIFERENCIAÇÃO CRUCIAL PARA ESTOQUE: VENDA vs. AJUSTE**
+-   Se o usuário descreve uma **VENDA** de um produto (ex: "vendi 2 cocas", "saída de 1 camisa para o cliente X"), use a ação \`RECORD_SALE\`. Esta ação dará baixa no estoque E registrará a entrada do dinheiro.
+-   Se o usuário descreve uma movimentação de estoque que **NÃO É UMA VENDA** (ex: "recebi 10 caixas do fornecedor", "dei baixa em 1 item quebrado", "ajuste de estoque para 50 unidades"), use a ação \`RECORD_STOCK_MOVEMEN\`. Esta ação afeta APENAS o inventário.
 
 **TOM E ESTILO DA CONVERSA (A REGRA MAIS IMPORTANTE DE TODAS!)**
 
@@ -821,6 +802,13 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
         - text: string (OBRIGATÓRIO)
         - priority: "low", "medium", "high" (opcional, default: "medium")    
     
+  80. RECORD_SALE (SÓ PARA CONTAS PJ/MEI): (Ação principal para vendas de produtos)
+    - productNameOrCode: string (OBRIGATÓRIO)
+    - quantitySold: integer (OBRIGATÓRIO, >0)
+    - saleDate: "YYYY-MM-DD" (opcional, default: hoje)
+    - notes: string (opcional)
+
+
 **FLUXO DE DECISÃO (HIERARQUIA DE COMANDOS)**
 
 Siga esta ordem de prioridade para decidir o que fazer. Esta é a regra mais importante para sua lógica de decisão.

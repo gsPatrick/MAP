@@ -141,6 +141,57 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
+            case 'CREATE_SALE_TRANSACTION': {
+    try {
+        const { productNameOrCode, quantitySold, salePricePerUnit, transactionDate, notes, businessClientName } = params;
+
+        if (!productNameOrCode || !quantitySold || isNaN(parseInt(quantitySold)) || parseInt(quantitySold) <= 0) {
+            throw { statusCode: 400, message: "Para registrar uma venda, preciso do nome do produto e da quantidade vendida." };
+        }
+
+        // 1. Encontrar o produto e validar
+        const productsResult = await productService.getAllProducts(state.activeFinancialAccountId, { search: productNameOrCode, limit: 1, isActive: true });
+        if (!productsResult.products || productsResult.products.length === 0) {
+            throw { statusCode: 404, message: `Produto "${productNameOrCode}" não encontrado no seu estoque.` };
+        }
+        const product = productsResult.products[0];
+
+        // 2. Dar baixa no estoque
+        await stockService.recordStockMovement(state.activeFinancialAccountId, product.id, {
+            movementType: 'Saída',
+            quantity: parseInt(quantitySold),
+            reason: `Venda para ${businessClientName || 'cliente'}`,
+        }, actorId);
+
+        // 3. Criar a transação financeira de ENTRADA
+        const finalSalePrice = salePricePerUnit ? parseFloat(salePricePerUnit) : parseFloat(product.salePrice);
+        const totalValue = finalSalePrice * parseInt(quantitySold);
+
+        const saleDescription = `Venda de ${quantitySold}x ${product.name}${businessClientName ? ` para ${businessClientName}` : ''}`;
+
+        const saleTransaction = await financialService.createTransaction(state.activeFinancialAccountId, {
+            description: saleDescription,
+            type: 'Entrada', // <<< AQUI ESTÁ A CORREÇÃO CRÍTICA
+            value: totalValue,
+            transactionDate: transactionDate || new Date().toISOString().split('T')[0],
+            isPayableOrReceivable: false,
+            isPaidOrReceived: true,
+            notes: notes,
+        }, actorId);
+
+        // 4. Formatar a resposta de sucesso
+        const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, saleTransaction.id);
+        formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx);
+        formattedData += `\n\n📦 Estoque de "${product.name}" atualizado com sucesso!`;
+
+        resourceForButtonsContext.resources.push({ type: 'transaction', id: saleTransaction.id, description: saleDescription });
+
+    } catch (e) {
+        logger.error(`[ACTION HANDLER] Erro em CREATE_SALE_TRANSACTION: ${e.message}`, { error: e, paramsUsed: params });
+        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui registrar a venda.\nDetalhe: ${e.message}`;
+    }
+    break;
+            }
                     case 'CREATE_CHECKLIST_ITEM': {
                 try {
                     const { text, priority } = detectedAction.parameters;
@@ -2416,6 +2467,8 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
     return { formattedData, resourceForButtonsContext, wasAnEdit };
 }
 
+
+
 async function handleButtonInteraction(state, buttonId, senderPhone) {
     try {
         const [action, resourceType, idStr] = buttonId.split(':');
@@ -2561,7 +2614,60 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
         return { flowCompleted: true };
     }
 }
+
+async function recordSale(state, params, clientNameToUse, actorId) {
+    try {
+        const { productNameOrCode, quantitySold, saleDate, notes } = params;
+        if (!productNameOrCode || !quantitySold || isNaN(parseInt(quantitySold)) || parseInt(quantitySold) <= 0) {
+            throw { statusCode: 400, message: "Para registrar uma venda, preciso do nome do produto e da quantidade vendida." };
+        }
+        
+        const financialAccountId = state.activeFinancialAccountId;
+        
+        // 1. Buscar o produto para obter o preço de venda e o ID
+        const product = await productService.findProductByNameOrCodeForSale(financialAccountId, productNameOrCode);
+        if (!product) {
+            throw { statusCode: 404, message: `Não encontrei um produto ativo chamado "${productNameOrCode}".` };
+        }
+
+        const qty = parseInt(quantitySold);
+
+        // 2. Dar baixa no estoque
+        await stockService.recordStockMovement(financialAccountId, product.id, {
+            movementType: 'Saída',
+            quantity: qty,
+            reason: `Venda registrada via WhatsApp (Ator ID: ${actorId})`,
+        });
+
+        // 3. Criar a transação financeira de ENTRADA
+        const totalSaleValue = product.salePrice * qty;
+        const transactionDescription = `Venda de ${qty}x ${product.name}`;
+        
+        await financialService.createTransaction(financialAccountId, {
+            description: transactionDescription,
+            type: 'Entrada',
+            value: totalSaleValue,
+            transactionDate: saleDate || new Date().toISOString().split('T')[0],
+            isPaidOrReceived: true, // Vendas diretas são consideradas recebidas
+            notes: notes,
+            // Opcional: Vincular a uma categoria "Venda de Produtos" se existir
+        }, actorId);
+
+        return {
+            formattedData: `✅ Venda registrada com sucesso!\n\n` +
+                           `📦 *Produto:* ${product.name} (-${qty} un.)\n` +
+                           `💰 *Entrada:* ${formatter.formatCurrency(totalSaleValue)}\n` +
+                           `📈 *Novo Estoque:* ${product.quantity - qty} un.`
+        };
+
+    } catch (e) {
+        logger.error(`[ACTION HANDLER] Erro em RECORD_SALE: ${e.message}`, { error: e, paramsUsed: params });
+        // Retorna uma mensagem de erro formatada para o usuário
+        return { formattedData: `❌ Ops, ${clientNameToUse}! Não consegui registrar a venda.\nDetalhe: ${e.message}` };
+    }
+}
 module.exports = {
     handleAction,
-    handleButtonInteraction
+    handleButtonInteraction,
+    recordSale
 };

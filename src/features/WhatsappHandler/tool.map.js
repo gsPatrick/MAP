@@ -25,7 +25,9 @@ const toolFunctionMap = {
     'CREATE_MOTIVATIONAL_PHRASE': actions.createMotivationalPhrase,
     'CREATE_CHECKLIST_ITEM': actions.createChecklistItem, // <<< ADICIONE ESTA LINHA
  'COMPLETE_CHECKLIST_ITEM': actions.completeChecklistItem, // <<< ADICIONE ESTA LINHA
-    // Ações de Leitura (GET / LIST)
+     'CREATE_SALE_TRANSACTION': actions.createSaleTransaction, 
+     'RECORD_SALE': actions.recordSale,
+ // Ações de Leitura (GET / LIST)
     'GET_FINANCIAL_SUMMARY': actions.getFinancialSummary,
     'LIST_FINANCIAL_TRANSACTIONS': actions.listFinancialTransactions,
     'LIST_APPOINTMENTS': actions.listAppointments,

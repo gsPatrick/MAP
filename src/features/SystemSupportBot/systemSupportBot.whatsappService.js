@@ -26,10 +26,13 @@ async function sendWhatsappMessage(phone, message) {
   }
 
   const endpoint = `${BASE_URL}/send-text`;
-  const payload = {
-    phone: phone.replace(/\D/g, ''), // Garante apenas números
-    message: message,
-  };
+// CÓDIGO MODIFICADO em sendWhatsappMessage
+const delaySeconds = parseInt(process.env.ZAPI_DELAY_TYPING_SECONDS, 10) || 3; // Padrão de 3 segundos
+const payload = {
+  phone: phone.replace(/\D/g, ''),
+  message: message,
+  delayTyping: delaySeconds
+};
   const headers = {
     'Content-Type': 'application/json',
     'client-token': ZAPI_CLIENT_TOKEN,
@@ -64,13 +67,15 @@ async function sendButtonListMessage(phone, messageText, buttons) {
 
     const endpoint = `${BASE_URL}/send-button-list`;
 
-    const payload = {
-        phone: phone.replace(/\D/g, ''), // Garante apenas números
-        message: messageText,
-        buttonList: {
-            buttons: buttons.map(btn => ({ id: btn.id.toString(), label: btn.label })),
-        }
-    };
+const delaySeconds = parseInt(process.env.ZAPI_DELAY_TYPING_SECONDS, 10) || 3; // Padrão de 3 segundos
+const payload = {
+  phone: phone.replace(/\D/g, ''),
+  message: messageText, 
+  delayTyping: delaySeconds, // <--- ADICIONADO AQUI
+  buttonList: {
+    buttons: buttons.map(btn => ({ id: btn.id.toString(), label: btn.label })), 
+  }
+};
 
     const headers = {
         'Content-Type': 'application/json',
