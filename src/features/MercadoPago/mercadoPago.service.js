@@ -6,7 +6,6 @@
 // CÓDIGO CORRIGIDO
 // src/features/MercadoPago/mercadoPago.service.js
 const { preference: mercadoPagoPreference } = require('../../config/mercadoPago'); // << Importação corrigida
-const { Subscription, Plan, Client, Payment } = require('../../database'); // Payment foi adicionado por engano aqui, removendo.
 const { Subscription, Plan, Client } = require('../../database'); // Correto
 const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
