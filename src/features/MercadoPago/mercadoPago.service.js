@@ -1,21 +1,31 @@
+// CÓDIGO ANTERIOR
+// const mercadopago = require('../../config/mercadoPago');
+// ...
+// const response = await mercadopago.preferences.create(preference);
+
+// CÓDIGO CORRIGIDO
 // src/features/MercadoPago/mercadoPago.service.js
-const mercadopago = require('../../config/mercadoPago');
-const { Subscription, Plan, Client } = require('../../database');
+const { preference: mercadoPagoPreference } = require('../../config/mercadoPago'); // << Importação corrigida
+const { Subscription, Plan, Client, Payment } = require('../../database'); // Payment foi adicionado por engano aqui, removendo.
+const { Subscription, Plan, Client } = require('../../database'); // Correto
 const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
+// É preciso importar a classe Payment diretamente da biblioteca para buscar pagamentos
+const { MercadoPagoConfig, Payment } = require('mercadopago');
 
 // Função adaptada de 'formatDateToPreference' do seu e-commerce
 function getExpirationDate() {
     const date = new Date();
     date.setDate(date.getDate() + 1); // Preferência expira em 24 horas
-    return date.toISOString().replace(/\.\d{3}Z$/, "-03:00"); // Formato ISO 8601 com offset de -3h (Brasil)
+    return date.toISOString().replace(/\.\d{3}Z$/, "-03:00");
 }
 
+// Inicializa o cliente de pagamento aqui também para uso no webhook
+const mpConfig = new MercadoPagoConfig({ accessToken: process.env.MERCADO_PAGO_TOKEN });
+const mpPayment = new Payment(mpConfig);
+
 const mercadoPagoService = {
-  /**
-   * Cria uma preferência de pagamento no Mercado Pago para uma assinatura.
-   * Adaptado de 'criarCheckoutPro' do seu e-commerce.
-   */
+  // ... (função criarPreferenciaAssinatura permanece igual, mas a chamada interna muda) ...
   async criarPreferenciaAssinatura(clientId, planId) {
     try {
       const client = await Client.findByPk(clientId);
@@ -28,21 +38,19 @@ const mercadoPagoService = {
         throw { statusCode: 400, message: 'Este plano não está mais disponível para assinatura.' };
       }
 
-      // 1. Cria uma assinatura PENDENTE para rastrear a tentativa de pagamento.
       const subscription = await Subscription.create({
         clientId,
         planId,
         status: 'Pendente',
-        // As datas serão definidas quando o pagamento for aprovado.
       });
 
-      const preference = {
+      const preferencePayload = {
         items: [{
           id: plan.id.toString(),
           title: `Assinatura Plano: ${plan.name}`,
           unit_price: Number.parseFloat(plan.price),
           quantity: 1,
-          category_id: "services", // Categoria para serviços/assinaturas
+          category_id: "services",
         }],
         payer: {
           name: client.name,
@@ -54,25 +62,24 @@ const mercadoPagoService = {
           pending: `${process.env.FRONTEND_URL}/assinatura/pendente`,
         },
         auto_return: "approved",
-        external_reference: subscription.id.toString(), // Mapeia o ID da Assinatura para a referência externa.
+        external_reference: subscription.id.toString(),
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
         statement_descriptor: "MAP NO CONTROLE",
         expires: true,
         expiration_date_to: getExpirationDate(),
       };
 
-      const response = await mercadopago.preferences.create(preference);
+      // << CHAMADA CORRIGIDA AQUI >>
+      const response = await mercadoPagoPreference.create({ body: preferencePayload });
 
-      // 2. Salva o ID da preferência do MP no nosso registro de assinatura.
-      // É assim que o webhook saberá qual assinatura atualizar.
       await subscription.update({
-        externalSubscriptionId: response.body.id
+        externalSubscriptionId: response.id // O ID da preferência agora vem em 'response.id'
       });
 
-      logger.info(`Preferência de pagamento MP criada (ID: ${response.body.id}) para Assinatura ID ${subscription.id}`);
+      logger.info(`Preferência de pagamento MP criada (ID: ${response.id}) para Assinatura ID ${subscription.id}`);
       return {
-        checkoutUrl: response.body.init_point,
-        preferenceId: response.body.id,
+        checkoutUrl: response.init_point, // init_point está no nível raiz da resposta
+        preferenceId: response.id,
       };
 
     } catch (error) {
@@ -81,10 +88,7 @@ const mercadoPagoService = {
     }
   },
 
-  /**
-   * Processa notificações de webhook do Mercado Pago.
-   * Adaptado de 'processarWebhook' do seu e-commerce.
-   */
+  // ... (função processarWebhook muda para usar o novo cliente de pagamento) ...
   async processarWebhook(dados) {
     try {
       if (dados.type !== 'payment') {
@@ -93,15 +97,17 @@ const mercadoPagoService = {
       }
       
       const paymentId = dados.data.id;
-      const payment = await mercadopago.payment.findById(paymentId);
-      const paymentData = payment.body;
+      // << CHAMADA CORRIGIDA AQUI >>
+      const paymentData = await mpPayment.get({ id: paymentId });
+
       const subscriptionId = parseInt(paymentData.external_reference, 10);
 
       if (!subscriptionId) {
         logger.warn("[MP Webhook] Webhook de pagamento recebido sem 'external_reference' (ID da assinatura).");
         return;
       }
-
+      
+      // O resto da lógica permanece o mesmo, pois já estava correta.
       const subscription = await Subscription.findByPk(subscriptionId);
       if (!subscription) {
         logger.error(`[MP Webhook] CRÍTICO: Assinatura com ID ${subscriptionId} (da external_reference) não encontrada!`);
@@ -110,8 +116,6 @@ const mercadoPagoService = {
       
       if (paymentData.status === "approved" && subscription.status !== 'Ativa') {
         logger.info(`[MP Webhook] Pagamento APROVADO para Assinatura ID ${subscriptionId}. Ativando assinatura...`);
-        // 3. Reutiliza o serviço de assinatura existente para ativar o plano e o acesso do cliente.
-        // Isso garante consistência com o fluxo do Asaas.
         await subscriptionService.activateSubscription(subscription.id, paymentData.id);
         logger.info(`[MP Webhook] Assinatura ID ${subscriptionId} ativada com sucesso.`);
 
