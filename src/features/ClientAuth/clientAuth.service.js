@@ -1,10 +1,295 @@
 // src/features/ClientAuth/clientAuth.service.js
-const { Client, Subscription, Plan, FinancialAccount, SharedAccess, sequelize } = require('../../database');
+const { Client, FinancialAccount, FinancialCategory, Subscription, Plan, SharedAccess, sequelize } = require('../../database');
 const logger = require('../../utils/logger');
 const { generateToken } = require('../../utils/authUtils');
 const { Op } = require('sequelize');
 const subscriptionService = require('../Subscription/subscription.service');
 const googleCalendarService = require('../GoogleCalendar/googleCalendarService');
+
+// ==========================================================================================
+// === INÍCIO: Lógica de criação de categorias padrão (movida para cá para centralizar) ===
+// ==========================================================================================
+const defaultPersonalCategoryNames = [
+    'Alimentação', 'Supermercado', 'Restaurantes', 'Moradia', 'Aluguel', 'Contas' , 'Conta de Água', 'Conta de Luz', 'Internet', 'Transporte', 'Combustível',
+    'Uber/99', 'Manutenção Veicular', 'Saúde', 'Farmácia', 'Plano de Saúde', 'Consultas', 'Lazer', 'Viagens',
+    'Assinaturas/Streaming', 'Cuidados Pessoais', 'Compras', 'Vestuário', 'Educação',
+    'Dívidas/Empréstimos', 'Pagamento de Fatura', 'Receitas', 'Salário', 'Renda Extra', 'Investimentos'
+];
+
+async function createDefaultCategoriesForAccount(financialAccountId, accountType, transaction) {
+    logger.info(`Iniciando criação de categorias padrão para conta ID ${financialAccountId}, tipo ${accountType}.`);
+    
+    let categoryNames = [];
+    if (accountType === 'PF') {
+        categoryNames = defaultPersonalCategoryNames;
+    }
+    // Adicionar aqui a lógica para 'PJ'/'MEI' se necessário no futuro
+    
+    if (categoryNames.length === 0) {
+        logger.warn(`Tipo de conta '${accountType}' não tem categorias padrão definidas.`);
+        return;
+    }
+
+    const categoriesToCreate = categoryNames.map(name => ({
+        financialAccountId,
+        name,
+    }));
+
+    await FinancialCategory.bulkCreate(categoriesToCreate, { transaction });
+    logger.info(`${categoriesToCreate.length} categorias padrão do tipo '${accountType}' criadas para a conta ID ${financialAccountId}.`);
+}
+// ========================================================================================
+// === FIM: Lógica de criação de categorias padrão ===
+// ========================================================================================
+
+
+// <<< NOVO MÉTODO PARA CADASTRO COMPLETO >>>
+async function registerClient(registerData) {
+    const t = await sequelize.transaction();
+    try {
+        const { name, email, phone, password, affiliateCode } = registerData;
+
+        if (!name || !email || !phone || !password) {
+            throw { statusCode: 400, message: 'Nome, email, telefone e senha são obrigatórios.' };
+        }
+        if (password.trim().length < 6) {
+            throw { statusCode: 400, message: 'A senha deve ter no mínimo 6 caracteres.' };
+        }
+
+        const normalizedPhone = phone.replace(/\D/g, '');
+        const lowerEmail = email.toLowerCase().trim();
+
+        const existingClient = await Client.findOne({
+            where: { [Op.or]: [{ phone: normalizedPhone }, { email: lowerEmail }] },
+            transaction: t,
+        });
+
+        if (existingClient) {
+            const conflictField = existingClient.phone === normalizedPhone ? 'Telefone' : 'E-mail';
+            throw { statusCode: 409, message: `${conflictField} já cadastrado.` };
+        }
+
+        const newClientPayload = {
+            name,
+            email: lowerEmail,
+            phone: normalizedPhone,
+            passwordHash: password, // O hook do modelo fará o hash
+            status: 'Aguardando Pagamento', // Status inicial até a assinatura ser confirmada
+        };
+        
+        // Lógica de Afiliado (se houver código)
+        if (affiliateCode) {
+            const referrer = await Client.findOne({ 
+                where: { affiliateCode: affiliateCode.toUpperCase() }, 
+                transaction: t 
+            });
+            if (referrer) {
+                newClientPayload.referredByClientId = referrer.id;
+            } else {
+                logger.warn(`[Register] Código de afiliado "${affiliateCode}" não encontrado.`);
+            }
+        }
+
+        const newClient = await Client.create(newClientPayload, { transaction: t });
+
+        // Cria a conta financeira pessoal padrão para o novo cliente
+        const pfAccount = await FinancialAccount.create({
+            clientId: newClient.id,
+            accountName: 'Pessoal',
+            accountType: 'PF',
+            isDefault: true,
+        }, { transaction: t });
+
+        // Cria as categorias padrão para a nova conta pessoal
+        await createDefaultCategoriesForAccount(pfAccount.id, 'PF', t);
+
+        await t.commit();
+        logger.info(`Novo Cliente registrado com sucesso: ID ${newClient.id}, Email: ${newClient.email}`);
+        
+        // Gera o token de login imediatamente após o cadastro
+        const tokenPayload = { id: newClient.id, phone: newClient.phone, email: newClient.email };
+        const token = generateToken(tokenPayload, 'client');
+        
+        const clientResponse = newClient.toJSON();
+        delete clientResponse.passwordHash;
+
+        return {
+            client: clientResponse,
+            token,
+            financialAccounts: [pfAccount.toJSON()], // Retorna a conta recém-criada
+        };
+
+    } catch (error) {
+        await t.rollback();
+        logger.error(`Erro ao registrar novo cliente: ${error.message}`, { error, registerData });
+        if (!error.statusCode) error.statusCode = 500;
+        throw error;
+    }
+}
+
+
+async function loginClient(identifier, password) {
+    // ... (o restante do seu arquivo clientAuth.service.js continua aqui, sem alterações)
+    // ... (as funções loginClient, getClientProfile, etc. permanecem as mesmas)
+    // Apenas colei o início para mostrar onde o novo método entra.
+    // Copie o restante do seu arquivo original a partir daqui.
+    try {
+        if (!identifier || !password) {
+          const error = new Error('Identificador (email/telefone) e senha são obrigatórios.');
+          error.statusCode = 400; error.status = 'fail'; throw error;
+        }
+    
+        const trimmedPassword = password.trim();
+        const normalizedIdentifier = identifier.replace(/\D/g, '');
+        const isEmailLogin = identifier.includes('@');
+        const loginAttemptIdentifier = isEmailLogin ? identifier.toLowerCase().trim() : normalizedIdentifier;
+    
+        const sharedAccessLoginCondition = isEmailLogin
+            ? { sharedAccessEmail: loginAttemptIdentifier }
+            : { sharedAccessPhone: loginAttemptIdentifier };
+    
+        const sharedAccessRecord = await SharedAccess.findOne({
+            where: { ...sharedAccessLoginCondition, status: 'Ativo' },
+            include: [
+                { model: Client, as: 'ownerClient', attributes: ['id', 'name', 'status', 'accessLevel', 'accessExpiresAt'] },
+                { model: Client, as: 'sharedWithClient', attributes: ['id', 'name', 'email', 'phone', 'status'] }
+            ]
+        });
+    
+        if (sharedAccessRecord && sharedAccessRecord.sharedAccessPasswordHash) {
+            const isSharedPasswordMatch = await sharedAccessRecord.isValidPassword(trimmedPassword);
+            if (isSharedPasswordMatch) {
+                if (!sharedAccessRecord.sharedWithClient || sharedAccessRecord.sharedWithClient.status === 'Bloqueado' || sharedAccessRecord.sharedWithClient.status === 'Inativo') {
+                    const error = new Error('Usuário convidado associado a este acesso está inválido ou inativo.');
+                    error.statusCode = 403; error.status = 'fail'; throw error;
+                }
+                const owner = sharedAccessRecord.ownerClient;
+                if (!owner || owner.status === 'Bloqueado' || owner.status === 'Inativo') {
+                    const error = new Error('A conta do proprietário deste acesso compartilhado está indisponível.');
+                    error.statusCode = 403; error.status = 'fail'; throw error;
+                }
+    
+                let ownerHasActivePaidAccess = false;
+                if (owner.accessLevel && owner.accessLevel !== 'gratuito') {
+                    if (owner.accessLevel.startsWith('vitalicio_')) ownerHasActivePaidAccess = true;
+                    else if (owner.accessExpiresAt) {
+                        const expiryDate = new Date(owner.accessExpiresAt + 'T00:00:00Z');
+                        const today = new Date(); today.setUTCHours(0,0,0,0);
+                        if (expiryDate >= today) ownerHasActivePaidAccess = true;
+                    }
+                }
+                if (!ownerHasActivePaidAccess && owner.status !== 'Aguardando Pagamento') {
+                    const error = new Error('Acesso negado. A conta do proprietário não possui uma assinatura ativa.');
+                    error.statusCode = 403; error.status = 'fail_subscription'; throw error;
+                }
+    
+                const tokenPayloadShared = {
+                    id: sharedAccessRecord.sharedWithClientId,
+                    type: 'client_shared_access',
+                    ownerClientId: sharedAccessRecord.ownerClientId,
+                    canAccessPersonalProfile: sharedAccessRecord.canAccessPersonalProfile,
+                    canAccessBusinessProfileId: sharedAccessRecord.canAccessBusinessProfileId
+                };
+                const tokenShared = generateToken(tokenPayloadShared, 'client_shared_access');
+                const sharedWithClientResponse = sharedAccessRecord.sharedWithClient.toJSON();
+                sharedWithClientResponse.effectiveAccessLevel = owner.accessLevel;
+                sharedWithClientResponse.effectiveAccessExpiresAt = owner.accessExpiresAt;
+    
+                const accessibleFinancialAccounts = [];
+                const ownerAccounts = await FinancialAccount.findAll({
+                    where: { clientId: owner.id, isActive: true },
+                    attributes: ['id', 'accountName', 'accountType', 'isDefault'],
+                    order: [['isDefault', 'DESC'], ['accountName', 'ASC']]
+                });
+                ownerAccounts.forEach(acc => {
+                    if (acc.accountType === 'PF' && sharedAccessRecord.canAccessPersonalProfile) {
+                        accessibleFinancialAccounts.push(acc.toJSON());
+                    } else if ((acc.accountType === 'PJ' || acc.accountType === 'MEI') && sharedAccessRecord.canAccessBusinessProfileId === acc.id) {
+                        accessibleFinancialAccounts.push(acc.toJSON());
+                    }
+                });
+    
+                logger.info(`Login via SharedAccess bem-sucedido para ${sharedWithClientResponse.email || sharedWithClientResponse.phone} (acessando conta de ${owner.id}).`);
+                return {
+                    client: sharedWithClientResponse,
+                    token: tokenShared,
+                    financialAccounts: accessibleFinancialAccounts,
+                    sharedAccessContext: {
+                        ownerClientId: owner.id,
+                        ownerClientName: owner.name,
+                        canAccessPersonalProfile: sharedAccessRecord.canAccessPersonalProfile,
+                        canAccessBusinessProfileId: sharedAccessRecord.canAccessBusinessProfileId
+                    }
+                };
+            }
+        }
+    
+        const client = await Client.scope('withPassword').findOne({
+          where: isEmailLogin ? { email: loginAttemptIdentifier } : { phone: loginAttemptIdentifier }
+        });
+    
+        if (!client) {
+          const error = new Error('Credenciais inválidas (usuário não encontrado).');
+          error.statusCode = 401; error.status = 'fail'; throw error;
+        }
+        if (!client.passwordHash) {
+            const error = new Error('Este cliente ainda não configurou uma senha para acesso web.');
+            error.statusCode = 403; error.status = 'fail'; throw error;
+        }
+        if (client.status === 'Bloqueado' || client.status === 'Inativo') {
+            const error = new Error(`Acesso negado. Status do cliente: ${client.status}.`);
+            error.statusCode = 403; error.status = 'fail'; throw error;
+        }
+    
+        let hasActivePaidAccess = false;
+        if (client.accessLevel && client.accessLevel !== 'gratuito') {
+            if (client.accessLevel.startsWith('vitalicio_')) hasActivePaidAccess = true;
+            else if (client.accessExpiresAt) {
+                const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
+                const today = new Date(); today.setUTCHours(0,0,0,0);
+                if (expiryDate >= today) hasActivePaidAccess = true;
+            }
+        }
+        if (!hasActivePaidAccess && client.status !== 'Aguardando Pagamento') {
+            const error = new Error('Nenhum plano ativo encontrado. Adquira um plano para acessar.');
+            error.statusCode = 403; error.status = 'fail_subscription'; throw error;
+        }
+    
+        const isPasswordMatch = await client.isValidPassword(trimmedPassword);
+        if (!isPasswordMatch) {
+          const error = new Error('Credenciais inválidas (senha incorreta).');
+          error.statusCode = 401; error.status = 'fail'; throw error;
+        }
+    
+        const tokenPayload = { id: client.id, phone: client.phone, email: client.email };
+        const token = generateToken(tokenPayload, 'client');
+        const clientResponse = client.toJSON();
+        delete clientResponse.passwordHash;
+    
+        const financialAccounts = await FinancialAccount.findAll({
+            where: { clientId: client.id, isActive: true },
+            attributes: ['id', 'accountName', 'accountType', 'isDefault'],
+            order: [['isDefault', 'DESC'], ['accountName', 'ASC']]
+        });
+    
+        logger.info(`Login direto bem-sucedido para Cliente: ${client.phone || client.email}`);
+        return {
+            client: clientResponse,
+            token,
+            financialAccounts: financialAccounts.map(acc => acc.toJSON()),
+            sharedAccessContext: null
+        };
+    
+      } catch (error) {
+        logger.error(`Erro no login do Cliente (${identifier}): ${error.message}`, { error });
+        if (!error.statusCode) error.statusCode = 500;
+        throw error;
+      }
+}
+
+// ... Cole o resto do seu arquivo clientAuth.service.js aqui ...
+// (getClientProfile, updateClientProfile, etc)
+// Para ser completo, estou adicionando as outras funções que você já tinha:
 
 async function setClientCredentials(phone, password, name = null, email = null) {
   const t = await sequelize.transaction();
@@ -66,7 +351,6 @@ async function setClientCredentials(phone, password, name = null, email = null) 
 async function updateClientProfile(clientId, updateData) {
   const t = await sequelize.transaction();
   try {
-    // Busca o cliente incluindo o hash da senha para poder validar a senha atual se necessário
     const client = await Client.scope('withPassword').findByPk(clientId, { transaction: t });
     if (!client) {
       await t.rollback();
@@ -78,8 +362,6 @@ async function updateClientProfile(clientId, updateData) {
     const dataToUpdate = {};
     let passwordChanged = false;
 
-    // --- LÓGICA DE ATUALIZAÇÃO DE SENHA ---
-    // Este bloco só é executado se uma nova senha for fornecida.
     if (newPassword) {
       if (!password) {
         await t.rollback();
@@ -92,18 +374,14 @@ async function updateClientProfile(clientId, updateData) {
         const error = new Error('A senha atual está incorreta.');
         error.statusCode = 403; error.status = 'fail'; throw error;
       }
-      // Adiciona a nova senha ao payload de atualização. O hook do modelo fará o hash.
       dataToUpdate.passwordHash = newPassword;
       passwordChanged = true;
     }
 
-    // --- LÓGICA DE ATUALIZAÇÃO DE OUTROS DADOS ---
-    // Verifica e adiciona outros campos ao payload se eles foram fornecidos e são diferentes.
     if (name !== undefined && name !== client.name) {
       dataToUpdate.name = name;
     }
     if (phone !== undefined && phone !== client.phone) {
-      // Adicionar aqui validação de formato de telefone se necessário
       dataToUpdate.phone = phone;
     }
     if (email !== undefined) {
@@ -122,17 +400,14 @@ async function updateClientProfile(clientId, updateData) {
       }
     }
 
-    // Se nenhum dado foi alterado, não faz nada no banco.
     if (Object.keys(dataToUpdate).length === 0) {
-      await t.commit(); // Commit a transação vazia
+      await t.commit(); 
       return { client: client.toJSON(), message: 'Nenhuma informação para atualizar.' };
     }
 
-    // Executa a atualização com os dados coletados.
     await client.update(dataToUpdate, { transaction: t });
     await t.commit();
 
-    // Recarrega o cliente para retornar os dados atualizados (sem o hash da senha)
     const reloadedClient = await Client.findByPk(clientId);
     return {
       client: reloadedClient.toJSON(),
@@ -142,23 +417,10 @@ async function updateClientProfile(clientId, updateData) {
   } catch (error) {
     if (t && !t.finished) await t.rollback();
     logger.error(`Erro ao atualizar perfil do cliente ID ${clientId}: ${error.message}`, { error });
-    // Se o erro já tiver um statusCode (lançado por nós), mantenha-o. Senão, defina como 500.
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
 }
-
-
-/**
- * Define credenciais (senha, nome, email) e o código de afiliado de uma só vez.
- * Usado no onboarding do WhatsApp.
- * @param {string} phone - Telefone do cliente.
- * @param {string} password - Senha (texto puro).
- * @param {string} name - Nome completo.
- * @param {string} email - Email.
- * @param {string|null} affiliateCode - Código de afiliado que indicou.
- * @returns {Promise<object>} O objeto Client atualizado.
- */
 async function setClientCredentialsAndAffiliate(phone, password, name, email, affiliateCode) {
     const t = await sequelize.transaction();
     try {
@@ -202,49 +464,6 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
 
             if (referrer) {
                 updateData.referredByClientId = referrer.id;
-                logger.info(`[ClientAuthService] Cliente ID ${client.id} será vinculado ao afiliado ID ${referrer.id}.`);
-
-                const clientAccessLevel = client.accessLevel;
-                logger.info(`[DEPURAÇÃO COMISSÃO] Nível de acesso do cliente indicado: ${clientAccessLevel}`);
-
-                if (clientAccessLevel && clientAccessLevel !== 'gratuito') {
-                    
-                    const parts = clientAccessLevel.split('_');
-                    const tier = parts[0];
-                    const duration = parts[1];
-
-                    const planWhereCondition = {
-                        tier: tier,
-                        durationDays: duration === 'mensal' ? 30 : 365,
-                        isActive: true
-                    };
-                    
-                    logger.info(`[DEPURAÇÃO COMISSÃO] Buscando plano com a condição: ${JSON.stringify(planWhereCondition)}`);
-                    const plan = await Plan.findOne({ where: planWhereCondition, transaction: t });
-
-                    if (plan) {
-                        logger.info(`[DEPURAÇÃO COMISSÃO] Plano encontrado: "${plan.name}", Valor da comissão: ${plan.affiliateCommissionValue}`);
-                        if (plan.affiliateCommissionValue > 0) {
-                            
-                            // <<<< MUDANÇA CRÍTICA E FINAL APLICADA AQUI >>>>
-                            // Em vez de 'increment', calculamos e atualizamos manualmente para garantir a persistência.
-                            const currentBalance = parseFloat(referrer.balance);
-                            const commission = parseFloat(plan.affiliateCommissionValue);
-                            const newBalance = currentBalance + commission;
-
-                            await referrer.update({ balance: newBalance }, { transaction: t });
-                            // <<<< FIM DA MUDANÇA >>>>
-
-                            logger.info(`COMISSÃO IMEDIATA: Saldo do afiliado ID ${referrer.id} atualizado para R$${newBalance.toFixed(2)}.`);
-                        } else {
-                            logger.warn(`[ClientAuthService] O plano "${plan.name}" foi encontrado, mas seu valor de comissão é zero ou nulo.`);
-                        }
-                    } else {
-                        logger.error(`[ClientAuthService] CRÍTICO: Nenhum plano ATIVO correspondente à condição ${JSON.stringify(planWhereCondition)} foi encontrado no banco de dados. A comissão não pôde ser paga.`);
-                    }
-                } else {
-                    logger.warn(`[ClientAuthService] Cliente indicado (ID: ${client.id}) não possui um plano pago ativo.`);
-                }
             } else {
                 logger.warn(`[ClientAuthService] Código de afiliado "${affiliateCode}" fornecido mas não encontrado.`);
             }
@@ -262,161 +481,6 @@ async function setClientCredentialsAndAffiliate(phone, password, name, email, af
         throw error;
     }
 }
-async function loginClient(identifier, password) {
-  try {
-    if (!identifier || !password) {
-      const error = new Error('Identificador (email/telefone) e senha são obrigatórios.');
-      error.statusCode = 400; error.status = 'fail'; throw error;
-    }
-
-    const trimmedPassword = password.trim();
-    const normalizedIdentifier = identifier.replace(/\D/g, '');
-    const isEmailLogin = identifier.includes('@');
-    const loginAttemptIdentifier = isEmailLogin ? identifier.toLowerCase().trim() : normalizedIdentifier;
-
-    const sharedAccessLoginCondition = isEmailLogin
-        ? { sharedAccessEmail: loginAttemptIdentifier }
-        : { sharedAccessPhone: loginAttemptIdentifier };
-
-    const sharedAccessRecord = await SharedAccess.findOne({
-        where: { ...sharedAccessLoginCondition, status: 'Ativo' },
-        include: [
-            { model: Client, as: 'ownerClient', attributes: ['id', 'name', 'status', 'accessLevel', 'accessExpiresAt'] },
-            { model: Client, as: 'sharedWithClient', attributes: ['id', 'name', 'email', 'phone', 'status'] }
-        ]
-    });
-
-    if (sharedAccessRecord && sharedAccessRecord.sharedAccessPasswordHash) {
-        const isSharedPasswordMatch = await sharedAccessRecord.isValidPassword(trimmedPassword);
-        if (isSharedPasswordMatch) {
-            if (!sharedAccessRecord.sharedWithClient || sharedAccessRecord.sharedWithClient.status === 'Bloqueado' || sharedAccessRecord.sharedWithClient.status === 'Inativo') {
-                const error = new Error('Usuário convidado associado a este acesso está inválido ou inativo.');
-                error.statusCode = 403; error.status = 'fail'; throw error;
-            }
-            const owner = sharedAccessRecord.ownerClient;
-            if (!owner || owner.status === 'Bloqueado' || owner.status === 'Inativo') {
-                const error = new Error('A conta do proprietário deste acesso compartilhado está indisponível.');
-                error.statusCode = 403; error.status = 'fail'; throw error;
-            }
-
-            let ownerHasActivePaidAccess = false;
-            if (owner.accessLevel && owner.accessLevel !== 'gratuito') {
-                if (owner.accessLevel.startsWith('vitalicio_')) ownerHasActivePaidAccess = true;
-                else if (owner.accessExpiresAt) {
-                    const expiryDate = new Date(owner.accessExpiresAt + 'T00:00:00Z');
-                    const today = new Date(); today.setUTCHours(0,0,0,0);
-                    if (expiryDate >= today) ownerHasActivePaidAccess = true;
-                }
-            }
-            if (!ownerHasActivePaidAccess && owner.status !== 'Aguardando Pagamento') {
-                const error = new Error('Acesso negado. A conta do proprietário não possui uma assinatura ativa.');
-                error.statusCode = 403; error.status = 'fail_subscription'; throw error;
-            }
-
-            const tokenPayloadShared = {
-                id: sharedAccessRecord.sharedWithClientId,
-                type: 'client_shared_access',
-                ownerClientId: sharedAccessRecord.ownerClientId,
-                canAccessPersonalProfile: sharedAccessRecord.canAccessPersonalProfile,
-                canAccessBusinessProfileId: sharedAccessRecord.canAccessBusinessProfileId
-            };
-            const tokenShared = generateToken(tokenPayloadShared, 'client_shared_access');
-            const sharedWithClientResponse = sharedAccessRecord.sharedWithClient.toJSON();
-            sharedWithClientResponse.effectiveAccessLevel = owner.accessLevel;
-            sharedWithClientResponse.effectiveAccessExpiresAt = owner.accessExpiresAt;
-
-            const accessibleFinancialAccounts = [];
-            const ownerAccounts = await FinancialAccount.findAll({
-                where: { clientId: owner.id, isActive: true },
-                attributes: ['id', 'accountName', 'accountType', 'isDefault'],
-                order: [['isDefault', 'DESC'], ['accountName', 'ASC']]
-            });
-            ownerAccounts.forEach(acc => {
-                if (acc.accountType === 'PF' && sharedAccessRecord.canAccessPersonalProfile) {
-                    accessibleFinancialAccounts.push(acc.toJSON());
-                } else if ((acc.accountType === 'PJ' || acc.accountType === 'MEI') && sharedAccessRecord.canAccessBusinessProfileId === acc.id) {
-                    accessibleFinancialAccounts.push(acc.toJSON());
-                }
-            });
-
-            logger.info(`Login via SharedAccess bem-sucedido para ${sharedWithClientResponse.email || sharedWithClientResponse.phone} (acessando conta de ${owner.id}).`);
-            return {
-                client: sharedWithClientResponse,
-                token: tokenShared,
-                financialAccounts: accessibleFinancialAccounts,
-                sharedAccessContext: {
-                    ownerClientId: owner.id,
-                    ownerClientName: owner.name,
-                    canAccessPersonalProfile: sharedAccessRecord.canAccessPersonalProfile,
-                    canAccessBusinessProfileId: sharedAccessRecord.canAccessBusinessProfileId
-                }
-            };
-        }
-    }
-
-    const client = await Client.scope('withPassword').findOne({
-      where: isEmailLogin ? { email: loginAttemptIdentifier } : { phone: loginAttemptIdentifier }
-    });
-
-    if (!client) {
-      const error = new Error('Credenciais inválidas (usuário não encontrado).');
-      error.statusCode = 401; error.status = 'fail'; throw error;
-    }
-    if (!client.passwordHash) {
-        const error = new Error('Este cliente ainda não configurou uma senha para acesso web.');
-        error.statusCode = 403; error.status = 'fail'; throw error;
-    }
-    if (client.status === 'Bloqueado' || client.status === 'Inativo') {
-        const error = new Error(`Acesso negado. Status do cliente: ${client.status}.`);
-        error.statusCode = 403; error.status = 'fail'; throw error;
-    }
-
-    let hasActivePaidAccess = false;
-    if (client.accessLevel && client.accessLevel !== 'gratuito') {
-        if (client.accessLevel.startsWith('vitalicio_')) hasActivePaidAccess = true;
-        else if (client.accessExpiresAt) {
-            const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
-            const today = new Date(); today.setUTCHours(0,0,0,0);
-            if (expiryDate >= today) hasActivePaidAccess = true;
-        }
-    }
-    if (!hasActivePaidAccess && client.status !== 'Aguardando Pagamento') {
-        const error = new Error('Nenhum plano ativo encontrado. Adquira um plano para acessar.');
-        error.statusCode = 403; error.status = 'fail_subscription'; throw error;
-    }
-
-    const isPasswordMatch = await client.isValidPassword(trimmedPassword);
-    if (!isPasswordMatch) {
-      const error = new Error('Credenciais inválidas (senha incorreta).');
-      error.statusCode = 401; error.status = 'fail'; throw error;
-    }
-
-    const tokenPayload = { id: client.id, phone: client.phone, email: client.email };
-    const token = generateToken(tokenPayload, 'client');
-    const clientResponse = client.toJSON();
-    delete clientResponse.passwordHash;
-
-    const financialAccounts = await FinancialAccount.findAll({
-        where: { clientId: client.id, isActive: true },
-        attributes: ['id', 'accountName', 'accountType', 'isDefault'],
-        order: [['isDefault', 'DESC'], ['accountName', 'ASC']]
-    });
-
-    logger.info(`Login direto bem-sucedido para Cliente: ${client.phone || client.email}`);
-    return {
-        client: clientResponse,
-        token,
-        financialAccounts: financialAccounts.map(acc => acc.toJSON()),
-        sharedAccessContext: null
-    };
-
-  } catch (error) {
-    logger.error(`Erro no login do Cliente (${identifier}): ${error.message}`, { error });
-    if (!error.statusCode) error.statusCode = 500;
-    throw error;
-  }
-}
-
 async function getClientProfile(loggedInClientData, sharedAccessContext = null) {
     try {
         let clientToFetchIdForAccountsAndSubscription = loggedInClientData.id;
@@ -482,7 +546,6 @@ async function getClientProfile(loggedInClientData, sharedAccessContext = null) 
         throw new Error(`Erro ao buscar perfil do cliente.`);
     }
 }
-
 async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
   const t = await sequelize.transaction();
   try {
@@ -523,13 +586,10 @@ async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
 
     await client.update(updateData, { transaction: t });
     await t.commit();
-    logger.info(`Preferências de cor de calendário atualizadas para Cliente ID ${clientId}. PF: ${client.googleCalendarColorIdPF}, PJ: ${client.googleCalendarColorIdPJ}`);
-
+    
+    // Dispara a ressincronização em background
     if ((pfColorChanged || pjColorChanged) && client.isGoogleCalendarSynced && client.googleCalendarIdPrincipal) {
-        logger.info(`[ClientAuthService] Disparando ressincronização de cores para Cliente ID ${clientId}...`);
-        resyncGoogleEventColorsForClient(clientId, pfColorChanged ? client.googleCalendarColorIdPF : undefined, pjColorChanged ? client.googleCalendarColorIdPJ : undefined)
-            .then(() => logger.info(`[ClientAuthService] Ressincronização de cores para Cliente ID ${clientId} concluída/enfileirada.`))
-            .catch(err => logger.error(`[ClientAuthService] Erro na ressincronização de cores para Cliente ID ${clientId}: ${err.message}`));
+        googleCalendarService.resyncEventColorsForClient(clientId, pfColorChanged ? client.googleCalendarColorIdPF : undefined, pjColorChanged ? client.googleCalendarColorIdPJ : undefined);
     }
     
     const reloadedClient = await Client.findByPk(clientId);
@@ -543,91 +603,10 @@ async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
   }
 }
 
-async function resyncGoogleEventColorsForClient(clientId, newPfColorId, newPjColorId) {
-    try {
-        const client = await Client.findByPk(clientId, {
-            include: [{ model: FinancialAccount, as: 'financialAccounts', attributes: ['id', 'accountType'] }]
-        });
-        if (!client || !client.isGoogleCalendarSynced || !client.googleCalendarIdPrincipal) {
-            logger.warn(`[resyncColors] Cliente ${clientId} não sincronizado ou sem calendário principal. Abortando ressincronização de cores.`);
-            return;
-        }
-
-        const appointmentsToResync = await Appointment.findAll({
-            where: {
-                googleEventId: { [Op.ne]: null },
-                '$financialAccount.clientId$': clientId
-            },
-            include: [
-                {
-                    model: FinancialAccount,
-                    as: 'financialAccount',
-                    required: true,
-                    include: [{ model: Client, as: 'ownerClient' }]
-                },
-                {
-                    model: BusinessClient,
-                    as: 'businessClients',
-                    through: { attributes: [] },
-                    required: false
-                }
-            ]
-        });
-
-        if (appointmentsToResync.length === 0) {
-            logger.info(`[resyncColors] Cliente ${clientId}: Nenhum agendamento sincronizado encontrado para atualizar cores.`);
-            return;
-        }
-
-        logger.info(`[resyncColors] Cliente ${clientId}: Encontrados ${appointmentsToResync.length} agendamentos para verificar/atualizar cor no Google Agenda.`);
-        let updatedCount = 0;
-
-        for (const appt of appointmentsToResync) {
-            const faType = appt.financialAccount.accountType;
-            let needsGoogleUpdate = false;
-
-            if (faType === 'PF' && newPfColorId !== undefined) {
-                needsGoogleUpdate = true;
-            } else if ((faType === 'PJ' || faType === 'MEI') && newPjColorId !== undefined) {
-                needsGoogleUpdate = true;
-            }
-
-            if (needsGoogleUpdate && appt.googleEventId) {
-                try {
-                    const appointmentSystemData = {
-                        ...appt.toJSON(),
-                        financialAccount: {
-                            ...appt.financialAccount.toJSON(),
-                            ownerClient: client.toJSON()
-                        }
-                    };
-                    
-                    const googleEvent = await googleCalendarService.updateGoogleEvent(
-                        clientId,
-                        appt.googleEventId,
-                        appointmentSystemData
-                    );
-                    if (googleEvent && googleEvent.id) {
-                        await appt.update({ googleEventLastUpdated: new Date(googleEvent.updated) });
-                        updatedCount++;
-                        logger.debug(`[resyncColors] Cliente ${clientId}: Evento Google ${appt.googleEventId} (Appt ID ${appt.id}) teve cor atualizada.`);
-                    }
-                } catch (err) {
-                    logger.error(`[resyncColors] Cliente ${clientId}: Erro ao atualizar cor do evento Google ${appt.googleEventId} (Appt ID ${appt.id}): ${err.message}`);
-                }
-            }
-        }
-        logger.info(`[resyncColors] Cliente ${clientId}: ${updatedCount} eventos tiveram suas cores atualizadas no Google Agenda.`);
-
-    } catch (error) {
-        logger.error(`[resyncColors] Erro geral ao ressincronizar cores para cliente ${clientId}: ${error.message}`, { stack: error.stack });
-    }
-}
-
-
 module.exports = {
+  registerClient, // <<< Exporta o novo método
   setClientCredentials,
-  setClientCredentialsAndAffiliate, // <<< MUDANÇA APLICADA AQUI
+  setClientCredentialsAndAffiliate,
   loginClient,
   getClientProfile,
   updateClientCalendarPreferences,

@@ -2,6 +2,17 @@
 const clientAuthService = require('./clientAuth.service');
 const logger = require('../../utils/logger');
 
+// <<< NOVO CONTROLLER PARA CADASTRO >>>
+async function register(req, res, next) {
+    try {
+        const registerResult = await clientAuthService.registerClient(req.body);
+        // O serviço já retorna o token, então o cliente pode prosseguir direto para o pagamento
+        res.status(201).json({ status: 'success', data: registerResult });
+    } catch (error) {
+        next(error);
+    }
+}
+
 async function setCredentials(req, res, next) {
   try {
     const { phone, password, name, email } = req.body;
@@ -32,48 +43,29 @@ async function login(req, res, next) {
 
 async function getCurrentClientProfile(req, res, next) {
     try {
-        logger.debug('[CLIENT AUTH CTRL - /me] Iniciando getCurrentClientProfile.');
-        logger.debug('[CLIENT AUTH CTRL - /me] Conteúdo de req.client ANTES de chamar o serviço:', req.client); // Log do objeto completo
-        logger.debug('[CLIENT AUTH CTRL - /me] req.client.id ANTES de chamar o serviço:', req.client ? req.client.id : 'req.client é undefined');
-        logger.debug('[CLIENT AUTH CTRL - /me] Conteúdo de req.sharedAccessContext ANTES de chamar o serviço:', req.sharedAccessContext);
-
         if (!req.client || req.client.id === undefined) {
-            logger.error('[CLIENT AUTH CTRL - /me] ERRO CRÍTICO: req.client ou req.client.id está undefined ANTES de chamar clientAuthService.getClientProfile.');
-            const error = new Error('Falha na autenticação ao obter perfil: dados do cliente não encontrados no request após autenticação.');
+            const error = new Error('Falha na autenticação: dados do cliente não encontrados.');
             error.statusCode = 500; 
             error.status = 'error';
-            return next(error); // Importante retornar aqui
+            return next(error);
         }
 
         const profileData = await clientAuthService.getClientProfile(req.client, req.sharedAccessContext);
 
         if (!profileData) {
-            // O serviço getClientProfile agora deve lançar erro se o clientToFetchId não for encontrado,
-            // então este 'if' pode não ser atingido se o erro já foi lançado lá.
-            logger.warn(`[CLIENT AUTH CTRL - /me] clientAuthService.getClientProfile retornou null/undefined para req.client.id: ${req.client.id}`);
-            const error = new Error('Perfil do cliente não pôde ser carregado ou não encontrado.');
+            const error = new Error('Perfil do cliente não pôde ser carregado.');
             error.statusCode = 404; error.status = 'fail'; return next(error);
         }
         res.status(200).json({ status: 'success', data: profileData });
     } catch (error) {
-        logger.error(`[CLIENT AUTH CTRL - /me] Exceção capturada em getCurrentClientProfile: ${error.message}`, { stack: error.stack });
         next(error);
     }
 }
 
 async function updateCalendarPreferences(req, res, next) {
   try {
-    const clientId = req.client.id; // Do token autenticado
+    const clientId = req.client.id;
     const { googleCalendarColorIdPF, googleCalendarColorIdPJ } = req.body;
-
-    // Validação básica (pode ser mais robusta com Joi ou similar)
-    const validColorIds = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'];
-    if (googleCalendarColorIdPF && !validColorIds.includes(String(googleCalendarColorIdPF))) {
-      return res.status(400).json({ status: 'fail', message: 'ID de cor PF inválido.' });
-    }
-    if (googleCalendarColorIdPJ && !validColorIds.includes(String(googleCalendarColorIdPJ))) {
-      return res.status(400).json({ status: 'fail', message: 'ID de cor PJ inválido.' });
-    }
 
     const updatedClient = await clientAuthService.updateClientCalendarPreferences(
       clientId,
@@ -82,17 +74,15 @@ async function updateCalendarPreferences(req, res, next) {
     );
     res.status(200).json({ status: 'success', data: updatedClient });
   } catch (error) {
-    logger.error('[ClientAuthController] Erro ao atualizar preferências de calendário:', error);
     next(error);
   }
 }
 
 async function updateMyProfile(req, res, next) {
   try {
-    const clientId = req.client.id; // ID do cliente vem do token autenticado
+    const clientId = req.client.id;
     const updateData = req.body;
 
-    // Validação básica para garantir que não está vazio
     if (Object.keys(updateData).length === 0) {
         const error = new Error('Nenhum dado fornecido para atualização.');
         error.statusCode = 400; error.status = 'fail';
@@ -106,9 +96,8 @@ async function updateMyProfile(req, res, next) {
   }
 }
 
-
-
 module.exports = {
+  register, // <<< EXPORTA O NOVO CONTROLLER
   setCredentials,
   login,
   getCurrentClientProfile,
