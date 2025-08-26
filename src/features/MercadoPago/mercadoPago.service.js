@@ -25,7 +25,7 @@ const mpPayment = new Payment(mpConfig);
 
 const mercadoPagoService = {
   // ... (função criarPreferenciaAssinatura permanece igual, mas a chamada interna muda) ...
-  async criarPreferenciaAssinatura(clientId, planId) {
+   async criarPreferenciaAssinatura(clientId, planId) {
     try {
       const client = await Client.findByPk(clientId);
       const plan = await Plan.findByPk(planId);
@@ -37,11 +37,21 @@ const mercadoPagoService = {
         throw { statusCode: 400, message: 'Este plano não está mais disponível para assinatura.' };
       }
 
+      // <<< INÍCIO DA CORREÇÃO >>>
+      // Define datas provisórias para a criação do registro.
+      // A data de início é hoje, e a de fim é calculada a partir de hoje.
+      const effectiveStartDate = new Date();
+      const endDate = new Date(effectiveStartDate);
+      endDate.setDate(endDate.getDate() + plan.durationDays);
+
       const subscription = await Subscription.create({
         clientId,
         planId,
         status: 'Pendente',
+        startDate: effectiveStartDate.toISOString().split('T')[0], // Adiciona a data de início
+        endDate: endDate.toISOString().split('T')[0],             // Adiciona a data de fim
       });
+      // <<< FIM DA CORREÇÃO >>>
 
       const preferencePayload = {
         items: [{
@@ -68,16 +78,15 @@ const mercadoPagoService = {
         expiration_date_to: getExpirationDate(),
       };
 
-      // << CHAMADA CORRIGIDA AQUI >>
       const response = await mercadoPagoPreference.create({ body: preferencePayload });
 
       await subscription.update({
-        externalSubscriptionId: response.id // O ID da preferência agora vem em 'response.id'
+        externalSubscriptionId: response.id
       });
 
       logger.info(`Preferência de pagamento MP criada (ID: ${response.id}) para Assinatura ID ${subscription.id}`);
       return {
-        checkoutUrl: response.init_point, // init_point está no nível raiz da resposta
+        checkoutUrl: response.init_point,
         preferenceId: response.id,
       };
 

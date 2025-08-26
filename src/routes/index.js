@@ -55,7 +55,7 @@ mainApiRouter.use('/auth/google', googleAuthRoutes);
 mainApiRouter.use('/webhooks/google-calendar', googleWebhookRoutes);
 mainApiRouter.use('/public/booking', publicBookingRoutes);
 mainApiRouter.use('/system-support-bot', systemSupportBotRoutes);
-mainApiRouter.use('/mercado-pago', mercadoPagoRoutes); // <<< ADICIONE ESTA LINHA
+mainApiRouter.use('/mercado-pago', publicMercadoPagoRouter); // <<< ROTA PÚBLICA AQUI
 
 
 // --- ROTAS DE ADMINISTRAÇÃO DO SISTEMA ---
@@ -134,6 +134,7 @@ clientFinancialAccountRouter.get('/monthly-trend', financialController.getMonthl
 clientFinancialAccountRouter.get('/expense-category-summary', financialController.getExpenseCategorySummary);
 clientFinancialAccountRouter.get('/income-category-summary', financialController.getIncomeCategorySummary);
 clientFinancialAccountRouter.use('/checklists', checklistRoutes); // <<< ADICIONE ESTA LINHA
+clientFinancialAccountRouter.use('/mercado-pago', privateMercadoPagoRouter); 
 
 // Monta as sub-rotas no clientFinancialAccountRouter
 clientFinancialAccountRouter.use('/transactions', financialTransactionRoutes);
