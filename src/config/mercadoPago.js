@@ -11,7 +11,7 @@ const { MercadoPagoConfig, Preference } = require('mercadopago');
 
 // 1. Cria o cliente de configuração com o seu token de acesso.
 const client = new MercadoPagoConfig({ 
-    accessToken: process.env.MERCADO_PAGO_TOKEN,
+    accessToken: "APP_USR-846af928-1fea-40a8-bca7-b027778026c5",
     options: { timeout: 5000 } // Opcional: define um timeout para as requisições
 });
 
