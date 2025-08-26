@@ -1,31 +1,26 @@
-// CÓDIGO ANTERIOR
-// const mercadopago = require('../../config/mercadoPago');
-// ...
-// const response = await mercadopago.preferences.create(preference);
-
-// CÓDIGO CORRIGIDO
 // src/features/MercadoPago/mercadoPago.service.js
-const { preference: mercadoPagoPreference } = require('../../config/mercadoPago'); // << Importação corrigida
-const { Subscription, Plan, Client } = require('../../database'); // Correto
+const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
+const { Subscription, Plan, Client } = require('../../database');
 const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
-// É preciso importar a classe Payment diretamente da biblioteca para buscar pagamentos
-const { MercadoPagoConfig, Payment } = require('mercadopago');
 
-// Função adaptada de 'formatDateToPreference' do seu e-commerce
+// Função para obter a data de expiração da preferência de pagamento
 function getExpirationDate() {
     const date = new Date();
     date.setDate(date.getDate() + 1); // Preferência expira em 24 horas
     return date.toISOString().replace(/\.\d{3}Z$/, "-03:00");
 }
 
-// Inicializa o cliente de pagamento aqui também para uso no webhook
+// Inicializa os clientes da API do Mercado Pago
 const mpConfig = new MercadoPagoConfig({ accessToken: process.env.MERCADO_PAGO_TOKEN });
+const mpPreference = new Preference(mpConfig);
 const mpPayment = new Payment(mpConfig);
 
 const mercadoPagoService = {
-  // ... (função criarPreferenciaAssinatura permanece igual, mas a chamada interna muda) ...
-   async criarPreferenciaAssinatura(clientId, planId) {
+  /**
+   * Cria uma preferência de pagamento no Mercado Pago para uma assinatura.
+   */
+  async criarPreferenciaAssinatura(clientId, planId) {
     try {
       const client = await Client.findByPk(clientId);
       const plan = await Plan.findByPk(planId);
@@ -37,9 +32,7 @@ const mercadoPagoService = {
         throw { statusCode: 400, message: 'Este plano não está mais disponível para assinatura.' };
       }
 
-      // <<< INÍCIO DA CORREÇÃO >>>
-      // Define datas provisórias para a criação do registro.
-      // A data de início é hoje, e a de fim é calculada a partir de hoje.
+      // CORREÇÃO: Define datas provisórias para a criação do registro.
       const effectiveStartDate = new Date();
       const endDate = new Date(effectiveStartDate);
       endDate.setDate(endDate.getDate() + plan.durationDays);
@@ -48,10 +41,9 @@ const mercadoPagoService = {
         clientId,
         planId,
         status: 'Pendente',
-        startDate: effectiveStartDate.toISOString().split('T')[0], // Adiciona a data de início
-        endDate: endDate.toISOString().split('T')[0],             // Adiciona a data de fim
+        startDate: effectiveStartDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0],
       });
-      // <<< FIM DA CORREÇÃO >>>
 
       const preferencePayload = {
         items: [{
@@ -66,9 +58,9 @@ const mercadoPagoService = {
           email: client.email,
         },
         back_urls: {
-          success: `${process.env.FRONTEND_URL}/assinatura/sucesso`,
-          failure: `${process.env.FRONTEND_URL}/assinatura/erro`,
-          pending: `${process.env.FRONTEND_URL}/assinatura/pendente`,
+          success: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/assinatura/sucesso`,
+          failure: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/assinatura/erro`,
+          pending: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/assinatura/pendente`,
         },
         auto_return: "approved",
         external_reference: subscription.id.toString(),
@@ -78,7 +70,7 @@ const mercadoPagoService = {
         expiration_date_to: getExpirationDate(),
       };
 
-      const response = await mercadoPagoPreference.create({ body: preferencePayload });
+      const response = await mpPreference.create({ body: preferencePayload });
 
       await subscription.update({
         externalSubscriptionId: response.id
@@ -96,7 +88,9 @@ const mercadoPagoService = {
     }
   },
 
-  // ... (função processarWebhook muda para usar o novo cliente de pagamento) ...
+  /**
+   * Processa notificações de webhook do Mercado Pago.
+   */
   async processarWebhook(dados) {
     try {
       if (dados.type !== 'payment') {
@@ -105,9 +99,7 @@ const mercadoPagoService = {
       }
       
       const paymentId = dados.data.id;
-      // << CHAMADA CORRIGIDA AQUI >>
       const paymentData = await mpPayment.get({ id: paymentId });
-
       const subscriptionId = parseInt(paymentData.external_reference, 10);
 
       if (!subscriptionId) {
@@ -115,15 +107,14 @@ const mercadoPagoService = {
         return;
       }
       
-      // O resto da lógica permanece o mesmo, pois já estava correta.
       const subscription = await Subscription.findByPk(subscriptionId);
       if (!subscription) {
-        logger.error(`[MP Webhook] CRÍTICO: Assinatura com ID ${subscriptionId} (da external_reference) não encontrada!`);
+        logger.error(`[MP Webhook] CRÍTICO: Assinatura com ID ${subscriptionId} não encontrada!`);
         return;
       }
       
       if (paymentData.status === "approved" && subscription.status !== 'Ativa') {
-        logger.info(`[MP Webhook] Pagamento APROVADO para Assinatura ID ${subscriptionId}. Ativando assinatura...`);
+        logger.info(`[MP Webhook] Pagamento APROVADO para Assinatura ID ${subscriptionId}. Ativando...`);
         await subscriptionService.activateSubscription(subscription.id, paymentData.id);
         logger.info(`[MP Webhook] Assinatura ID ${subscriptionId} ativada com sucesso.`);
 
@@ -131,7 +122,7 @@ const mercadoPagoService = {
         logger.warn(`[MP Webhook] Pagamento para Assinatura ID ${subscriptionId} foi '${paymentData.status}'. Atualizando status.`);
         await subscription.update({ status: 'Cancelada' });
       } else {
-        logger.info(`[MP Webhook] Status de pagamento '${paymentData.status}' para Assinatura ID ${subscriptionId} recebido, nenhuma ação necessária no momento.`);
+        logger.info(`[MP Webhook] Status de pagamento '${paymentData.status}' para Assinatura ID ${subscriptionId} recebido, nenhuma ação necessária.`);
       }
 
     } catch (error) {

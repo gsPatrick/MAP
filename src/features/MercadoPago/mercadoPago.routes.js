@@ -1,11 +1,3 @@
-// CÓDIGO ANTERIOR em mercadoPago.routes.js
-// const router = Router();
-// router.post('/webhook', mercadoPagoController.webhook);
-// router.post('/checkout', authenticateClientToken, mercadoPagoController.criarCheckoutAssinatura);
-// module.exports = router;
-
-
-// CÓDIGO CORRIGIDO
 // src/features/MercadoPago/mercadoPago.routes.js
 const { Router } = require('express');
 const mercadoPagoController = require('./mercadoPago.controller');

@@ -29,13 +29,13 @@ const hydrationRoutes = require('../features/Hydration/hydration.routes');
 const asaasWebhookRouter = require('../features/WebhookHandler/asaas.routes');
 const adminRoutes = require('../features/Admin/admin.routes');
 const serviceRoutes = require('../features/Service/service.routes');
-const availabilityRoutes = require('../features/Availability/availability.routes'); // <<< JÁ ESTÁ IMPORTADO, ÓTIMO
+const availabilityRoutes = require('../features/Availability/availability.routes');
 const publicBookingRoutes = require('../features/PublicBooking/publicBooking.routes');
 const financialController = require('../features/Financial/financial.controller');
 const affiliateRoutes = require('../features/Affiliate/affiliate.routes');
 const systemSupportBotRoutes = require ('../features/SystemSupportBot/systemSupportBot.routes')
-const checklistRoutes = require('../features/Checklist/checklist.routes'); // <<< ADICIONE ESTE IMPORT
-const { publicMercadoPagoRouter, privateMercadoPagoRouter } = require('../features/MercadoPago/mercadoPago.routes'); // <-- Adicione este import
+const checklistRoutes = require('../features/Checklist/checklist.routes');
+const { publicMercadoPagoRouter, privateMercadoPagoRouter } = require('../features/MercadoPago/mercadoPago.routes');
 
 const mainApiRouter = Router();
 
@@ -55,8 +55,7 @@ mainApiRouter.use('/auth/google', googleAuthRoutes);
 mainApiRouter.use('/webhooks/google-calendar', googleWebhookRoutes);
 mainApiRouter.use('/public/booking', publicBookingRoutes);
 mainApiRouter.use('/system-support-bot', systemSupportBotRoutes);
-mainApiRouter.use('/mercado-pago', publicMercadoPagoRouter); // <<< ROTA PÚBLICA AQUI
-
+mainApiRouter.use('/mercado-pago', publicMercadoPagoRouter); // Webhook do MP (Público)
 
 // --- ROTAS DE ADMINISTRAÇÃO DO SISTEMA ---
 mainApiRouter.use('/users', userRoutes);
@@ -64,20 +63,19 @@ mainApiRouter.use('/clients', clientRoutes);
 mainApiRouter.use('/system', systemRoutes);
 mainApiRouter.use('/dev-tools', devToolsRoutes);
 mainApiRouter.use('/chat', InteractiveChatRoutes);
+mainApiRouter.use('/', adminRoutes);
+
+// --- ROTAS PRIVADAS PARA CLIENTES LOGADOS (requerem token, mas não um financialAccountId na URL) ---
 mainApiRouter.use('/shared-access', authenticateClientToken, sharedAccessRoutes);
 mainApiRouter.use('/hydration', authenticateClientToken, hydrationRoutes);
-mainApiRouter.use('/', adminRoutes);
 mainApiRouter.use('/affiliate', authenticateClientToken, affiliateRoutes);
-
-// <<< MUDANÇA: MONTAR AS ROTAS DE SERVIÇO E DISPONIBILIDADE AQUI DIRETAMENTE >>>
-// Isso garante que as URLs sejam /api/services/:id e /api/availability/:id
-mainApiRouter.use('/services', serviceRoutes);
-mainApiRouter.use('/availability', availabilityRoutes);
-
+mainApiRouter.use('/mercado-pago', privateMercadoPagoRouter); // Checkout do MP (Privado)
+mainApiRouter.use('/services', authenticateClientToken, serviceRoutes);
+mainApiRouter.use('/availability', authenticateClientToken, availabilityRoutes);
+mainApiRouter.use('/stock', authenticateClientToken, globalStockRouter); // Rota global de estoque
 
 // --- Middleware para autorização de acesso à conta financeira ---
 async function authorizeFinancialAccountOwnership(req, res, next) {
-    // ... (código existente sem alteração)
     try {
         const clientForAuth = req.sharedAccessContext ? { id: req.sharedAccessContext.ownerClientId } : req.client;
         const financialAccountIdFromParams = parseInt(req.params.financialAccountId, 10);
@@ -125,7 +123,7 @@ async function authorizeFinancialAccountOwnership(req, res, next) {
     }
 }
 
-// --- ROTAS PARA CLIENTS LOGADOS (com middleware de autorização de conta) ---
+// --- ROTAS ANINHADAS QUE DEPENDEM DE UMA CONTA FINANCEIRA ESPECÍFICA ---
 const clientFinancialAccountRouter = Router({ mergeParams: true });
 
 // Monta as rotas de resumo financeiro
@@ -133,8 +131,7 @@ clientFinancialAccountRouter.get('/summary', financialController.getFinancialSum
 clientFinancialAccountRouter.get('/monthly-trend', financialController.getMonthlyTrend);
 clientFinancialAccountRouter.get('/expense-category-summary', financialController.getExpenseCategorySummary);
 clientFinancialAccountRouter.get('/income-category-summary', financialController.getIncomeCategorySummary);
-clientFinancialAccountRouter.use('/checklists', checklistRoutes); // <<< ADICIONE ESTA LINHA
-clientFinancialAccountRouter.use('/mercado-pago', privateMercadoPagoRouter); 
+clientFinancialAccountRouter.use('/checklists', checklistRoutes);
 
 // Monta as sub-rotas no clientFinancialAccountRouter
 clientFinancialAccountRouter.use('/transactions', financialTransactionRoutes);
@@ -146,9 +143,6 @@ clientFinancialAccountRouter.use('/appointments', appointmentRoutes);
 clientFinancialAccountRouter.use('/categories', financialCategoryRoutes);
 clientFinancialAccountRouter.use('/kanban', kanbanRoutes);
 clientFinancialAccountRouter.use('/business-clients', businessClientRoutes);
-// <<< MUDANÇA: REMOVER AS LINHAS ABAIXO DESTE ROTEADOR ANINHADO >>>
-// clientFinancialAccountRouter.use('/services', serviceRoutes);
-// clientFinancialAccountRouter.use('/availability-rules', availabilityRoutes);
 
 // Monta o router de conta financeira no router principal da API,
 // aplicando os middlewares NA ORDEM CORRETA.
@@ -157,8 +151,5 @@ mainApiRouter.use('/financial-accounts/:financialAccountId',
     authorizeFinancialAccountOwnership,  // 2. Autoriza a posse da conta usando req.client
     clientFinancialAccountRouter         // 3. Passa para as rotas específicas
 );
-
-// Rota global de estoque para Clients logados (não depende de uma financialAccount específica)
-mainApiRouter.use('/stock', authenticateClientToken, globalStockRouter);
 
 module.exports = mainApiRouter;
