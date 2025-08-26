@@ -4,22 +4,17 @@ const { Subscription, Plan, Client } = require('../../database');
 const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
 
-// Função para obter a data de expiração da preferência de pagamento
 function getExpirationDate() {
     const date = new Date();
-    date.setDate(date.getDate() + 1); // Preferência expira em 24 horas
+    date.setDate(date.getDate() + 1);
     return date.toISOString().replace(/\.\d{3}Z$/, "-03:00");
 }
 
-// Inicializa os clientes da API do Mercado Pago
 const mpConfig = new MercadoPagoConfig({ accessToken: process.env.MERCADO_PAGO_TOKEN });
 const mpPreference = new Preference(mpConfig);
 const mpPayment = new Payment(mpConfig);
 
 const mercadoPagoService = {
-  /**
-   * Cria uma preferência de pagamento no Mercado Pago para uma assinatura.
-   */
   async criarPreferenciaAssinatura(clientId, planId) {
     try {
       const client = await Client.findByPk(clientId);
@@ -32,7 +27,6 @@ const mercadoPagoService = {
         throw { statusCode: 400, message: 'Este plano não está mais disponível para assinatura.' };
       }
 
-      // CORREÇÃO: Define datas provisórias para a criação do registro.
       const effectiveStartDate = new Date();
       const endDate = new Date(effectiveStartDate);
       endDate.setDate(endDate.getDate() + plan.durationDays);
@@ -88,9 +82,6 @@ const mercadoPagoService = {
     }
   },
 
-  /**
-   * Processa notificações de webhook do Mercado Pago.
-   */
   async processarWebhook(dados) {
     try {
       if (dados.type !== 'payment') {
@@ -103,7 +94,7 @@ const mercadoPagoService = {
       const subscriptionId = parseInt(paymentData.external_reference, 10);
 
       if (!subscriptionId) {
-        logger.warn("[MP Webhook] Webhook de pagamento recebido sem 'external_reference' (ID da assinatura).");
+        logger.warn("[MP Webhook] Webhook de pagamento recebido sem 'external_reference'.");
         return;
       }
       
@@ -117,9 +108,8 @@ const mercadoPagoService = {
         logger.info(`[MP Webhook] Pagamento APROVADO para Assinatura ID ${subscriptionId}. Ativando...`);
         await subscriptionService.activateSubscription(subscription.id, paymentData.id);
         logger.info(`[MP Webhook] Assinatura ID ${subscriptionId} ativada com sucesso.`);
-
       } else if (['rejected', 'cancelled'].includes(paymentData.status) && subscription.status === 'Pendente') {
-        logger.warn(`[MP Webhook] Pagamento para Assinatura ID ${subscriptionId} foi '${paymentData.status}'. Atualizando status.`);
+        logger.warn(`[MP Webhook] Pagamento para Assinatura ID ${subscriptionId} foi '${paymentData.status}'.`);
         await subscription.update({ status: 'Cancelada' });
       } else {
         logger.info(`[MP Webhook] Status de pagamento '${paymentData.status}' para Assinatura ID ${subscriptionId} recebido, nenhuma ação necessária.`);
