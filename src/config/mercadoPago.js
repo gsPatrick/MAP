@@ -1,23 +1,21 @@
-// CÓDIGO ANTERIOR
-// const mercadopago = require("mercadopago");
-// mercadopago.configure({
-//   access_token: process.env.MERCADO_PAGO_TOKEN,
-// });
-// module.exports = mercadopago;
-
-// CÓDIGO CORRIGIDO
 // src/config/mercadoPago.js
-const { MercadoPagoConfig, Preference } = require('mercadopago');
+require('dotenv').config(); // Garante que as variáveis de ambiente sejam carregadas
+const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
 
-// 1. Cria o cliente de configuração com o seu token de acesso.
+// 1. Valida se o token foi carregado do ambiente
+if (!process.env.MERCADO_PAGO_TOKEN) {
+  throw new Error('A variável de ambiente MERCADO_PAGO_TOKEN não está definida.');
+}
+
+// 2. Cria o cliente de configuração com o token do seu arquivo .env
 const client = new MercadoPagoConfig({ 
-    accessToken: "APP_USR-846af928-1fea-40a8-bca7-b027778026c5",
+    accessToken: process.env.MERCADO_PAGO_TOKEN,
     options: { timeout: 5000 } // Opcional: define um timeout para as requisições
 });
 
-// 2. Exporta um objeto contendo o cliente de preferência já inicializado
-//    e o cliente de configuração geral para outras possíveis operações.
+// 3. Exporta um objeto contendo os clientes já inicializados
 module.exports = {
   preference: new Preference(client),
-  // Adicione outros clientes aqui se precisar (ex: new Payment(client), etc.)
-};
+  payment: new Payment(client), // Já exporta o cliente de Pagamento também
+  // Adicione outros clientes aqui se precisar no futuro
+};  
