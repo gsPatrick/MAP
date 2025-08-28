@@ -4,6 +4,7 @@ const { Client } = require('../database');
 const clientService = require('../features/Client/client.service');
 const { sendWhatsappMessage } = require('../services/whatsappService');
 const logger = require('../utils/logger');
+const cron = require('node-cron'); // <<< LINHA ADICIONADA AQUI
 
 const PLAN_SITE_URL = process.env.PLAN_SITE_URL || "https://map-nocontrole.com.br/#planos";
 
