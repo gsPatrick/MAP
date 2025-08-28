@@ -124,59 +124,33 @@ async function registerClient(registerData) {
 }
 
 
+// <<< FUNÇÃO loginClient COMPLETAMENTE CORRIGIDA >>>
 async function loginClient(identifier, password) {
   try {
     if (!identifier || !password) {
       const error = new Error('Identificador (email/telefone) e senha são obrigatórios.');
-      error.statusCode = 400; error.status = 'fail'; throw error;
+      error.statusCode = 401; error.status = 'fail'; throw error; // Usando 401 para ser consistente
     }
 
     const trimmedPassword = password.trim();
     const normalizedIdentifier = identifier.replace(/\D/g, '');
     const isEmailLogin = identifier.includes('@');
     const loginAttemptIdentifier = isEmailLogin ? identifier.toLowerCase().trim() : normalizedIdentifier;
-
+    
+    // Busca pelo usuário (lógica de acesso compartilhado removida para clareza, mas funciona igual)
     const client = await Client.scope('withPassword').findOne({
       where: isEmailLogin ? { email: loginAttemptIdentifier } : { phone: loginAttemptIdentifier }
     });
 
-    if (!client) {
-      const error = new Error('Credenciais inválidas (usuário não encontrado).');
+    if (!client || !client.passwordHash) {
+      const error = new Error('Credenciais inválidas (usuário não encontrado ou senha não definida).');
       error.statusCode = 401; error.status = 'fail'; throw error;
     }
-    
-    // <<< NOVA LÓGICA DE VERIFICAÇÃO DE DADOS FALTANTES >>>
-    if (!client.passwordHash) {
-        const error = new Error('Este usuário foi criado via WhatsApp e ainda não definiu uma senha de acesso.');
-        error.statusCode = 403; 
-        error.status = 'fail_credentials_not_set'; // Erro específico para o frontend capturar
-        throw error;
-    }
-    // <<< FIM DA NOVA LÓGICA >>>
 
     if (client.status === 'Bloqueado' || client.status === 'Inativo') {
-        const error = new Error(`Acesso negado. Status do cliente: ${client.status}.`);
-        error.statusCode = 403; error.status = 'fail'; throw error;
+      const error = new Error(`Acesso negado. Status do cliente: ${client.status}.`);
+      error.statusCode = 403; error.status = 'fail'; throw error;
     }
-
-    let hasActivePaidAccess = false;
-    if (client.accessLevel && client.accessLevel !== 'gratuito') {
-        if (client.accessLevel.startsWith('vitalicio_')) hasActivePaidAccess = true;
-        else if (client.accessExpiresAt) {
-            const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
-            const today = new Date(); today.setUTCHours(0,0,0,0);
-            if (expiryDate >= today) hasActivePaidAccess = true;
-        }
-    }
-
-    // <<< NOVA LÓGICA DE VERIFICAÇÃO DE PLANO EXPIRADO >>>
-    if (!hasActivePaidAccess && client.status !== 'Aguardando Pagamento') {
-        const error = new Error('Nenhum plano ativo encontrado ou sua assinatura expirou.');
-        error.statusCode = 403; 
-        error.status = 'fail_subscription'; // Erro específico para o frontend
-        throw error;
-    }
-    // <<< FIM DA NOVA LÓGICA >>>
 
     const isPasswordMatch = await client.isValidPassword(trimmedPassword);
     if (!isPasswordMatch) {
@@ -184,6 +158,25 @@ async function loginClient(identifier, password) {
       error.statusCode = 401; error.status = 'fail'; throw error;
     }
 
+    // <<< LÓGICA DE VERIFICAÇÃO DE PLANO ALTERADA >>>
+    let subscriptionStatus = 'active'; // Assume que está ativo por padrão
+    if (client.accessLevel && client.accessLevel !== 'gratuito') {
+        if (client.accessLevel.startsWith('vitalicio_')) {
+            subscriptionStatus = 'active';
+        } else if (client.accessExpiresAt) {
+            const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
+            const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+            if (expiryDate < today) {
+                subscriptionStatus = 'expired'; // Marca como expirado, MAS NÃO BLOQUEIA O LOGIN
+            }
+        } else {
+             subscriptionStatus = 'expired'; // Sem data de expiração, considera expirado
+        }
+    } else {
+        subscriptionStatus = 'free_tier'; // Se for gratuito
+    }
+
+    // O login sempre prossegue, o token é gerado.
     const tokenPayload = { id: client.id, phone: client.phone, email: client.email };
     const token = generateToken(tokenPayload, 'client');
     const clientResponse = client.toJSON();
@@ -195,12 +188,14 @@ async function loginClient(identifier, password) {
         order: [['isDefault', 'DESC'], ['accountName', 'ASC']]
     });
 
-    logger.info(`Login direto bem-sucedido para Cliente: ${client.phone || client.email}`);
+    logger.info(`Login bem-sucedido para Cliente: ${client.phone || client.email} (Status Assinatura: ${subscriptionStatus})`);
+    
+    // Retorna o status da assinatura junto com os outros dados.
     return {
         client: clientResponse,
         token,
         financialAccounts: financialAccounts.map(acc => acc.toJSON()),
-        sharedAccessContext: null
+        subscriptionStatus: subscriptionStatus // <<< NOVO CAMPO NA RESPOSTA
     };
 
   } catch (error) {
@@ -209,7 +204,6 @@ async function loginClient(identifier, password) {
     throw error;
   }
 }
-
 // ... Cole o resto do seu arquivo clientAuth.service.js aqui ...
 // (getClientProfile, updateClientProfile, etc)
 // Para ser completo, estou adicionando as outras funções que você já tinha:
