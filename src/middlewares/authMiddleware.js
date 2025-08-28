@@ -296,9 +296,45 @@ async function checkFinancialAccountOwnership(req, res, next) {
     }
 }
 
+// <<< NOVO MIDDLEWARE: Apenas identifica o cliente, sem validar a assinatura >>>
+async function identifyClientToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ status: 'fail', message: 'Token não fornecido.' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.type !== 'client') {
+        logger.warn(`[IdentifyClient] Tentativa de usar token de tipo '${decoded.type}' em rota de cliente.`);
+        return res.status(403).json({ status: 'fail', message: 'Token inválido para esta operação.' });
+    }
+
+    const clientInstance = await Client.findByPk(decoded.id);
+    if (!clientInstance) {
+      return res.status(401).json({ status: 'fail', message: 'Cliente inválido.' });
+    }
+    if (clientInstance.status === 'Bloqueado' || clientInstance.status === 'Inativo') {
+      return res.status(403).json({ status: 'fail', message: `Status do cliente: ${clientInstance.status}.` });
+    }
+
+    req.client = clientInstance.toJSON(); // Adiciona o cliente à requisição
+    next();
+  } catch (error) {
+    logger.error('[IdentifyClient] Erro na verificação do token:', { message: error.message });
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({ status: 'fail', message: 'Token expirado.' });
+    }
+    return res.status(403).json({ status: 'fail', message: 'Token inválido.' });
+  }
+}
+
 module.exports = {
   authenticateToken,
   authenticateClientToken,
   authorizeRole,
-  checkFinancialAccountOwnership
+  checkFinancialAccountOwnership,
+  identifyClientToken
 };
