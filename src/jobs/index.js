@@ -9,6 +9,7 @@ const startGoogleCalendarWatchRenewalJob = require('./googleCalendarWatchRenewal
 const startMorningBriefingJob = require('./morningBriefingJob'); // <<< NOVO JOB IMPORTADO
 const startChecklistSummaryJob = require('./checklistSummaryJob'); // <<< ADICIONE ESTE IMPORT
 const startChecklistReminderJob = require('./checklistReminderJob'); // <<< ADICIONE ESTE IMPORT
+const { startSubscriptionJobs } = require('./subscription.jobs');
 
 const logger = require('../utils/logger');
 const { sequelize, UserPreference } = require('../database');
@@ -33,6 +34,7 @@ async function startJobs() {
     startMorningBriefingJob(preferences, models); // <<< NOVO JOB INICIADO
     startChecklistSummaryJob(); // <<< ADICIONE ESTA LINHA
     startChecklistReminderJob();
+     startSubscriptionJobs();
     logger.info('Todos os Jobs foram configurados e agendados.');
   } catch (error) {
     logger.error('Erro crítico durante a inicialização ou agendamento dos Jobs:', error);
