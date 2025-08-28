@@ -176,7 +176,7 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         const subscription = await Subscription.findOne({
             where: { externalSubscriptionId },
             include: [
-                { model: Client, as: 'client' }, // A associação já traz o cliente completo
+                { model: Client, as: 'client' },
                 { model: Plan, as: 'plan' }
             ],
             transaction: t
@@ -190,7 +190,8 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
 
         const clientInstance = subscription.client;
         const plan = subscription.plan;
-        const oldStatus = subscription.status;
+        const oldClientStatus = clientInstance.status; // Captura o status ANTES da atualização
+        const oldSubscriptionStatus = subscription.status;
 
         if (!clientInstance || !plan) {
             logger.error(`[SUBSCRIPTION SERVICE] Dados inconsistentes para a assinatura ${subscription.id}. Cliente ou Plano ausente.`);
@@ -203,10 +204,17 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         let clientAccessExpiresAt = clientInstance.accessExpiresAt;
         let clientStatus = clientInstance.status;
 
+        let isRenewal = false; // Flag para identificar se é uma renovação
+
         // A lógica principal acontece aqui, quando uma assinatura é ativada
-        if (newStatus === 'Ativa' && oldStatus !== 'Ativa') {
+        if (newStatus === 'Ativa' && oldSubscriptionStatus !== 'Ativa') {
             
-            // === NOVA LÓGICA PARA PAGAR A COMISSÃO ===
+            // DETECTA A RENOVAÇÃO se o status anterior do cliente não era 'Ativo' ou se a assinatura estava pendente.
+            if (oldClientStatus !== 'Ativo' || oldSubscriptionStatus === 'Pendente') {
+                isRenewal = true;
+            }
+            
+            // === LÓGICA PARA PAGAR A COMISSÃO ===
             if (clientInstance.referredByClientId && plan.affiliateCommissionValue > 0) {
                 const affiliateClient = await Client.findByPk(clientInstance.referredByClientId, { transaction: t });
                 if (affiliateClient) {
@@ -261,30 +269,28 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         await t.commit();
         logger.info(`[SUBSCRIPTION SERVICE] Status da assinatura ID ${subscription.id} (Externo: ${externalSubscriptionId}) atualizado para ${newStatus}.`);
 
-        // Bloco de envio de mensagem de WhatsApp (mantido)
+        // Bloco de envio de mensagem de WhatsApp
         if (newStatus === 'Ativa' && clientInstance.phone) {
-            const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Cliente';
-            let expiryMessagePart = `Seu acesso foi estendido e agora está garantido até *${formatDate(newEndDate)}*.`;
-            if (plan.tier.includes('vitalicio')) {
-                expiryMessagePart = "Seu acesso *vitalício* continua firme e forte! 🎉";
-            }
-            let intro, body;
+            const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Olá';
+            let welcomeMessage;
 
-            if (oldStatus !== 'Ativa') {
-                intro = `Ebaaa, ${clientName}! Boas notícias! 🥳`;
-                body = `Sua assinatura do plano *${plan.name}* foi ativada com sucesso.\n\n${expiryMessagePart}`;
+            if (isRenewal) {
+                // Mensagem específica para RENOVAÇÃO
+                welcomeMessage = `Uhuul, que bom te ter de volta, ${clientName}! 🎉\n\n` +
+                                 `Sua assinatura do plano *${plan.name}* foi renovada com sucesso e seu acesso total já está liberado.\n\n` +
+                                 `Continue no controle! Estou pronto para te ajudar. O que vamos organizar primeiro? 💪`;
             } else {
-                intro = `Olá, ${clientName}! Ótimas notícias! 🚀`;
-                body = `Sua assinatura do plano *${plan.name}* foi renovada com sucesso.\n\n${expiryMessagePart}`;
+                // Mensagem para uma ativação normal (primeira vez)
+                welcomeMessage = `Ebaaa, ${clientName}! 🥳\n\n` +
+                                 `Sua assinatura do plano *${plan.name}* foi ativada com sucesso.\n\n` +
+                                 `Seu acesso está garantido. Para começar, que tal me dizer "oi"?`;
             }
-
-            const footer = `Continue aproveitando todos os benefícios! Se precisar de algo, é só chamar.`;
-            const finalMessage = `${intro}\n\n${body}\n\n${footer}`;
 
             try {
-                await sendWhatsappMessage(clientInstance.phone, finalMessage);
+                await sendWhatsappMessage(clientInstance.phone, welcomeMessage);
+                logger.info(`[SUBSCRIPTION SERVICE] Mensagem de ${isRenewal ? 'RENOVAÇÃO' : 'ativação'} enviada para o cliente ID ${clientInstance.id}.`);
             } catch (whatsappError) {
-                logger.error(`[SUBSCRIPTION SERVICE] FALHA AO ENVIAR MENSAGEM para o cliente ID ${clientInstance.id}: ${whatsappError.message}`);
+                logger.error(`[SUBSCRIPTION SERVICE] FALHA AO ENVIAR MENSAGEM de ${isRenewal ? 'renovação' : 'ativação'} para o cliente ID ${clientInstance.id}: ${whatsappError.message}`);
             }
         }
         
