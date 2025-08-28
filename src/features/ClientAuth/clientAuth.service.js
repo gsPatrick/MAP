@@ -124,12 +124,11 @@ async function registerClient(registerData) {
 }
 
 
-// <<< FUNÇÃO loginClient COMPLETAMENTE CORRIGIDA >>>
+// <<< VERSÃO FINAL E CORRIGIDA DA FUNÇÃO loginClient >>>
 async function loginClient(identifier, password) {
   try {
     if (!identifier || !password) {
-      const error = new Error('Identificador (email/telefone) e senha são obrigatórios.');
-      error.statusCode = 401; error.status = 'fail'; throw error; // Usando 401 para ser consistente
+      throw { statusCode: 401, status: 'fail', message: 'Identificador (email/telefone) e senha são obrigatórios.' };
     }
 
     const trimmedPassword = password.trim();
@@ -137,29 +136,25 @@ async function loginClient(identifier, password) {
     const isEmailLogin = identifier.includes('@');
     const loginAttemptIdentifier = isEmailLogin ? identifier.toLowerCase().trim() : normalizedIdentifier;
     
-    // Busca pelo usuário (lógica de acesso compartilhado removida para clareza, mas funciona igual)
     const client = await Client.scope('withPassword').findOne({
       where: isEmailLogin ? { email: loginAttemptIdentifier } : { phone: loginAttemptIdentifier }
     });
 
     if (!client || !client.passwordHash) {
-      const error = new Error('Credenciais inválidas (usuário não encontrado ou senha não definida).');
-      error.statusCode = 401; error.status = 'fail'; throw error;
+      throw { statusCode: 401, status: 'fail', message: 'Credenciais inválidas ou usuário não encontrado.' };
     }
 
     if (client.status === 'Bloqueado' || client.status === 'Inativo') {
-      const error = new Error(`Acesso negado. Status do cliente: ${client.status}.`);
-      error.statusCode = 403; error.status = 'fail'; throw error;
+      throw { statusCode: 403, status: 'fail', message: `Acesso negado. Status do cliente: ${client.status}.` };
     }
 
     const isPasswordMatch = await client.isValidPassword(trimmedPassword);
     if (!isPasswordMatch) {
-      const error = new Error('Credenciais inválidas (senha incorreta).');
-      error.statusCode = 401; error.status = 'fail'; throw error;
+      throw { statusCode: 401, status: 'fail', message: 'Credenciais inválidas (senha incorreta).' };
     }
 
-    // <<< LÓGICA DE VERIFICAÇÃO DE PLANO ALTERADA >>>
-    let subscriptionStatus = 'active'; // Assume que está ativo por padrão
+    // --- LÓGICA DE VERIFICAÇÃO DE PLANO SEM BLOQUEIO ---
+    let subscriptionStatus = 'active'; // Padrão
     if (client.accessLevel && client.accessLevel !== 'gratuito') {
         if (client.accessLevel.startsWith('vitalicio_')) {
             subscriptionStatus = 'active';
@@ -167,16 +162,16 @@ async function loginClient(identifier, password) {
             const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
             const today = new Date(); today.setUTCHours(0, 0, 0, 0);
             if (expiryDate < today) {
-                subscriptionStatus = 'expired'; // Marca como expirado, MAS NÃO BLOQUEIA O LOGIN
+                subscriptionStatus = 'expired'; // Apenas informa, não bloqueia
             }
         } else {
-             subscriptionStatus = 'expired'; // Sem data de expiração, considera expirado
+             subscriptionStatus = 'expired';
         }
     } else {
-        subscriptionStatus = 'free_tier'; // Se for gratuito
+        subscriptionStatus = 'free_tier';
     }
 
-    // O login sempre prossegue, o token é gerado.
+    // O login sempre prossegue e o token é gerado
     const tokenPayload = { id: client.id, phone: client.phone, email: client.email };
     const token = generateToken(tokenPayload, 'client');
     const clientResponse = client.toJSON();
@@ -190,20 +185,21 @@ async function loginClient(identifier, password) {
 
     logger.info(`Login bem-sucedido para Cliente: ${client.phone || client.email} (Status Assinatura: ${subscriptionStatus})`);
     
-    // Retorna o status da assinatura junto com os outros dados.
+    // Retorna o status da assinatura para o frontend decidir o que fazer
     return {
         client: clientResponse,
         token,
         financialAccounts: financialAccounts.map(acc => acc.toJSON()),
-        subscriptionStatus: subscriptionStatus // <<< NOVO CAMPO NA RESPOSTA
+        subscriptionStatus: subscriptionStatus
     };
 
   } catch (error) {
     logger.error(`Erro no login do Cliente (${identifier}): ${error.message}`, { error });
-    if (!error.statusCode) error.statusCode = 500;
+    if (!error.statusCode) throw new Error('Erro interno no servidor durante o login.');
     throw error;
   }
 }
+
 // ... Cole o resto do seu arquivo clientAuth.service.js aqui ...
 // (getClientProfile, updateClientProfile, etc)
 // Para ser completo, estou adicionando as outras funções que você já tinha:
