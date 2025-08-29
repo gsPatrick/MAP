@@ -85,9 +85,10 @@ const mercadoPagoService = {
       logger.info(`Preferência de pagamento MP criada (ID: ${response.id}) para Assinatura ID ${subscription.id}`);
       
       return {
-        checkoutUrl: response.init_point, // URL de checkout para redirecionar o cliente
-        preferenceId: response.id,
-      };
+      checkoutUrl: `${response.init_point}?source=web`,
+      preferenceId: response.id,
+    };
+
 
     } catch (error) {
       // O `.cause` geralmente contém o erro detalhado da SDK do Mercado Pago
