@@ -15,12 +15,6 @@ function getExpirationDate() {
     return date.toISOString().replace(/\.\d{3}Z$/, "-03:00");
 }
 
-// 2. CONFIGURAÇÃO REMOVIDA: As linhas abaixo foram removidas pois agora a configuração é centralizada
-// const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
-// const mpConfig = new MercadoPagoConfig({ accessToken: process.env.MERCADO_PAGO_TOKEN });
-// const mpPreference = new Preference(mpConfig);
-// const mpPayment = new Payment(mpConfig);
-
 const mercadoPagoService = {
   async criarPreferenciaAssinatura(clientId, planId) {
     try {
@@ -48,98 +42,211 @@ const mercadoPagoService = {
         endDate: endDate.toISOString().split('T')[0],
       });
 
-      // Monta o payload para a API do Mercado Pago
+      // CORREÇÃO 1: Ajustar o payload para melhor compatibilidade mobile
       const preferencePayload = {
         items: [{
           id: plan.id.toString(),
-          title: `Assinatura Plano: ${plan.name}`,
-          unit_price: Number.parseFloat(plan.price),
+          title: `Assinatura - ${plan.name}`, // Titulo mais limpo
+          description: `Plano ${plan.name} - ${plan.durationDays} dias`, // Adicionada descrição
+          unit_price: Number(plan.price), // Usando Number() ao invés de parseFloat()
           quantity: 1,
-          category_id: "services", // Categoria para produtos digitais/serviços
+          category_id: "services",
         }],
         payer: {
           name: client.name,
           email: client.email,
+          // CORREÇÃO 2: Adicionar informações do pagador se disponível
+          ...(client.phone && { phone: { number: client.phone } }),
+          ...(client.document && { identification: { type: "CPF", number: client.document } }),
         },
+        // CORREÇÃO 3: Melhorar as URLs de retorno para mobile
         back_urls: {
-          success: `${process.env.FRONTEND_URL}/assinatura/sucesso`,
-          failure: `${process.env.FRONTEND_URL}/assinatura/erro`,
-          pending: `${process.env.FRONTEND_URL}/assinatura/pendente`,
+          success: `${process.env.FRONTEND_URL}/assinatura/sucesso?subscription_id=${subscription.id}`,
+          failure: `${process.env.FRONTEND_URL}/assinatura/erro?subscription_id=${subscription.id}`,
+          pending: `${process.env.FRONTEND_URL}/assinatura/pendente?subscription_id=${subscription.id}`,
         },
         auto_return: "approved",
-        external_reference: subscription.id.toString(), // Vincula a preferência à nossa assinatura
-        notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`, // URL para receber webhooks
-        statement_descriptor: "MAP NO CONTROLE", // O que aparece na fatura do cartão
+        external_reference: subscription.id.toString(),
+        notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
+        statement_descriptor: "MAP NO CONTROLE",
+        
+        // CORREÇÃO 4: Configurações adicionais para melhor experiência mobile
+        payment_methods: {
+          excluded_payment_methods: [], // Permite todos os métodos por padrão
+          excluded_payment_types: [], // Permite todos os tipos por padrão
+          installments: 12, // Máximo de 12x
+        },
+        
+        // CORREÇÃO 5: Configurar expiração corretamente
         expires: true,
         expiration_date_to: getExpirationDate(),
+        
+        // CORREÇÃO 6: Adicionar configurações de experiência do usuário
+        purpose: "subscription", // Indica que é para assinatura
+        marketplace: process.env.NODE_ENV === 'production' ? "PROD" : "TEST",
       };
 
+      logger.info(`Criando preferência MP para cliente ${client.email}, plano ${plan.name}`);
+      
       // Cria a preferência de pagamento usando a instância importada
       const response = await mpPreference.create({ body: preferencePayload });
+
+      if (!response || !response.id) {
+        throw new Error('Resposta inválida do Mercado Pago - ID da preferência não encontrado');
+      }
 
       // Atualiza nossa assinatura com o ID da preferência do MP para referência futura
       await subscription.update({
         externalSubscriptionId: response.id
       });
 
-      logger.info(`Preferência de pagamento MP criada (ID: ${response.id}) para Assinatura ID ${subscription.id}`);
+      logger.info(`Preferência MP criada com sucesso (ID: ${response.id}) para Assinatura ${subscription.id}`);
       
+      // CORREÇÃO 7: Retornar URLs apropriadas para web e mobile
       return {
-      checkoutUrl: `${response.init_point}?source=web`,
-      preferenceId: response.id,
-    };
-
+        // Para web - abre no navegador
+        checkoutUrl: response.init_point,
+        // Para mobile - deep link que pode abrir o app
+        checkoutUrlMobile: response.init_point,
+        preferenceId: response.id,
+        subscriptionId: subscription.id,
+        // Informações adicionais úteis
+        amount: plan.price,
+        planName: plan.name,
+      };
 
     } catch (error) {
-      // O `.cause` geralmente contém o erro detalhado da SDK do Mercado Pago
-      logger.error("Erro ao criar preferência de pagamento no Mercado Pago:", error.cause || error);
-      throw error;
+      logger.error("Erro ao criar preferência MP:", {
+        error: error.cause || error.message || error,
+        clientId,
+        planId,
+        stack: error.stack
+      });
+      
+      // CORREÇÃO 8: Melhor tratamento de erros
+      if (error.status || error.statusCode) {
+        throw error;
+      }
+      
+      // Se o erro veio do MP, extrair informações úteis
+      if (error.cause && error.cause.details) {
+        logger.error("Detalhes do erro MP:", error.cause.details);
+        throw {
+          statusCode: 400,
+          message: 'Erro ao processar pagamento. Tente novamente.',
+          details: error.cause.details
+        };
+      }
+      
+      throw {
+        statusCode: 500,
+        message: 'Erro interno do servidor ao criar preferência de pagamento.'
+      };
     }
   },
 
   async processarWebhook(dados) {
     try {
-      // Processa apenas eventos do tipo "pagamento"
-      if (dados.type !== 'payment') {
-        logger.info(`[MP Webhook] Recebido evento do tipo '${dados.type}', ignorando.`);
-        return;
+      logger.info(`[MP Webhook] Recebido: ${dados.type} - ID: ${dados.data?.id}`);
+      
+      // CORREÇÃO 9: Processar mais tipos de eventos relevantes
+      if (!['payment', 'merchant_order'].includes(dados.type)) {
+        logger.info(`[MP Webhook] Evento '${dados.type}' ignorado.`);
+        return { processed: false, reason: 'event_type_ignored' };
       }
       
       const paymentId = dados.data.id;
-      // Busca os dados completos do pagamento usando a instância importada
-      const paymentData = await mpPayment.get({ id: paymentId });
+      if (!paymentId) {
+        logger.warn("[MP Webhook] Webhook recebido sem ID de pagamento");
+        return { processed: false, reason: 'no_payment_id' };
+      }
+
+      // CORREÇÃO 10: Melhor tratamento de erro na busca do pagamento
+      let paymentData;
+      try {
+        paymentData = await mpPayment.get({ id: paymentId });
+      } catch (mpError) {
+        logger.error(`[MP Webhook] Erro ao buscar pagamento ${paymentId}:`, mpError);
+        throw new Error(`Não foi possível recuperar dados do pagamento: ${mpError.message}`);
+      }
+
       const subscriptionId = parseInt(paymentData.external_reference, 10);
 
-      if (!subscriptionId) {
-        logger.warn("[MP Webhook] Webhook de pagamento recebido sem 'external_reference', não é possível processar.");
-        return;
+      if (!subscriptionId || isNaN(subscriptionId)) {
+        logger.warn(`[MP Webhook] External reference inválida: ${paymentData.external_reference}`);
+        return { processed: false, reason: 'invalid_external_reference' };
       }
       
       const subscription = await Subscription.findByPk(subscriptionId);
       if (!subscription) {
-        logger.error(`[MP Webhook] CRÍTICO: Assinatura com ID ${subscriptionId} (da external_reference) não foi encontrada no banco de dados!`);
-        return;
+        logger.error(`[MP Webhook] Assinatura ${subscriptionId} não encontrada!`);
+        return { processed: false, reason: 'subscription_not_found' };
       }
       
-      // Lógica de atualização de status baseada na resposta do webhook
+      logger.info(`[MP Webhook] Processando pagamento ${paymentId} - Status: ${paymentData.status} - Assinatura: ${subscriptionId}`);
+
+      // CORREÇÃO 11: Lógica de status mais robusta
       if (paymentData.status === "approved" && subscription.status !== 'Ativa') {
-        logger.info(`[MP Webhook] Pagamento APROVADO para Assinatura ID ${subscriptionId}. Ativando...`);
+        logger.info(`[MP Webhook] Ativando assinatura ${subscriptionId}...`);
         await subscriptionService.activateSubscription(subscription.id, paymentData.id);
-        logger.info(`[MP Webhook] Assinatura ID ${subscriptionId} ativada com sucesso.`);
+        logger.info(`[MP Webhook] Assinatura ${subscriptionId} ativada com sucesso`);
+        return { processed: true, action: 'activated' };
 
-      } else if (['rejected', 'cancelled'].includes(paymentData.status) && subscription.status === 'Pendente') {
-        logger.warn(`[MP Webhook] Pagamento para Assinatura ID ${subscriptionId} foi '${paymentData.status}'. Atualizando para Cancelada.`);
-        await subscription.update({ status: 'Cancelada' });
+      } else if (['rejected', 'cancelled', 'refunded'].includes(paymentData.status)) {
+        if (subscription.status === 'Pendente') {
+          logger.warn(`[MP Webhook] Cancelando assinatura ${subscriptionId} - Status pagamento: ${paymentData.status}`);
+          await subscription.update({ status: 'Cancelada' });
+          return { processed: true, action: 'cancelled' };
+        } else if (paymentData.status === 'refunded' && subscription.status === 'Ativa') {
+          logger.warn(`[MP Webhook] Reembolso processado - Desativando assinatura ${subscriptionId}`);
+          await subscription.update({ status: 'Cancelada' });
+          return { processed: true, action: 'refunded' };
+        }
 
-      } else {
-        logger.info(`[MP Webhook] Status de pagamento '${paymentData.status}' para Assinatura ID ${subscriptionId} recebido, nenhuma ação necessária no momento.`);
+      } else if (paymentData.status === "pending") {
+        logger.info(`[MP Webhook] Pagamento ${paymentId} ainda pendente`);
+        return { processed: true, action: 'pending' };
       }
 
+      logger.info(`[MP Webhook] Nenhuma ação necessária - Status: ${paymentData.status}, Assinatura status: ${subscription.status}`);
+      return { processed: true, action: 'no_action_needed' };
+
     } catch (error) {
-      logger.error("Erro fatal ao processar webhook do Mercado Pago:", error.cause || error);
-      // Não re-lança o erro para evitar que o webhook tente reenviar indefinidamente por um erro de lógica interna
+      logger.error("Erro ao processar webhook MP:", {
+        error: error.message,
+        dados,
+        stack: error.stack
+      });
+      
+      // CORREÇÃO 12: Retornar informação sobre o erro sem lançar exceção
+      return { processed: false, reason: 'processing_error', error: error.message };
     }
   },
+
+  // CORREÇÃO 13: Método auxiliar para verificar status de pagamento
+  async verificarStatusPagamento(preferenceId) {
+    try {
+      // Este método pode ser usado pelo frontend para verificar status
+      const subscription = await Subscription.findOne({
+        where: { externalSubscriptionId: preferenceId }
+      });
+      
+      if (!subscription) {
+        return { found: false };
+      }
+      
+      return {
+        found: true,
+        status: subscription.status,
+        subscriptionId: subscription.id,
+        startDate: subscription.startDate,
+        endDate: subscription.endDate
+      };
+    } catch (error) {
+      logger.error("Erro ao verificar status:", error);
+      throw error;
+    }
+  }
 };
 
 module.exports = mercadoPagoService;
