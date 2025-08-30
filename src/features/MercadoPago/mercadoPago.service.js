@@ -40,32 +40,48 @@ const mercadoPagoService = {
         items: [{
           id: plan.id.toString(),
           title: `Assinatura Plano: ${plan.name}`,
+          description: `Acesso ao plano ${plan.name} do MAP no Controle`,
           unit_price: Number.parseFloat(plan.price),
           quantity: 1,
-          category_id: "services",
+          currency_id: 'BRL',
         }],
         payer: {
           name: client.name,
           email: client.email,
         },
         
-        // <<< MUDANÇA CRÍTICA AQUI >>>
-        // Adicionamos este objeto para EXCLUIR métodos de pagamento que não funcionam bem no app.
-        // 'ticket' engloba boleto e outras formas de pagamento em dinheiro.
+        // <<< INÍCIO DAS CORREÇÕES BASEADAS NO SEU CÓDIGO FUNCIONAL >>>
+        
+        // CORREÇÃO 1: Adicionar binary_mode para forçar um resultado imediato (aprovado/recusado)
+        binary_mode: true,
+
+        // CORREÇÃO 2: Especificar que não há frete
+        shipments: {
+            cost: 0,
+            mode: 'not_specified',
+        },
+
+        // CORREÇÃO 3: Estrutura de payment_methods mais completa
         payment_methods: {
             excluded_payment_types: [
-                { id: "ticket" } 
+                { id: "ticket" }, // Exclui Boleto
+                { id: "atm" }     // Exclui Pagamento em Lotérica
             ],
-            // Opcional: Você pode definir um número máximo de parcelas se desejar
-            // installments: 12
+            installments: 1 // Força o pagamento à vista, removendo a tela de seleção de parcelas
         },
+        
+        // <<< FIM DAS CORREÇÕES >>>
 
         external_reference: subscription.id.toString(),
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
         statement_descriptor: "MAP NO CONTROLE",
-        expires: true,
-        expiration_date_to: getExpirationDate(),
-        purpose: 'wallet_purchase',
+        // As back_urls são mantidas para o fluxo web, elas não afetam negativamente
+        back_urls: {
+            success: `${process.env.FRONTEND_URL}/assinatura/sucesso`,
+            failure: `${process.env.FRONTEND_URL}/assinatura/erro`,
+            pending: `${process.env.FRONTEND_URL}/assinatura/pendente`,
+        },
+        auto_return: "approved",
       };
 
       const response = await mpPreference.create({ body: preferencePayload });
