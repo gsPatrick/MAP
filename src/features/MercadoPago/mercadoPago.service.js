@@ -48,17 +48,24 @@ const mercadoPagoService = {
           name: client.name,
           email: client.email,
         },
-        // <<< REMOVIDO >>> As chaves 'back_urls' e 'auto_return' foram completamente removidas.
-        // <<< RAZÃO DA MUDANÇA >>> Estes parâmetros são para redirecionamento em navegadores e
-        // causam o erro no fluxo do aplicativo móvel do Mercado Pago. A confirmação do
-        // pagamento para a nossa API virá exclusivamente pelo 'notification_url' (webhook).
+        
+        // <<< MUDANÇA CRÍTICA AQUI >>>
+        // Adicionamos este objeto para EXCLUIR métodos de pagamento que não funcionam bem no app.
+        // 'ticket' engloba boleto e outras formas de pagamento em dinheiro.
+        payment_methods: {
+            excluded_payment_types: [
+                { id: "ticket" } 
+            ],
+            // Opcional: Você pode definir um número máximo de parcelas se desejar
+            // installments: 12
+        },
 
         external_reference: subscription.id.toString(),
-        notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`, // Essencial para o backend
+        notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
         statement_descriptor: "MAP NO CONTROLE",
         expires: true,
         expiration_date_to: getExpirationDate(),
-        purpose: 'wallet_purchase', // Mantido como boa prática para o app
+        purpose: 'wallet_purchase',
       };
 
       const response = await mpPreference.create({ body: preferencePayload });
@@ -96,7 +103,7 @@ const mercadoPagoService = {
         return;
       }
       
-      const subscription = await Subscription.findByPk(subscriptionId, { include: ['plan'] }); // Inclui o plano
+      const subscription = await Subscription.findByPk(subscriptionId, { include: ['plan'] });
       if (!subscription) {
         logger.error(`[MP Webhook] CRÍTICO: Assinatura com ID ${subscriptionId} não foi encontrada!`);
         return;
