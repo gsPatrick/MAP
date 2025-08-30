@@ -453,8 +453,44 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
-            case 'CREATE_PRODUCT': {
+          case 'CREATE_PRODUCT': {
                 try {
+                    // <<< INÍCIO DA CORREÇÃO DE LÓGICA >>>
+                    // Se estivermos em modo de edição para um produto, esta chamada DEVE ser uma atualização.
+                    // Isso protege contra a IA que pode erroneamente detectar CREATE em vez de UPDATE.
+                    if (state.editingResource?.type === 'product' && state.editingResource?.id) {
+                        logger.warn(`[ACTION HANDLER] IA detectou CREATE_PRODUCT, mas o sistema está em modo de edição para o produto ID ${state.editingResource.id}. Forçando uma ATUALIZAÇÃO.`);
+                        
+                        // Reutiliza a lógica de UPDATE_PRODUCT diretamente
+                        const updateParams = { 
+                            ...params, 
+                            productIdToUpdate: state.editingResource.id 
+                        };
+                        // Chamamos a função de atualização e retornamos seu resultado.
+                        // Precisamos simular a chamada da ação UPDATE_PRODUCT.
+                        // A forma mais limpa é duplicar a lógica de 'UPDATE_PRODUCT' aqui ou refatorar para uma função auxiliar.
+                        // Por simplicidade, vamos duplicar a lógica essencial aqui:
+                        
+                        const updateDataProd = {};
+                        if (params.hasOwnProperty('name')) updateDataProd.name = params.name;
+                        if (params.hasOwnProperty('salePrice') && !isNaN(parseFloat(params.salePrice))) updateDataProd.salePrice = parseFloat(params.salePrice);
+                        if (params.hasOwnProperty('code')) updateDataProd.code = params.code;
+                        if (params.hasOwnProperty('costPrice')) updateDataProd.costPrice = params.costPrice === null ? null : parseFloat(params.costPrice);
+                        // Adiciona a atualização de quantidade que a IA pode ter inferido
+                        if (params.hasOwnProperty('initialQuantity') && !isNaN(parseInt(params.initialQuantity))) updateDataProd.quantity = parseInt(params.initialQuantity);
+                        if (params.hasOwnProperty('minimumStock') && !isNaN(parseInt(params.minimumStock))) updateDataProd.minimumStock = parseInt(params.minimumStock);
+                        if (params.hasOwnProperty('unit')) updateDataProd.unit = params.unit;
+                        if (params.hasOwnProperty('description')) updateDataProd.description = params.description;
+                        
+                        const updatedProduct = await productService.updateProduct(state.activeFinancialAccountId, state.editingResource.id, updateDataProd, actorId);
+                        
+                        formattedData = formatter.formatProductDataStructure(updatedProduct);
+                        wasAnEdit = true; // Sinaliza que a edição foi concluída.
+                        break; // Sai do case 'CREATE_PRODUCT'
+                    }
+                    // <<< FIM DA CORREÇÃO DE LÓGICA >>>
+
+                    // Se não estiver em modo de edição, a lógica de criação normal continua.
                     const productData = {
                         name: params.name, salePrice: parseFloat(params.salePrice), code: params.code,
                         costPrice: params.costPrice ? parseFloat(params.costPrice) : null,
