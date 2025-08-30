@@ -7,7 +7,8 @@ const logger = require('../../utils/logger');
 
 function getExpirationDate() {
     const date = new Date();
-    date.setDate(date.getDate() + 1); 
+    // Aumentar a expiração para 3 dias para dar mais flexibilidade ao usuário
+    date.setDate(date.getDate() + 3); 
     return date.toISOString().replace(/\.\d{3}Z$/, "-03:00");
 }
 
@@ -24,64 +25,56 @@ const mercadoPagoService = {
         throw { statusCode: 400, message: 'Este plano não está mais disponível para assinatura.' };
       }
 
-      const effectiveStartDate = new Date();
-      const endDate = new Date(effectiveStartDate);
-      endDate.setDate(endDate.getDate() + plan.durationDays);
-
       const subscription = await Subscription.create({
         clientId,
         planId,
         status: 'Pendente',
-        startDate: effectiveStartDate.toISOString().split('T')[0],
-        endDate: endDate.toISOString().split('T')[0],
+        startDate: new Date().toISOString().split('T')[0],
+        endDate: new Date(new Date().setDate(new Date().getDate() + plan.durationDays)).toISOString().split('T')[0],
       });
 
       const preferencePayload = {
+        // <<< INÍCIO DA CORREÇÃO DEFINITIVA BASEADA NO SEU E-COMMERCE >>>
         items: [{
           id: plan.id.toString(),
-          title: `Assinatura Plano: ${plan.name}`,
-          description: `Acesso ao plano ${plan.name} do MAP no Controle`,
+          title: plan.name, // Usar o nome do plano, mais curto e direto
           unit_price: Number.parseFloat(plan.price),
           quantity: 1,
-          currency_id: 'BRL',
+          currency_id: 'BRL', // Boa prática, exigido em alguns contextos
+          // Campos como 'description' e 'category_id' foram removidos do item
+          // para criar o payload mais limpo e compatível possível, evitando conflitos no app.
         }],
+        // <<< FIM DA CORREÇÃO DEFINITIVA >>>
+        
         payer: {
           name: client.name,
           email: client.email,
         },
         
-        // <<< INÍCIO DAS CORREÇÕES BASEADAS NO SEU CÓDIGO FUNCIONAL >>>
-        
-        // CORREÇÃO 1: Adicionar binary_mode para forçar um resultado imediato (aprovado/recusado)
+        // Parâmetros que garantem o fluxo correto (baseado no seu e-commerce)
         binary_mode: true,
-
-        // CORREÇÃO 2: Especificar que não há frete
+        payment_methods: {
+            excluded_payment_types: [
+                { id: "ticket" }, // Exclui Boleto e similares
+                { id: "atm" }     // Exclui Lotérica
+            ],
+            installments: 1 // Força pagamento à vista
+        },
         shipments: {
             cost: 0,
             mode: 'not_specified',
         },
 
-        // CORREÇÃO 3: Estrutura de payment_methods mais completa
-        payment_methods: {
-            excluded_payment_types: [
-                { id: "ticket" }, // Exclui Boleto
-                { id: "atm" }     // Exclui Pagamento em Lotérica
-            ],
-            installments: 1 // Força o pagamento à vista, removendo a tela de seleção de parcelas
+        // URLs e referências
+        back_urls: {
+          success: `${process.env.FRONTEND_URL}/assinatura/sucesso`,
+          failure: `${process.env.FRONTEND_URL}/assinatura/erro`,
+          pending: `${process.env.FRONTEND_URL}/assinatura/pendente`,
         },
-        
-        // <<< FIM DAS CORREÇÕES >>>
-
+        auto_return: "approved",
         external_reference: subscription.id.toString(),
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
         statement_descriptor: "MAP NO CONTROLE",
-        // As back_urls são mantidas para o fluxo web, elas não afetam negativamente
-        back_urls: {
-            success: `${process.env.FRONTEND_URL}/assinatura/sucesso`,
-            failure: `${process.env.FRONTEND_URL}/assinatura/erro`,
-            pending: `${process.env.FRONTEND_URL}/assinatura/pendente`,
-        },
-        auto_return: "approved",
       };
 
       const response = await mpPreference.create({ body: preferencePayload });
@@ -106,7 +99,6 @@ const mercadoPagoService = {
   async processarWebhook(dados) {
     try {
       if (dados.type !== 'payment') {
-        logger.info(`[MP Webhook] Recebido evento do tipo '${dados.type}', ignorando.`);
         return;
       }
       
@@ -115,19 +107,17 @@ const mercadoPagoService = {
       const subscriptionId = parseInt(paymentData.external_reference, 10);
 
       if (!subscriptionId) {
-        logger.warn("[MP Webhook] Webhook sem 'external_reference', não é possível processar.");
+        logger.warn("[MP Webhook] Webhook sem 'external_reference'.");
         return;
       }
       
       const subscription = await Subscription.findByPk(subscriptionId, { include: ['plan'] });
       if (!subscription) {
-        logger.error(`[MP Webhook] CRÍTICO: Assinatura com ID ${subscriptionId} não foi encontrada!`);
+        logger.error(`[MP Webhook] CRÍTICO: Assinatura com ID ${subscriptionId} não encontrada!`);
         return;
       }
       
       if (paymentData.status === "approved" && subscription.status !== 'Ativa') {
-        logger.info(`[MP Webhook] Pagamento APROVADO para Assinatura ID ${subscriptionId}. Ativando...`);
-        
         const newEndDate = new Date();
         newEndDate.setDate(newEndDate.getDate() + subscription.plan.durationDays);
         
@@ -136,13 +126,8 @@ const mercadoPagoService = {
           'Ativa', 
           newEndDate.toISOString().split('T')[0]
         );
-        logger.info(`[MP Webhook] Assinatura ID ${subscriptionId} ativada com sucesso.`);
-
       } else if (['rejected', 'cancelled', 'refunded'].includes(paymentData.status) && subscription.status !== 'Cancelada') {
-        logger.warn(`[MP Webhook] Pagamento para Assinatura ID ${subscriptionId} foi '${paymentData.status}'. Atualizando para Cancelada.`);
         await subscription.update({ status: 'Cancelada' });
-      } else {
-        logger.info(`[MP Webhook] Status de pagamento '${paymentData.status}' para Assinatura ID ${subscriptionId} recebido, nenhuma ação necessária no momento.`);
       }
 
     } catch (error) {
