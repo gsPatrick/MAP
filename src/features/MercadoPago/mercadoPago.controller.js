@@ -74,6 +74,23 @@ const mercadoPagoController = {
       next(error);
     }
   }, 
+// <<< NOVO CONTROLLER PARA O PAYMENT BRICK >>>
+  async processBrickPayment(req, res, next) {
+    try {
+      const clientId = req.client.id;
+      const { planId, ...paymentData } = req.body; // Separa o planId do resto dos dados do pagamento
+
+      if (!planId || !paymentData) {
+        return res.status(400).json({ status: 'fail', message: 'Dados de pagamento ou ID do plano ausentes.' });
+      }
+
+      const result = await mercadoPagoService.processBrickPayment(clientId, planId, paymentData);
+      res.status(201).json({ status: 'success', data: result });
+    } catch (error) {
+      next(error);
+    }
+  },
 };
+
 
 module.exports = mercadoPagoController;

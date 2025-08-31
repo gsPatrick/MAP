@@ -270,7 +270,71 @@ const mercadoPagoService = {
       throw new Error(`The following parameters must be valid date and format (yyyy-MM-dd'T'HH:mm:ssz): date_of_expiration`);
     }
   },
+// <<< NOVA FUNÇÃO PARA PROCESSAR O PAGAMENTO VINDO DO BRICK >>>
+  async processBrickPayment(clientId, planId, paymentData) {
+    logger.info(`[MP Brick] Processando pagamento para Cliente ID: ${clientId}, Plano ID: ${planId}`);
+    try {
+      const client = await Client.findByPk(clientId);
+      const plan = await Plan.findByPk(planId);
 
+      if (!client || !plan) {
+        throw { statusCode: 404, message: 'Cliente ou Plano não encontrado.' };
+      }
+      
+      // Validação de segurança: O preço é sempre definido pelo backend, não pelo frontend.
+      if (!plan.price || Number(plan.price) < 1.00) {
+        throw { statusCode: 500, message: 'Plano com configuração de preço inválida.' };
+      }
+
+      // Cria a assinatura com status "Pendente" para gerar a referência externa
+      const subscription = await Subscription.create({
+        clientId,
+        planId,
+        status: 'Pendente',
+        startDate: new Date().toISOString().split('T')[0],
+        endDate: new Date(new Date().setDate(new Date().getDate() + plan.durationDays)).toISOString().split('T')[0],
+      });
+      logger.info(`[MP Brick] Assinatura pendente ID: ${subscription.id} criada.`);
+      
+      const expirationDate = new Date();
+      expirationDate.setMinutes(expirationDate.getMinutes() + 30); // PIX expira em 30 minutos
+      const formattedExpirationDate = expirationDate.toISOString().replace(/Z$/, "-03:00");
+      
+      // Monta o payload do pagamento usando os dados do Brick e os dados seguros do nosso DB
+      const paymentPayload = {
+        transaction_amount: Number(plan.price), // Preço do nosso banco de dados
+        description: `Pagamento Plano ${plan.name} - MAP no Controle`,
+        payment_method_id: 'pix', // Fixo como pix
+        payer: { // Payer vem do brick, já preenchido pelo usuário
+          email: paymentData.payer.email,
+          first_name: paymentData.payer.firstName,
+          last_name: paymentData.payer.lastName,
+        },
+        external_reference: subscription.id.toString(), // ID da nossa assinatura pendente
+        notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
+        date_of_expiration: formattedExpirationDate,
+      };
+
+      const pixResponse = await mpPayment.create({ body: paymentPayload });
+      logger.info(`[MP Brick] Pagamento PIX criado com sucesso via Brick. Payment ID: ${pixResponse.id}`);
+
+      // Atualiza nossa assinatura com o ID do pagamento gerado
+      await subscription.update({ externalSubscriptionId: pixResponse.id.toString() });
+
+      // Retorna os dados necessários para o frontend renderizar o QR Code
+      return {
+        paymentId: pixResponse.id,
+        status: pixResponse.status,
+        qrCode: pixResponse.point_of_interaction.transaction_data.qr_code,
+        qrCodeBase64: pixResponse.point_of_interaction.transaction_data.qr_code_base64,
+      };
+
+    } catch (error) {
+      const errorMessage = error.cause?.message || error.message;
+      logger.error('Erro ao processar pagamento do Brick:', { message: errorMessage, data: error.cause?.data });
+      throw new Error(`Falha ao processar o pagamento: ${errorMessage}`);
+    }
+  },
 }
 
 module.exports = mercadoPagoService;
