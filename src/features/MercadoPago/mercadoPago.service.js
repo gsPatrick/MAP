@@ -13,7 +13,6 @@ function getExpirationDate() {
 }
 
 const mercadoPagoService = {
-  // ... (a função criarPreferenciaAssinatura permanece a mesma)
   async criarPreferenciaAssinatura(clientId, planId) {
     try {
       const client = await Client.findByPk(clientId);
@@ -95,7 +94,6 @@ const mercadoPagoService = {
     }
   },
 
-  // ... (a função processarWebhook permanece a mesma)
   async processarWebhook(dados) {
     try {
       if (dados.type !== 'payment') {
@@ -125,7 +123,7 @@ const mercadoPagoService = {
           subscription.externalSubscriptionId, 
           'Ativa', 
           newEndDate.toISOString().split('T')[0],
-          subscription.id // Passando o ID direto para mais robustez
+          subscription.id
         );
       } else if (['rejected', 'cancelled', 'refunded'].includes(paymentData.status) && subscription.status !== 'Cancelada') {
         await subscription.update({ status: 'Cancelada' });
@@ -136,7 +134,6 @@ const mercadoPagoService = {
     }
   },
 
-  // ... (a função createPixPayment permanece a mesma)
   async createPixPayment(clientId, planId) {
     logger.info(`[MP PIX] Criando pagamento PIX para Cliente ID: ${clientId}, Plano ID: ${planId}`);
     try {
@@ -191,7 +188,6 @@ const mercadoPagoService = {
     }
   },
 
-  // <<< FUNÇÃO CORRIGIDA PARA O PAYMENT BRICK >>>
   async processBrickPayment(clientId, planId, paymentData) {
     logger.info(`[MP Brick] Processando pagamento para Cliente ID: ${clientId}, Plano ID: ${planId}`);
     try {
@@ -219,15 +215,15 @@ const mercadoPagoService = {
       expirationDate.setMinutes(expirationDate.getMinutes() + 30);
       const formattedExpirationDate = expirationDate.toISOString().replace(/Z$/, "-03:00");
       
-      // <<< CORREÇÃO PRINCIPAL: Usamos o `paymentData` do Brick como base >>>
-      // Isso garante que `payment_method_id: 'pix'` e outros campos coletados pelo Brick sejam enviados.
+      // <<< CORREÇÃO DEFINITIVA AQUI >>>
       const paymentPayload = {
-          ...paymentData, // Inclui todos os dados do Brick (payer, payment_method_id, etc.)
-          transaction_amount: Number(plan.price), // SOBRESCREVE o valor para segurança
-          description: `Pagamento Plano ${plan.name} - MAP no Controle`, // Adiciona nossa descrição
-          external_reference: subscription.id.toString(), // Adiciona nossa referência
-          notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`, // Adiciona nosso webhook
-          date_of_expiration: formattedExpirationDate, // Adiciona nossa data de expiração
+          ...paymentData,
+          payment_method_id: 'pix', // FORÇA o método de pagamento para 'pix'.
+          transaction_amount: Number(plan.price),
+          description: `Pagamento Plano ${plan.name} - MAP no Controle`,
+          external_reference: subscription.id.toString(),
+          notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
+          date_of_expiration: formattedExpirationDate,
       };
 
       const pixResponse = await mpPayment.create({ body: paymentPayload });
