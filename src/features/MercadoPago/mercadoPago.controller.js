@@ -58,13 +58,22 @@ const mercadoPagoController = {
       next(error);
     }
   },
+   // <<< NOVO CONTROLLER PARA PIX >>>
+  async createPixPayment(req, res, next) {
+    try {
+      const clientId = req.client.id; // Vem do middleware de autenticação
+      const { planId } = req.body;
+
+      if (!planId) {
+        return res.status(400).json({ status: 'fail', message: 'O ID do Plano (planId) é obrigatório.' });
+      }
+
+      const pixData = await mercadoPagoService.createPixPayment(clientId, planId);
+      res.status(200).json({ status: 'success', data: pixData });
+    } catch (error) {
+      next(error);
+    }
+  }, 
 };
 
-// <<< A CORREÇÃO ESTÁ AQUI >>>
-// A função 'criarPagamentoPix' não estava sendo exportada.
-module.exports = {
-    criarCheckoutAssinatura: mercadoPagoController.criarCheckoutAssinatura,
-    webhook: mercadoPagoController.webhook,
-    processarPagamentoBrick: mercadoPagoController.processarPagamentoBrick,
-    criarPagamentoPix: mercadoPagoController.criarPagamentoPix, // Adicione esta linha
-};
+module.exports = mercadoPagoController;

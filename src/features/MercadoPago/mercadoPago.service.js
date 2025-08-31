@@ -211,6 +211,66 @@ const mercadoPagoService = {
       throw { statusCode: 500, message: errorMessage };
     }
   },
+   // <<< FUNÇÃO NOVA E CORRIGIDA PARA PAGAMENTO PIX >>>
+  async createPixPayment(clientId, planId) {
+    logger.info(`[MP PIX] Criando pagamento PIX para Cliente ID: ${clientId}, Plano ID: ${planId}`);
+    try {
+      const client = await Client.findByPk(clientId);
+      const plan = await Plan.findByPk(planId);
+
+      if (!client || !plan) {
+        throw { statusCode: 404, message: 'Cliente ou Plano não encontrado.' };
+      }
+
+      // Cria a assinatura pendente
+      const subscription = await Subscription.create({
+        clientId,
+        planId,
+        status: 'Pendente',
+        startDate: new Date().toISOString().split('T')[0],
+        endDate: new Date(new Date().setDate(new Date().getDate() + plan.durationDays)).toISOString().split('T')[0],
+      });
+      logger.info(`[MP PIX] Assinatura pendente ID: ${subscription.id} criada.`);
+
+      // --- CORREÇÃO DA DATA DE EXPIRAÇÃO ---
+      const expirationDate = new Date();
+      expirationDate.setMinutes(expirationDate.getMinutes() + 30); // Define a expiração para 30 minutos
+
+      // Formata a data para o padrão exigido pela API do MP: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
+      const formattedExpirationDate = expirationDate.toISOString().replace(/Z$/, "-03:00");
+
+      const pixPayload = {
+        transaction_amount: Number(plan.price),
+        description: `Pagamento Plano ${plan.name} - MAP no Controle`,
+        payment_method_id: 'pix',
+        payer: {
+          email: client.email,
+          first_name: client.name.split(' ')[0],
+          last_name: client.name.split(' ').slice(1).join(' ') || client.name.split(' ')[0],
+        },
+        external_reference: subscription.id.toString(),
+        notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
+        date_of_expiration: formattedExpirationDate, // <<< USA A DATA FORMATADA CORRETAMENTE
+      };
+
+      const pixResponse = await mpPayment.create({ body: pixPayload });
+      logger.info(`[MP PIX] Pagamento PIX criado com sucesso. Payment ID: ${pixResponse.id}`);
+
+      return {
+        paymentId: pixResponse.id,
+        qrCode: pixResponse.point_of_interaction.transaction_data.qr_code,
+        qrCodeBase64: pixResponse.point_of_interaction.transaction_data.qr_code_base64,
+        subscriptionId: subscription.id,
+      };
+
+    } catch (error) {
+      const errorMessage = error.cause?.message || error.message;
+      logger.error('Erro ao criar pagamento PIX:', { message: errorMessage, data: error.cause?.data });
+      // Lança um erro padronizado para o controller
+      throw new Error(`The following parameters must be valid date and format (yyyy-MM-dd'T'HH:mm:ssz): date_of_expiration`);
+    }
+  },
+
 }
 
 module.exports = mercadoPagoService;
