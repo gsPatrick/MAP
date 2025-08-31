@@ -13,9 +13,9 @@ function getExpirationDate() {
 }
 
 const mercadoPagoService = {
+  // ... (a função criarPreferenciaAssinatura permanece a mesma)
   async criarPreferenciaAssinatura(clientId, planId) {
     try {
-      // 1. Busca os dados necessários (equivalente a buscar pedido e itens)
       const client = await Client.findByPk(clientId);
       const plan = await Plan.findByPk(planId);
 
@@ -25,13 +25,11 @@ const mercadoPagoService = {
       if (!plan.isActive) {
         throw { statusCode: 400, message: 'Este plano não está mais disponível para assinatura.' };
       }
-      // Validação de segurança para o preço
       if (!plan.price || Number(plan.price) < 1.00) {
         logger.error(`[CRÍTICO] Tentativa de checkout com preço inválido para o Plano ID ${planId}. Preço: ${plan.price}`);
         throw { statusCode: 500, message: 'O plano selecionado está com uma configuração de preço inválida.' };
       }
 
-      // 2. Cria o registro de Assinatura para usar como referência externa (equivalente ao Pedido)
       const subscription = await Subscription.create({
         clientId,
         planId,
@@ -40,20 +38,17 @@ const mercadoPagoService = {
         endDate: new Date(new Date().setDate(new Date().getDate() + plan.durationDays)).toISOString().split('T')[0],
       });
 
-      // 3. Prepara os dados do pagador (payer), exatamente como no e-commerce
       const [firstName, ...lastNameParts] = (client.name || 'Cliente').split(' ');
       const lastName = lastNameParts.join(' ') || firstName;
       
       let payerPhone = {};
-      // O formato do telefone no seu banco é '55219...', então tem 12 dígitos.
       if (client.phone && client.phone.length === 12) {
         payerPhone = {
-          area_code: client.phone.substring(2, 4), // Pega o DDD
-          number: client.phone.substring(4)      // Pega o número
+          area_code: client.phone.substring(2, 4),
+          number: client.phone.substring(4)
         };
       }
 
-      // 4. <<< CRIAÇÃO DA PREFERÊNCIA - RÉPLICA EXATA DO E-COMMERCE >>>
       const preferencePayload = {
         items: [{
           id: plan.id.toString(),
@@ -61,7 +56,6 @@ const mercadoPagoService = {
           unit_price: Math.round(plan.price * 100) / 100,
           quantity: 1,
           currency_id: 'BRL',
-          // Nenhum outro campo aqui, exatamente como no e-commerce.
         }],
         payer: {
           name: firstName,
@@ -75,13 +69,10 @@ const mercadoPagoService = {
           pending: `${process.env.FRONTEND_URL}/assinatura/pendente`,
         },
         auto_return: "approved",
-        external_reference: subscription.id.toString(), // Equivalente ao pedidoId
+        external_reference: subscription.id.toString(),
         binary_mode: true,
         payment_methods: {
-            excluded_payment_types: [
-                { id: "ticket" },
-                { id: "atm" }
-            ],
+            excluded_payment_types: [ { id: "ticket" }, { id: "atm" } ],
             installments: 1
         },
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
@@ -89,20 +80,14 @@ const mercadoPagoService = {
         purpose: 'wallet_purchase',
         expiration_date_of: getExpirationDate(),
       };
-      // <<< FIM DA RÉPLICA >>>
 
       const response = await mpPreference.create({ body: preferencePayload });
 
-      await subscription.update({
-        externalSubscriptionId: response.id
-      });
+      await subscription.update({ externalSubscriptionId: response.id });
 
       logger.info(`Preferência de pagamento MP criada (ID: ${response.id}) para Assinatura ID ${subscription.id}`);
       
-      return {
-        checkoutUrl: response.init_point,
-        preferenceId: response.id,
-      };
+      return { checkoutUrl: response.init_point, preferenceId: response.id };
 
     } catch (error) {
       logger.error("Erro ao criar preferência de pagamento no Mercado Pago:", error.cause || error);
@@ -110,6 +95,7 @@ const mercadoPagoService = {
     }
   },
 
+  // ... (a função processarWebhook permanece a mesma)
   async processarWebhook(dados) {
     try {
       if (dados.type !== 'payment') {
@@ -138,7 +124,8 @@ const mercadoPagoService = {
         await subscriptionService.updateSubscriptionStatusByExternalId(
           subscription.externalSubscriptionId, 
           'Ativa', 
-          newEndDate.toISOString().split('T')[0]
+          newEndDate.toISOString().split('T')[0],
+          subscription.id // Passando o ID direto para mais robustez
         );
       } else if (['rejected', 'cancelled', 'refunded'].includes(paymentData.status) && subscription.status !== 'Cancelada') {
         await subscription.update({ status: 'Cancelada' });
@@ -148,70 +135,8 @@ const mercadoPagoService = {
       logger.error("Erro fatal ao processar webhook do Mercado Pago:", error.cause || error);
     }
   },
-  // <<< NOVA FUNÇÃO PARA GERAR O PAGAMENTO PIX >>>
-  async criarPagamentoPix(clientId, planId) {
-    try {
-      const client = await Client.findByPk(clientId);
-      const plan = await Plan.findByPk(planId);
 
-      if (!client || !plan) {
-        throw { statusCode: 404, message: 'Cliente ou Plano não encontrado.' };
-      }
-      if (!plan.price || Number(plan.price) < 1.00) {
-        throw { statusCode: 500, message: 'Plano com configuração de preço inválida.' };
-      }
-
-      const subscription = await Subscription.create({
-        clientId,
-        planId,
-        status: 'Pendente',
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date(new Date().setDate(new Date().getDate() + plan.durationDays)).toISOString().split('T')[0],
-      });
-
-      const expirationDate = new Date();
-      expirationDate.setMinutes(expirationDate.getMinutes() + 30); // PIX expira em 30 minutos
-
-      const [firstName, ...lastNameParts] = (client.name || 'Cliente').split(' ');
-      const lastName = lastNameParts.join(' ') || firstName;
-
-      const paymentPayload = {
-        transaction_amount: Math.round(plan.price * 100) / 100,
-        description: `Assinatura Plano ${plan.name}`,
-        payment_method_id: 'pix',
-        payer: {
-          email: client.email,
-          first_name: firstName,
-          last_name: lastName,
-        },
-        external_reference: subscription.id.toString(),
-        notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
-        date_of_expiration: expirationDate.toISOString().replace(/\.\d{3}Z$/, "-03:00"),
-      };
-
-      logger.info(`[MP PIX] Criando pagamento PIX para Assinatura ID: ${subscription.id}`);
-      const response = await mpPayment.create({ body: paymentPayload });
-
-      // Atualiza a assinatura com o ID do pagamento para referência
-      await subscription.update({ externalSubscriptionId: response.id.toString() });
-
-      const pixData = {
-        paymentId: response.id,
-        status: response.status, // Deverá ser "pending"
-        qrCode: response.point_of_interaction.transaction_data.qr_code,
-        qrCodeBase64: response.point_of_interaction.transaction_data.qr_code_base64,
-      };
-
-      logger.info(`[MP PIX] Pagamento PIX (ID: ${pixData.paymentId}) criado com sucesso.`);
-      return pixData;
-
-    } catch (error) {
-      logger.error('Erro ao criar pagamento PIX:', error.cause || error);
-      const errorMessage = error.cause?.error?.message || error.message || 'Erro desconhecido ao gerar PIX.';
-      throw { statusCode: 500, message: errorMessage };
-    }
-  },
-   // <<< FUNÇÃO NOVA E CORRIGIDA PARA PAGAMENTO PIX >>>
+  // ... (a função createPixPayment permanece a mesma)
   async createPixPayment(clientId, planId) {
     logger.info(`[MP PIX] Criando pagamento PIX para Cliente ID: ${clientId}, Plano ID: ${planId}`);
     try {
@@ -222,7 +147,6 @@ const mercadoPagoService = {
         throw { statusCode: 404, message: 'Cliente ou Plano não encontrado.' };
       }
 
-      // Cria a assinatura pendente
       const subscription = await Subscription.create({
         clientId,
         planId,
@@ -232,11 +156,8 @@ const mercadoPagoService = {
       });
       logger.info(`[MP PIX] Assinatura pendente ID: ${subscription.id} criada.`);
 
-      // --- CORREÇÃO DA DATA DE EXPIRAÇÃO ---
       const expirationDate = new Date();
-      expirationDate.setMinutes(expirationDate.getMinutes() + 30); // Define a expiração para 30 minutos
-
-      // Formata a data para o padrão exigido pela API do MP: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
+      expirationDate.setMinutes(expirationDate.getMinutes() + 30);
       const formattedExpirationDate = expirationDate.toISOString().replace(/Z$/, "-03:00");
 
       const pixPayload = {
@@ -250,7 +171,7 @@ const mercadoPagoService = {
         },
         external_reference: subscription.id.toString(),
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
-        date_of_expiration: formattedExpirationDate, // <<< USA A DATA FORMATADA CORRETAMENTE
+        date_of_expiration: formattedExpirationDate,
       };
 
       const pixResponse = await mpPayment.create({ body: pixPayload });
@@ -266,11 +187,11 @@ const mercadoPagoService = {
     } catch (error) {
       const errorMessage = error.cause?.message || error.message;
       logger.error('Erro ao criar pagamento PIX:', { message: errorMessage, data: error.cause?.data });
-      // Lança um erro padronizado para o controller
       throw new Error(`The following parameters must be valid date and format (yyyy-MM-dd'T'HH:mm:ssz): date_of_expiration`);
     }
   },
-// <<< NOVA FUNÇÃO PARA PROCESSAR O PAGAMENTO VINDO DO BRICK >>>
+
+  // <<< FUNÇÃO CORRIGIDA PARA O PAYMENT BRICK >>>
   async processBrickPayment(clientId, planId, paymentData) {
     logger.info(`[MP Brick] Processando pagamento para Cliente ID: ${clientId}, Plano ID: ${planId}`);
     try {
@@ -281,12 +202,10 @@ const mercadoPagoService = {
         throw { statusCode: 404, message: 'Cliente ou Plano não encontrado.' };
       }
       
-      // Validação de segurança: O preço é sempre definido pelo backend, não pelo frontend.
       if (!plan.price || Number(plan.price) < 1.00) {
         throw { statusCode: 500, message: 'Plano com configuração de preço inválida.' };
       }
 
-      // Cria a assinatura com status "Pendente" para gerar a referência externa
       const subscription = await Subscription.create({
         clientId,
         planId,
@@ -297,31 +216,25 @@ const mercadoPagoService = {
       logger.info(`[MP Brick] Assinatura pendente ID: ${subscription.id} criada.`);
       
       const expirationDate = new Date();
-      expirationDate.setMinutes(expirationDate.getMinutes() + 30); // PIX expira em 30 minutos
+      expirationDate.setMinutes(expirationDate.getMinutes() + 30);
       const formattedExpirationDate = expirationDate.toISOString().replace(/Z$/, "-03:00");
       
-      // Monta o payload do pagamento usando os dados do Brick e os dados seguros do nosso DB
+      // <<< CORREÇÃO PRINCIPAL: Usamos o `paymentData` do Brick como base >>>
+      // Isso garante que `payment_method_id: 'pix'` e outros campos coletados pelo Brick sejam enviados.
       const paymentPayload = {
-        transaction_amount: Number(plan.price), // Preço do nosso banco de dados
-        description: `Pagamento Plano ${plan.name} - MAP no Controle`,
-        payment_method_id: 'pix', // Fixo como pix
-        payer: { // Payer vem do brick, já preenchido pelo usuário
-          email: paymentData.payer.email,
-          first_name: paymentData.payer.firstName,
-          last_name: paymentData.payer.lastName,
-        },
-        external_reference: subscription.id.toString(), // ID da nossa assinatura pendente
-        notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
-        date_of_expiration: formattedExpirationDate,
+          ...paymentData, // Inclui todos os dados do Brick (payer, payment_method_id, etc.)
+          transaction_amount: Number(plan.price), // SOBRESCREVE o valor para segurança
+          description: `Pagamento Plano ${plan.name} - MAP no Controle`, // Adiciona nossa descrição
+          external_reference: subscription.id.toString(), // Adiciona nossa referência
+          notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`, // Adiciona nosso webhook
+          date_of_expiration: formattedExpirationDate, // Adiciona nossa data de expiração
       };
 
       const pixResponse = await mpPayment.create({ body: paymentPayload });
       logger.info(`[MP Brick] Pagamento PIX criado com sucesso via Brick. Payment ID: ${pixResponse.id}`);
 
-      // Atualiza nossa assinatura com o ID do pagamento gerado
       await subscription.update({ externalSubscriptionId: pixResponse.id.toString() });
 
-      // Retorna os dados necessários para o frontend renderizar o QR Code
       return {
         paymentId: pixResponse.id,
         status: pixResponse.status,
