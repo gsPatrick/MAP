@@ -9,7 +9,6 @@ const logger = require('../../utils/logger');
 function getExpirationDate() {
     const date = new Date();
     date.setDate(date.getDate() + 3); 
-    // Formato ISO 8601 com fuso horário -03:00 (Brasília)
     return date.toISOString().replace(/\.\d{3}Z$/, "-03:00");
 }
 
@@ -34,24 +33,26 @@ const mercadoPagoService = {
         endDate: new Date(new Date().setDate(new Date().getDate() + plan.durationDays)).toISOString().split('T')[0],
       });
 
-      // <<< INÍCIO DA CORREÇÃO DEFINITIVA BASEADA NO SEU E-COMMERCE >>>
-      
-      const [firstName, ...lastNameParts] = (client.name || '').split(' ');
-      const lastName = lastNameParts.join(' ') || firstName; // Garante que sobrenome tenha um valor
+      const [firstName, ...lastNameParts] = (client.name || 'Cliente').split(' ');
+      const lastName = lastNameParts.join(' ') || firstName;
 
       const preferencePayload = {
-        // [ALTERAÇÃO 1]: Adicionado o parâmetro 'purpose'
         purpose: 'wallet_purchase',
 
         items: [{
           id: plan.id.toString(),
-          title: plan.name,
-          unit_price: Number.parseFloat(plan.price),
+          // <<< CORREÇÃO 1: Título padronizado e seguro >>>
+          // Usamos o nome do plano, que é mais descritivo do que um título genérico.
+          // Isso ajuda o usuário a identificar a compra.
+          title: plan.name, 
+          description: `Assinatura do plano ${plan.name} para o MAP no Controle.`, // Descrição opcional, mas útil
+          // <<< CORREÇÃO 2: Garantia de formato numérico correto para o preço >>>
+          // Evita problemas de arredondamento com valores como 39.90
+          unit_price: Math.round(plan.price * 100) / 100,
           quantity: 1,
           currency_id: 'BRL',
         }],
         
-        // [ALTERAÇÃO 2]: Ajustado 'payer' para incluir 'surname'
         payer: {
           name: firstName,
           surname: lastName,
@@ -59,10 +60,7 @@ const mercadoPagoService = {
         },
         
         payment_methods: {
-            excluded_payment_types: [
-                { id: "ticket" },
-                { id: "atm" }
-            ],
+            excluded_payment_types: [{ id: "ticket" }, { id: "atm" }],
             installments: 1
         },
 
@@ -76,17 +74,12 @@ const mercadoPagoService = {
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
         statement_descriptor: "MAP NO CONTROLE",
         binary_mode: true,
-
-        // [ALTERAÇÃO 3]: Adicionada data de expiração para a preferência
         expiration_date_of: getExpirationDate(),
-        
-        // [ALTERAÇÃO 4]: Objeto 'shipments' foi completamente removido
       };
-      // <<< FIM DA CORREÇÃO DEFINITIVA >>>
-
 
       const response = await mpPreference.create({ body: preferencePayload });
 
+      // Atualiza a assinatura com o ID da preferência para rastreamento no webhook
       await subscription.update({
         externalSubscriptionId: response.id
       });
