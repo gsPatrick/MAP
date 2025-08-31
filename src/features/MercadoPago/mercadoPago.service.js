@@ -5,6 +5,7 @@ const { Subscription, Plan, Client } = require('../../database');
 const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
 
+// Helper para obter a data de expiração da preferência (3 dias a partir de agora)
 function getExpirationDate() {
     const date = new Date();
     date.setDate(date.getDate() + 3); 
@@ -14,6 +15,7 @@ function getExpirationDate() {
 const mercadoPagoService = {
   async criarPreferenciaAssinatura(clientId, planId) {
     try {
+      // 1. Busca os dados necessários (equivalente a buscar pedido e itens)
       const client = await Client.findByPk(clientId);
       const plan = await Plan.findByPk(planId);
 
@@ -23,11 +25,13 @@ const mercadoPagoService = {
       if (!plan.isActive) {
         throw { statusCode: 400, message: 'Este plano não está mais disponível para assinatura.' };
       }
+      // Validação de segurança para o preço
       if (!plan.price || Number(plan.price) < 1.00) {
         logger.error(`[CRÍTICO] Tentativa de checkout com preço inválido para o Plano ID ${planId}. Preço: ${plan.price}`);
-        throw { statusCode: 500, message: 'O plano selecionado está com uma configuração de preço inválida. Por favor, contate o suporte.' };
+        throw { statusCode: 500, message: 'O plano selecionado está com uma configuração de preço inválida.' };
       }
 
+      // 2. Cria o registro de Assinatura para usar como referência externa (equivalente ao Pedido)
       const subscription = await Subscription.create({
         clientId,
         planId,
@@ -36,41 +40,34 @@ const mercadoPagoService = {
         endDate: new Date(new Date().setDate(new Date().getDate() + plan.durationDays)).toISOString().split('T')[0],
       });
 
+      // 3. Prepara os dados do pagador (payer), exatamente como no e-commerce
       const [firstName, ...lastNameParts] = (client.name || 'Cliente').split(' ');
       const lastName = lastNameParts.join(' ') || firstName;
       
-      // <<< INÍCIO DA CORREÇÃO FINAL >>>
-      // Adiciona a lógica para extrair o DDD e o número do telefone do cliente.
       let payerPhone = {};
-      if (client.phone && client.phone.length === 12) { // Formato 55XXYYYYYYYY
+      // O formato do telefone no seu banco é '55219...', então tem 12 dígitos.
+      if (client.phone && client.phone.length === 12) {
         payerPhone = {
-          area_code: client.phone.substring(2, 4),
-          number: client.phone.substring(4)
+          area_code: client.phone.substring(2, 4), // Pega o DDD
+          number: client.phone.substring(4)      // Pega o número
         };
       }
-      // <<< FIM DA CORREÇÃO FINAL >>>
 
+      // 4. <<< CRIAÇÃO DA PREFERÊNCIA - RÉPLICA EXATA DO E-COMMERCE >>>
       const preferencePayload = {
-        purpose: 'wallet_purchase',
         items: [{
           id: plan.id.toString(),
           title: plan.name,
-          description: `Assinatura do plano ${plan.name} para o MAP no Controle.`,
           unit_price: Math.round(plan.price * 100) / 100,
           quantity: 1,
           currency_id: 'BRL',
+          // Nenhum outro campo aqui, exatamente como no e-commerce.
         }],
         payer: {
           name: firstName,
           surname: lastName,
           email: client.email,
-          // <<< CORREÇÃO FINAL APLICADA AQUI >>>
-          // Inclui o objeto 'phone' no 'payer', espelhando a implementação funcional.
           phone: payerPhone,
-        },
-        payment_methods: {
-            excluded_payment_types: [{ id: "ticket" }, { id: "atm" }],
-            installments: 1
         },
         back_urls: {
           success: `${process.env.FRONTEND_URL}/assinatura/sucesso`,
@@ -78,12 +75,21 @@ const mercadoPagoService = {
           pending: `${process.env.FRONTEND_URL}/assinatura/pendente`,
         },
         auto_return: "approved",
-        external_reference: subscription.id.toString(),
+        external_reference: subscription.id.toString(), // Equivalente ao pedidoId
+        binary_mode: true,
+        payment_methods: {
+            excluded_payment_types: [
+                { id: "ticket" },
+                { id: "atm" }
+            ],
+            installments: 1
+        },
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
         statement_descriptor: "MAP NO CONTROLE",
-        binary_mode: true,
+        purpose: 'wallet_purchase',
         expiration_date_of: getExpirationDate(),
       };
+      // <<< FIM DA RÉPLICA >>>
 
       const response = await mpPreference.create({ body: preferencePayload });
 
