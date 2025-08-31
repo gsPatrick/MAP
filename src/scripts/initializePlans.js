@@ -3,7 +3,7 @@ const { Plan } = require('../database');
 const logger = require('../utils/logger');
 
 // Definição dos 4 planos base do sistema.
-// Os nomes são amigáveis para o usuário final.
+// Estes são os valores "corretos" que o sistema irá garantir.
 const basePlansData = [
   {
     name: 'Básico Mensal',
@@ -18,7 +18,7 @@ const basePlansData = [
   {
     name: 'Básico Anual',
     description: 'Acesso completo às funcionalidades do plano básico por um ano, com desconto.',
-    price: 389.90, // Preço anual sugerido
+    price: 389.90, // <<< PREÇO CORRETO GARANTIDO PELO SCRIPT
     currency: 'BRL',
     durationDays: 365,
     tier: 'basico',
@@ -38,7 +38,7 @@ const basePlansData = [
   {
     name: 'Avançado Anual',
     description: 'Acesso a todas as funcionalidades, incluindo recursos empresariais, por um ano com desconto.',
-    price: 789.90, // Preço anual sugerido
+    price: 789.90, // <<< PREÇO CORRETO GARANTIDO PELO SCRIPT
     currency: 'BRL',
     durationDays: 365,
     tier: 'avancado',
@@ -48,42 +48,60 @@ const basePlansData = [
 ];
 
 /**
- * Verifica se os planos base existem no banco de dados e os cria se necessário.
- * Esta função deve ser chamada na inicialização da aplicação.
+ * <<< FUNÇÃO ATUALIZADA >>>
+ * Garante que os planos base existam e estejam com os dados corretos no banco.
+ * Se um plano não existe, ele é criado.
+ * Se um plano existe mas tem dados diferentes (ex: preço), ele é ATUALIZADO.
  */
 async function initializeBasePlans() {
   try {
-    logger.info('[DB INIT] Verificando a existência dos planos base...');
+    logger.info('[DB INIT] Sincronizando e corrigindo os planos base...');
     
     let createdCount = 0;
+    let updatedCount = 0;
     let checkedCount = 0;
 
     for (const planData of basePlansData) {
-      // O método findOrCreate é perfeito para esta tarefa:
-      // Ele busca um plano com o nome. Se encontrar, retorna ele. Se não, cria um novo.
-      const [plan, created] = await Plan.findOrCreate({
-        where: { name: planData.name },
-        defaults: planData // Os dados a serem usados se precisar criar
-      });
+      // 1. Tenta encontrar o plano pelo nome
+      const existingPlan = await Plan.findOne({ where: { name: planData.name } });
 
-      if (created) {
-        logger.info(`[DB INIT] Plano "${plan.name}" não encontrado. Criado com sucesso.`);
+      if (!existingPlan) {
+        // 2. Se não existe, cria o plano.
+        await Plan.create(planData);
+        logger.info(`[DB INIT] Plano "${planData.name}" não encontrado. CRIANDO com sucesso.`);
         createdCount++;
       } else {
-        logger.debug(`[DB INIT] Plano "${plan.name}" já existe. Verificação OK.`);
-        checkedCount++;
+        // 3. Se existe, verifica se os dados importantes estão corretos.
+        const needsUpdate = 
+          Number(existingPlan.price) !== Number(planData.price) ||
+          existingPlan.durationDays !== planData.durationDays ||
+          existingPlan.tier !== planData.tier ||
+          Number(existingPlan.affiliateCommissionValue) !== Number(planData.affiliateCommissionValue);
+
+        if (needsUpdate) {
+          // 4. Se algum dado está diferente, atualiza o plano.
+          await existingPlan.update(planData);
+          logger.warn(`[DB INIT] Plano "${planData.name}" encontrado com dados desatualizados. ATUALIZANDO para os valores corretos.`);
+          updatedCount++;
+        } else {
+          // 5. Se está tudo certo, apenas registra a verificação.
+          logger.debug(`[DB INIT] Plano "${planData.name}" já existe e está correto. Verificação OK.`);
+          checkedCount++;
+        }
       }
     }
 
     if (createdCount > 0) {
-        logger.info(`[DB INIT] ${createdCount} plano(s) base foram criados.`);
+      logger.info(`[DB INIT] ${createdCount} novo(s) plano(s) base foram criados.`);
     }
-    logger.info(`[DB INIT] Verificação de ${checkedCount + createdCount} planos base concluída.`);
+    if (updatedCount > 0) {
+      logger.info(`[DB INIT] ${updatedCount} plano(s) existente(s) foram corrigidos/atualizados.`);
+    }
+    logger.info(`[DB INIT] Sincronização de ${basePlansData.length} planos base concluída.`);
 
   } catch (error) {
-    logger.error('[DB INIT] Erro crítico ao inicializar os planos base:', error);
-    // Em um ambiente de produção, você pode querer que a aplicação pare se os planos não puderem ser criados.
-    // process.exit(1);
+    logger.error('[DB INIT] Erro crítico ao inicializar/sincronizar os planos base:', error);
+    // process.exit(1); // Descomente se for crítico para a aplicação
   }
 }
 
