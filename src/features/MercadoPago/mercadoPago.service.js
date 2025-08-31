@@ -148,6 +148,69 @@ const mercadoPagoService = {
       logger.error("Erro fatal ao processar webhook do Mercado Pago:", error.cause || error);
     }
   },
-};
+  // <<< NOVA FUNÇÃO PARA GERAR O PAGAMENTO PIX >>>
+  async criarPagamentoPix(clientId, planId) {
+    try {
+      const client = await Client.findByPk(clientId);
+      const plan = await Plan.findByPk(planId);
+
+      if (!client || !plan) {
+        throw { statusCode: 404, message: 'Cliente ou Plano não encontrado.' };
+      }
+      if (!plan.price || Number(plan.price) < 1.00) {
+        throw { statusCode: 500, message: 'Plano com configuração de preço inválida.' };
+      }
+
+      const subscription = await Subscription.create({
+        clientId,
+        planId,
+        status: 'Pendente',
+        startDate: new Date().toISOString().split('T')[0],
+        endDate: new Date(new Date().setDate(new Date().getDate() + plan.durationDays)).toISOString().split('T')[0],
+      });
+
+      const expirationDate = new Date();
+      expirationDate.setMinutes(expirationDate.getMinutes() + 30); // PIX expira em 30 minutos
+
+      const [firstName, ...lastNameParts] = (client.name || 'Cliente').split(' ');
+      const lastName = lastNameParts.join(' ') || firstName;
+
+      const paymentPayload = {
+        transaction_amount: Math.round(plan.price * 100) / 100,
+        description: `Assinatura Plano ${plan.name}`,
+        payment_method_id: 'pix',
+        payer: {
+          email: client.email,
+          first_name: firstName,
+          last_name: lastName,
+        },
+        external_reference: subscription.id.toString(),
+        notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
+        date_of_expiration: expirationDate.toISOString().replace(/\.\d{3}Z$/, "-03:00"),
+      };
+
+      logger.info(`[MP PIX] Criando pagamento PIX para Assinatura ID: ${subscription.id}`);
+      const response = await mpPayment.create({ body: paymentPayload });
+
+      // Atualiza a assinatura com o ID do pagamento para referência
+      await subscription.update({ externalSubscriptionId: response.id.toString() });
+
+      const pixData = {
+        paymentId: response.id,
+        status: response.status, // Deverá ser "pending"
+        qrCode: response.point_of_interaction.transaction_data.qr_code,
+        qrCodeBase64: response.point_of_interaction.transaction_data.qr_code_base64,
+      };
+
+      logger.info(`[MP PIX] Pagamento PIX (ID: ${pixData.paymentId}) criado com sucesso.`);
+      return pixData;
+
+    } catch (error) {
+      logger.error('Erro ao criar pagamento PIX:', error.cause || error);
+      const errorMessage = error.cause?.error?.message || error.message || 'Erro desconhecido ao gerar PIX.';
+      throw { statusCode: 500, message: errorMessage };
+    }
+  },
+}
 
 module.exports = mercadoPagoService;

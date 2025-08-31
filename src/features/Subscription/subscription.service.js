@@ -3,13 +3,8 @@ const { Client, Plan, Subscription, sequelize } = require('../../database');
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 const { sendWhatsappMessage } = require('../../services/whatsappService');
-const { formatDate, formatCurrency } = require('../../utils/formatters'); // Adicionado formatCurrency
+const { formatDate, formatCurrency } = require('../../utils/formatters');
 
-/**
- * Cria uma nova assinatura, opcionalmente registrando um código de afiliado.
- * @param {string} affiliateCode - O código de afiliado usado na compra (opcional).
- * ... outros parâmetros
- */
 async function createSubscription(clientId, planId, startDate = null, status = 'Ativa', externalSubscriptionId = null, affiliateCode = null) {
   const t = await sequelize.transaction();
   try {
@@ -19,12 +14,11 @@ async function createSubscription(clientId, planId, startDate = null, status = '
       error.statusCode = 404; error.status = 'fail'; throw error;
     }
 
-    // === LÓGICA PARA REGISTRAR O INDICADOR NO MOMENTO DA CRIAÇÃO ===
     if (affiliateCode && !clientInstance.referredByClientId) {
       const referrer = await Client.findOne({ 
           where: { 
             affiliateCode: affiliateCode.toUpperCase(),
-            id: { [Op.ne]: clientInstance.id } // Garante que o cliente não se auto-indicou
+            id: { [Op.ne]: clientInstance.id }
           }, 
           transaction: t 
       });
@@ -32,10 +26,9 @@ async function createSubscription(clientId, planId, startDate = null, status = '
         await clientInstance.update({ referredByClientId: referrer.id }, { transaction: t });
         logger.info(`[SubscriptionService] Cliente ID ${clientId} foi indicado pelo afiliado ID ${referrer.id} (código: ${affiliateCode}).`);
       } else {
-        logger.warn(`[SubscriptionService] Código de afiliado "${affiliateCode}" inválido, não encontrado ou pertence ao próprio cliente.`);
+        logger.warn(`[SubscriptionService] Código de afiliado "${affiliateCode}" inválido ou não encontrado.`);
       }
     }
-    // === FIM DA LÓGICA DO CÓDIGO ===
 
     const plan = await Plan.findByPk(planId, { transaction: t });
     if (!plan) {
@@ -73,7 +66,6 @@ async function createSubscription(clientId, planId, startDate = null, status = '
             accessExpiresAt: clientAccessExpiresAt,
             status: 'Ativo'
         }, { transaction: t });
-        logger.info(`[SUBSCRIPTION SERVICE] Cliente ID ${clientId} atualizado para accessLevel: ${clientAccessLevel}, expiresAt: ${clientAccessExpiresAt}`);
     } else if (status === 'Pendente' && clientInstance.status === 'Ativo' && clientInstance.accessLevel === 'gratuito') {
         await clientInstance.update({ status: 'Aguardando Pagamento' }, { transaction: t });
     }
@@ -92,18 +84,16 @@ async function createSubscription(clientId, planId, startDate = null, status = '
 
     const newSubscription = await Subscription.create(newSubscriptionData, { transaction: t });
 
-    // === LÓGICA PARA PAGAR COMISSÃO SE A ASSINATURA JÁ É CRIADA COMO ATIVA ===
     if (status === 'Ativa') {
         const referredClient = await Client.findByPk(clientId, { transaction: t });
         if (referredClient.referredByClientId && plan.affiliateCommissionValue > 0) {
             const affiliateClient = await Client.findByPk(referredClient.referredByClientId, { transaction: t });
             if (affiliateClient) {
                 await affiliateClient.increment('balance', { by: plan.affiliateCommissionValue, transaction: t });
-                logger.info(`Comissão de ${formatCurrency(plan.affiliateCommissionValue)} creditada ao afiliado ID ${affiliateClient.id} pela criação da assinatura do cliente ID ${clientId}.`);
+                logger.info(`Comissão de ${formatCurrency(plan.affiliateCommissionValue)} creditada ao afiliado ID ${affiliateClient.id}.`);
             }
         }
     }
-    // === FIM DA LÓGICA DE COMISSÃO ===
 
     await t.commit(); 
 
@@ -115,22 +105,22 @@ async function createSubscription(clientId, planId, startDate = null, status = '
             expiryWelcomePart = "Você agora tem *acesso vitalício*! 🎉";
         }
         const intro = `Ebaaa, ${clientName}! 🚀 Seja muito bem-vindo(a) ao time MAP no Controle!`;
-        const body = `Sua assinatura do plano *${plan.name}* foi ativada com sucesso e eu não poderia estar mais feliz em ter você por aqui!\n\n${expiryWelcomePart}`;
-        const footer = `Para começarmos, que tal me dizer "oi"? Ou, se preferir, já pode explorar a plataforma em https://${platformUrl}\n\nEstou a postos para te ajudar a organizar tudo! 💪✨`;
+        const body = `Sua assinatura do plano *${plan.name}* foi ativada com sucesso!\n\n${expiryWelcomePart}`;
+        const footer = `Para começar, que tal me dizer "oi"? Ou acesse a plataforma em https://${platformUrl}\n\nEstou pronto para te ajudar! 💪✨`;
         const welcomeMessage = `${intro}\n\n${body}\n\n${footer}`;
         try {
           await sendWhatsappMessage(clientInstance.phone, welcomeMessage);
-          logger.info(`[SUBSCRIPTION SERVICE] Mensagem de boas-vindas (primeira assinatura) enviada para o cliente ID ${clientId} (Plano: ${plan.name}).`);
+          logger.info(`[SUBSCRIPTION SERVICE] Mensagem de boas-vindas enviada para o cliente ID ${clientId}.`);
         } catch (whatsappError) {
-          logger.error(`[SUBSCRIPTION SERVICE] Falha ao enviar mensagem de boas-vindas para o cliente ID ${clientId}: ${whatsappError.message}`);
+          logger.error(`[SUBSCRIPTION SERVICE] Falha ao enviar mensagem de boas-vindas: ${whatsappError.message}`);
         }
     }
 
-    logger.info(`Assinatura ID ${newSubscription.id} criada para Cliente ID ${clientId} com Plano "${plan.name}" (ID ${planId}). Válida até ${newSubscription.endDate}. Status: ${status}.`);
+    logger.info(`Assinatura ID ${newSubscription.id} criada para Cliente ID ${clientId}. Status: ${status}.`);
     return newSubscription.toJSON();
   } catch (error) {
-    if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
-    logger.error(`Erro ao criar assinatura para Cliente ID ${clientId}: ${error.message}`, { error, planId, startDate, status });
+    if (t && !t.finished) await t.rollback();
+    logger.error(`Erro ao criar assinatura: ${error.message}`, { error });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
@@ -151,7 +141,7 @@ async function getActiveSubscription(clientId) {
     });
     return subscription ? subscription.toJSON() : null;
   } catch (error) {
-    logger.error(`[SUBSCRIPTION SERVICE] Erro ao verificar assinatura ativa para Cliente ID ${clientId}: ${error.message}`, { error });
+    logger.error(`[SUBSCRIPTION SERVICE] Erro ao verificar assinatura ativa: ${error.message}`, { error });
     return null; 
   }
 }
@@ -165,16 +155,31 @@ async function getClientSubscriptions(clientId) {
         });
         return subscriptions.map(sub => sub.toJSON());
     } catch (error) {
-        logger.error(`Erro ao listar assinaturas do cliente ID ${clientId}: ${error.message}`, { error });
+        logger.error(`Erro ao listar assinaturas do cliente ${clientId}: ${error.message}`, { error });
         throw error;
     }
 }
 
-async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newStatus, newEndDate = null) {
+// <<< FUNÇÃO MODIFICADA PARA ACEITAR subscriptionId >>>
+async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newStatus, newEndDate = null, subscriptionId = null) {
     const t = await sequelize.transaction();
     try {
+        // Validação de entrada
+        if (!externalSubscriptionId && !subscriptionId) {
+            logger.warn(`[SUBSCRIPTION SERVICE] Tentativa de atualizar status sem um ID externo ou ID de assinatura.`);
+            await t.rollback();
+            return null;
+        }
+
+        // Lógica de busca flexível
+        const whereClause = subscriptionId 
+          ? { id: subscriptionId } 
+          : { externalSubscriptionId: externalSubscriptionId };
+        
+        logger.info(`[SUBSCRIPTION SERVICE] Buscando assinatura por ${subscriptionId ? `ID direto '${subscriptionId}'` : `ID externo '${externalSubscriptionId}'`} para atualização.`);
+
         const subscription = await Subscription.findOne({
-            where: { externalSubscriptionId },
+            where: whereClause,
             include: [
                 { model: Client, as: 'client' },
                 { model: Plan, as: 'plan' }
@@ -183,18 +188,18 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         });
 
         if (!subscription) {
-            logger.warn(`[SUBSCRIPTION SERVICE] Assinatura com ID externo ${externalSubscriptionId} não encontrada para atualização.`);
+            logger.warn(`[SUBSCRIPTION SERVICE] Assinatura não encontrada para atualização usando a cláusula:`, whereClause);
             await t.rollback();
             return null;
         }
 
         const clientInstance = subscription.client;
         const plan = subscription.plan;
-        const oldClientStatus = clientInstance.status; // Captura o status ANTES da atualização
+        const oldClientStatus = clientInstance.status;
         const oldSubscriptionStatus = subscription.status;
 
         if (!clientInstance || !plan) {
-            logger.error(`[SUBSCRIPTION SERVICE] Dados inconsistentes para a assinatura ${subscription.id}. Cliente ou Plano ausente.`);
+            logger.error(`[SUBSCRIPTION SERVICE] Dados inconsistentes para a assinatura ${subscription.id}.`);
             await t.rollback();
             return null;
         }
@@ -203,35 +208,21 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         let clientAccessLevel = clientInstance.accessLevel;
         let clientAccessExpiresAt = clientInstance.accessExpiresAt;
         let clientStatus = clientInstance.status;
+        let isRenewal = false;
 
-        let isRenewal = false; // Flag para identificar se é uma renovação
-
-        // A lógica principal acontece aqui, quando uma assinatura é ativada
         if (newStatus === 'Ativa' && oldSubscriptionStatus !== 'Ativa') {
-            
-            // DETECTA A RENOVAÇÃO se o status anterior do cliente não era 'Ativo' ou se a assinatura estava pendente.
             if (oldClientStatus !== 'Ativo' || oldSubscriptionStatus === 'Pendente') {
                 isRenewal = true;
             }
             
-            // === LÓGICA PARA PAGAR A COMISSÃO ===
             if (clientInstance.referredByClientId && plan.affiliateCommissionValue > 0) {
                 const affiliateClient = await Client.findByPk(clientInstance.referredByClientId, { transaction: t });
                 if (affiliateClient) {
-                    await affiliateClient.increment('balance', { 
-                        by: plan.affiliateCommissionValue, 
-                        transaction: t 
-                    });
-                    logger.info(`Comissão de ${formatCurrency(plan.affiliateCommissionValue)} creditada ao afiliado ID ${affiliateClient.id} pela ativação da assinatura do cliente ID ${clientInstance.id}.`);
-                } else {
-                    logger.warn(`Afiliado ID ${clientInstance.referredByClientId} não foi encontrado. Nenhuma comissão será paga para a assinatura ${subscription.id}.`);
+                    await affiliateClient.increment('balance', { by: plan.affiliateCommissionValue, transaction: t });
+                    logger.info(`Comissão de ${formatCurrency(plan.affiliateCommissionValue)} creditada ao afiliado ID ${affiliateClient.id}.`);
                 }
-            } else {
-                logger.info(`Assinatura ${subscription.id} ativada, mas sem indicação ou comissão de afiliado aplicável.`);
             }
-            // === FIM DA LÓGICA DE COMISSÃO ===
 
-            // Lógica para atualizar o nível de acesso do cliente que pagou
             updateSubData.endDate = newEndDate;
             const planTier = plan.tier || 'basico';
             clientAccessLevel = `${planTier}_${plan.durationDays > 60 ? 'anual' : 'mensal'}`;
@@ -240,15 +231,9 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
             }
             clientAccessExpiresAt = newEndDate;
             clientStatus = 'Ativo';
-
         } else if (['Cancelada', 'Expirada', 'Pagamento Falhou'].includes(newStatus)) {
-            // Lógica para rebaixar o plano do cliente se ele não tiver outra assinatura ativa
             const otherActiveSubscriptions = await Subscription.count({
-                where: { 
-                    clientId: subscription.clientId, 
-                    status: 'Ativa', 
-                    id: {[Op.ne]: subscription.id} 
-                }, transaction: t
+                where: { clientId: subscription.clientId, status: 'Ativa', id: {[Op.ne]: subscription.id} }, transaction: t
             });
             if (otherActiveSubscriptions === 0) {
                 clientAccessLevel = 'gratuito';
@@ -257,7 +242,6 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
             }
         }
         
-        // Aplica as atualizações no cliente e na assinatura
         await clientInstance.update({
             accessLevel: clientAccessLevel,
             accessExpiresAt: clientAccessExpiresAt,
@@ -267,38 +251,27 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         await subscription.update(updateSubData, { transaction: t });
         
         await t.commit();
-        logger.info(`[SUBSCRIPTION SERVICE] Status da assinatura ID ${subscription.id} (Externo: ${externalSubscriptionId}) atualizado para ${newStatus}.`);
+        logger.info(`[SUBSCRIPTION SERVICE] Status da assinatura ID ${subscription.id} atualizado para ${newStatus}.`);
 
-        // Bloco de envio de mensagem de WhatsApp
         if (newStatus === 'Ativa' && clientInstance.phone) {
             const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Olá';
-            let welcomeMessage;
-
-            if (isRenewal) {
-                // Mensagem específica para RENOVAÇÃO
-                welcomeMessage = `Uhuul, que bom te ter de volta, ${clientName}! 🎉\n\n` +
-                                 `Sua assinatura do plano *${plan.name}* foi renovada com sucesso e seu acesso total já está liberado.\n\n` +
-                                 `Continue no controle! Estou pronto para te ajudar. O que vamos organizar primeiro? 💪`;
-            } else {
-                // Mensagem para uma ativação normal (primeira vez)
-                welcomeMessage = `Ebaaa, ${clientName}! 🥳\n\n` +
-                                 `Sua assinatura do plano *${plan.name}* foi ativada com sucesso.\n\n` +
-                                 `Seu acesso está garantido. Para começar, que tal me dizer "oi"?`;
-            }
-
+            let welcomeMessage = isRenewal
+                ? `Uhuul, que bom te ter de volta, ${clientName}! 🎉\n\nSua assinatura do plano *${plan.name}* foi renovada com sucesso e seu acesso total já está liberado.\n\nContinue no controle! 💪`
+                : `Ebaaa, ${clientName}! 🥳\n\nSua assinatura do plano *${plan.name}* foi ativada com sucesso.\n\nSeu acesso está garantido. Para começar, que tal me dizer "oi"?`;
+            
             try {
                 await sendWhatsappMessage(clientInstance.phone, welcomeMessage);
-                logger.info(`[SUBSCRIPTION SERVICE] Mensagem de ${isRenewal ? 'RENOVAÇÃO' : 'ativação'} enviada para o cliente ID ${clientInstance.id}.`);
+                logger.info(`[SUBSCRIPTION SERVICE] Mensagem de ${isRenewal ? 'RENOVAÇÃO' : 'ativação'} enviada.`);
             } catch (whatsappError) {
-                logger.error(`[SUBSCRIPTION SERVICE] FALHA AO ENVIAR MENSAGEM de ${isRenewal ? 'renovação' : 'ativação'} para o cliente ID ${clientInstance.id}: ${whatsappError.message}`);
+                logger.error(`[SUBSCRIPTION SERVICE] FALHA AO ENVIAR MENSAGEM: ${whatsappError.message}`);
             }
         }
         
-        return subscription.reload({ include: [{ model: Client, as: 'client'}, {model: Plan, as: 'plan'}] });
+        return subscription.reload({ include: ['client', 'plan'] });
 
     } catch (error) {
-        if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
-        logger.error(`[SUBSCRIPTION SERVICE] Erro ao atualizar status da assinatura externa ${externalSubscriptionId}: ${error.message}`, { error });
+        if (t && !t.finished) await t.rollback();
+        logger.error(`[SUBSCRIPTION SERVICE] Erro ao atualizar status da assinatura: ${error.message}`, { error });
         throw error;
     }
 }

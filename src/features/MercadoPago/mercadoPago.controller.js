@@ -29,6 +29,21 @@ const mercadoPagoController = {
       // O 'next(error)' não deve ser chamado aqui.
     }
   },
+ async criarPagamentoPix(req, res, next) {
+    try {
+      const clientId = req.client.id;
+      const { planId } = req.body;
+
+      if (!planId) {
+        return res.status(400).json({ status: 'fail', message: 'O ID do Plano (planId) é obrigatório.' });
+      }
+
+      const pixData = await mercadoPagoService.criarPagamentoPix(clientId, planId);
+      res.status(201).json({ status: 'success', data: pixData });
+    } catch (error) {
+      next(error);
+    }
+  },
 };
 
 module.exports = mercadoPagoController;
