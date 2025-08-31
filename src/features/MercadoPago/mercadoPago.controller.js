@@ -2,15 +2,14 @@
 const mercadoPagoService = require('./mercadoPago.service');
 
 const mercadoPagoController = {
+  // Rota antiga - pode manter ou remover depois
   async criarCheckoutAssinatura(req, res, next) {
     try {
-      const clientId = req.client.id; // Vem do middleware de autenticação
+      const clientId = req.client.id;
       const { planId } = req.body;
-
       if (!planId) {
         return res.status(400).json({ status: 'fail', message: 'O ID do Plano (planId) é obrigatório.' });
       }
-
       const checkout = await mercadoPagoService.criarPreferenciaAssinatura(clientId, planId);
       res.status(200).json({ status: 'success', data: checkout });
     } catch (error) {
@@ -18,18 +17,33 @@ const mercadoPagoController = {
     }
   },
 
+  // Rota antiga - pode manter ou remover depois
+  async processarPagamentoBrick(req, res, next) {
+    try {
+      const clientId = req.client.id;
+      const paymentData = req.body;
+      if (!paymentData.token || !paymentData.planId || !paymentData.payment_method_id) {
+        return res.status(400).json({ status: 'fail', message: 'Dados de pagamento incompletos.' });
+      }
+      const resultado = await mercadoPagoService.processarPagamentoBrick(clientId, paymentData);
+      res.status(201).json({ status: 'success', data: resultado });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // Webhook
   async webhook(req, res, next) {
     try {
-      // O webhook responde imediatamente com 200 OK para o Mercado Pago
-      // e processa a lógica em segundo plano.
       res.status(200).send('Webhook recebido.'); 
       await mercadoPagoService.processarWebhook(req.body);
     } catch (error) {
-      // A resposta já foi enviada, então apenas logamos o erro.
-      // O 'next(error)' não deve ser chamado aqui.
+      // Apenas loga o erro, pois a resposta já foi enviada
     }
   },
- async criarPagamentoPix(req, res, next) {
+
+  // Controller para gerar PIX
+  async criarPagamentoPix(req, res, next) {
     try {
       const clientId = req.client.id;
       const { planId } = req.body;
@@ -46,4 +60,11 @@ const mercadoPagoController = {
   },
 };
 
-module.exports = mercadoPagoController;
+// <<< A CORREÇÃO ESTÁ AQUI >>>
+// A função 'criarPagamentoPix' não estava sendo exportada.
+module.exports = {
+    criarCheckoutAssinatura: mercadoPagoController.criarCheckoutAssinatura,
+    webhook: mercadoPagoController.webhook,
+    processarPagamentoBrick: mercadoPagoController.processarPagamentoBrick,
+    criarPagamentoPix: mercadoPagoController.criarPagamentoPix, // Adicione esta linha
+};
