@@ -5,10 +5,11 @@ const { Subscription, Plan, Client } = require('../../database');
 const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
 
+// Helper para obter a data de expiração da preferência (3 dias a partir de agora)
 function getExpirationDate() {
     const date = new Date();
-    // Aumentar a expiração para 3 dias para dar mais flexibilidade ao usuário
     date.setDate(date.getDate() + 3); 
+    // Formato ISO 8601 com fuso horário -03:00 (Brasília)
     return date.toISOString().replace(/\.\d{3}Z$/, "-03:00");
 }
 
@@ -33,39 +34,38 @@ const mercadoPagoService = {
         endDate: new Date(new Date().setDate(new Date().getDate() + plan.durationDays)).toISOString().split('T')[0],
       });
 
+      // <<< INÍCIO DA CORREÇÃO DEFINITIVA BASEADA NO SEU E-COMMERCE >>>
+      
+      const [firstName, ...lastNameParts] = (client.name || '').split(' ');
+      const lastName = lastNameParts.join(' ') || firstName; // Garante que sobrenome tenha um valor
+
       const preferencePayload = {
-        // <<< INÍCIO DA CORREÇÃO DEFINITIVA BASEADA NO SEU E-COMMERCE >>>
+        // [ALTERAÇÃO 1]: Adicionado o parâmetro 'purpose'
+        purpose: 'wallet_purchase',
+
         items: [{
           id: plan.id.toString(),
-          title: plan.name, // Usar o nome do plano, mais curto e direto
+          title: plan.name,
           unit_price: Number.parseFloat(plan.price),
           quantity: 1,
-          currency_id: 'BRL', // Boa prática, exigido em alguns contextos
-          // Campos como 'description' e 'category_id' foram removidos do item
-          // para criar o payload mais limpo e compatível possível, evitando conflitos no app.
+          currency_id: 'BRL',
         }],
-        // <<< FIM DA CORREÇÃO DEFINITIVA >>>
         
+        // [ALTERAÇÃO 2]: Ajustado 'payer' para incluir 'surname'
         payer: {
-          name: client.name,
+          name: firstName,
+          surname: lastName,
           email: client.email,
         },
         
-        // Parâmetros que garantem o fluxo correto (baseado no seu e-commerce)
-        binary_mode: true,
         payment_methods: {
             excluded_payment_types: [
-                { id: "ticket" }, // Exclui Boleto e similares
-                { id: "atm" }     // Exclui Lotérica
+                { id: "ticket" },
+                { id: "atm" }
             ],
-            installments: 1 // Força pagamento à vista
-        },
-        shipments: {
-            cost: 0,
-            mode: 'not_specified',
+            installments: 1
         },
 
-        // URLs e referências
         back_urls: {
           success: `${process.env.FRONTEND_URL}/assinatura/sucesso`,
           failure: `${process.env.FRONTEND_URL}/assinatura/erro`,
@@ -75,7 +75,15 @@ const mercadoPagoService = {
         external_reference: subscription.id.toString(),
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
         statement_descriptor: "MAP NO CONTROLE",
+        binary_mode: true,
+
+        // [ALTERAÇÃO 3]: Adicionada data de expiração para a preferência
+        expiration_date_of: getExpirationDate(),
+        
+        // [ALTERAÇÃO 4]: Objeto 'shipments' foi completamente removido
       };
+      // <<< FIM DA CORREÇÃO DEFINITIVA >>>
+
 
       const response = await mpPreference.create({ body: preferencePayload });
 
@@ -99,25 +107,28 @@ const mercadoPagoService = {
   async processarWebhook(dados) {
     try {
       if (dados.type !== 'payment') {
+        logger.debug("[MP Webhook] Webhook recebido não é do tipo 'payment'. Ignorando.");
         return;
       }
       
       const paymentId = dados.data.id;
+      logger.info(`[MP Webhook] Processando pagamento ID: ${paymentId}`);
       const paymentData = await mpPayment.get({ id: paymentId });
       const subscriptionId = parseInt(paymentData.external_reference, 10);
 
       if (!subscriptionId) {
-        logger.warn("[MP Webhook] Webhook sem 'external_reference'.");
+        logger.warn(`[MP Webhook] Webhook para pagamento ${paymentId} não continha 'external_reference'. Ignorando.`);
         return;
       }
       
       const subscription = await Subscription.findByPk(subscriptionId, { include: ['plan'] });
       if (!subscription) {
-        logger.error(`[MP Webhook] CRÍTICO: Assinatura com ID ${subscriptionId} não encontrada!`);
+        logger.error(`[MP Webhook] CRÍTICO: Assinatura com ID ${subscriptionId} (da external_reference) não encontrada no banco de dados!`);
         return;
       }
       
       if (paymentData.status === "approved" && subscription.status !== 'Ativa') {
+        logger.info(`[MP Webhook] Pagamento ${paymentId} APROVADO para assinatura ${subscriptionId}. Atualizando status para 'Ativa'.`);
         const newEndDate = new Date();
         newEndDate.setDate(newEndDate.getDate() + subscription.plan.durationDays);
         
@@ -127,7 +138,10 @@ const mercadoPagoService = {
           newEndDate.toISOString().split('T')[0]
         );
       } else if (['rejected', 'cancelled', 'refunded'].includes(paymentData.status) && subscription.status !== 'Cancelada') {
+        logger.info(`[MP Webhook] Pagamento ${paymentId} com status '${paymentData.status}' para assinatura ${subscriptionId}. Atualizando status para 'Cancelada'.`);
         await subscription.update({ status: 'Cancelada' });
+      } else {
+        logger.info(`[MP Webhook] Status do pagamento ${paymentId} é '${paymentData.status}'. Nenhuma ação necessária para a assinatura ${subscriptionId} (status atual: ${subscription.status}).`);
       }
 
     } catch (error) {
