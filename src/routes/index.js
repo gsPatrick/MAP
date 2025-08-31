@@ -36,6 +36,7 @@ const affiliateRoutes = require('../features/Affiliate/affiliate.routes');
 const systemSupportBotRoutes = require ('../features/SystemSupportBot/systemSupportBot.routes')
 const checklistRoutes = require('../features/Checklist/checklist.routes');
 const { publicMercadoPagoRouter, privateMercadoPagoRouter } = require('../features/MercadoPago/mercadoPago.routes');
+const subscriptionRouter = require('../features/Subscription/subscription.routes'); // <<< IMPORTE A NOVA ROTA
 
 const mainApiRouter = Router();
 
@@ -56,7 +57,7 @@ mainApiRouter.use('/webhooks/google-calendar', googleWebhookRoutes);
 mainApiRouter.use('/public/booking', publicBookingRoutes);
 mainApiRouter.use('/system-support-bot', systemSupportBotRoutes);
 mainApiRouter.use('/mercado-pago', publicMercadoPagoRouter); // Webhook do MP (Público)
-
+mainApiRouter.use('/subscriptions', subscriptionRouter); // <<< USE A NOVA ROTA AQUI
 // --- ROTAS DE ADMINISTRAÇÃO DO SISTEMA ---
 mainApiRouter.use('/users', userRoutes);
 mainApiRouter.use('/clients', clientRoutes);
