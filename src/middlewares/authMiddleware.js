@@ -1,8 +1,9 @@
 // src/middlewares/authMiddleware.js
 const jwt = require('jsonwebtoken');
-const { User, Client, FinancialAccount, SharedAccess } = require('../database'); // FinancialAccount e SharedAccess podem não ser usados diretamente aqui, mas bom ter se precisar no futuro
+const { User, Client, FinancialAccount, SharedAccess } = require('../database');
 const { JWT_SECRET } = require('../utils/authUtils');
 const logger = require('../utils/logger');
+const { Op } = require('sequelize');
 
 async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -56,7 +57,7 @@ async function authenticateClientToken(req, res, next) {
     const decoded = jwt.verify(token, JWT_SECRET);
     logger.debug('[AUTH CLIENT MIDDLEWARE] Token decodificado:', decoded);
 
-    let clientInstance; // Variável para a instância do Sequelize
+    let clientInstance;
 
     if (decoded.type === 'client') {
         logger.debug(`[AUTH CLIENT MIDDLEWARE] Tipo 'client'. Buscando Client ID: ${decoded.id}`);
@@ -75,27 +76,52 @@ async function authenticateClientToken(req, res, next) {
             return res.status(403).json({ status: 'fail', message: `Acesso proibido. Status do cliente: ${clientInstance.status}.` });
         }
         
+        // <<< CORREÇÃO PRINCIPAL: Anexa o cliente à requisição ANTES de verificar a assinatura >>>
+        req.client = clientInstance.get({ plain: true });
+        req.sharedAccessContext = null;
+
+        // <<< LISTA DE EXCEÇÕES: Rotas que um cliente PODE acessar mesmo sem assinatura ativa >>>
+        const subscriptionCheckWhitelist = [
+            '/api/subscriptions/me/active',           // Necessária para a página de planos saber o status atual.
+            '/api/auth/client/me',                    // Necessária para o checkout buscar os dados do usuário.
+            '/api/mercado-pago/process-brick-payment',// Essencial para processar o pagamento do Brick.
+            '/api/mercado-pago/create-pix-payment',   // Essencial para o fluxo de pagamento PIX antigo.
+            '/api/mercado-pago/checkout',             // Essencial para o fluxo de Checkout Pro.
+        ];
+        
+        // Se a rota atual ESTÁ na whitelist, pulamos a verificação de assinatura.
+        if (subscriptionCheckWhitelist.some(path => req.originalUrl.startsWith(path))) {
+            logger.info(`[AUTH CLIENT MIDDLEWARE] Rota ${req.originalUrl} na whitelist. Verificação de assinatura pulada para Cliente ID ${req.client.id}.`);
+            return next(); // Pula para o próximo handler.
+        }
+
+        // <<< A VERIFICAÇÃO DE ASSINATURA AGORA SÓ ACONTECE PARA AS OUTRAS ROTAS >>>
         let hasActivePaidAccess = false;
         if (clientInstance.accessLevel && clientInstance.accessLevel !== 'gratuito') {
             if (clientInstance.accessLevel.startsWith('vitalicio_')) hasActivePaidAccess = true;
             else if (clientInstance.accessExpiresAt) {
-                const expiryDate = new Date(clientInstance.accessExpiresAt + 'T00:00:00Z'); // Trata como UTC
-                const today = new Date(); today.setUTCHours(0,0,0,0); // Zera para comparar só data
+                const expiryDate = new Date(clientInstance.accessExpiresAt + 'T00:00:00Z');
+                const today = new Date(); today.setUTCHours(0,0,0,0);
                 if (expiryDate >= today) hasActivePaidAccess = true;
             }
         }
-        if (!hasActivePaidAccess && clientInstance.status !== 'Aguardando Pagamento') {
-            logger.warn(`[AUTH CLIENT MIDDLEWARE] Cliente ID ${clientInstance.id} não possui plano ativo/válido. AccessLevel: ${clientInstance.accessLevel}, ExpiresAt: ${clientInstance.accessExpiresAt}. Acesso negado.`);
+        
+        // Permite o acesso se o cliente acabou de se cadastrar e está indo pagar.
+        if (clientInstance.status === 'Aguardando Pagamento') {
+             hasActivePaidAccess = true;
+        }
+
+        if (!hasActivePaidAccess) {
+            logger.warn(`[AUTH CLIENT MIDDLEWARE] Cliente ID ${clientInstance.id} não possui plano ativo/válido para a rota ${req.originalUrl}. AccessLevel: ${clientInstance.accessLevel}, ExpiresAt: ${clientInstance.accessExpiresAt}. Acesso negado.`);
             return res.status(403).json({ status: 'fail_subscription', message: 'Acesso negado. Nenhuma assinatura ativa encontrada ou sua assinatura expirou.' });
         }
-        req.client = clientInstance.get({ plain: true }); // Converte para plain object
-        req.sharedAccessContext = null;
-        logger.info(`[AUTH CLIENT MIDDLEWARE] req.client populado para login direto. ID: ${req.client.id}`);
-        logger.debug('[AUTH CLIENT MIDDLEWARE] Objeto req.client (direto):', req.client);
+        
+        logger.info(`[AUTH CLIENT MIDDLEWARE] Acesso à rota protegida ${req.originalUrl} concedido para Cliente ID: ${req.client.id}`);
 
     } else if (decoded.type === 'client_shared_access') {
+        // A lógica de acesso compartilhado permanece a mesma
         logger.debug(`[AUTH CLIENT MIDDLEWARE] Tipo 'client_shared_access'. Buscando SharedWithClient ID: ${decoded.id} e OwnerClient ID: ${decoded.ownerClientId}`);
-        const sharedWithClientInstance = await Client.findByPk(decoded.id, { // ID do usuário que recebeu o acesso
+        const sharedWithClientInstance = await Client.findByPk(decoded.id, {
             attributes: ['id', 'phone', 'email', 'name', 'status']
         });
 
@@ -103,7 +129,6 @@ async function authenticateClientToken(req, res, next) {
              logger.warn(`[AUTH CLIENT MIDDLEWARE - SHARED] Usuário compartilhado (ID: ${decoded.id}) do token NÃO ENCONTRADO.`);
              return res.status(401).json({ status: 'fail', message: 'Acesso compartilhado inválido (usuário).' });
         }
-        logger.debug('[AUTH CLIENT MIDDLEWARE - SHARED] Usuário compartilhado encontrado:', sharedWithClientInstance.get({ plain: true }));
 
         if (sharedWithClientInstance.status === 'Bloqueado' || sharedWithClientInstance.status === 'Inativo') {
             logger.warn(`[AUTH CLIENT MIDDLEWARE - SHARED] Usuário compartilhado (ID: ${decoded.id}) está ${sharedWithClientInstance.status}.`);
@@ -117,7 +142,6 @@ async function authenticateClientToken(req, res, next) {
             logger.warn(`[AUTH CLIENT MIDDLEWARE - SHARED] Dono da conta (ID: ${decoded.ownerClientId}) NÃO ENCONTRADO.`);
             return res.status(403).json({ status: 'fail', message: 'Conta do proprietário indisponível para acesso compartilhado.' });
         }
-        logger.debug('[AUTH CLIENT MIDDLEWARE - SHARED] Dono da conta encontrado:', ownerClientInstance.get({ plain: true }));
 
         if (ownerClientInstance.status === 'Bloqueado' || ownerClientInstance.status === 'Inativo') {
             logger.warn(`[AUTH CLIENT MIDDLEWARE - SHARED] Dono da conta (ID: ${decoded.ownerClientId}) está ${ownerClientInstance.status}.`);
@@ -138,7 +162,7 @@ async function authenticateClientToken(req, res, next) {
             return res.status(403).json({ status: 'fail_subscription', message: 'Acesso negado. A conta do proprietário não possui uma assinatura ativa.' });
         }
 
-        req.client = sharedWithClientInstance.get({ plain: true }); // O "usuário logado" é quem recebeu o share
+        req.client = sharedWithClientInstance.get({ plain: true });
         req.sharedAccessContext = {
             ownerClientId: ownerClientInstance.id,
             ownerClientName: ownerClientInstance.name,
@@ -146,9 +170,6 @@ async function authenticateClientToken(req, res, next) {
             canAccessPersonalProfile: decoded.canAccessPersonalProfile,
             canAccessBusinessProfileId: decoded.canAccessBusinessProfileId
         };
-        logger.info(`[AUTH CLIENT MIDDLEWARE - SHARED] req.client (sharedWith) populado. ID: ${req.client.id}`);
-        logger.debug('[AUTH CLIENT MIDDLEWARE - SHARED] Objeto req.client (sharedWith):', req.client);
-        logger.debug('[AUTH CLIENT MIDDLEWARE - SHARED] Objeto req.sharedAccessContext:', req.sharedAccessContext);
     } else {
         logger.warn(`[AUTH CLIENT MIDDLEWARE] Tipo de token desconhecido ou inválido: '${decoded.type || 'desconhecido'}'`);
         return res.status(403).json({ status: 'fail', message: 'Tipo de token inválido para esta operação.' });
@@ -182,7 +203,6 @@ async function checkFinancialAccountOwnership(req, res, next) {
     try {
         const financialAccountIdFromParams = parseInt(req.params.financialAccountId, 10);
 
-        // Verifica se req.client está populado (deve estar pelo authenticateClientToken)
         if (!req.client || !req.client.id) {
             logger.error('[AuthOwnership] Middleware chamado sem req.client. O authenticateClientToken falhou ou não foi executado.');
             return res.status(500).json({ status: 'error', message: 'Erro interno de autenticação.' });
@@ -193,26 +213,22 @@ async function checkFinancialAccountOwnership(req, res, next) {
 
         let financialAccount = null;
 
-        // Cenário 1: Cliente logado diretamente (token.type === 'client')
-        // req.sharedAccessContext será null neste caso.
         if (!req.sharedAccessContext) {
             logger.debug(`[AuthOwnership] Cliente ID ${req.client.id} logado diretamente. Verificando posse ou acesso compartilhado recebido para FA ID ${financialAccountIdFromParams}.`);
             
-            // Tenta encontrar por posse DIRETA
             financialAccount = await FinancialAccount.findOne({
                 where: {
                     id: financialAccountIdFromParams,
-                    clientId: req.client.id // O cliente logado é o proprietário
+                    clientId: req.client.id
                 }
             });
 
-            // Se não encontrou por posse direta, tenta encontrar por ACESSO COMPARTILHADO RECEBIDO
             if (!financialAccount) {
                 const sharedAccess = await SharedAccess.findOne({
                     where: {
-                        sharedWithClientId: req.client.id, // O cliente logado recebeu acesso
-                        status: 'Ativo', // O acesso compartilhado deve estar ativo
-                        [Op.or]: [ // Pode ser acesso ao perfil PF ou a um perfil PJ/MEI específico
+                        sharedWithClientId: req.client.id,
+                        status: 'Ativo',
+                        [Op.or]: [
                             { canAccessPersonalProfile: true, '$accessibleBusinessProfile.accountType$': 'PF' },
                             { canAccessBusinessProfileId: financialAccountIdFromParams }
                         ]
@@ -220,14 +236,11 @@ async function checkFinancialAccountOwnership(req, res, next) {
                     include: [{
                         model: FinancialAccount,
                         as: 'accessibleBusinessProfile',
-                        required: false // Para permitir o OR com canAccessPersonalProfile
+                        required: false
                     }]
                 });
 
                 if (sharedAccess) {
-                    // Confirma que o sharedAccess encontrado é para a FA correta
-                    // Se for acesso a PF, precisamos que a FA da rota seja PF.
-                    // Se for acesso a PJ/MEI, precisa bater o ID.
                     const faTypeFromDb = (await FinancialAccount.findByPk(financialAccountIdFromParams))?.accountType;
 
                     if (faTypeFromDb === 'PF' && sharedAccess.canAccessPersonalProfile) {
@@ -242,19 +255,17 @@ async function checkFinancialAccountOwnership(req, res, next) {
                 }
             }
 
-        } else { // Cenário 2: Cliente logado via token de acesso compartilhado (token.type === 'client_shared_access')
-            // req.client é o sharedWithClient, req.sharedAccessContext.ownerClientId é o dono.
+        } else {
             logger.debug(`[AuthOwnership] Cliente ID ${req.client.id} logado via acesso compartilhado do Owner ID ${req.sharedAccessContext.ownerClientId}. Verificando acesso para FA ID ${financialAccountIdFromParams}.`);
 
-            // Aqui, a validação é se o token de acesso compartilhado realmente dá permissão para esta FA.
             const sharedAccess = await SharedAccess.findOne({
                 where: {
                     ownerClientId: req.sharedAccessContext.ownerClientId,
                     sharedWithClientId: req.client.id,
                     status: 'Ativo',
                     [Op.or]: [
-                        { canAccessPersonalProfile: true }, // Acesso ao perfil pessoal do dono
-                        { canAccessBusinessProfileId: financialAccountIdFromParams } // Acesso a um perfil de negócio específico
+                        { canAccessPersonalProfile: true },
+                        { canAccessBusinessProfileId: financialAccountIdFromParams }
                     ]
                 }
             });
@@ -262,11 +273,10 @@ async function checkFinancialAccountOwnership(req, res, next) {
             if (sharedAccess) {
                 financialAccount = await FinancialAccount.findByPk(financialAccountIdFromParams);
                 if (financialAccount) {
-                    // Verificações adicionais baseadas no tipo de conta e nas permissões do sharedAccess
                     if (financialAccount.accountType === 'PF' && !sharedAccess.canAccessPersonalProfile) {
-                        financialAccount = null; // Tenta acessar PF sem permissão específica
+                        financialAccount = null;
                     } else if (['PJ', 'MEI'].includes(financialAccount.accountType) && sharedAccess.canAccessBusinessProfileId !== financialAccount.id) {
-                        financialAccount = null; // Tenta acessar um PJ/MEI diferente do concedido
+                        financialAccount = null;
                     }
                     if (financialAccount) {
                         logger.debug(`[AuthOwnership] Acesso concedido via token SharedAccess para FA ID ${financialAccountIdFromParams}.`);
@@ -275,19 +285,16 @@ async function checkFinancialAccountOwnership(req, res, next) {
             }
         }
         
-        // Se, após todas as verificações, a financialAccount ainda é nula, nega o acesso.
         if (!financialAccount) {
             logger.warn(`[AuthOwnership] Acesso negado para FinancialAccount ID ${financialAccountIdFromParams} ao Cliente ID ${req.client.id}.`);
             return res.status(403).json({ status: 'fail', message: 'Acesso negado a esta conta financeira.' });
         }
         
-        // Verifica se a conta financeira está ativa
         if (!financialAccount.isActive) {
             logger.warn(`[AuthOwnership] Cliente ${req.client.id} tentou acessar FinancialAccount INATIVA ID ${financialAccountIdFromParams}.`);
             return res.status(403).json({ status: 'fail', message: 'Esta conta financeira está inativa.' });
         }
         
-        // Popula req.financialAccount com o objeto da conta para uso posterior nos controllers
         req.financialAccount = financialAccount.toJSON();
         next();
     } catch (error) {
@@ -296,7 +303,6 @@ async function checkFinancialAccountOwnership(req, res, next) {
     }
 }
 
-// <<< NOVO MIDDLEWARE: Apenas identifica o cliente, sem validar a assinatura >>>
 async function identifyClientToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
