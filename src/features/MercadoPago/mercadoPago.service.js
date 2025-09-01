@@ -8,8 +8,8 @@ const mercadoPagoService = {
   /**
    * [VERSÃO FINAL E CORRIGIDA] Cria uma preferência de pagamento flexível para o Payment Brick.
    */
-  async createPaymentPreference(clientId, planId) {
-    logger.info(`[MP Pref Final] Criando preferência para Cliente ID: ${clientId}, Plano ID: ${planId}`);
+ async createPaymentPreference(clientId, planId) {
+    logger.info(`[MP Pref Teste Cartão] Criando preferência para Cliente ID: ${clientId}, Plano ID: ${planId}`);
     try {
       const client = await Client.findByPk(clientId);
       const plan = await Plan.findByPk(planId);
@@ -27,10 +27,15 @@ const mercadoPagoService = {
           unit_price: Number(plan.price), quantity: 1, currency_id: 'BRL',
         }],
         payer: { email: client.email, name: client.name },
-        // <<< CORREÇÃO 1: Habilitando PIX e Cartões Corretamente >>>
-        // Apenas excluímos boleto, que não é instantâneo. O Brick mostrará as opções restantes.
+        
+        // <<< MUDANÇA PRINCIPAL AQUI: SOMENTE CARTÃO HABILITADO >>>
+        // Excluímos todos os outros tipos de pagamento para forçar o Brick a mostrar apenas o cartão.
         payment_methods: {
-          excluded_payment_types: [{ id: "ticket" }],
+          excluded_payment_types: [
+              { id: "ticket" },        // Exclui Boleto
+              { id: "bank_transfer" }, // Exclui PIX
+              { id: "debit_card" }      // Exclui Cartão de Débito
+          ],
           installments: 1,
         },
         external_reference: subscription.id.toString(),
@@ -41,10 +46,10 @@ const mercadoPagoService = {
       const preference = await mpPreference.create({ body: preferencePayload });
       await subscription.update({ externalSubscriptionId: preference.id });
 
-      logger.info(`[MP Pref Final] Preferência ID: ${preference.id} criada para Assinatura ID ${subscription.id}`);
+      logger.info(`[MP Pref Teste Cartão] Preferência ID: ${preference.id} criada para Assinatura ID ${subscription.id}`);
       return { preferenceId: preference.id };
     } catch (error) {
-      logger.error("Erro ao criar preferência de pagamento final:", error.cause || error);
+      logger.error("Erro ao criar preferência de pagamento para teste de cartão:", error.cause || error);
       throw new Error('Falha ao preparar o ambiente de pagamento.');
     }
   },
