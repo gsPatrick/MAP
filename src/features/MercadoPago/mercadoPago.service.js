@@ -244,6 +244,70 @@ const mercadoPagoService = {
       throw new Error(`Falha ao processar o pagamento: ${errorMessage}`);
     }
   },
+   async createBrickPreference(clientId, planId) {
+    logger.info(`[MP Brick Pref] Criando preferência para Cliente ID: ${clientId}, Plano ID: ${planId}`);
+    try {
+      const client = await Client.findByPk(clientId);
+      const plan = await Plan.findByPk(planId);
+
+      if (!client || !plan) {
+        throw { statusCode: 404, message: 'Cliente ou Plano não encontrado.' };
+      }
+
+      const subscription = await Subscription.create({
+        clientId,
+        planId,
+        status: 'Pendente',
+        startDate: new Date().toISOString().split('T')[0],
+        endDate: new Date(new Date().setDate(new Date().getDate() + plan.durationDays)).toISOString().split('T')[0],
+      });
+
+      const preferencePayload = {
+        items: [{
+          id: plan.id.toString(),
+          title: plan.name,
+          unit_price: Number(plan.price), // Garante que é um número
+          quantity: 1,
+          currency_id: 'BRL',
+        }],
+        payer: {
+          email: client.email,
+          name: client.name,
+        },
+        // IMPORTANTE: Este campo diz ao Brick para renderizar apenas PIX.
+        payment_methods: {
+          excluded_payment_methods: [
+            { id: "credit_card" },
+            { id: "debit_card" },
+            { id: "ticket" },
+            { id: "bank_transfer" },
+            { id: "mercado_pago_wallet" }
+          ],
+          installments: 1
+        },
+        external_reference: subscription.id.toString(),
+        notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
+        // O Brick não usa back_urls, mas é bom ter por segurança
+        back_urls: {
+          success: `${process.env.FRONTEND_URL}/assinatura/sucesso`,
+          failure: `${process.env.FRONTEND_URL}/assinatura/erro`,
+          pending: `${process.env.FRONTEND_URL}/assinatura/pendente`,
+        },
+      };
+
+      const preference = await mpPreference.create({ body: preferencePayload });
+      await subscription.update({ externalSubscriptionId: preference.id });
+
+      logger.info(`[MP Brick Pref] Preferência ID: ${preference.id} criada para Assinatura ID ${subscription.id}`);
+      
+      // Retorna apenas o ID da preferência
+      return { preferenceId: preference.id };
+
+    } catch (error) {
+      logger.error("Erro ao criar preferência para o Brick:", error.cause || error);
+      throw new Error('Falha ao preparar o ambiente de pagamento.');
+    }
+  },
 }
 
 module.exports = mercadoPagoService;

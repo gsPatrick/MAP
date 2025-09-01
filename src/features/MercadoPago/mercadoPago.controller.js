@@ -90,6 +90,20 @@ const mercadoPagoController = {
       next(error);
     }
   },
+
+    async createBrickPreference(req, res, next) {
+    try {
+      const clientId = req.client.id;
+      const { planId } = req.body;
+      if (!planId) {
+        return res.status(400).json({ status: 'fail', message: 'O ID do Plano (planId) é obrigatório.' });
+      }
+      const preference = await mercadoPagoService.createBrickPreference(clientId, planId);
+      res.status(200).json({ status: 'success', data: preference });
+    } catch (error) {
+      next(error);
+    }
+  },
 };
 
 
