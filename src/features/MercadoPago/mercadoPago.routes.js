@@ -19,6 +19,7 @@ privateMercadoPagoRouter.post('/create-pix-payment', identifyClientToken, mercad
 // <<< NOVA ROTA PARA PROCESSAR O PAGAMENTO DO PAYMENT BRICK >>>
 privateMercadoPagoRouter.post('/process-brick-payment', identifyClientToken, mercadoPagoController.processBrickPayment);
 
+privateMercadoPagoRouter.post('/create-brick-preference', identifyClientToken, mercadoPagoController.createBrickPreference);
 
 module.exports = {
   publicMercadoPagoRouter,
