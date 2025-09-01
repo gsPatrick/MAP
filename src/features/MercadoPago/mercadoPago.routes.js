@@ -21,6 +21,9 @@ privateMercadoPagoRouter.post('/process-brick-payment', identifyClientToken, mer
 
 privateMercadoPagoRouter.post('/create-brick-preference', identifyClientToken, mercadoPagoController.createBrickPreference);
 
+// Rota para PROCESSAR o pagamento vindo do onSubmit do Brick
+privateMercadoPagoRouter.post('/process-brick-payment', identifyClientToken, mercadoPagoController.processBrickPayment);
+
 module.exports = {
   publicMercadoPagoRouter,
   privateMercadoPagoRouter,
