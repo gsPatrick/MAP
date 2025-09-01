@@ -308,15 +308,13 @@ const mercadoPagoService = {
       throw new Error('Falha ao preparar o ambiente de pagamento.');
     }
   },
-   async createPaymentPreference(clientId, planId) {
+  async createPaymentPreferenceForBrick(clientId, planId) {
     logger.info(`[MP Pref] Criando preferência de pagamento para Cliente ID: ${clientId}, Plano ID: ${planId}`);
     try {
       const client = await Client.findByPk(clientId);
       const plan = await Plan.findByPk(planId);
       if (!client || !plan) throw { statusCode: 404, message: 'Cliente ou Plano não encontrado.' };
 
-      // Cria uma assinatura PENDENTE que servirá como referência.
-      // O webhook usará o external_reference para encontrar esta assinatura.
       const subscription = await Subscription.create({
         clientId, planId, status: 'Pendente',
         startDate: new Date().toISOString().split('T')[0],
@@ -332,11 +330,11 @@ const mercadoPagoService = {
           currency_id: 'BRL',
         }],
         payer: { email: client.email, name: client.name },
-        // Não vamos mais restringir métodos de pagamento aqui. Deixamos o Brick decidir.
-        // Apenas excluímos boleto e ATM, que não são instantâneos.
+        // Deixamos o Brick mostrar os métodos de pagamento padrão (Cartão, PIX, etc)
+        // Apenas excluímos boleto e lotérica.
         payment_methods: {
           excluded_payment_types: [{ id: "ticket" }, { id: "atm" }],
-          installments: 1, // Limita a 1 parcela
+          installments: 1,
         },
         external_reference: subscription.id.toString(),
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
@@ -344,10 +342,7 @@ const mercadoPagoService = {
       };
 
       const preference = await mpPreference.create({ body: preferencePayload });
-      
-      // Armazena o ID da preferência na assinatura para referência
       await subscription.update({ externalSubscriptionId: preference.id });
-
       logger.info(`[MP Pref] Preferência ID: ${preference.id} criada para Assinatura ID ${subscription.id}`);
       return { preferenceId: preference.id };
     } catch (error) {
