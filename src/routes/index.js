@@ -2,7 +2,7 @@
 const { Router } = require('express');
 const logger = require('../utils/logger');
 const { FinancialAccount } = require('../database');
-const { authenticateClientToken } = require('../middlewares/authMiddleware');
+const { authenticateClientToken, requireActiveSubscription } = require('../middlewares/authMiddleware');
 
 // Importações dos Módulos de Rotas
 const userRoutes = require('../features/User/user.routes');
@@ -56,7 +56,7 @@ mainApiRouter.use('/auth/google', googleAuthRoutes);
 mainApiRouter.use('/webhooks/google-calendar', googleWebhookRoutes);
 mainApiRouter.use('/public/booking', publicBookingRoutes);
 mainApiRouter.use('/system-support-bot', systemSupportBotRoutes);
-mainApiRouter.use('/mercado-pago', publicMercadoPagoRouter); // Webhook do MP (Público)
+mainApiRouter.use('/mercado-pago', publicMercadoPagoRouter); // APENAS o Webhook
 mainApiRouter.use('/subscriptions', subscriptionRouter); // <<< USE A NOVA ROTA AQUI
 // --- ROTAS DE ADMINISTRAÇÃO DO SISTEMA ---
 mainApiRouter.use('/users', userRoutes);
@@ -70,7 +70,7 @@ mainApiRouter.use('/', adminRoutes);
 mainApiRouter.use('/shared-access', authenticateClientToken, sharedAccessRoutes);
 mainApiRouter.use('/hydration', authenticateClientToken, hydrationRoutes);
 mainApiRouter.use('/affiliate', authenticateClientToken, affiliateRoutes);
-mainApiRouter.use('/mercado-pago', publicMercadoPagoRouter); // Checkout do MP (Privado)
+mainApiRouter.use('/mercado-pago', privateMercadoPagoRouter); // CRIAR PAGAMENTO
 mainApiRouter.use('/services', authenticateClientToken, serviceRoutes);
 mainApiRouter.use('/availability', authenticateClientToken, availabilityRoutes);
 mainApiRouter.use('/stock', authenticateClientToken, globalStockRouter); // Rota global de estoque
@@ -148,7 +148,8 @@ clientFinancialAccountRouter.use('/business-clients', businessClientRoutes);
 // Monta o router de conta financeira no router principal da API,
 // aplicando os middlewares NA ORDEM CORRETA.
 mainApiRouter.use('/financial-accounts/:financialAccountId',
-    authenticateClientToken,           // 1. Autentica o token e define req.client
+    authenticateClientToken,
+    requireActiveSubscription,           // 1. Autentica o token e define req.client
     authorizeFinancialAccountOwnership,  // 2. Autoriza a posse da conta usando req.client
     clientFinancialAccountRouter         // 3. Passa para as rotas específicas
 );
