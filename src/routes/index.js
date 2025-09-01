@@ -70,6 +70,7 @@ mainApiRouter.use('/', adminRoutes);
 mainApiRouter.use('/shared-access', authenticateClientToken, sharedAccessRoutes);
 mainApiRouter.use('/hydration', authenticateClientToken, hydrationRoutes);
 mainApiRouter.use('/affiliate', authenticateClientToken, affiliateRoutes);
+mainApiRouter.use('/mercado-pago', publicMercadoPagoRouter); // Checkout do MP (Privado)
 mainApiRouter.use('/services', authenticateClientToken, serviceRoutes);
 mainApiRouter.use('/availability', authenticateClientToken, availabilityRoutes);
 mainApiRouter.use('/stock', authenticateClientToken, globalStockRouter); // Rota global de estoque
