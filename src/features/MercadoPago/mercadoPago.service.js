@@ -8,7 +8,7 @@ const mercadoPagoService = {
   /**
    * [VERSÃO CORRIGIDA] Cria uma preferência de pagamento para Cartão e PIX no Payment Brick.
    */
-  async createPaymentPreference(clientId, planId) {
+async createPaymentPreference(clientId, planId) {
     logger.info(`[MP Pref] Criando preferência para Cliente ID: ${clientId}, Plano ID: ${planId}`);
     try {
       const client = await Client.findByPk(clientId);
@@ -33,22 +33,17 @@ const mercadoPagoService = {
           email: client.email, 
           name: client.name 
         },
-        
-        // CONFIGURAÇÃO PARA CARTÃO E PIX
         payment_methods: {
           excluded_payment_types: [
-            { id: "ticket" },        // Exclui Boleto
-            { id: "bank_transfer" }, // Exclui Transferência Bancária
-            { id: "debit_card" }     // Exclui Cartão de Débito (opcional)
+            { id: "ticket" },
+            { id: "bank_transfer" },
+            { id: "debit_card" }
           ],
-          excluded_payment_methods: [],
-          installments: 12, // Permite até 12x no cartão
+          installments: 12,
         },
-        
         external_reference: subscription.id.toString(),
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
-        // Removemos back_urls e auto_return para Payment Brick
-        purpose: 'wallet_purchase',
+        // purpose: 'wallet_purchase', // <--- REMOVA OU COMENTE ESTA LINHA!!!
       };
 
       const preference = await mpPreference.create({ body: preferencePayload });
@@ -56,7 +51,6 @@ const mercadoPagoService = {
 
       logger.info(`[MP Pref] Preferência ID: ${preference.id} criada para Assinatura ID ${subscription.id}`);
       
-      // CORREÇÃO: Retorna também os dados do plano
       return { 
         preferenceId: preference.id,
         plan: {
@@ -72,7 +66,6 @@ const mercadoPagoService = {
       throw new Error('Falha ao preparar o ambiente de pagamento.');
     }
   },
-
   /**
    * [VERSÃO CORRIGIDA] Processa os dados de pagamento enviados pelo 'onSubmit' do Payment Brick.
    */
