@@ -47,12 +47,7 @@ const mercadoPagoService = {
         
         external_reference: subscription.id.toString(),
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
-        back_urls: {
-          success: `${process.env.FRONTEND_URL}/success`,
-          failure: `${process.env.FRONTEND_URL}/failure`,
-          pending: `${process.env.FRONTEND_URL}/pending`
-        },
-        auto_return: "approved",
+        // Removemos back_urls e auto_return para Payment Brick
         purpose: 'wallet_purchase',
       };
 
