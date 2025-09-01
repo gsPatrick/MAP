@@ -98,7 +98,7 @@ const mercadoPagoController = {
       if (!planId) {
         return res.status(400).json({ status: 'fail', message: 'O ID do Plano (planId) é obrigatório.' });
       }
-      const preference = await mercadoPagoService.createBrickPreference(clientId, planId);
+        const preference = await mercadoPagoService.createPaymentPreference(clientId, planId); 
       res.status(200).json({ status: 'success', data: preference });
     } catch (error) {
       next(error);
