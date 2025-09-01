@@ -104,36 +104,7 @@ const mercadoPagoController = {
       next(error);
     }
   },
-   // <<< CONTROLLER ATUALIZADO para usar a nova função de serviço >>>
-  async createBrickPreference(req, res, next) {
-    try {
-      const clientId = req.client.id;
-      const { planId } = req.body;
-      if (!planId) {
-        return res.status(400).json({ status: 'fail', message: 'O ID do Plano (planId) é obrigatório.' });
-      }
-      // Chama a nova função de serviço
-      const preference = await mercadoPagoService.createPaymentPreference(clientId, planId);
-      res.status(200).json({ status: 'success', data: preference });
-    } catch (error) {
-      next(error);
-    }
-  },
-
-  // <<< CONTROLLER ATUALIZADO para usar a nova função de serviço >>>
-  async processBrickPayment(req, res, next) {
-    try {
-      const clientId = req.client.id;
-      const { planId, ...paymentData } = req.body;
-      if (!planId || !paymentData) {
-        return res.status(400).json({ status: 'fail', message: 'Dados de pagamento ou ID do plano ausentes.' });
-      }
-      const result = await mercadoPagoService.processBrickPayment(clientId, planId, paymentData);
-      res.status(201).json({ status: 'success', data: result });
-    } catch (error) {
-      next(error);
-    }
-  },
+  
 };
 
 

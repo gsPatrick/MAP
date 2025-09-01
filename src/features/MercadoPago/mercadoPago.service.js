@@ -188,62 +188,7 @@ const mercadoPagoService = {
     }
   },
 
-  async processBrickPayment(clientId, planId, paymentData) {
-    logger.info(`[MP Brick] Processando pagamento para Cliente ID: ${clientId}, Plano ID: ${planId}`);
-    try {
-      const client = await Client.findByPk(clientId);
-      const plan = await Plan.findByPk(planId);
 
-      if (!client || !plan) {
-        throw { statusCode: 404, message: 'Cliente ou Plano não encontrado.' };
-      }
-      
-      if (!plan.price || Number(plan.price) < 1.00) {
-        throw { statusCode: 500, message: 'Plano com configuração de preço inválida.' };
-      }
-
-      const subscription = await Subscription.create({
-        clientId,
-        planId,
-        status: 'Pendente',
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date(new Date().setDate(new Date().getDate() + plan.durationDays)).toISOString().split('T')[0],
-      });
-      logger.info(`[MP Brick] Assinatura pendente ID: ${subscription.id} criada.`);
-      
-      const expirationDate = new Date();
-      expirationDate.setMinutes(expirationDate.getMinutes() + 30);
-      const formattedExpirationDate = expirationDate.toISOString().replace(/Z$/, "-03:00");
-      
-      // <<< CORREÇÃO DEFINITIVA AQUI >>>
-      const paymentPayload = {
-          ...paymentData,
-          payment_method_id: 'pix', // FORÇA o método de pagamento para 'pix'.
-          transaction_amount: Number(plan.price),
-          description: `Pagamento Plano ${plan.name} - MAP no Controle`,
-          external_reference: subscription.id.toString(),
-          notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
-          date_of_expiration: formattedExpirationDate,
-      };
-
-      const pixResponse = await mpPayment.create({ body: paymentPayload });
-      logger.info(`[MP Brick] Pagamento PIX criado com sucesso via Brick. Payment ID: ${pixResponse.id}`);
-
-      await subscription.update({ externalSubscriptionId: pixResponse.id.toString() });
-
-      return {
-        paymentId: pixResponse.id,
-        status: pixResponse.status,
-        qrCode: pixResponse.point_of_interaction.transaction_data.qr_code,
-        qrCodeBase64: pixResponse.point_of_interaction.transaction_data.qr_code_base64,
-      };
-
-    } catch (error) {
-      const errorMessage = error.cause?.message || error.message;
-      logger.error('Erro ao processar pagamento do Brick:', { message: errorMessage, data: error.cause?.data });
-      throw new Error(`Falha ao processar o pagamento: ${errorMessage}`);
-    }
-  },
    async createBrickPreference(clientId, planId) {
     logger.info(`[MP Brick Pref] Criando preferência para Cliente ID: ${clientId}, Plano ID: ${planId}`);
     try {
@@ -308,8 +253,8 @@ const mercadoPagoService = {
       throw new Error('Falha ao preparar o ambiente de pagamento.');
     }
   },
-  async createPaymentPreferenceForBrick(clientId, planId) {
-    logger.info(`[MP Pref] Criando preferência de pagamento para Cliente ID: ${clientId}, Plano ID: ${planId}`);
+   async createPaymentPreference(clientId, planId) {
+    logger.info(`[MP Pref V3] Criando preferência para Cliente ID: ${clientId}, Plano ID: ${planId}`);
     try {
       const client = await Client.findByPk(clientId);
       const plan = await Plan.findByPk(planId);
@@ -330,23 +275,27 @@ const mercadoPagoService = {
           currency_id: 'BRL',
         }],
         payer: { email: client.email, name: client.name },
-        // Deixamos o Brick mostrar os métodos de pagamento padrão (Cartão, PIX, etc)
-        // Apenas excluímos boleto e lotérica.
+        // <<< CORREÇÃO CRÍTICA BASEADA NA DOCUMENTAÇÃO >>>
+        // Não excluímos métodos. Dizemos ao Brick o que ele PODE mostrar.
+        // 'bank_transfer' é a chave que habilita o PIX dentro do Brick.
         payment_methods: {
-          excluded_payment_types: [{ id: "ticket" }, { id: "atm" }],
+          excluded_payment_types: [
+              { id: "ticket" } // Excluímos apenas boleto, que não é instantâneo.
+          ],
           installments: 1,
         },
         external_reference: subscription.id.toString(),
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
-        purpose: 'wallet_purchase', // Essencial para o Brick
+        purpose: 'wallet_purchase',
       };
 
       const preference = await mpPreference.create({ body: preferencePayload });
       await subscription.update({ externalSubscriptionId: preference.id });
-      logger.info(`[MP Pref] Preferência ID: ${preference.id} criada para Assinatura ID ${subscription.id}`);
+
+      logger.info(`[MP Pref V3] Preferência ID: ${preference.id} criada para Assinatura ID ${subscription.id}`);
       return { preferenceId: preference.id };
     } catch (error) {
-      logger.error("Erro ao criar preferência de pagamento:", error.cause || error);
+      logger.error("Erro ao criar preferência de pagamento V3:", error.cause || error);
       throw new Error('Falha ao preparar o ambiente de pagamento.');
     }
   },
@@ -354,55 +303,42 @@ const mercadoPagoService = {
   /**
    * [NOVO E DEFINITIVO] Processa os dados de pagamento enviados pelo 'onSubmit' do Payment Brick.
    */
-  async processBrickPayment(clientId, planId, paymentData) {
-    logger.info(`[MP Process] Processando pagamento do Brick para Cliente ID: ${clientId}`);
-    const t = await sequelize.transaction();
+ async processBrickPayment(clientId, planId, paymentData) {
+    logger.info(`[MP Process V3] Processando pagamento do Brick para Cliente ID: ${clientId}`);
     try {
-      const plan = await Plan.findByPk(planId, { transaction: t });
+      const plan = await Plan.findByPk(planId);
       if (!plan) throw { statusCode: 404, message: 'Plano não encontrado.' };
 
-      // O external_reference já foi definido na criação da preferência.
-      // Aqui, precisamos encontrar a assinatura pendente para garantir consistência.
       const subscription = await Subscription.findOne({
-          where: { clientId, planId, status: 'Pendente' },
-          order: [['createdAt', 'DESC']], // Pega a mais recente
-          transaction: t
+          where: { clientId, planId, status: 'Pendente' }, order: [['createdAt', 'DESC']],
       });
+      if (!subscription) throw { statusCode: 404, message: 'Assinatura pendente não encontrada.'};
 
-      if (!subscription) {
-        throw { statusCode: 404, message: 'Nenhuma assinatura pendente encontrada para este pagamento.'};
-      }
+      const expirationDate = new Date();
+      expirationDate.setMinutes(expirationDate.getMinutes() + 30);
+      const formattedExpirationDate = expirationDate.toISOString().replace(/Z$/, "-03:00");
 
       const paymentPayload = {
         ...paymentData,
-        transaction_amount: Number(plan.price), // Garante o preço correto (segurança)
+        transaction_amount: Number(plan.price),
         external_reference: subscription.id.toString(),
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
+        // Adiciona a data de expiração para pagamentos PIX
+        ...(paymentData.payment_method_id === 'pix' && { date_of_expiration: formattedExpirationDate }),
       };
       
       const paymentResponse = await mpPayment.create({ body: paymentPayload });
-      
-      // Atualiza a assinatura com o ID do pagamento final
-      await subscription.update({ externalSubscriptionId: paymentResponse.id.toString() }, { transaction: t });
+      await subscription.update({ externalSubscriptionId: paymentResponse.id.toString() });
 
-      await t.commit();
-      logger.info(`[MP Process] Pagamento ID ${paymentResponse.id} criado via Brick.`);
-
-      // Retorna os dados necessários para o frontend (especialmente para PIX)
-      return {
-        id: paymentResponse.id,
-        status: paymentResponse.status,
-        payment_method_id: paymentResponse.payment_method_id,
-        point_of_interaction: paymentResponse.point_of_interaction, // Contém QR code se for PIX
-      };
-
+      logger.info(`[MP Process V3] Pagamento ID ${paymentResponse.id} criado via Brick.`);
+      return paymentResponse;
     } catch (error) {
-      await t.rollback();
       const errorMessage = error.cause?.data?.message || error.cause?.message || error.message;
-      logger.error('Erro ao processar pagamento do Brick:', { message: errorMessage, data: error.cause?.data });
+      logger.error('Erro ao processar pagamento do Brick V3:', { message: errorMessage, data: error.cause?.data });
       throw new Error(errorMessage || 'Falha ao processar o pagamento.');
     }
   },
+  
 }
 
 module.exports = mercadoPagoService;
