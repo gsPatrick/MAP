@@ -55,7 +55,18 @@ const mercadoPagoService = {
       await subscription.update({ externalSubscriptionId: preference.id });
 
       logger.info(`[MP Pref] Preferência ID: ${preference.id} criada para Assinatura ID ${subscription.id}`);
-      return { preferenceId: preference.id };
+      
+      // CORREÇÃO: Retorna também os dados do plano
+      return { 
+        preferenceId: preference.id,
+        plan: {
+          id: plan.id,
+          name: plan.name,
+          price: plan.price,
+          durationDays: plan.durationDays,
+          description: plan.description
+        }
+      };
     } catch (error) {
       logger.error("Erro ao criar preferência de pagamento:", error.cause || error);
       throw new Error('Falha ao preparar o ambiente de pagamento.');
