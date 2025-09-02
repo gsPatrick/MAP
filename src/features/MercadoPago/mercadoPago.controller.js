@@ -24,6 +24,25 @@ const mercadoPagoController = {
       next(error);
     }
   },
+   async createCheckout(req, res, next) {
+    try {
+      const clientId = req.client.id;
+      const { planId, affiliateCode } = req.body;
+
+      if (!planId) {
+        return res.status(400).json({ status: 'fail', message: 'O ID do Plano (planId) é obrigatório.' });
+      }
+
+      // O nome do método no serviço pode permanecer o mesmo, pois é mais descritivo internamente.
+      const preference = await mercadoPagoService.createCheckoutProPreference(clientId, planId, affiliateCode);
+      
+      // <<< CORREÇÃO: Retornando a URL diretamente para simplificar o frontend >>>
+      res.status(200).json({ status: 'success', data: { checkoutUrl: preference.init_point } });
+
+    } catch (error) {
+      next(error);
+    }
+  },
 
   /**
    * Recebe e processa as notificações de webhook do Mercado Pago.

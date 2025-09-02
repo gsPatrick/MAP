@@ -15,9 +15,10 @@ const privateMercadoPagoRouter = Router();
 // Aplica o middleware de autenticação para todas as rotas privadas abaixo
 privateMercadoPagoRouter.use(authenticateClientToken);
 
-// Rota principal para criar a preferência de pagamento do Checkout Pro
+// <<< CORREÇÃO DA ROTA AQUI >>>
+// A rota agora é '/checkout' para corresponder à chamada do frontend.
 privateMercadoPagoRouter.post(
-  '/create-checkout-pro-preference', 
+  '/checkout', 
   mercadoPagoController.createCheckoutProPreference
 );
 
