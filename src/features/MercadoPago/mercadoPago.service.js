@@ -20,7 +20,6 @@ const mercadoPagoService = {
         throw { statusCode: 404, message: 'Cliente ou Plano não encontrado.' };
       }
 
-      // A função createSubscription retorna um objeto JSON, não uma instância do Sequelize
       const createdSubscriptionData = await subscriptionService.createSubscription(
         clientId, planId, new Date().toISOString().split('T')[0], 'Pendente', null, affiliateCode
       );
@@ -44,15 +43,12 @@ const mercadoPagoService = {
           pending: `${process.env.FRONTEND_URL}/payment-pending`,
         },
         auto_return: 'approved',
-        external_reference: createdSubscriptionData.id.toString(), // Usamos o ID do objeto retornado
+        external_reference: createdSubscriptionData.id.toString(),
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
       };
 
       const preference = await mpPreference.create({ body: preferencePayload });
 
-      // <<< CORREÇÃO PRINCIPAL AQUI >>>
-      // Em vez de: await subscription.update(...)
-      // Usamos o método estático do modelo Subscription para atualizar o registro no banco de dados.
       await Subscription.update(
         { externalSubscriptionId: preference.id },
         { where: { id: createdSubscriptionData.id } }
@@ -94,19 +90,32 @@ const mercadoPagoService = {
         return;
       }
       
-      if (paymentData.status === "approved" && subscription.status !== 'Ativa') {
+      // <<< INÍCIO DA CORREÇÃO E MELHORIA >>>
+      const successStatuses = ['approved', 'accredited']; // Status que confirmam o pagamento
+      const failureStatuses = ['rejected', 'cancelled', 'refunded', 'charged_back']; // Status de falha ou devolução
+
+      if (successStatuses.includes(paymentData.status) && subscription.status !== 'Ativa') {
+        // Se o pagamento foi aprovado/creditado e a assinatura ainda não está ativa
         const newEndDate = new Date();
         newEndDate.setDate(newEndDate.getDate() + subscription.plan.durationDays);
         await subscriptionService.updateSubscriptionStatusByExternalId(
           null, 'Ativa', newEndDate.toISOString().split('T')[0], subscription.id
         );
-        logger.info(`[Webhook MP] Assinatura ${subscription.id} ATIVADA com sucesso.`);
-      } else if (['rejected', 'cancelled', 'refunded'].includes(paymentData.status) && subscription.status === 'Pendente') {
+        logger.info(`[Webhook MP] Assinatura ${subscription.id} ATIVADA com sucesso via status '${paymentData.status}'.`);
+
+      } else if (failureStatuses.includes(paymentData.status) && subscription.status === 'Pendente') {
+        // Se o pagamento falhou e a assinatura estava pendente
          await subscriptionService.updateSubscriptionStatusByExternalId(
           null, 'Pagamento Falhou', subscription.endDate, subscription.id
         );
-        logger.info(`[Webhook MP] Assinatura ${subscription.id} marcada como 'Pagamento Falhou'.`);
+        logger.info(`[Webhook MP] Assinatura ${subscription.id} marcada como 'Pagamento Falhou' via status '${paymentData.status}'.`);
+
+      } else {
+        // Loga qualquer outra situação para depuração
+        logger.info(`[Webhook MP] Status de pagamento '${paymentData.status}' recebido para assinatura ${subscription.id} (status atual: '${subscription.status}'). Nenhuma ação necessária.`);
       }
+      // <<< FIM DA CORREÇÃO E MELHORIA >>>
+
     } catch (error) {
       logger.error("[Webhook MP] Erro fatal ao processar webhook:", error.cause || error.message || error);
     }
