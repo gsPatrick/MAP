@@ -18,15 +18,22 @@ async function processAndSendBriefings() {
     const endOfDay = new Date(new Date().setHours(23, 59, 59, 999));
     const todayDateString = startOfDay.toISOString().split('T')[0];
 
+    // <<< INÍCIO DA MODIFICAÇÃO >>>
+    // A query agora filtra clientes com assinatura ativa.
     const activeClients = await Client.findAll({
       where: {
         status: 'Ativo',
         phone: { [Op.ne]: null },
+        [Op.or]: [
+            { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+            { accessExpiresAt: { [Op.gte]: todayDateString } }
+        ]
       },
     });
+    // <<< FIM DA MODIFICAÇÃO >>>
 
     if (activeClients.length === 0) {
-      logger.info('[JOB BRIEFING MATINAL] Nenhum cliente ativo encontrado para enviar o resumo.');
+      logger.info('[JOB BRIEFING MATINAL] Nenhum cliente com assinatura ativa encontrado para enviar o resumo.');
       return;
     }
 
@@ -39,11 +46,7 @@ async function processAndSendBriefings() {
 
         const accountIds = clientAccounts.map(acc => acc.id);
         
-        // <<<< INÍCIO DA MUDANÇA >>>>
-        // Em vez de buscar uma conta de negócio específica, agora busca a conta padrão do usuário
-        // ou, como fallback, a primeira conta ativa encontrada. Isso torna o checklist universal.
         const mainAccountForChecklist = clientAccounts.find(acc => acc.isDefault) || clientAccounts[0];
-        // <<<< FIM DA MUDANÇA >>>>
 
         // --- BUSCA DE DADOS FINANCEIROS E DE AGENDA (EXISTENTE) ---
         const pendingTransactions = await FinancialTransaction.findAll({
@@ -79,20 +82,16 @@ async function processAndSendBriefings() {
 
         // --- LÓGICA DE CHECKLIST MODIFICADA ---
         let checklistData = null;
-        // <<<< INÍCIO DA MUDANÇA >>>>
-        // A verificação agora é feita na 'mainAccountForChecklist', que pode ser de qualquer tipo.
         if (mainAccountForChecklist) {
             const checklist = await DailyChecklist.findOne({
                 where: { financialAccountId: mainAccountForChecklist.id, date: todayDateString },
-                include: [{ model: ChecklistItem, as: 'items', order: [['createdAt', 'ASC']] }] // Ordena as tarefas
+                include: [{ model: ChecklistItem, as: 'items', order: [['createdAt', 'ASC']] }]
             });
-            // Estrutura os dados do checklist para enviar à IA
             checklistData = {
-                accountName: mainAccountForChecklist.accountName, // Usa o nome da conta principal
-                items: checklist ? checklist.items.map(item => item.toJSON()) : [] // Garante que itens seja um array
+                accountName: mainAccountForChecklist.accountName,
+                items: checklist ? checklist.items.map(item => item.toJSON()) : []
             };
         }
-        // <<<< FIM DA MUDANÇA >>>>
 
         // Ação proativa de hidratação
         await hydrationService.logWaterIntake(client.id, 250, 'Registrado automaticamente pelo briefing matinal');
@@ -104,10 +103,9 @@ async function processAndSendBriefings() {
           pendingTransactions,
           appointments,
           recurringItems,
-          checklistData, // PASSANDO OS DADOS DO CHECKLIST PARA A IA
+          checklistData,
         };
         
-        // A IA agora recebe os dados do checklist e pode incluí-los na mensagem
         const briefingMessage = await aiModelService.generateMorningBriefingMessage(briefingData);
 
         await sendWhatsappMessage(client.phone, briefingMessage);

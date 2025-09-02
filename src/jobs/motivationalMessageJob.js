@@ -5,7 +5,6 @@ const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
 
-// Array com 200 frases motivacionais.
 const motivationalPhrases = [
   "✨ Acredite em você. Você é mais forte do que pensa e mais capaz do que imagina.",
   "🚀 Não espere por oportunidades, crie-as! O futuro pertence a quem se prepara hoje.",
@@ -199,47 +198,43 @@ function getRandomMotivationalPhrase() {
   return motivationalPhrases[Math.floor(Math.random() * motivationalPhrases.length)];
 }
 
-/**
- * Função principal do Job. Verifica clientes que precisam receber a mensagem motivacional.
- */
 async function checkAndSendDailyMotivation() {
   try {
     const timeZone = process.env.TZ || "America/Sao_Paulo";
     const now = new Date(new Date().toLocaleString("en-US", { timeZone }));
     const todayDateString = now.toISOString().split('T')[0];
-
-    // Pega a hora e minuto atuais para comparação precisa. Ex: "19:29"
     const currentHour = now.getHours();
     const currentMinute = now.getMinutes();
     const currentTimeStringHHMM = `${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`;
 
-    // 1. A query agora filtra diretamente pelo horário exato (HH:MM)
-    // Isso é muito mais eficiente do que buscar todos e filtrar na aplicação.
+    // <<< INÍCIO DA MODIFICAÇÃO >>>
+    // A query agora filtra clientes com assinatura ativa.
     const clientsToSend = await Client.findAll({
       where: {
         wantsMotivationMessage: true,
         status: 'Ativo',
         phone: { [Op.ne]: null },
-        // Compara apenas a parte HH:MM do campo TIME 'motivationMessageTime'
         [Op.and]: [
           sequelize.where(sequelize.fn('to_char', sequelize.col('motivationMessageTime'), 'HH24:MI'), currentTimeStringHHMM)
         ],
-        // E garante que a mensagem ainda não foi enviada hoje
         lastMotivationSentDate: {
           [Op.or]: [null, { [Op.lt]: todayDateString }]
-        }
+        },
+        [Op.or]: [
+            { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+            { accessExpiresAt: { [Op.gte]: todayDateString } }
+        ]
       },
       attributes: ['id', 'name', 'phone', 'motivationMessageTime']
     });
+    // <<< FIM DA MODIFICAÇÃO >>>
     
-    // Se a query não encontrou ninguém para o minuto atual, o trabalho termina aqui.
     if (clientsToSend.length === 0) {
       return;
     }
 
-    logger.info(`[JOB MOTIVAÇÃO] Encontrados ${clientsToSend.length} clientes agendados para ${currentTimeStringHHMM}.`);
+    logger.info(`[JOB MOTIVAÇÃO] Encontrados ${clientsToSend.length} clientes com plano ativo agendados para ${currentTimeStringHHMM}.`);
 
-    // Pega uma única frase para este lote de envios
     const phrase = getRandomMotivationalPhrase();
     if (!phrase) {
       logger.warn('[JOB MOTIVAÇÃO] Nenhuma frase motivacional disponível. Abortando.');
@@ -248,28 +243,19 @@ async function checkAndSendDailyMotivation() {
     
     logger.info(`[JOB MOTIVAÇÃO] Frase do dia selecionada: "${phrase.substring(0, 50)}..."`);
 
-    // Envia a mensagem para cada cliente e atualiza seu registro
     for (const client of clientsToSend) {
       try {
         const clientFirstName = client.name ? client.name.split(' ')[0] : 'Você';
-        const scheduledTime = client.motivationMessageTime.substring(0, 5); // Pega HH:MM
+        const scheduledTime = client.motivationMessageTime.substring(0, 5);
 
-        // 1. Cabeçalho (Header)
         const header = `Olá, ${clientFirstName}! ☀️\nSua dose de motivação diária das *${scheduledTime}* chegou!`;
-
-        // 2. Corpo (a frase em si)
         const body = `\n_"${phrase}"_`;
-
-        // 3. Rodapé (Footer)
         const footer = `\n\n---\n*Dica:* Para alterar o horário ou desativar, me diga algo como "mudar horário da motivação para 8h" ou "desativar mensagem motivacional".*`;
-
-        // 4. Montagem final
         const finalMessage = `${header}\n${body}${footer}`;
         
         const sent = await sendWhatsappMessage(client.phone, finalMessage);
         
         if (sent) {
-          // Marca a data de hoje para não enviar de novo
           await client.update({ lastMotivationSentDate: todayDateString });
           logger.info(`[JOB MOTIVAÇÃO] Mensagem personalizada enviada e registro atualizado para ${client.name} (${client.phone}).`);
         } else {
@@ -283,11 +269,9 @@ async function checkAndSendDailyMotivation() {
     logger.error('[JOB MOTIVAÇÃO] Erro geral ao verificar e enviar mensagens:', { message: error.message, stack: error.stack });
   }
 }
-/**
- * Inicia o agendamento do job.
- */
+
 function startMotivationalMessageJob() {
-  const schedule = '*/1 * * * *'; // Roda a cada minuto
+  const schedule = '*/1 * * * *';
   logger.info(`[JOB MOTIVAÇÃO] Agendado para rodar a cada minuto (schedule: ${schedule})`);
   
   cron.schedule(schedule, checkAndSendDailyMotivation, {

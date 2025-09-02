@@ -34,7 +34,9 @@ async function startJobs() {
     startMorningBriefingJob(preferences, models); // <<< NOVO JOB INICIADO
     startChecklistSummaryJob(); // <<< ADICIONE ESTA LINHA
     startChecklistReminderJob();
-     startSubscriptionJobs();
+    // <<< INÍCIO DA MODIFICAÇÃO >>>
+    startSubscriptionJobs(); // Esta chamada agora agenda os dois jobs de notificação de assinatura
+    // <<< FIM DA MODIFICAÇÃO >>>
     logger.info('Todos os Jobs foram configurados e agendados.');
   } catch (error) {
     logger.error('Erro crítico durante a inicialização ou agendamento dos Jobs:', error);

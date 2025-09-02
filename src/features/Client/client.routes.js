@@ -5,6 +5,10 @@ const { authenticateToken, authorizeRole } = require('../../middlewares/authMidd
 
 const router = Router();
 
+// <<< INÍCIO DA NOVA ROTA PÚBLICA >>>
+// Rota para obter informações públicas de um afiliado (usada na página de cadastro)
+router.get('/affiliates/info/:affiliateCode', clientController.getClientInfoByAffiliateCode);
+// <<< FIM DA NOVA ROTA PÚBLICA >>>
 
 router.get('/debug/all-clients', clientController.getClientsForDebug);
 router.post('/debug/backfill-affiliate-codes', clientController.backfillAffiliateCodes);

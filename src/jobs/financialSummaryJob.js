@@ -5,31 +5,37 @@ const financialService = require('../features/Financial/financial.service');
 const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
 const formatter = require('../features/WhatsappHandler/response.formatter');
-
-// <<<< INÍCIO DA MUDANÇA >>>>
-// Importa o checklistService para poder buscar os dados do checklist diário.
 const checklistService = require('../features/Checklist/checklist.service');
-// <<<< FIM DA MUDANÇA >>>>
+const { Op } = require('sequelize'); // Importar Op
 
 async function sendFinancialSummariesForPeriod(period) {
   logger.info(`[JOB RESUMO FINANCEIRO] Iniciando geração de resumos (${period})...`);
   
   try {
     const adminPhoneNumber = process.env.ADMIN_PHONE_FOR_SUMMARIES;
-
-    // <<<< INÍCIO DA MUDANÇA >>>>
-    // Define a data de hoje aqui, para que seja usada tanto na busca do checklist
-    // quanto na lógica de período do resumo financeiro.
     const todayDateString = new Date().toISOString().split('T')[0];
-    // <<<< FIM DA MUDANÇA >>>>
 
+    // <<< INÍCIO DA MODIFICAÇÃO >>>
+    // A query agora busca FinancialAccounts cujo ownerClient tenha uma assinatura ativa.
     const activeFinancialAccounts = await FinancialAccount.findAll({
         where: { isActive: true },
-        include: [{ model: Client, as: 'ownerClient', attributes: ['id', 'name', 'phone'] }]
+        include: [{ 
+            model: Client, 
+            as: 'ownerClient', 
+            attributes: ['id', 'name', 'phone'],
+            where: {
+                status: 'Ativo',
+                [Op.or]: [
+                    { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+                    { accessExpiresAt: { [Op.gte]: todayDateString } }
+                ]
+            }
+        }]
     });
+    // <<< FIM DA MODIFICAÇÃO >>>
 
     if (activeFinancialAccounts.length === 0) {
-        logger.info('[JOB RESUMO FINANCEIRO] Nenhuma conta financeira ativa para gerar resumo.');
+        logger.info('[JOB RESUMO FINANCEIRO] Nenhuma conta financeira ativa de clientes com plano ativo para gerar resumo.');
         return;
     }
 
@@ -44,7 +50,6 @@ async function sendFinancialSummariesForPeriod(period) {
                 continue;
             }
 
-            // O serviço agora retorna o objeto completo
             const summary = await financialService.getFinancialSummary(account.id, { period });
             
             let introMessageTemplate;
@@ -63,21 +68,16 @@ async function sendFinancialSummariesForPeriod(period) {
             }
 
             const intro = introMessageTemplate.replace('{clientName}', clientName).replace('{accountName}', account.accountName);
-
-            // Usamos o novo formatador para criar o corpo da mensagem.
             const body = formatter.formatFinancialSummaryDataStructure(summary);
 
-            // <<<< INÍCIO DA MUDANÇA >>>>
-            // Lógica para buscar e formatar o resumo do checklist diário
             let checklistSummaryText = '';
-            if (period === 'daily') { // Adiciona o resumo do checklist apenas ao relatório diário
+            if (period === 'daily') {
                 const checklist = await checklistService.getChecklistByDate(account.id, todayDateString);
                 
                 if (checklist && checklist.items && checklist.items.length > 0) {
                     const completedItems = checklist.items.filter(item => item.completed);
                     const pendingItems = checklist.items.filter(item => !item.completed);
 
-                    // Se houver tarefas pendentes, o foco é nelas
                     if (pendingItems.length > 0) {
                         checklistSummaryText += `\n\n---\n\n📋 *Checklist do Dia (Pendências):*\n`;
                         pendingItems.forEach(item => {
@@ -85,7 +85,6 @@ async function sendFinancialSummariesForPeriod(period) {
                         });
                         checklistSummaryText += `\nAmanhã é um novo dia para concluí-las! 💪`;
                     } 
-                    // Se não há pendentes, e há concluídas, mostra o sucesso
                     else if (completedItems.length > 0) {
                         checklistSummaryText += `\n\n---\n\n🏆 *Checklist do Dia (100% Concluído!):*\n`;
                         completedItems.forEach(item => {
@@ -93,17 +92,11 @@ async function sendFinancialSummariesForPeriod(period) {
                         });
                         checklistSummaryText += `\nParabéns pelo dia produtivo!`;
                     }
-                    // Se não houver itens no checklist, nada será adicionado
                 }
             }
-            // <<<< FIM DA MUDANÇA >>>>
 
             const footer = "Para ver mais detalhes, acesse a plataforma! 😉";
-
-            // <<<< INÍCIO DA MUDANÇA >>>>
-            // Monta a mensagem final, incluindo o texto do checklist se ele existir
             const message = `${intro}\n\n${body}${checklistSummaryText}\n\n${footer}`;
-            // <<<< FIM DA MUDANÇA >>>>
 
             await sendWhatsappMessage(targetPhone, message);
             logger.info(`[JOB RESUMO FINANCEIRO] Resumo ${period} para conta ${account.accountName} (ID: ${account.id}) enviado para ${targetPhone}.`);

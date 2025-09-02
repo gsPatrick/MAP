@@ -13,7 +13,8 @@ async function sendChecklistSummaries() {
   try {
     const today = new Date().toISOString().split('T')[0];
 
-    // Busca checklists de hoje que tenham pelo menos um item
+    // <<< INÍCIO DA MODIFICAÇÃO >>>
+    // A query agora junta com Client e filtra por assinatura ativa.
     const checklistsToSummarize = await DailyChecklist.findAll({
       where: {
         date: today,
@@ -22,7 +23,7 @@ async function sendChecklistSummaries() {
         {
           model: ChecklistItem,
           as: 'items',
-          required: true, // Garante que só venham checklists com itens
+          required: true,
         },
         {
           model: FinancialAccount,
@@ -30,13 +31,21 @@ async function sendChecklistSummaries() {
           include: [{
             model: Client,
             as: 'ownerClient',
-            where: { status: 'Ativo', phone: { [Op.ne]: null } },
+            where: { 
+                status: 'Ativo', 
+                phone: { [Op.ne]: null },
+                [Op.or]: [
+                    { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+                    { accessExpiresAt: { [Op.gte]: today } }
+                ]
+            },
             required: true,
           }],
           required: true,
         }
       ]
     });
+    // <<< FIM DA MODIFICAÇÃO >>>
 
     if (checklistsToSummarize.length === 0) {
       logger.info('[JOB CHECKLIST] Nenhum checklist com tarefas encontrado hoje para resumir.');
@@ -68,7 +77,7 @@ async function sendChecklistSummaries() {
 
       if (pendingItems.length > 0) {
         message += `\n*Tarefas que ficaram pendentes:*\n`;
-        pendingItems.slice(0, 5).forEach(item => { // Limita a 5 para não poluir
+        pendingItems.slice(0, 5).forEach(item => {
           message += `> 📝 ${item.text}\n`;
         });
         message += `\nNão se preocupe, o importante é o aprendizado. Amanhã teremos uma nova oportunidade! ✨`;

@@ -891,8 +891,33 @@ async function backfillAffiliateCodes() {
     logger.error(`[Backfill] Erro ao gerar códigos de afiliado para clientes existentes: ${error.message}`, { error });
     throw new Error('Falha ao executar o backfill dos códigos de afiliado.');
   }
-}
+// <<< INÍCIO DA NOVA FUNÇÃO >>>
+/**
+ * Busca informações públicas de um cliente pelo seu código de afiliado.
+ * @param {string} affiliateCode - O código de afiliado.
+ * @returns {Promise<object|null>} Objeto com dados públicos do afiliado ou null.
+ */
+async function getClientPublicInfoByAffiliateCode(affiliateCode) {
+  try {
+    if (!affiliateCode) return null;
 
+    const client = await Client.findOne({
+      where: { affiliateCode: affiliateCode.toUpperCase() },
+      attributes: ['name'], // Retorna apenas os campos seguros/públicos
+    });
+
+    if (!client) {
+      logger.warn(`[ClientService] Tentativa de buscar informações de afiliado com código inválido: ${affiliateCode}`);
+      return null;
+    }
+
+    return client.toJSON();
+  } catch (error) {
+    logger.error(`Erro ao buscar informações públicas de afiliado pelo código ${affiliateCode}: ${error.message}`, { error });
+    throw error;
+  }
+}
+}
 
 module.exports = {
   findClientByPhone,
@@ -911,5 +936,6 @@ module.exports = {
   getActiveOrDefaultFinancialAccount,
   getClientsForDebug,
   updateClientMotivationPrefs,
-  backfillAffiliateCodes
+  backfillAffiliateCodes,
+  getClientPublicInfoByAffiliateCode
 };

@@ -155,6 +155,19 @@ async function backfillAffiliateCodes(req, res, next) {
   } catch (error) {
     next(error);
   }
+async function getClientInfoByAffiliateCode(req, res, next) {
+  try {
+    const { affiliateCode } = req.params;
+    const clientInfo = await clientService.getClientPublicInfoByAffiliateCode(affiliateCode);
+    if (!clientInfo) {
+      // Retorna 404 para que o frontend saiba que o código não é válido
+      return res.status(404).json({ status: 'fail', message: 'Afiliado não encontrado.' });
+    }
+    res.status(200).json({ status: 'success', data: clientInfo });
+  } catch (error) {
+    next(error);
+  }
+}
 }
 
 module.exports = {
@@ -169,5 +182,6 @@ module.exports = {
   updateFinancialAccount,
   deleteFinancialAccount,
   getClientsForDebug,
-  backfillAffiliateCodes
+  backfillAffiliateCodes,
+  getClientInfoByAffiliateCode
 };

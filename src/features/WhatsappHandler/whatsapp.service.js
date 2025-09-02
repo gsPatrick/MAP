@@ -6,7 +6,7 @@ const sharedAccessService = require('../SharedAccess/sharedAccess.service');
 const financialCategoryService = require('../FinancialCategory/financialCategory.service');
 const financialService = require('../Financial/financial.service');
 const creditCardService = require('../CreditCardManagement/creditCard.service');
-const businessClientService = require('../BusinessClient/BusinessClient.service'); // <<< ADICIONE ESTA LINHA
+const businessClientService = require('../BusinessClient/BusinessClient.service');
 
 // --- Imports dos Novos Especialistas e Utilitários ---
 const onboardingHandler = require('./onboarding.handler');
@@ -77,8 +77,8 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
             hasPaidAccess = true;
             accessLevelTextForUser = formatter.formatPlanName(ownerClientForContext.accessLevel);
         } else if (ownerClientForContext.accessExpiresAt) {
-            const expiryDate = new Date(ownerClientForContext.accessExpiresAt + 'T00:00:00Z');
-            const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+            const expiryDate = new Date(ownerClientForContext.accessExpiresAt + 'T23:59:59Z'); // Considera o dia todo
+            const today = new Date();
             if (expiryDate >= today) {
                 hasPaidAccess = true;
                 const planNamePart = formatter.formatPlanName(ownerClientForContext.accessLevel);
@@ -149,12 +149,9 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
     }
 
     if (existingState) {
-        // <<< INÍCIO DA MODIFICAÇÃO >>>
-        // Detecta se o usuário acabou de reativar o plano
         if (!existingState.hasPaidAccess && hasPaidAccess) {
             existingState.justReactivated = true;
         }
-        // <<< FIM DA MODIFICAÇÃO >>>
 
         existingState.clientName = clientName;
         existingState.ownerClientIdForContext = ownerClientIdForContext;
@@ -210,7 +207,7 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
         currentAccessLevel: clientAccessLevel, accessExpiresAt: clientAccessExpiresAt,
         hasPaidAccess: hasPaidAccess, accessLevelTextForUser: accessLevelTextForUser,
         hasPaidAccess_whenStageLastSet: hasPaidAccess,
-        justReactivated: false, // <<< ADICIONADO AQUI
+        justReactivated: false,
     };
     logger.debug(`[WHATSAPP SERVICE - InitializeState] Novo estado criado para ator ${client.id}: `, {
         onboardingStage: newState.data.onboardingStage, hasPaidAccessDono: newState.hasPaidAccess,
@@ -219,7 +216,6 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
     return newState;
 }
 
-// ... (função processIncomingAudioMessage permanece a mesma) ...
 async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, pushName, rawPayload) {
     const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
     if (!canonicalPhone) {
@@ -353,24 +349,29 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         state.isNewUserForSessionLogic = !existingState;
         state.pushNameFromPayload = pushNameFromPayload; 
 
-        // <<< INÍCIO DA MODIFICAÇÃO >>>
-        // ETAPA 1.1: Tratar reativação de plano
         if (state.justReactivated) {
             const welcomeBackMessage = `🎉 Eba, que bom te ver de volta, ${state.clientName}! Sua assinatura foi reativada com sucesso e tudo está pronto para você continuar de onde parou. O que vamos organizar primeiro? 💪`;
             await sendWhatsappMessage(senderPhone, welcomeBackMessage);
-            state.justReactivated = false; // Reseta a flag para não mostrar de novo
-            // Continua o fluxo para processar a mensagem original do usuário
+            state.justReactivated = false;
         }
 
-        // ETAPA 1.2: Interceptar mensagens se o plano estiver expirado
-        // Apenas para donos de conta (não para convidados) que já completaram o onboarding.
+        // <<< INÍCIO DA MODIFICAÇÃO >>>
+        // Intercepta a mensagem se o plano estiver expirado, oferecendo os links de checkout.
         if (!state.isSharedAccessContext && state.data.onboardingStage === 'onboarding_complete' && !state.hasPaidAccess) {
             logger.info(`[WHATSAPP HANDLER] Bloqueando ação para ${senderPhone} devido à assinatura expirada.`);
-            const PLAN_SITE_URL = process.env.PLAN_SITE_URL || "https://map-nocontrole.com.br/#planos";
-            const expiredMessage = `Olá, ${state.clientName}! 👋\n\n` +
-                                   `Sua assinatura do MAP no Controle não está ativa no momento. Para voltar a usar todas as funcionalidades, por favor, renove seu plano.\n\n` +
-                                   `👉 Renove agora: ${PLAN_SITE_URL}\n\n` +
-                                   `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
+            
+            const checkoutBaseUrl = process.env.CHECKOUT_BASE_URL || "https://www.map-nocontrole.com.br";
+            const expiredMessage = 
+                `Olá, ${state.clientName}! 👋\n\n` +
+                `Sua assinatura do MAP no Controle não está ativa. Para reativar seu acesso completo e continuar no controle, escolha um dos planos abaixo:\n\n` +
+                `*Plano Básico*\n` +
+                `- Mensal (R$ 39,90): ${checkoutBaseUrl}/checkout/7\n` +
+                `- Anual (R$ 389,90): ${checkoutBaseUrl}/checkout/8\n\n` +
+                `*Plano Avançado (com Módulo de Negócios)*\n` +
+                `- Mensal (R$ 79,90): ${checkoutBaseUrl}/checkout/9\n` +
+                `- Anual (R$ 789,90): ${checkoutBaseUrl}/checkout/10\n\n` +
+                `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
+
             await sendWhatsappMessage(senderPhone, expiredMessage);
             conversationState.set(senderPhone, state);
             pushNameFromPayload = null;
@@ -378,7 +379,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         }
         // <<< FIM DA MODIFICAÇÃO >>>
 
-        // ETAPA 1.5: Tratamento de Comandos Diretos (Botões)
         if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
             const buttonId = rawPayload.selectedButtonId;
             logger.info(`[MAESTRO] Botão clicado por ${senderPhone}: ID '${buttonId}'`);
@@ -437,7 +437,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
         }
 
-        // ETAPA 2: Delegar para o Handler de Onboarding, se aplicável
         if (state.isSharedAccessContext && actorClient.passwordHash === null && 
             (state.data.onboardingStage === 'awaiting_shared_user_name' || state.data.onboardingStage === 'setting_up_main_client_credentials')) {
             
@@ -468,8 +467,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             return;
         }
         
-        // ... (o restante do arquivo, da ETAPA 2.5 em diante, permanece exatamente o mesmo) ...
-        // ETAPA 2.5: Tratamento de Respostas a Perguntas Diretas do Bot
         if (state.currentAction === 'awaiting_confirmation' && state.pendingConfirmation) {
             const pendingAction = state.pendingConfirmation;
             if (pendingAction.action === 'AWAITING_DELETION_CHOICE') {
@@ -516,7 +513,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
         }
         
-        // ETAPA 3: Lógica de Fluxo Pós-Onboarding (Seleção de Conta)
         if (!state.activeFinancialAccountId) {
             const accountsForSelection = state.isSharedAccessContext
                 ? ownerAccountsIfShared
@@ -568,7 +564,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             if (!state.activeFinancialAccountId) return;
         }
 
-        // ETAPA 4: Delegar para a IA e para o Action Handler
         const availableFinancialCategoriesForAI = await financialCategoryService.getAllCategoriesForAccountAI(state.activeFinancialAccountId);
         const availableCreditCardsForAI = await creditCardService.getActiveCreditCardsForAI(state.activeFinancialAccountId);
         
@@ -584,14 +579,11 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             accountsForAiContext = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
         }
         
-        // <<< INÍCIO DA MODIFICAÇÃO >>>
-        // Adiciona a lista de clientes de negócio ao contexto da IA
         let businessClientsForAI = [];
         if (['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
             const { businessClients } = await businessClientService.getAllBusinessClients(state.activeFinancialAccountId, { isActive: true, limit: 50 });
             businessClientsForAI = businessClients;
         }
-        // <<< FIM DA MODIFICAÇÃO >>>
 
         const aiContext = {
             currentFinancialAccountId: state.activeFinancialAccountId,
@@ -604,7 +596,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             availableFinancialCategories: availableFinancialCategoriesForAI,
             availableCreditCards: availableCreditCardsForAI,
             availableFinancialAccounts: accountsForAiContext,
-            availableBusinessClients: businessClientsForAI, // <<< ADICIONADO AQUI
+            availableBusinessClients: businessClientsForAI,
             pendingAction: state.currentAction === 'awaiting_clarification_response' ? state.pendingConfirmation : null
         };
 

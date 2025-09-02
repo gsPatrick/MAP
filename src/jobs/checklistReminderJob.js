@@ -5,15 +5,13 @@ const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
 
-/**
- * Busca checklists com tarefas pendentes e envia lembretes.
- */
 async function sendChecklistReminders() {
   logger.info('[JOB CHECKLIST REMINDER] Iniciando verificação de tarefas pendentes...');
   try {
     const today = new Date().toISOString().split('T')[0];
 
-    // Busca checklists de hoje que tenham itens pendentes
+    // <<< INÍCIO DA MODIFICAÇÃO >>>
+    // A query agora junta com Client e filtra por assinatura ativa.
     const checklistsToRemind = await DailyChecklist.findAll({
       where: {
         date: today,
@@ -22,7 +20,7 @@ async function sendChecklistReminders() {
         {
           model: ChecklistItem,
           as: 'items',
-          where: { completed: false }, // Apenas checklists com itens pendentes
+          where: { completed: false },
           required: true,
         },
         {
@@ -31,13 +29,21 @@ async function sendChecklistReminders() {
           include: [{
             model: Client,
             as: 'ownerClient',
-            where: { status: 'Ativo', phone: { [Op.ne]: null } },
+            where: { 
+                status: 'Ativo', 
+                phone: { [Op.ne]: null },
+                [Op.or]: [
+                    { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+                    { accessExpiresAt: { [Op.gte]: today } }
+                ]
+            },
             required: true,
           }],
           required: true,
         }
       ]
     });
+    // <<< FIM DA MODIFICAÇÃO >>>
 
     if (checklistsToRemind.length === 0) {
       logger.info('[JOB CHECKLIST REMINDER] Nenhum checklist com tarefas pendentes para lembrar agora.');
@@ -50,7 +56,7 @@ async function sendChecklistReminders() {
       const client = checklist.financialAccount.ownerClient;
       const clientFirstName = client.name ? client.name.split(' ')[0] : 'Você';
 
-      const pendingItems = checklist.items; // Já vem filtrado da query
+      const pendingItems = checklist.items;
       if (pendingItems.length === 0) continue;
 
       let message = `Olá, ${clientFirstName}! Passando para dar um gás no seu dia! 🚀\n\n`;
@@ -78,11 +84,7 @@ async function sendChecklistReminders() {
   }
 }
 
-/**
- * Inicia o agendamento do job.
- */
 function startChecklistReminderJob() {
-  // Roda às 11:00 e às 16:00, de segunda a sábado.
   const schedule = '0 11,16 * * 1-6';
   
   logger.info(`[JOB CHECKLIST REMINDER] Agendado para rodar às 11h e 16h, de Seg a Sáb (schedule: ${schedule})`);

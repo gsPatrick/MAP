@@ -3,7 +3,9 @@ const cron = require('node-cron');
 const appointmentService = require('../features/Appointment/appointment.service');
 const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
-const formatter = require('../features/WhatsappHandler/response.formatter'); // Corrigido o caminho para o formatter
+const formatter = require('../features/WhatsappHandler/response.formatter');
+const aiModelService = require('../services/aiModelService'); // Importado para mensagens criativas
+const { Op } = require('sequelize'); // Importar Op para queries complexas
 
 /**
  * Envia lembretes para compromissos de contas de Pessoa Física (PF).
@@ -12,7 +14,20 @@ const formatter = require('../features/WhatsappHandler/response.formatter'); // 
 async function sendPersonalAccountReminders() {
   logger.info('[JOB LEMBRETE - PF] Verificando compromissos de contas pessoais...');
   try {
-    const appointmentsToRemind = await appointmentService.getPFAppointmentsNeedingReminder(null);
+    // <<< INÍCIO DA MODIFICAÇÃO >>>
+    // A lógica de busca de compromissos agora está dentro do service,
+    // mas a verificação do plano do cliente é crucial.
+    // O service agora precisa receber o filtro de cliente ativo.
+    const today = new Date().toISOString().split('T')[0];
+    const clientSubscriptionFilter = {
+        status: 'Ativo',
+        [Op.or]: [
+            { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+            { accessExpiresAt: { [Op.gte]: today } }
+        ]
+    };
+    const appointmentsToRemind = await appointmentService.getPFAppointmentsNeedingReminder(clientSubscriptionFilter);
+    // <<< FIM DA MODIFICAÇÃO >>>
 
     if (appointmentsToRemind.length === 0) {
       // logger.info('[JOB LEMBRETE - PF] Nenhum compromisso de PF precisando de lembrete.');
@@ -60,23 +75,32 @@ async function sendPersonalAccountReminders() {
  */
 async function sendBusinessAccountReminders() {
     logger.info('[JOB LEMBRETE - PJ/MEI] Verificando compromissos de contas de negócio...');
+    // <<< INÍCIO DA MODIFICAÇÃO >>>
+    // O filtro de assinatura ativa será passado para as funções do service.
+    const today = new Date().toISOString().split('T')[0];
+    const clientSubscriptionFilter = {
+        status: 'Ativo',
+        [Op.or]: [
+            { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+            { accessExpiresAt: { [Op.gte]: today } }
+        ]
+    };
+    // <<< FIM DA MODIFICAÇÃO >>>
 
     // Lembretes de 24 horas
     try {
-        const appointments24h = await appointmentService.getPJAppointmentsNeeding24hReminder();
+        const appointments24h = await appointmentService.getPJAppointmentsNeeding24hReminder(clientSubscriptionFilter);
         if (appointments24h.length > 0) {
             logger.info(`[JOB LEMBRETE - PJ/MEI] ${appointments24h.length} compromissos encontrados para lembrete de 24h.`);
             for (const app of appointments24h) {
                 const providerName = app.financialAccount.accountName || app.financialAccount.ownerClient.name;
                 for (const bClient of app.businessClients) {
                     if (bClient.phone) {
-                        // <<< INÍCIO DA MUDANÇA >>>
                         const creativeMessage = await aiModelService.generateClientReminderMessage(providerName, bClient.name, app.toJSON(), "24 horas");
                         const formattedDetails = formatter.formatAppointmentDataStructure(app.toJSON(), true);
                         const finalMessage = `${creativeMessage}\n\n${formattedDetails}\n\n---\nLembrete de *${providerName}* via MAP no Controle.`;
                         
                         const sent = await sendWhatsappMessage(bClient.phone, finalMessage);
-                        // <<< FIM DA MUDANÇA >>>
                         if (sent) {
                             logger.info(`[JOB LEMBRETE - PJ/MEI] Lembrete de 24h para Appt ID ${app.id} enviado para BusinessClient ${bClient.name} (${bClient.phone}).`);
                         }
@@ -91,20 +115,18 @@ async function sendBusinessAccountReminders() {
 
     // Lembretes de 30 minutos
     try {
-        const appointments30min = await appointmentService.getPJAppointmentsNeeding30minReminder();
+        const appointments30min = await appointmentService.getPJAppointmentsNeeding30minReminder(clientSubscriptionFilter);
         if (appointments30min.length > 0) {
             logger.info(`[JOB LEMBRETE - PJ/MEI] ${appointments30min.length} compromissos encontrados para lembrete de 30min.`);
             for (const app of appointments30min) {
                 const providerName = app.financialAccount.accountName || app.financialAccount.ownerClient.name;
                 for (const bClient of app.businessClients) {
                     if (bClient.phone) {
-                        // <<< INÍCIO DA MUDANÇA >>>
                         const creativeMessage = await aiModelService.generateClientReminderMessage(providerName, bClient.name, app.toJSON(), "30 minutos");
                         const formattedDetails = formatter.formatAppointmentDataStructure(app.toJSON(), true);
                         const finalMessage = `${creativeMessage}\n\n${formattedDetails}\n\n---\nLembrete de *${providerName}* via MAP no Controle.`;
 
                         const sent = await sendWhatsappMessage(bClient.phone, finalMessage);
-                        // <<< FIM DA MUDANÇA >>>
                          if (sent) {
                             logger.info(`[JOB LEMBRETE - PJ/MEI] Lembrete de 30min para Appt ID ${app.id} enviado para BusinessClient ${bClient.name} (${bClient.phone}).`);
                         }
@@ -134,11 +156,9 @@ async function sendAllAppointmentReminders() {
 /**
  * Inicia o cron job para enviar os lembretes de compromisso.
  * @param {object} preferences - Objeto de preferências do sistema.
- * @param {object} models - Objeto com os modelos do Sequelize (não utilizado diretamente aqui).
  */
-function startAppointmentReminderJob(preferences, models) {
-  // Roda a cada 5 minutos por padrão, para capturar as janelas de 30min com precisão.
-  const schedule = preferences?.appointmentReminderJobSchedule || '*/5 * * * *';
+function startAppointmentReminderJob(preferences) {
+  const schedule = preferences?.appointmentReminderJobSchedule || '*/2 * * * *'; // Aumentei a frequência para melhor precisão
 
   if (cron.validate(schedule)) {
     logger.info(`[JOB LEMBRETE - MASTER] Agendado para rodar: ${schedule}`);
@@ -146,8 +166,8 @@ function startAppointmentReminderJob(preferences, models) {
       timezone: process.env.TZ || "America/Sao_Paulo",
     });
   } else {
-    logger.error(`[JOB LEMBRETE - MASTER] Schedule cron inválido nas preferências: ${schedule}. Usando default '*/5 * * * *'.`);
-    cron.schedule('*/5 * * * *', sendAllAppointmentReminders, { timezone: process.env.TZ || "America/Sao_Paulo" });
+    logger.error(`[JOB LEMBRETE - MASTER] Schedule cron inválido nas preferências: ${schedule}. Usando default '*/2 * * * *'.`);
+    cron.schedule('*/2 * * * *', sendAllAppointmentReminders, { timezone: process.env.TZ || "America/Sao_Paulo" });
   }
 }
 
