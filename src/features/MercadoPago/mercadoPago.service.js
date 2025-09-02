@@ -1,11 +1,13 @@
 // src/features/MercadoPago/mercadoPago.service.js
-const mercadopago = require('../../config/mercadoPago'); // <<< ALTERAÇÃO: Importa a SDK legada
+// <<< ALTERAÇÃO: Importamos os clientes 'preference' e 'payment' já configurados >>>
+const { preference: mpPreference, payment: mpPayment } = require('../../config/mercadoPago'); 
 const { Subscription, Plan, Client } = require('../../database');
 const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
 
 // <<< NOVO: Função para formatar a data para o padrão do Mercado Pago >>>
 function formatDateToPreference(date) {
+  // Esta função é idêntica à do Código 02 e está correta
   const pad = (n) => String(n).padStart(2, '0');
   const padMs = (n) => String(n).padStart(3, '0');
   
@@ -69,7 +71,7 @@ const mercadoPagoService = {
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
         statement_descriptor: "MAP NO CONTROLE", // <<< NOVO: Texto na fatura do cliente
 
-        // <<< NOVO: Configuração de expiração ESSENCIAL para o PIX >>>
+        // <<< CORREÇÃO CRÍTICA: Configuração de expiração ESSENCIAL para o PIX >>>
         expires: true,
         expiration_date_from: formatDateToPreference(new Date()),
         expiration_date_to: formatDateToPreference(new Date(Date.now() + 30 * 60 * 1000)), // Expira em 30 minutos
@@ -83,31 +85,28 @@ const mercadoPagoService = {
 
       logger.info('[MP Checkout Pro] Payload da preferência:', JSON.stringify(preferencePayload, null, 2));
 
-      // <<< ALTERAÇÃO: Chamada à API usando a SDK legada >>>
-      const preferenceResponse = await mercadopago.preferences.create(preferencePayload);
-      const preference = preferenceResponse.body; // O resultado útil fica em .body
+      // <<< ALTERAÇÃO: A chamada usa a sintaxe da NOVA SDK, passando o payload dentro de um objeto 'body' >>>
+      const preference = await mpPreference.create({ body: preferencePayload });
 
       await Subscription.update(
         { externalSubscriptionId: preference.id },
         { where: { id: createdSubscriptionData.id } }
       );
 
-      logger.info(`[MP Checkout Pro] Preferência criada com sucesso:`);
-      logger.info(`[MP Checkout Pro] - ID: ${preference.id}`);
-      logger.info(`[MP Checkout Pro] - Init Point: ${preference.init_point}`);
-      logger.info(`[MP Checkout Pro] - Sandbox Init Point: ${preference.sandbox_init_point}`);
-      
-      return preference; // Retorna o objeto completo da preferência
-
-    } catch (error) {
-       // O log de erro já está bom, mas podemos garantir que a resposta da API seja capturada
-       const apiError = error.response?.data || error.cause?.data || error.message;
-      logger.error(`[MP Checkout Pro] Erro detalhado:`, {
-        message: error.message,
-        apiError: apiError,
-        stack: error.stack
+      logger.info(`[MP Checkout Pro] Preferência criada com sucesso:`, {
+        id: preference.id,
+        init_point: preference.init_point,
       });
       
+      return preference;
+
+    } catch (error) {
+      const apiError = error.cause?.data || error.message;
+      logger.error(`[MP Checkout Pro] Erro detalhado:`, {
+        message: error.message,
+        apiResponse: apiError,
+        stack: error.stack
+      });
       const errorMessage = apiError?.message || error.message || 'Falha ao iniciar o processo de pagamento.';
       throw new Error(errorMessage);
     }
@@ -125,18 +124,13 @@ const mercadoPagoService = {
       const paymentId = dados.data.id;
       logger.info(`[Webhook MP] Processando pagamento: ${paymentId}`);
       
-      // <<< ALTERAÇÃO: Chamada para buscar pagamento com a SDK legada >>>
-      const paymentResponse = await mercadopago.payment.findById(paymentId);
-      const paymentData = paymentResponse.body;
+      // <<< ALTERAÇÃO: A chamada usa a sintaxe da NOVA SDK para buscar o pagamento >>>
+      const paymentData = await mpPayment.get({ id: paymentId });
       
       logger.info(`[Webhook MP] Dados do pagamento:`, {
         id: paymentData.id,
         status: paymentData.status,
-        payment_method_id: paymentData.payment_method_id,
-        payment_type_id: paymentData.payment_type_id,
         external_reference: paymentData.external_reference,
-        transaction_amount: paymentData.transaction_amount,
-        date_approved: paymentData.date_approved
       });
       
       if (!paymentData.external_reference) {
@@ -152,7 +146,7 @@ const mercadoPagoService = {
         return;
       }
       
-      // Lógica de status permanece a mesma
+      // A lógica de atualização de status permanece a mesma, pois é interna do seu sistema
       const successStatuses = ['approved', 'accredited'];
       const failureStatuses = ['rejected', 'cancelled', 'refunded', 'charged_back'];
 
@@ -163,15 +157,13 @@ const mercadoPagoService = {
         await subscriptionService.updateSubscriptionStatusByExternalId(
           null, 'Ativa', newEndDate.toISOString().split('T')[0], subscription.id
         );
-        
-        logger.info(`[Webhook MP] ✅ PAGAMENTO APROVADO - Assinatura ${subscription.id} ativada (${paymentData.payment_method_id})`);
+        logger.info(`[Webhook MP] ✅ PAGAMENTO APROVADO - Assinatura ${subscription.id} ativada.`);
 
       } else if (failureStatuses.includes(paymentData.status) && subscription.status === 'Pendente') {
         await subscriptionService.updateSubscriptionStatusByExternalId(
           null, 'Pagamento Falhou', subscription.endDate, subscription.id
         );
-        
-        logger.info(`[Webhook MP] ❌ PAGAMENTO FALHOU - Assinatura ${subscription.id} (${paymentData.payment_method_id})`);
+        logger.info(`[Webhook MP] ❌ PAGAMENTO FALHOU - Assinatura ${subscription.id}.`);
 
       } else {
         logger.info(`[Webhook MP] Status ${paymentData.status} recebido para assinatura ${subscription.id} (status atual: ${subscription.status})`);
