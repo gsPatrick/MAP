@@ -155,6 +155,9 @@ async function backfillAffiliateCodes(req, res, next) {
   } catch (error) {
     next(error);
   }
+
+}
+
 async function getClientInfoByAffiliateCode(req, res, next) {
   try {
     const { affiliateCode } = req.params;
@@ -167,7 +170,6 @@ async function getClientInfoByAffiliateCode(req, res, next) {
   } catch (error) {
     next(error);
   }
-}
 }
 
 module.exports = {
