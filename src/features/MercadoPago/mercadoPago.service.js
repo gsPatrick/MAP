@@ -24,31 +24,19 @@ const mercadoPagoService = {
         clientId, planId, new Date().toISOString().split('T')[0], 'Pendente', null, affiliateCode
       );
 
+      // PAYLOAD OTIMIZADO ESPECIFICAMENTE PARA PIX FUNCIONAR
       const preferencePayload = {
         items: [{
           id: plan.id.toString(),
           title: `Plano ${plan.name} - MAP no Controle`,
           description: plan.description || `Acesso ao plano ${plan.name}`,
-          unit_price: Number(plan.price),
+          unit_price: parseFloat(plan.price),
           quantity: 1,
           currency_id: 'BRL',
         }],
         payer: {
           name: client.name,
           email: client.email,
-        },
-        // CORREÇÃO PRINCIPAL: Configurar métodos de pagamento para incluir PIX
-        payment_methods: {
-          excluded_payment_methods: [], // Não excluir nenhum método
-          excluded_payment_types: [],   // Não excluir nenhum tipo
-          installments: 12,             // Permitir até 12 parcelas no cartão
-          default_installments: 1,      // Padrão em 1x
-        },
-        // ADIÇÃO: Configurar explicitamente o PIX
-        payment_methods_configuration: {
-          pix: {
-            expiration_date: new Date(Date.now() + 30 * 60 * 1000).toISOString(), // PIX expira em 30 minutos
-          }
         },
         back_urls: {
           success: `${process.env.FRONTEND_URL}/payment-success`,
@@ -58,23 +46,56 @@ const mercadoPagoService = {
         auto_return: 'approved',
         external_reference: createdSubscriptionData.id.toString(),
         notification_url: `${process.env.BASE_URL}/api/mercado-pago/webhook`,
-        // ADIÇÃO: Configurações extras para melhor experiência
-        expires: true,
-        expiration_date_from: new Date().toISOString(),
-        expiration_date_to: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // Preferência expira em 24h
-        // CORREÇÃO: Definir métodos permitidos explicitamente
+        // CONFIGURAÇÕES ESSENCIAIS PARA PIX
         payment_methods: {
           excluded_payment_methods: [],
           excluded_payment_types: [],
           installments: 12,
-          default_payment_method_id: null,
-          // Forçar a inclusão do PIX
-          included_payment_methods: ['pix'],
+          default_installments: 1
+        },
+        // OBRIGATÓRIO PARA PIX EM PRODUÇÃO
+        statement_descriptor: "MAP no Controle",
+        // CONFIGURAR EXPIRAÇÃO (PIX precisa disso)
+        expires: true,
+        expiration_date_from: new Date().toISOString(),
+        expiration_date_to: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        // CONFIGURAÇÕES ADICIONAIS PARA PIX
+        additional_info: {
+          items: [{
+            id: plan.id.toString(),
+            title: `Plano ${plan.name}`,
+            description: plan.description || `Acesso ao plano ${plan.name}`,
+            picture_url: null,
+            category_id: "services",
+            quantity: 1,
+            unit_price: parseFloat(plan.price)
+          }],
+          payer: {
+            first_name: client.name.split(' ')[0] || client.name,
+            last_name: client.name.split(' ').slice(1).join(' ') || '',
+            phone: {
+              area_code: "11",
+              number: "999999999"
+            },
+            address: {
+              street_name: "Rua Exemplo",
+              street_number: 123,
+              zip_code: "01234567"
+            }
+          },
+          shipments: {
+            receiver_address: {
+              zip_code: "01234567",
+              street_name: "Rua Exemplo",
+              street_number: 123,
+              floor: "",
+              apartment: ""
+            }
+          }
         }
       };
 
-      // Log para debug da configuração
-      logger.info('[MP Checkout Pro] Payload da preferência:', JSON.stringify(preferencePayload, null, 2));
+      logger.info('[MP Checkout Pro] Payload PIX enviado:', JSON.stringify(preferencePayload, null, 2));
 
       const preference = await mpPreference.create({ body: preferencePayload });
 
@@ -83,30 +104,35 @@ const mercadoPagoService = {
         { where: { id: createdSubscriptionData.id } }
       );
 
-      logger.info(`[MP Checkout Pro] Preferência ID: ${preference.id} criada e associada à Assinatura ID ${createdSubscriptionData.id}.`);
+      logger.info(`[MP Checkout Pro] Preferência ID: ${preference.id} criada com PIX habilitado`);
+      logger.info(`[MP Checkout Pro] Init Point: ${preference.init_point}`);
       
-      // Log da resposta da preferência para debug
-      logger.info(`[MP Checkout Pro] Resposta da preferência:`, {
-        id: preference.id,
-        init_point: preference.init_point,
-        sandbox_init_point: preference.sandbox_init_point
-      });
-
       return preference;
 
     } catch (error) {
-      const errorMessage = error.cause?.data?.message || error.cause?.message || error.message;
-      logger.error(`[MP Checkout Pro] Erro ao criar preferência de pagamento:`, { 
-        message: errorMessage, 
+      // Log completo do erro para debug do PIX
+      logger.error(`[MP Checkout Pro] ERRO COMPLETO PIX:`, {
+        message: error.message,
+        cause: error.cause,
         data: error.cause?.data,
-        fullError: error
+        response: error.response?.data,
+        status: error.status || error.statusCode,
+        config: error.config
       });
-      throw new Error(errorMessage || 'Falha ao iniciar o processo de pagamento.');
+
+      const errorMessage = error.cause?.data?.message || 
+                          error.response?.data?.message || 
+                          error.cause?.message || 
+                          error.message;
+      
+      throw new Error(errorMessage || 'Falha ao criar preferência PIX.');
     }
   },
 
   async processarWebhook(dados) {
     try {
+      logger.info('[Webhook MP] Webhook PIX recebido:', JSON.stringify(dados, null, 2));
+
       if (dados.type !== 'payment') {
         logger.info(`[Webhook MP] Notificação do tipo '${dados.type}' ignorada.`);
         return;
@@ -115,17 +141,19 @@ const mercadoPagoService = {
       const paymentId = dados.data.id;
       const paymentData = await mpPayment.get({ id: paymentId });
       
-      // Log adicional para debug do status do pagamento PIX
-      logger.info(`[Webhook MP] Dados do pagamento recebidos:`, {
+      logger.info(`[Webhook MP] Pagamento PIX processado:`, {
         id: paymentData.id,
         status: paymentData.status,
         payment_method_id: paymentData.payment_method_id,
         payment_type_id: paymentData.payment_type_id,
-        external_reference: paymentData.external_reference
+        transaction_amount: paymentData.transaction_amount,
+        external_reference: paymentData.external_reference,
+        date_created: paymentData.date_created,
+        date_approved: paymentData.date_approved
       });
       
       if (!paymentData.external_reference) {
-        logger.warn(`[Webhook MP] Pagamento ${paymentId} não possui 'external_reference'.`);
+        logger.warn(`[Webhook MP] PIX ${paymentId} sem external_reference.`);
         return;
       }
       
@@ -133,45 +161,40 @@ const mercadoPagoService = {
       const subscription = await Subscription.findByPk(subscriptionId, { include: ['plan'] });
 
       if (!subscription) {
-        logger.warn(`[Webhook MP] Assinatura ID ${subscriptionId} não encontrada.`);
+        logger.warn(`[Webhook MP] Assinatura PIX ${subscriptionId} não encontrada.`);
         return;
       }
       
-      // Status de sucesso mais abrangentes para PIX
+      // Status específicos do PIX
       const successStatuses = ['approved', 'accredited'];
-      // Status específicos do PIX que podem precisar de tratamento especial
-      const pixPendingStatuses = ['pending', 'in_process'];
+      const pendingStatuses = ['pending', 'in_process'];
       const failureStatuses = ['rejected', 'cancelled', 'refunded', 'charged_back'];
 
-      if (successStatuses.includes(paymentData.status) && subscription.status !== 'Ativa') {
-        // Pagamento aprovado - ativar assinatura
-        const newEndDate = new Date();
-        newEndDate.setDate(newEndDate.getDate() + subscription.plan.durationDays);
-        await subscriptionService.updateSubscriptionStatusByExternalId(
-          null, 'Ativa', newEndDate.toISOString().split('T')[0], subscription.id
-        );
-        logger.info(`[Webhook MP] Assinatura ${subscription.id} ATIVADA com sucesso via ${paymentData.payment_method_id} status '${paymentData.status}'.`);
-
-      } else if (pixPendingStatuses.includes(paymentData.status) && paymentData.payment_method_id === 'pix') {
-        // PIX pendente - manter como pendente mas logar
-        logger.info(`[Webhook MP] PIX em processamento para assinatura ${subscription.id} - status '${paymentData.status}'.`);
-        
-      } else if (failureStatuses.includes(paymentData.status) && subscription.status === 'Pendente') {
-        // Pagamento falhou
-        await subscriptionService.updateSubscriptionStatusByExternalId(
-          null, 'Pagamento Falhou', subscription.endDate, subscription.id
-        );
-        logger.info(`[Webhook MP] Assinatura ${subscription.id} marcada como 'Pagamento Falhou' via ${paymentData.payment_method_id} status '${paymentData.status}'.`);
-
-      } else {
-        // Log detalhado para outros casos
-        logger.info(`[Webhook MP] Status '${paymentData.status}' via ${paymentData.payment_method_id} para assinatura ${subscription.id} (status atual: '${subscription.status}'). Nenhuma ação necessária.`);
+      if (successStatuses.includes(paymentData.status)) {
+        if (subscription.status !== 'Ativa') {
+          const newEndDate = new Date();
+          newEndDate.setDate(newEndDate.getDate() + subscription.plan.durationDays);
+          
+          await subscriptionService.updateSubscriptionStatusByExternalId(
+            null, 'Ativa', newEndDate.toISOString().split('T')[0], subscription.id
+          );
+          
+          logger.info(`[Webhook MP] ✅ PIX APROVADO - Assinatura ${subscription.id} ATIVADA`);
+        }
+      } else if (pendingStatuses.includes(paymentData.status)) {
+        logger.info(`[Webhook MP] ⏳ PIX PENDENTE - Assinatura ${subscription.id} aguardando`);
+      } else if (failureStatuses.includes(paymentData.status)) {
+        if (subscription.status === 'Pendente') {
+          await subscriptionService.updateSubscriptionStatusByExternalId(
+            null, 'Pagamento Falhou', subscription.endDate, subscription.id
+          );
+          logger.info(`[Webhook MP] ❌ PIX FALHOU - Assinatura ${subscription.id}`);
+        }
       }
 
     } catch (error) {
-      logger.error("[Webhook MP] Erro fatal ao processar webhook:", {
+      logger.error("[Webhook MP] Erro PIX webhook:", {
         message: error.message,
-        cause: error.cause,
         stack: error.stack
       });
     }
