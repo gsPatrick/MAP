@@ -891,12 +891,9 @@ async function backfillAffiliateCodes() {
     logger.error(`[Backfill] Erro ao gerar códigos de afiliado para clientes existentes: ${error.message}`, { error });
     throw new Error('Falha ao executar o backfill dos códigos de afiliado.');
   }
-// <<< INÍCIO DA NOVA FUNÇÃO >>>
-/**
- * Busca informações públicas de um cliente pelo seu código de afiliado.
- * @param {string} affiliateCode - O código de afiliado.
- * @returns {Promise<object|null>} Objeto com dados públicos do afiliado ou null.
- */
+
+}
+
 async function getClientPublicInfoByAffiliateCode(affiliateCode) {
   try {
     if (!affiliateCode) return null;
@@ -916,7 +913,6 @@ async function getClientPublicInfoByAffiliateCode(affiliateCode) {
     logger.error(`Erro ao buscar informações públicas de afiliado pelo código ${affiliateCode}: ${error.message}`, { error });
     throw error;
   }
-}
 }
 
 module.exports = {
@@ -938,4 +934,5 @@ module.exports = {
   updateClientMotivationPrefs,
   backfillAffiliateCodes,
   getClientPublicInfoByAffiliateCode
+  
 };
