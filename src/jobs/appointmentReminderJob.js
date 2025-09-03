@@ -6,6 +6,7 @@ const { sendWhatsappMessage } = require('../services/whatsappService');
 const formatter = require('../features/WhatsappHandler/response.formatter');
 const aiModelService = require('../services/aiModelService'); // Importado para mensagens criativas
 const { Op } = require('sequelize'); // Importar Op para queries complexas
+const { FinancialAccount, Client } = require('../database'); 
 
 /**
  * Envia lembretes para compromissos de contas de Pessoa Física (PF).
@@ -15,8 +16,6 @@ async function sendPersonalAccountReminders() {
   logger.info('[JOB LEMBRETE - PF] Verificando compromissos de contas pessoais...');
   try {
     const today = new Date().toISOString().split('T')[0];
-
-    // --- INÍCIO DA CORREÇÃO ---
 
     // 1. Buscar os IDs das contas financeiras PF que pertencem a clientes com assinatura ativa.
     const activePfAccounts = await FinancialAccount.findAll({
@@ -41,7 +40,8 @@ async function sendPersonalAccountReminders() {
     });
 
     if (activePfAccounts.length === 0) {
-      logger.info('[JOB LEMBRETE - PF] Nenhuma conta PF de clientes com assinatura ativa encontrada.');
+      // logger.info('[JOB LEMBRETE - PF] Nenhuma conta PF de clientes com assinatura ativa encontrada.');
+      // Silenciamos este log para não poluir em execuções normais.
       return;
     }
 
@@ -50,8 +50,6 @@ async function sendPersonalAccountReminders() {
     
     // 3. Chamar o serviço de agendamentos com o array de IDs correto.
     const appointmentsToRemind = await appointmentService.getPFAppointmentsNeedingReminder(activePfAccountIds);
-
-    // --- FIM DA CORREÇÃO ---
 
     if (appointmentsToRemind.length === 0) {
       // logger.info('[JOB LEMBRETE - PF] Nenhum compromisso de PF precisando de lembrete.');
