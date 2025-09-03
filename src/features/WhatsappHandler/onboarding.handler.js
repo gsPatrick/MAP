@@ -116,6 +116,21 @@ function getOnboardingCompanyCreatedMessage(clientName, companyType, companyName
     return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
 }
 
+function getSubscriptionExpiredOrInactiveMessage(clientName) {
+    const checkoutBaseUrl = process.env.CHECKOUT_BASE_URL || "https://www.map-nocontrole.com.br";
+    const message =
+        `Olá, ${clientName}! 👋\n\n` +
+        `Sua assinatura do MAP no Controle não está ativa. Para reativar seu acesso completo e continuar no controle, escolha um dos planos abaixo:\n\n` +
+        `*Plano Básico*\n` +
+        `- Mensal: ${checkoutBaseUrl}/checkout/7\n` +
+        `- Anual: ${checkoutBaseUrl}/checkout/8\n\n` +
+        `*Plano Avançado (com Módulo de Negócios)*\n` +
+        `- Mensal: ${checkoutBaseUrl}/checkout/9\n` +
+        `- Anual: ${checkoutBaseUrl}/checkout/10\n\n` +
+        `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
+    return message;
+}
+
 async function handleOnboardingStep(state, messageText, actorClient) {
     let onboardingReply = "";
     const nameFromDb = (actorClient.name && actorClient.name.toLowerCase() !== 'convidado' && actorClient.name.toLowerCase() !== 'unknown')
@@ -125,6 +140,25 @@ async function handleOnboardingStep(state, messageText, actorClient) {
     let clientNameForMessages = nameFromDb || state.pushNameFromPayload || "você";
     const lowerMessageText = (messageText || "").toLowerCase().trim();
     const isSharedContext = state.isSharedAccessContext;
+
+    // --- INÍCIO DA CORREÇÃO PRINCIPAL ---
+    // Etapa 0: Verifica se o usuário está no limbo (sem plano) e intercepta a conversa.
+    if (state.data.onboardingStage === 'awaiting_plan_confirmation' && !state.hasPaidAccess) {
+        // Se o usuário responder "sim" à pergunta inicial sobre ver planos, o fluxo continua.
+        if (lowerMessageText.includes("sim") || lowerMessageText.includes("quero") || lowerMessageText.includes("bora")) {
+            const planDetailsMessage = `Temos planos Mensais e Anuais, para controle Pessoal ou Empresarial (com o módulo de negócios!). Para ver todos os detalhes e valores, acesse nossa página de planos: https://map-nocontrole.com.br/#planos\n\nQuando sua assinatura estiver ativa, é só me dar um "oi" que começamos! 😉`;
+            await sendWhatsappMessage(actorClient.phone, planDetailsMessage);
+            onboardingReply = 'Detalhes do plano enviados.';
+        } else {
+            // Para qualquer outra mensagem (como "Olá"), envia o lembrete de assinatura.
+            onboardingReply = getSubscriptionExpiredOrInactiveMessage(clientNameForMessages);
+            await sendWhatsappMessage(actorClient.phone, onboardingReply);
+        }
+        // Interrompe o fluxo aqui para não processar mais nada.
+        return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
+    }
+    // --- FIM DA CORREÇÃO PRINCIPAL ---
+
 
     // Se o cliente ainda estiver no estágio 'awaiting_plan_confirmation' e tiver pago,
     // garantimos que ele avance para a próxima etapa: definir o nome completo.
@@ -323,11 +357,9 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
     
-    // Se chegou aqui e o stage não é 'onboarding_complete', algo falhou ou é uma saudação inicial
-    // mas o fluxo de envio da mensagem de boas-vindas já ocorreu no topo da função.
-    
     return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
 }
+
 
 module.exports = {
     handleOnboardingStep,

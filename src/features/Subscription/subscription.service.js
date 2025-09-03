@@ -5,8 +5,8 @@ const logger = require('../../utils/logger');
 const { sendWhatsappMessage } = require('../../services/whatsappService');
 const { formatDate, formatCurrency } = require('../../utils/formatters');
 
-async function createSubscription(clientId, planId, startDate = null, status = 'Ativa', externalSubscriptionId = null, affiliateCode = null) {
-  const t = await sequelize.transaction();
+async function createSubscription(clientId, planId, startDate = null, status = 'Ativa', externalSubscriptionId = null, affiliateCode = null, options = {}) {
+  const t = options.transaction || await sequelize.transaction();
   try {
     const clientInstance = await Client.findByPk(clientId, { transaction: t });
     if (!clientInstance) {
@@ -95,13 +95,11 @@ async function createSubscription(clientId, planId, startDate = null, status = '
         }
     }
 
-    await t.commit(); 
+    if (!options.transaction) {
+      await t.commit(); 
+    }
 
-    // <<< INÍCIO DA MODIFICAÇÃO >>>
-    // A mensagem de boas-vindas só é enviada aqui se for a PRIMEIRA assinatura do cliente.
-    // A mensagem de RENOVAÇÃO será enviada pela função 'updateSubscriptionStatusByExternalId'.
     if (status === 'Ativa' && clientInstance.phone && previousSubscriptionsCount === 0) {
-    // <<< FIM DA MODIFICAÇÃO >>>
         const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Cliente';
         const platformUrl = process.env.PLATFORM_URL || 'app.mapnocontrole.com.br';
         let expiryWelcomePart = `Seu acesso está garantido até *${formatDate(newSubscription.endDate)}*.`;
@@ -123,7 +121,7 @@ async function createSubscription(clientId, planId, startDate = null, status = '
     logger.info(`Assinatura ID ${newSubscription.id} criada para Cliente ID ${clientId}. Status: ${status}.`);
     return newSubscription.toJSON();
   } catch (error) {
-    if (t && !t.finished) await t.rollback();
+    if (t && !t.finished && !options.transaction) await t.rollback();
     logger.error(`Erro ao criar assinatura: ${error.message}`, { error });
     if (!error.statusCode) error.statusCode = 500;
     throw error;

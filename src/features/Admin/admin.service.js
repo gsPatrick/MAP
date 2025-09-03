@@ -153,7 +153,8 @@ async function changeUserPlan(clientId, planId) {
             'Ativa',
             null,
             null,
-            { transaction: t }
+            // --- ESTA É A LINHA CORRIGIDA ---
+            { transaction: t } 
         );
         await t.commit();
         logger.info(`[AdminService] Plano do cliente ID ${clientId} alterado para "${plan.name}" (ID: ${planId}).`);
