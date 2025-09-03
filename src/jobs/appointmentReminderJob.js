@@ -14,20 +14,44 @@ const { Op } = require('sequelize'); // Importar Op para queries complexas
 async function sendPersonalAccountReminders() {
   logger.info('[JOB LEMBRETE - PF] Verificando compromissos de contas pessoais...');
   try {
-    // <<< INÍCIO DA MODIFICAÇÃO >>>
-    // A lógica de busca de compromissos agora está dentro do service,
-    // mas a verificação do plano do cliente é crucial.
-    // O service agora precisa receber o filtro de cliente ativo.
     const today = new Date().toISOString().split('T')[0];
-    const clientSubscriptionFilter = {
-        status: 'Ativo',
-        [Op.or]: [
+
+    // --- INÍCIO DA CORREÇÃO ---
+
+    // 1. Buscar os IDs das contas financeiras PF que pertencem a clientes com assinatura ativa.
+    const activePfAccounts = await FinancialAccount.findAll({
+      where: {
+        accountType: 'PF',
+        isActive: true,
+      },
+      include: [{
+        model: Client,
+        as: 'ownerClient',
+        attributes: [], // Não precisamos dos dados do cliente aqui, apenas da condição
+        where: {
+          status: 'Ativo',
+          [Op.or]: [
             { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
             { accessExpiresAt: { [Op.gte]: today } }
-        ]
-    };
-    const appointmentsToRemind = await appointmentService.getPFAppointmentsNeedingReminder(clientSubscriptionFilter);
-    // <<< FIM DA MODIFICAÇÃO >>>
+          ]
+        },
+        required: true // Garante que só venham contas de clientes que atendem ao critério
+      }],
+      attributes: ['id'] // Seleciona apenas o ID da conta financeira
+    });
+
+    if (activePfAccounts.length === 0) {
+      logger.info('[JOB LEMBRETE - PF] Nenhuma conta PF de clientes com assinatura ativa encontrada.');
+      return;
+    }
+
+    // 2. Extrair apenas os IDs para um array de números.
+    const activePfAccountIds = activePfAccounts.map(acc => acc.id);
+    
+    // 3. Chamar o serviço de agendamentos com o array de IDs correto.
+    const appointmentsToRemind = await appointmentService.getPFAppointmentsNeedingReminder(activePfAccountIds);
+
+    // --- FIM DA CORREÇÃO ---
 
     if (appointmentsToRemind.length === 0) {
       // logger.info('[JOB LEMBRETE - PF] Nenhum compromisso de PF precisando de lembrete.');
