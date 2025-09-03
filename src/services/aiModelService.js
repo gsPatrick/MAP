@@ -28,29 +28,33 @@ async function transcribeAudioStream(audioStream, inputFilename) {
     throw new Error('Stream de áudio é necessário para transcrição.');
   }
   
-  // Garante um nome de arquivo válido para a OpenAI, mesmo que não salvemos o arquivo.
+  // Garante um nome de arquivo válido para o Whisper
   const filename = inputFilename || 'audio.ogg';
+  const tempFilePath = path.join(os.tmpdir(), `whisper-${Date.now()}-${filename}`);
   
   try {
-    logger.info(`[AI SERVICE - WHISPER] Lendo stream de áudio para a memória (buffer)...`);
+    logger.info(`[AI SERVICE - WHISPER] Iniciando salvamento do áudio em arquivo temporário: ${tempFilePath}`);
+    
+    // Cria um stream de escrita para o arquivo temporário
+    const writer = fs.createWriteStream(tempFilePath);
+    
+    // Conecta o stream de download (audioStream) ao stream de escrita (writer)
+    audioStream.pipe(writer);
 
-    // 1. Converte o stream de áudio em um buffer na memória RAM.
-    const chunks = [];
-    for await (const chunk of audioStream) {
-        chunks.push(chunk);
-    }
-    const audioBuffer = Buffer.concat(chunks);
+    // Aguarda o download e o salvamento do arquivo serem concluídos
+    await new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', (err) => {
+        logger.error(`[AI SERVICE - WHISPER] Erro ao salvar o arquivo de áudio temporário: ${err.message}`);
+        reject(err);
+      });
+    });
 
-    logger.info(`[AI SERVICE - WHISPER] Áudio carregado na memória. Enviando para transcrição...`);
+    logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário salvo com sucesso. Enviando para transcrição...`);
 
-    // 2. Envia o buffer diretamente para a API da OpenAI.
-    // A biblioteca da OpenAI é inteligente o suficiente para lidar com um buffer
-    // se passarmos um nome de arquivo junto.
+    // Envia o arquivo salvo no disco para a API da OpenAI
     const transcription = await openai.audio.transcriptions.create({
-      file: {
-          name: filename,
-          data: audioBuffer,
-      },
+      file: fs.createReadStream(tempFilePath), // << A chave é criar um ReadStream a partir do arquivo salvo
       model: "whisper-1",
       language: "pt",
       response_format: "text"
@@ -59,15 +63,15 @@ async function transcribeAudioStream(audioStream, inputFilename) {
     const transcribedText = String(transcription); 
 
     if (transcribedText.trim() === "") {
-      logger.warn(`[AI SERVICE - WHISPER] Transcrição do áudio resultou em texto vazio.`);
+      logger.warn(`[AI SERVICE - WHISPER] Transcrição do arquivo ${filename} resultou em texto vazio.`);
       return ""; 
     }
 
-    logger.info(`[AI SERVICE - WHISPER] Texto transcrito: "${transcribedText.substring(0, 100)}..."`);
+    logger.info(`[AI SERVICE - WHISPER] Texto transcrito de ${filename}: "${transcribedText.substring(0, 100)}..."`);
     return transcribedText;
 
   } catch (error) {
-    let errorMessage = `Falha ao transcrever áudio`;
+    let errorMessage = `Falha ao transcrever áudio (${filename})`;
     if (error.response && error.response.data) {
         logger.error('[AI SERVICE - WHISPER] Erro da API OpenAI:', error.response.data);
         errorMessage += `: ${JSON.stringify(error.response.data.error?.message || error.response.data)}`;
@@ -76,8 +80,17 @@ async function transcribeAudioStream(audioStream, inputFilename) {
         errorMessage += `: ${error.message}`;
     }
     throw new Error(errorMessage);
+  } finally {
+    // --- LIMPEZA ESSENCIAL ---
+    // Garante que o arquivo temporário seja sempre excluído, mesmo se ocorrer um erro.
+    fs.unlink(tempFilePath, (err) => {
+      if (err) {
+        logger.warn(`[AI SERVICE - WHISPER] Não foi possível excluir o arquivo de áudio temporário ${tempFilePath}: ${err.message}`);
+      } else {
+        logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário ${tempFilePath} excluído com sucesso.`);
+      }
+    });
   }
-  // A cláusula 'finally' para apagar o arquivo não é mais necessária.
 }
 
 function buildSystemPrompt(conversationContext) {
