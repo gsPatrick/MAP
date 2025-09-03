@@ -153,17 +153,38 @@ async function changeUserPlan(clientId, planId) {
             'Ativa',
             null,
             null,
-            // --- ESTA É A LINHA CORRIGIDA ---
-            { transaction: t } 
+            { transaction: t }
         );
-        await t.commit();
+        
+        await t.commit(); // Comita a transação ANTES de enviar a mensagem
+        
         logger.info(`[AdminService] Plano do cliente ID ${clientId} alterado para "${plan.name}" (ID: ${planId}).`);
+
+        // --- INÍCIO DA MODIFICAÇÃO: Envio de notificação proativa ---
+        if (client.phone) {
+            try {
+                const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
+                let expiryWelcomePart = `Seu acesso agora está garantido até *${formatDate(newSubscription.endDate)}*.`;
+                if (plan.durationDays > 7000) { // Lógica para plano vitalício
+                    expiryWelcomePart = "Você agora tem *acesso vitalício*! 🎉";
+                }
+                const welcomeMessage = `Olá, ${clientName}! ✨\n\nSua assinatura foi atualizada com sucesso para o plano *${plan.name}* pelo nosso suporte.\n\n${expiryWelcomePart}\n\nJá pode começar a usar todos os recursos. Qualquer dúvida, é só me chamar! 😉`;
+                
+                await sendWhatsappMessage(client.phone, welcomeMessage);
+                logger.info(`[AdminService] Mensagem de confirmação de mudança de plano enviada para ${client.phone}.`);
+            } catch (whatsappError) {
+                logger.error(`[AdminService] Falha ao enviar mensagem de confirmação para ${client.phone}: ${whatsappError.message}`);
+                // Mesmo que a mensagem falhe, a operação no banco foi um sucesso, então não lançamos um erro.
+            }
+        }
+        // --- FIM DA MODIFICAÇÃO ---
+
         return {
             message: 'Plano do cliente alterado com sucesso.',
             newSubscription: newSubscription
         };
     } catch (error) {
-        await t.rollback();
+        if (t && !t.finished) await t.rollback();
         logger.error(`[AdminService] Erro ao alterar plano do cliente ID ${clientId}: ${error.message}`, error);
         throw error;
     }
