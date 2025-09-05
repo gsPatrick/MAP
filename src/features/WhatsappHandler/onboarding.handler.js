@@ -143,18 +143,53 @@ async function handleOnboardingStep(state, messageText, actorClient) {
 
     // --- INÍCIO DA CORREÇÃO PRINCIPAL ---
     // Etapa 0: Verifica se o usuário está no limbo (sem plano) e intercepta a conversa.
-    if (state.data.onboardingStage === 'awaiting_plan_confirmation' && !state.hasPaidAccess) {
-        // Se o usuário responder "sim" à pergunta inicial sobre ver planos, o fluxo continua.
-        if (lowerMessageText.includes("sim") || lowerMessageText.includes("quero") || lowerMessageText.includes("bora")) {
-            const planDetailsMessage = `Temos planos Mensais e Anuais, para controle Pessoal ou Empresarial (com o módulo de negócios!). Para ver todos os detalhes e valores, acesse nossa página de planos: https://map-nocontrole.com.br/#planos\n\nQuando sua assinatura estiver ativa, é só me dar um "oi" que começamos! 😉`;
-            await sendWhatsappMessage(actorClient.phone, planDetailsMessage);
-            onboardingReply = 'Detalhes do plano enviados.';
+   if (state.data.onboardingStage === 'setting_up_credentials_email') {
+        if (state.currentAction !== 'awaiting_input_email') {
+            onboardingReply = getOnboardingAskForEmailMessage(clientNameForMessages);
+            state.currentAction = 'awaiting_input_email';
+            await sendWhatsappMessage(actorClient.phone, onboardingReply);
+            return { onboardingReply: 'Aguardando e-mail do usuário...', updatedState: state, updatedActorClient: actorClient };
+        }
+        
+        const emailInput = lowerMessageText;
+        if (emailInput.includes('@') && emailInput.includes('.')) {
+            // Validação de e-mail já existente
+            const existingClient = await clientService.findClientByEmail(emailInput);
+            if (existingClient && existingClient.id !== actorClient.id) {
+                onboardingReply = `Opa! O e-mail *${emailInput}* já está em uso. Por favor, tente outro.`;
+                await sendWhatsappMessage(actorClient.phone, onboardingReply);
+                return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
+            }
+
+            state.data.tempEmail = emailInput;
+            state.data.onboardingStage = 'setting_up_credentials_password';
+            state.currentAction = 'awaiting_input_password';
+            onboardingReply = getOnboardingAskForPasswordMessage();
+            await sendWhatsappMessage(actorClient.phone, onboardingReply);
         } else {
-            // Para qualquer outra mensagem (como "Olá"), envia o lembrete de assinatura.
-            onboardingReply = getSubscriptionExpiredOrInactiveMessage(clientNameForMessages);
+            onboardingReply = `Hmm, isso não parece um e-mail válido. Pode tentar de novo, por favor? 😊`;
             await sendWhatsappMessage(actorClient.phone, onboardingReply);
         }
-        // Interrompe o fluxo aqui para não processar mais nada.
+        return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
+    }
+
+    if (state.data.onboardingStage === 'setting_up_credentials_password') {
+        const passwordInput = messageText.trim();
+        if (passwordInput.length >= 6) {
+            const emailToSet = state.data.tempEmail;
+            await clientAuthService.setClientCredentials(actorClient.phone, passwordInput, null, emailToSet);
+            actorClient.email = emailToSet; // Atualiza em memória
+
+            delete state.data.tempEmail;
+            state.data.onboardingStage = 'setting_up_full_name'; // Próximo passo
+            state.currentAction = 'awaiting_full_name';
+
+            onboardingReply = getOnboardingAskForFullNameMessage(clientNameForMessages, isSharedContext);
+            await sendWhatsappMessage(actorClient.phone, onboardingReply);
+        } else {
+            onboardingReply = `Sua senha precisa ter no mínimo 6 caracteres. Por favor, escolha uma senha mais forte.`;
+            await sendWhatsappMessage(actorClient.phone, onboardingReply);
+        }
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
     // --- FIM DA CORREÇÃO PRINCIPAL ---

@@ -139,9 +139,10 @@ async function getClientsForDebug() {
   }
 }
 
+// VERSÃO NOVA E SEGURA
 /**
  * Busca um cliente pelo telefone. Se não existir, cria um novo.
- * Esta função é destinada ao uso pelo WhatsappHandler.
+ * Esta função NUNCA atualiza um cliente existente para prevenir a sobrescrita de dados.
  * @param {string} phone - Número de telefone do cliente.
  * @param {object} defaultData - Dados para usar na criação se o cliente não existir (ex: { name }).
  * @returns {Promise<object>} O objeto Client encontrado ou criado (toJSON).
@@ -150,62 +151,28 @@ async function findOrCreateClientByPhone(phone, defaultData = {}) {
   const normalizedPhone = phone.replace(/\D/g, '');
   const t = await sequelize.transaction();
   try {
+    // Passo 1: Tenta encontrar o cliente.
     let client = await Client.findOne({
       where: { phone: normalizedPhone },
       transaction: t
     });
 
+    // Passo 2: Se o cliente JÁ EXISTE, retorna-o imediatamente, sem modificá-lo.
     if (client) {
-      // ===== INÍCIO DA LÓGICA DE PROTEÇÃO =====
-      // Se o cliente já tem um nome e email definidos, consideramos ele "completo".
-      // Não faremos nenhuma atualização para evitar apagar dados. Apenas o retornamos.
-      if (client.name && client.email) {
-        logger.info(`Cliente ${normalizedPhone} (ID: ${client.id}) já está totalmente configurado. Nenhuma atualização necessária.`);
-        await t.commit();
-        return client.toJSON();
-      }
-
-      // Se chegamos aqui, o cliente existe mas é um "esqueleto" (pode não ter nome ou email).
-      // É seguro tentar preencher os dados faltantes com o que veio do WhatsApp.
-      let clientNeedsUpdate = false;
-      const updatePayload = {};
-
-      // Atualiza o nome apenas se o novo nome for mais completo ou se o atual for nulo.
-      if (defaultData.name && defaultData.name.trim() !== "") {
-        const existingNameWords = client.name ? client.name.split(' ').length : 0;
-        const newNameWords = defaultData.name.split(' ').length;
-        if (newNameWords > existingNameWords || !client.name) {
-          updatePayload.name = defaultData.name;
-          clientNeedsUpdate = true;
-        }
-      }
-      
-      // Atualiza o email apenas se ele não existir ainda.
-      if (defaultData.email && !client.email) {
-        updatePayload.email = defaultData.email;
-        clientNeedsUpdate = true;
-      }
-
-      if (clientNeedsUpdate) {
-        await client.update(updatePayload, { transaction: t });
-        logger.info(`Cliente ${normalizedPhone} (ID: ${client.id}) encontrado e dados de perfil (nome/email) foram preenchidos.`);
-      } else {
-        logger.info(`Cliente ${normalizedPhone} (ID: ${client.id}) encontrado. Nenhum dado novo para preencher.`);
-      }
-      // ===== FIM DA LÓGICA DE PROTEÇÃO =====
-
-    } else {
-      // Cliente não encontrado, criar novo.
-      // Esta parte já estava correta, criando um registro com o que tiver disponível.
-      logger.info(`Cliente com telefone ${normalizedPhone} não encontrado. Criando novo...`);
-      client = await Client.create({
-        phone: normalizedPhone,
-        name: defaultData.name || null,
-        email: defaultData.email || null,
-        status: defaultData.status || 'Ativo',
-      }, { transaction: t });
-      logger.info(`Novo Cliente criado via findOrCreate: ID ${client.id}, Telefone: ${client.phone}, Nome: ${client.name}`);
+      logger.info(`Cliente ${normalizedPhone} (ID: ${client.id}) encontrado. Retornando dados existentes sem alterações.`);
+      await t.commit();
+      return client.toJSON();
     }
+
+    // Passo 3: Se o cliente NÃO EXISTE, cria um novo registro.
+    logger.info(`Cliente com telefone ${normalizedPhone} não encontrado. Criando novo...`);
+    client = await Client.create({
+      phone: normalizedPhone,
+      name: defaultData.name || 'Convidado', // Usa um nome placeholder seguro
+      email: defaultData.email || null,
+      status: defaultData.status || 'Ativo',
+    }, { transaction: t });
+    logger.info(`Novo Cliente criado via findOrCreate: ID ${client.id}, Telefone: ${client.phone}`);
 
     await t.commit();
     return client.toJSON();
@@ -915,6 +882,23 @@ async function getClientPublicInfoByAffiliateCode(affiliateCode) {
   }
 }
 
+/**
+ * Busca um Client pelo endereço de e-mail.
+ * @param {string} email - Endereço de e-mail.
+ * @returns {Promise<object|null>} O Client encontrado ou null.
+ */
+async function findClientByEmail(email) {
+  if (!email) return null;
+  const lowerEmail = email.toLowerCase().trim();
+  try {
+    const client = await Client.findOne({ where: { email: lowerEmail } });
+    return client; // Retorna a instância do Sequelize
+  } catch (error) {
+    logger.error(`Erro ao buscar cliente por email ${lowerEmail}: ${error.message}`, { error });
+    throw error;
+  }
+}
+
 module.exports = {
   findClientByPhone,
   findOrCreateClientByPhone,
@@ -933,6 +917,7 @@ module.exports = {
   getClientsForDebug,
   updateClientMotivationPrefs,
   backfillAffiliateCodes,
-  getClientPublicInfoByAffiliateCode
+  getClientPublicInfoByAffiliateCode,
+  findClientByEmail
   
 };

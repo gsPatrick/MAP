@@ -15,14 +15,22 @@ async function renewExpiringGoogleCalendarWatches() {
     const now = new Date();
     const thresholdDate = new Date(now.getTime() + RENEWAL_THRESHOLD_HOURS * 60 * 60 * 1000);
 
+// VERSÃO NOVA E SEGURA
     const clientsToRenew = await Client.findAll({
       where: {
         isGoogleCalendarSynced: true,
         googleChannelId: { [Op.ne]: null },
-        googleCalendarIdPrincipal: { [Op.ne]: null }, // Precisa do ID do calendário para renovar
+        googleCalendarIdPrincipal: { [Op.ne]: null },
         googleChannelExpiryDate: {
-          [Op.lte]: thresholdDate, // Canais que expiram dentro do nosso threshold
+          [Op.lte]: thresholdDate,
         },
+        // --- INÍCIO DA CORREÇÃO: ADICIONA FILTRO DE ASSINATURA ATIVA ---
+        status: 'Ativo',
+        [Op.or]: [
+            { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+            { accessExpiresAt: { [Op.gte]: now.toISOString().split('T')[0] } } // 'now' já está definido no escopo do job
+        ]
+        // --- FIM DA CORREÇÃO ---
       },
     });
 

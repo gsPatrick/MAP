@@ -24,11 +24,26 @@ async function processRecurringTransactions() {
             { endDate: { [Op.gte]: today } }
         ]
       },
+// VERSÃO NOVA E SEGURA
       include: [{
         model: FinancialAccount,
         as: 'financialAccount',
         where: { isActive: true },
-        include: [{ model: Client, as: 'ownerClient', attributes: ['id', 'name', 'phone'] }]
+        include: [{ 
+          model: Client, 
+          as: 'ownerClient', 
+          attributes: ['id', 'name', 'phone'],
+          // --- INÍCIO DA CORREÇÃO: ADICIONA FILTRO DE ASSINATURA ATIVA ---
+          where: {
+            status: 'Ativo',
+            [Op.or]: [
+              { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+              { accessExpiresAt: { [Op.gte]: today } } // 'today' já está definido no escopo do job
+            ]
+          },
+          required: true // Garante que só traga regras de clientes com assinatura ativa
+          // --- FIM DA CORREÇÃO ---
+        }]
       }],
       order: [['nextDueDate', 'ASC']],
     });

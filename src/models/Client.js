@@ -220,23 +220,33 @@ const Client = sequelize.define('Client', {
   hooks: {
     beforeCreate: async (client) => {
       // Gera o código de afiliado para o novo cliente
-      if (!client.affiliateCode) {
-        client.affiliateCode = crypto.randomBytes(4).toString('hex').toUpperCase();
-      }
-      
-      if (client.email) client.email = client.email.toLowerCase();
-      if (client.passwordHash) client.passwordHash = await bcrypt.hash(client.passwordHash, 10);
-      
-      if (client.accessLevel && !client.accessExpiresAt) {
-        const now = new Date();
-        if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
-        else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
-        else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
-            client.accessExpiresAt = null;
-            return;
-        }
-        client.accessExpiresAt = now.toISOString().split('T')[0];
-      }
+// DENTRO DO beforeCreate:
+if (client.accessLevel && !client.accessExpiresAt) {
+    // CORREÇÃO: Usa um fuso horário consistente para o cálculo
+    const now = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
+    
+    if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
+    else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
+    else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
+        client.accessExpiresAt = null;
+        return;
+    }
+    client.accessExpiresAt = now.toISOString().split('T')[0];
+}
+
+// DENTRO DO beforeUpdate:
+if (client.changed('accessLevel')) {
+    // CORREÇÃO: Usa um fuso horário consistente para o cálculo
+    const now = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
+
+    if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
+    else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
+    else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
+         client.accessExpiresAt = null;
+         return;
+    }
+    client.accessExpiresAt = now.toISOString().split('T')[0];
+}
     },
     beforeUpdate: async (client) => {
       if (client.changed('email') && client.email) client.email = client.email.toLowerCase();
