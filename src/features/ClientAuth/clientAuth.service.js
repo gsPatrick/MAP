@@ -69,13 +69,14 @@ async function registerClient(registerData) {
             throw { statusCode: 409, message: `${conflictField} já cadastrado.` };
         }
 
-        const newClientPayload = {
-            name,
-            email: lowerEmail,
-            phone: normalizedPhone,
-            passwordHash: password,
-            status: 'Aguardando Pagamento',
-        };
+// VERSÃO NOVA E CORRETA
+const newClientPayload = {
+    name,
+    email: lowerEmail,
+    phone: normalizedPhone,
+    passwordHash: password, // <<< CORREÇÃO: Passa a senha em texto plano para o hook do modelo fazer a criptografia.
+    status: 'Aguardando Pagamento',
+};
         
         if (affiliateCode) {
             const referrer = await Client.findOne({ 

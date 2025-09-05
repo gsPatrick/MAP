@@ -55,8 +55,9 @@ async function createSubscription(clientId, planId, startDate = null, status = '
         clientAccessExpiresAt = endDate.toISOString().split('T')[0];
     }
     
-    const previousSubscriptionsCount = await Subscription.count({
-        where: { clientId: clientId },
+    // Esta verificação agora é usada apenas para a mensagem de boas-vindas
+    const previousPaidSubscriptionsCount = await Subscription.count({
+        where: { clientId: clientId, status: 'Ativa' },
         transaction: t
     });
 
@@ -99,24 +100,8 @@ async function createSubscription(clientId, planId, startDate = null, status = '
       await t.commit(); 
     }
 
-    if (status === 'Ativa' && clientInstance.phone && previousSubscriptionsCount === 0) {
-        const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Cliente';
-        const platformUrl = process.env.PLATFORM_URL || 'app.mapnocontrole.com.br';
-        let expiryWelcomePart = `Seu acesso está garantido até *${formatDate(newSubscription.endDate)}*.`;
-        if (clientAccessLevel.includes('vitalicio')) {
-            expiryWelcomePart = "Você agora tem *acesso vitalício*! 🎉";
-        }
-        const intro = `Ebaaa, ${clientName}! 🚀 Seja muito bem-vindo(a) ao time MAP no Controle!`;
-        const body = `Sua assinatura do plano *${plan.name}* foi ativada com sucesso!\n\n${expiryWelcomePart}`;
-        const footer = `Para começar, que tal me dizer "oi"? Ou acesse a plataforma em https://${platformUrl}\n\nEstou pronto para te ajudar! 💪✨`;
-        const welcomeMessage = `${intro}\n\n${body}\n\n${footer}`;
-        try {
-          await sendWhatsappMessage(clientInstance.phone, welcomeMessage);
-          logger.info(`[SUBSCRIPTION SERVICE] Mensagem de boas-vindas enviada para o cliente ID ${clientId}.`);
-        } catch (whatsappError) {
-          logger.error(`[SUBSCRIPTION SERVICE] Falha ao enviar mensagem de boas-vindas: ${whatsappError.message}`);
-        }
-    }
+    // A mensagem de boas-vindas foi movida para o 'updateSubscriptionStatusByExternalId'
+    // que é chamado pelo webhook, garantindo que a mensagem só seja enviada após a confirmação do pagamento.
 
     logger.info(`Assinatura ID ${newSubscription.id} criada para Cliente ID ${clientId}. Status: ${status}.`);
     return newSubscription.toJSON();
@@ -207,12 +192,8 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         let clientAccessLevel = clientInstance.accessLevel;
         let clientAccessExpiresAt = clientInstance.accessExpiresAt;
         let clientStatus = clientInstance.status;
-        let isRenewal = false;
 
         if (newStatus === 'Ativa' && oldSubscriptionStatus !== 'Ativa') {
-            // Considera renovação se o status anterior não era 'Ativo'
-            isRenewal = true;
-            
             if (clientInstance.referredByClientId && plan.affiliateCommissionValue > 0) {
                 const affiliateClient = await Client.findByPk(clientInstance.referredByClientId, { transaction: t });
                 if (affiliateClient) {
@@ -236,6 +217,8 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
             if (otherActiveSubscriptions === 0) {
                 clientAccessLevel = 'gratuito';
                 clientAccessExpiresAt = null;
+                // Mantém o status 'Ativo' se o pagamento falhou, mas o plano é rebaixado.
+                // Isso evita que o usuário seja bloqueado imediatamente.
                 clientStatus = (newStatus === 'Pagamento Falhou') ? 'Pagamento Falhou' : 'Inativo';
             }
         }
@@ -251,26 +234,26 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         await t.commit();
         logger.info(`[SUBSCRIPTION SERVICE] Status da assinatura ID ${subscription.id} atualizado para ${newStatus}.`);
 
-        // <<< INÍCIO DA MODIFICAÇÃO >>>
-        // Envia mensagem de ativação ou renovação
         if (newStatus === 'Ativa' && oldSubscriptionStatus !== 'Ativa' && clientInstance.phone) {
             const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Olá';
             
-            // Se o cliente tinha um plano antes (não era gratuito), consideramos uma renovação
-            const wasPaidBefore = oldClientStatus !== 'Ativo' && clientInstance.accessLevel !== 'gratuito';
+            // --- INÍCIO DA LÓGICA CORRIGIDA ---
+            // É uma renovação apenas se o status anterior do CLIENTE era 'Inativo' ou 'Pagamento Falhou'.
+            // Se era 'Aguardando Pagamento', é uma nova assinatura.
+            const isRenewal = oldClientStatus === 'Inativo' || oldClientStatus === 'Pagamento Falhou';
+            // --- FIM DA LÓGICA CORRIGIDA ---
 
-            let welcomeMessage = wasPaidBefore
+            let welcomeMessage = isRenewal
                 ? `Uhuul, que bom te ter de volta, ${clientName}! 🎉\n\nSua assinatura do plano *${plan.name}* foi renovada com sucesso e seu acesso total já está liberado.\n\nContinue no controle! 💪`
                 : `Ebaaa, ${clientName}! 🥳\n\nSua assinatura do plano *${plan.name}* foi ativada com sucesso.\n\nSeu acesso está garantido. Para começar, que tal me dizer "oi"?`;
             
             try {
                 await sendWhatsappMessage(clientInstance.phone, welcomeMessage);
-                logger.info(`[SUBSCRIPTION SERVICE] Mensagem de ${wasPaidBefore ? 'RENOVAÇÃO' : 'ativação'} enviada.`);
+                logger.info(`[SUBSCRIPTION SERVICE] Mensagem de ${isRenewal ? 'RENOVAÇÃO' : 'ativação'} enviada.`);
             } catch (whatsappError) {
                 logger.error(`[SUBSCRIPTION SERVICE] FALHA AO ENVIAR MENSAGEM: ${whatsappError.message}`);
             }
         }
-        // <<< FIM DA MODIFICAÇÃO >>>
         
         return subscription.reload({ include: ['client', 'plan'] });
 
@@ -280,7 +263,6 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         throw error;
     }
 }
-
 
 module.exports = {
   createSubscription,

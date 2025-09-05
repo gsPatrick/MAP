@@ -31,12 +31,16 @@ let pushNameFromPayload = null;
 // --- Funções de Controle de Fluxo e Estado (Core do Maestro) ---
 
 async function initializeOrUpdateState(client, sharedAccessRecord = null, existingState = null, clientAccountsFromDb = [], ownerAccountsIfShared = []) {
-    const clientName = (client.name && client.name.trim() !== "" && client.name.trim().toLowerCase() !== "unknown" && client.name.trim().toLowerCase() !== "null" && client.name.trim().toLowerCase() !== "convidado")
-        ? client.name.split(" ")[0]
-        : (existingState?.clientName || "pessoa incrível");
+const nameFromDb = (client.name && client.name.trim() !== "" && client.name.toLowerCase() !== 'convidado')
+    ? client.name.split(" ")[0]
+    : null;
+
+// Usa o nome do banco como primeira opção. Se não houver, usa o nome do estado anterior.
+// O "pessoa incrível" se torna o último recurso.
+const clientName = nameFromDb || existingState?.clientName || "pessoa incrível";
     
     let ownerClientIdForContext = client.id;
-    let isSharedAccessContext = false;
+    let isSharedAccessContext = false; 
     let sharedAccessPermissions = null;
     let ownerClientForContext = client;
     let ownerClientNameForContext = clientName; 
