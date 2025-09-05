@@ -96,11 +96,42 @@ async function updateMyProfile(req, res, next) {
   }
 }
 
+
+
+async function requestActivationCode(req, res, next) {
+    try {
+        const { phone } = req.body;
+        if (!phone) {
+            return res.status(400).json({ status: 'fail', message: 'O número do WhatsApp é obrigatório.' });
+        }
+        await clientAuthService.sendActivationCode(phone);
+        res.status(200).json({ status: 'success', message: 'Código de ativação enviado para seu WhatsApp.' });
+    } catch (error) {
+        next(error);
+    }
+}
+
+async function setPasswordWithCode(req, res, next) {
+    try {
+        const { phone, code, newPassword, email, name } = req.body;
+        if (!phone || !code || !newPassword) {
+            return res.status(400).json({ status: 'fail', message: 'Telefone, código e nova senha são obrigatórios.' });
+        }
+        const result = await clientAuthService.verifyCodeAndSetPassword(phone, code, newPassword, email, name);
+        res.status(200).json({ status: 'success', data: result });
+    } catch (error) {
+        next(error);
+    }
+}
+
+
 module.exports = {
-  register, // <<< EXPORTA O NOVO CONTROLLER
+  register,
   setCredentials,
   login,
   getCurrentClientProfile,
   updateCalendarPreferences,
-  updateMyProfile
+  updateMyProfile,
+  requestActivationCode, // <<< EXPORTAR
+  setPasswordWithCode,   // <<< EXPORTAR
 };
