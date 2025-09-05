@@ -117,43 +117,62 @@ const mercadoPagoService = {
    * Processa as notificações de webhook enviadas pelo Mercado Pago.
    * @param {object} dados - O corpo da notificação (req.body).
    */
+  /**
+   * Processa as notificações de webhook enviadas pelo Mercado Pago.
+   * CÓDIGO FINAL E ROBUSTO.
+   */
   async processarWebhook(dados) {
     try {
       logger.info('[Webhook MP] Dados recebidos:', JSON.stringify(dados, null, 2));
 
-      // Ignora eventos que não são de pagamento
-      if (dados.type !== 'payment') {
-        logger.info(`[Webhook MP] Tipo '${dados.type}' ignorado.`);
+      // 1. Extrai o ID do recurso e o tipo de notificação de forma flexível.
+      const topic = dados.type || dados.topic;
+      const resourceId = dados.data?.id;
+
+      if (!topic || !resourceId) {
+        logger.warn('[Webhook MP] Webhook recebido sem "type" ou "data.id". Ignorando.', { dados });
         return;
       }
       
-      const paymentId = dados.data.id;
-      logger.info(`[Webhook MP] Processando pagamento: ${paymentId}`);
+      logger.info(`[Webhook MP] Processando notificação. Tópico: "${topic}", ID do Recurso: ${resourceId}`);
       
-      // Busca os detalhes do pagamento na API do Mercado Pago
-      const paymentResponse = await mercadopago.payment.findById(paymentId);
-      const paymentData = paymentResponse.body;
+      let paymentDetails;
+      let subscriptionId;
+
+      // 2. Decide qual API do Mercado Pago chamar.
+      // A chamada a esta API é onde o erro "Payment not found" acontece se os tokens estiverem errados.
+      if (topic === 'payment') {
+        const paymentResponse = await mercadopago.payment.findById(resourceId);
+        paymentDetails = paymentResponse.body;
+        subscriptionId = paymentDetails.external_reference ? parseInt(paymentDetails.external_reference, 10) : null;
       
-      logger.info(`[Webhook MP] Dados do pagamento: status ${paymentData.status}, ref ${paymentData.external_reference}`);
+      } else if (topic.includes('preapproval') || topic.includes('subscription')) {
+        const preapprovalResponse = await mercadopago.preapproval.findById(resourceId);
+        paymentDetails = preapprovalResponse.body;
+        subscriptionId = paymentDetails.external_reference ? parseInt(paymentDetails.external_reference, 10) : null;
       
-      if (!paymentData.external_reference) {
-        logger.warn(`[Webhook MP] Pagamento ${paymentId} sem external_reference.`);
+      } else {
+        logger.info(`[Webhook MP] Tópico '${topic}' não é relevante para o fluxo de ativação. Ignorando.`);
+        return;
+      }
+
+      // 3. Valida e processa a assinatura.
+      if (!subscriptionId) {
+        logger.warn(`[Webhook MP] Recurso ${resourceId} (Tópico: ${topic}) não possui uma external_reference (ID da nossa assinatura).`);
         return;
       }
       
-      const subscriptionId = parseInt(paymentData.external_reference, 10);
       const subscription = await Subscription.findByPk(subscriptionId, { include: ['plan'] });
 
       if (!subscription) {
-        logger.warn(`[Webhook MP] Assinatura ${subscriptionId} não encontrada.`);
+        logger.warn(`[Webhook MP] Assinatura com ID ${subscriptionId} não foi encontrada no banco de dados.`);
         return;
       }
       
-      const successStatuses = ['approved', 'accredited'];
+      const successStatuses = ['approved', 'accredited', 'authorized'];
       const failureStatuses = ['rejected', 'cancelled', 'refunded', 'charged_back'];
 
-      // Se o pagamento foi aprovado e a assinatura ainda não está ativa
-      if (successStatuses.includes(paymentData.status) && subscription.status !== 'Ativa') {
+      if (successStatuses.includes(paymentDetails.status) && subscription.status !== 'Ativa') {
         const newEndDate = new Date();
         newEndDate.setDate(newEndDate.getDate() + subscription.plan.durationDays);
         
@@ -162,21 +181,19 @@ const mercadoPagoService = {
         );
         logger.info(`[Webhook MP] ✅ PAGAMENTO APROVADO - Assinatura ${subscription.id} ativada.`);
 
-      // Se o pagamento falhou e a assinatura estava pendente
-      } else if (failureStatuses.includes(paymentData.status) && subscription.status === 'Pendente') {
+      } else if (failureStatuses.includes(paymentDetails.status) && subscription.status === 'Pendente') {
         await subscriptionService.updateSubscriptionStatusByExternalId(
           null, 'Pagamento Falhou', subscription.endDate, subscription.id
         );
         logger.info(`[Webhook MP] ❌ PAGAMENTO FALHOU - Assinatura ${subscription.id}.`);
       } else {
-        logger.info(`[Webhook MP] Status '${paymentData.status}' recebido para assinatura ${subscription.id}. Nenhuma ação necessária.`);
+        logger.info(`[Webhook MP] Status '${paymentDetails.status}' recebido para assinatura ${subscription.id}. Nenhuma ação necessária.`);
       }
 
     } catch (error) {
-      // É crucial capturar o erro aqui para garantir que o Mercado Pago sempre receba uma resposta 200 OK
-      console.error("[Webhook MP] Erro ao processar webhook:", error);
+      const errorMessage = error.cause?.[0]?.description || error.message;
+      logger.error(`[Webhook MP] Erro ao processar webhook: ${errorMessage}`, { error });
     }
   },
 };
-
 module.exports = mercadoPagoService;
