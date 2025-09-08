@@ -32,6 +32,10 @@ router.get('/admin/plans', adminController.getAllPlans);
 router.put('/admin/plans/:planId', adminController.updatePlan);
 
 // --- Rotas de Comunicação ---
-router.post('/admin/broadcast', adminController.sendBroadcastMessage);
+router.post('/admin/broadcast', adminController.sendBroadcastMessage)
+
+// --- <<< NOVAS ROTAS Z-API >>> ---
+router.get('/admin/zapi/status', adminController.getZapiStatus);
+router.get('/admin/zapi/qrcode-url', adminController.getZapiQrCode);
 
 module.exports = router;

@@ -156,9 +156,50 @@ async function downloadZapiMedia(mediaUrl) {
 // EXPORTS
 // ========================================================================
 
+// ========================================================================
+// <<< INÍCIO: NOVAS FUNÇÕES DE GERENCIAMENTO DA INSTÂNCIA Z-API >>>
+// ========================================================================
+
+/**
+ * Verifica o status da conexão da instância principal da Z-API.
+ * @returns {Promise<object|null>} Objeto com o status da conexão ou null em caso de erro.
+ */
+async function getZapiInstanceStatus() {
+  const endpoint = `${ZAPI_API_URL}/instances/${ZAPI_INSTANCE_ID}/status`;
+  const headers = { 'client-token': ZAPI_CLIENT_TOKEN };
+  
+  try {
+    logger.info(`[WhatsAppService] Verificando status da instância Z-API: ${ZAPI_INSTANCE_ID}`);
+    const response = await axios.get(endpoint, { headers });
+    logger.info(`[WhatsAppService] Status da instância obtido com sucesso. Conectado: ${response.data.connected}`);
+    return response.data;
+  } catch (error) {
+    const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
+    logger.error(`[WhatsAppService] Erro ao verificar status da instância Z-API: ${errorMessage}`);
+    return null;
+  }
+}
+
+/**
+ * Gera a URL da imagem do QR Code para conexão.
+ * @returns {string} A URL completa para ser usada em uma tag <img>.
+ */
+function getZapiQrCodeImageUrl() {
+    // Este endpoint é acessado diretamente pelo frontend, então apenas montamos a URL.
+    const qrCodeUrl = `${BASE_URL}/qr-code/image`;
+    logger.info(`[WhatsAppService] Gerando URL do QR Code: ${qrCodeUrl}`);
+    return qrCodeUrl;
+}
+
+// ========================================================================
+// <<< FIM: NOVAS FUNÇÕES DE GERENCIAMENTO DA INSTÂNCIA Z-API >>>
+// ========================================================================
+
+
 module.exports = {
-  // Apenas as funções de comunicação com a API externa são exportadas.
   sendWhatsappMessage,
   sendButtonListMessage,
   downloadZapiMedia,
+  getZapiInstanceStatus, // <<< EXPORTAR NOVA FUNÇÃO
+  getZapiQrCodeImageUrl, // <<< EXPORTAR NOVA FUNÇÃO
 };

@@ -1,13 +1,10 @@
-
-
 // src/features/Admin/admin.controller.js
 const adminService = require('./admin.service');
 const clientService = require('../Client/client.service');
+const whatsappService = require('../../services/whatsappService');
 
-/**
- * <<< NOVO CONTROLLER PARA O PAINEL DE ADMIN >>>
- * Lista todos os clientes com dados detalhados para o painel de admin.
- */
+// <<< CONTROLLER ALTERADO >>>
+// Lista todos os clientes com dados detalhados para o painel de admin.
 const getAdminClientList = (req, res, next) => {
     adminService.getAdminClientList(req.query)
         .then(result => res.status(200).json({ status: 'success', ...result }))
@@ -30,7 +27,7 @@ const changeClientPhone = (req, res, next) => {
         .catch(next);
 };
 
-// --- CRUD de Clientes (reutilizando clientService) ---
+// --- CRUD de Clientes (reutilizando clientService - mantido para compatibilidade) ---
 const getAllClients = (req, res, next) => clientService.getAllClientContacts(req.query)
   .then(result => res.status(200).json({ status: 'success', ...result }))
   .catch(next);
@@ -56,20 +53,18 @@ const createCustomPlan = (req, res, next) => adminService.createCustomPlan(req.b
   .then(newPlan => res.status(201).json({ status: 'success', data: newPlan }))
   .catch(next);
 
+// <<< CONTROLLER ALTERADO >>>
 const changeUserPlan = (req, res, next) => {
-    const { clientId, planId } = req.body;
+    const { clientId, planId, customMessage } = req.body;
     if (!clientId || !planId) {
         return res.status(400).json({ status: 'fail', message: 'clientId e planId são obrigatórios.' });
     }
-    adminService.changeUserPlan(clientId, planId)
+    adminService.changeUserPlan(clientId, planId, customMessage)
         .then(result => res.status(200).json({ status: 'success', data: result }))
         .catch(next);
 };
 
-/**
- * <<< CONTROLLER MELHORADO >>>
- * Envia uma mensagem em massa para um grupo alvo.
- */
+// <<< CONTROLLER ALTERADO >>>
 const sendBroadcastMessage = (req, res, next) => {
     const { message, targetGroup } = req.body;
     adminService.sendBroadcastMessage(message, targetGroup)
@@ -77,6 +72,7 @@ const sendBroadcastMessage = (req, res, next) => {
         .catch(next);
 };
 
+// <<< CONTROLLER ALTERADO >>>
 const getAllPlans = (req, res, next) => adminService.getAllPlans(req.query)
     .then(plans => res.status(200).json({ status: 'success', data: plans }))
     .catch(next);
@@ -116,8 +112,37 @@ const deleteClientAsAdmin = (req, res, next) => {
         .catch(next);
 };
 
+// <<< NOVO CONTROLLER >>>
+const createClientAsAdmin = (req, res, next) => {
+    adminService.createClientAsAdmin(req.body)
+        .then(newClient => res.status(201).json({ status: 'success', data: newClient }))
+        .catch(next);
+};
+
+// <<< NOVOS CONTROLLERS PARA Z-API >>>
+const getZapiStatus = (req, res, next) => {
+    whatsappService.getZapiInstanceStatus()
+        .then(status => {
+            if (status) {
+                res.status(200).json({ status: 'success', data: status });
+            } else {
+                res.status(503).json({ status: 'fail', message: 'Não foi possível obter o status da instância Z-API.' });
+            }
+        })
+        .catch(next);
+};
+
+const getZapiQrCode = (req, res, next) => {
+    try {
+        const imageUrl = whatsappService.getZapiQrCodeImageUrl();
+        res.status(200).json({ status: 'success', data: { imageUrl } });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
-  getAdminClientList, // <<< EXPORTAR NOVO CONTROLLER
+  getAdminClientList,
   getAllClients,
   createClient,
   updateClient,
@@ -131,5 +156,8 @@ module.exports = {
   changeClientPhone,
   updatePlan,
   deleteClientAsAdmin,
-  clearClientBalance
+  clearClientBalance,
+  createClientAsAdmin, // Exportar novo controller
+  getZapiStatus,       // Exportar novo controller
+  getZapiQrCode,       // Exportar novo controller
 };

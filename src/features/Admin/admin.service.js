@@ -1,25 +1,24 @@
-
 // src/features/Admin/admin.service.js
-const { Client, Plan, Subscription, sequelize } = require('../../database');
+const { Client, Plan, Subscription, FinancialAccount, sequelize } = require('../../database');
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
-const clientService = require('../Client/client.service');
 const subscriptionService = require('../Subscription/subscription.service');
 const { sendWhatsappMessage } = require('../../services/whatsappService');
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
-const { formatDate } = require('../../utils/formatters'); // Importar formatDate
+const { formatDate } = require('../../utils/formatters');
 
 /**
- * <<< NOVA FUNÇÃO PARA O PAINEL DE ADMIN >>>
- * Lista todos os clientes com detalhes de plano e assinatura para o painel de admin.
- * @param {object} queryParams - Parâmetros de consulta (page, limit, search).
+ * <<< FUNÇÃO ALTERADA >>>
+ * Lista clientes com filtros avançados para o painel de admin.
+ * @param {object} queryParams - Parâmetros de consulta (page, limit, search, filter).
  * @returns {Promise<object>} Objeto com lista de clientes e informações de paginação.
  */
 async function getAdminClientList(queryParams = {}) {
   try {
-    const { page = 1, limit = 10, search } = queryParams;
+    const { page = 1, limit = 10, search, filter = 'all' } = queryParams;
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const whereConditions = {};
+    const today = new Date().toISOString().split('T')[0];
 
     if (search) {
       whereConditions[Op.or] = [
@@ -29,16 +28,38 @@ async function getAdminClientList(queryParams = {}) {
       ];
     }
 
+    // Lógica de filtros
+    switch (filter) {
+        case 'active':
+            whereConditions.status = 'Ativo';
+            break;
+        case 'expiring_soon':
+            const sevenDaysFromNow = new Date();
+            sevenDaysFromNow.setDate(new Date().getDate() + 7);
+            whereConditions.status = 'Ativo';
+            whereConditions.accessExpiresAt = {
+                [Op.between]: [today, sevenDaysFromNow.toISOString().split('T')[0]]
+            };
+            break;
+        case 'expired':
+            // Pega clientes cujo status não é 'Ativo' E a data de expiração já passou.
+            whereConditions.status = { [Op.notIn]: ['Ativo', 'Aguardando Pagamento'] };
+            whereConditions.accessExpiresAt = { [Op.lt]: today };
+            break;
+        default: // 'all'
+            break;
+    }
+
     const { count, rows } = await Client.findAndCountAll({
       where: whereConditions,
       attributes: ['id', 'name', 'phone', 'email', 'status', 'accessLevel', 'accessExpiresAt', 'createdAt'],
       limit: parseInt(limit, 10),
       offset: offset,
       order: [['createdAt', 'DESC']],
-      distinct: true, // Importante para contagem correta com 'include'
+      distinct: true,
     });
 
-    logger.info(`[AdminService] Listados ${rows.length} clientes para o painel de admin.`);
+    logger.info(`[AdminService] Listados ${rows.length} clientes para o painel de admin com filtro '${filter}'.`);
     return {
       totalItems: count,
       totalPages: Math.ceil(count / parseInt(limit, 10)),
@@ -50,7 +71,6 @@ async function getAdminClientList(queryParams = {}) {
     throw new Error('Erro ao buscar a lista de clientes.');
   }
 }
-
 
 /**
  * Altera o número de telefone de um cliente. (Função de Admin)
@@ -100,12 +120,30 @@ async function changeClientPhoneNumber(clientId, newPhoneNumber) {
     }
 }
 
+/**
+ * <<< FUNÇÃO ALTERADA >>>
+ * Lista planos, com opção de filtrar apenas os customizados (criados pelo admin).
+ */
 async function getAllPlans(queryParams = {}) {
   try {
     const whereConditions = {};
     if (queryParams.isActive !== undefined) {
       whereConditions.isActive = (queryParams.isActive === 'true' || queryParams.isActive === true);
     }
+    
+    // Novo filtro para planos customizados (não-padrão)
+    if (queryParams.isCustom === 'true') {
+        const defaultPlanNames = [
+            'Plano Básico - Mensal', 
+            'Plano Básico - Anual', 
+            'Plano Avançado - Mensal', 
+            'Plano Avançado - Anual',
+            'Plano Vitalício - Básico',
+            'Plano Vitalício - Avançado'
+        ];
+        whereConditions.name = { [Op.notIn]: defaultPlanNames };
+    }
+    
     const plans = await Plan.findAll({ where: whereConditions, order: [['price', 'ASC']] });
     logger.info(`[AdminService] Listando ${plans.length} planos.`);
     return plans.map(p => p.toJSON());
@@ -176,7 +214,14 @@ async function createCustomPlan(planData) {
   }
 }
 
-async function changeUserPlan(clientId, planId) {
+/**
+ * <<< FUNÇÃO ALTERADA >>>
+ * Altera o plano de um usuário e permite enviar uma mensagem customizada.
+ * @param {number} clientId - ID do cliente.
+ * @param {number} planId - ID do novo plano.
+ * @param {string} [customMessage] - Mensagem opcional para enviar ao cliente.
+ */
+async function changeUserPlan(clientId, planId, customMessage) {
     const t = await sequelize.transaction();
     try {
         const client = await Client.findByPk(clientId, { transaction: t });
@@ -203,18 +248,23 @@ async function changeUserPlan(clientId, planId) {
         
         await t.commit(); 
         
-        logger.info(`[AdminService] Plano do cliente ID ${clientId} alterado para "${plan.name}" (ID: ${planId}).`);
+        logger.info(`[AdminService] Plano do cliente ID ${clientId} alterado para "${plan.name}".`);
 
         if (client.phone) {
             try {
-                const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
-                let expiryWelcomePart = `Seu acesso agora está garantido até *${formatDate(newSubscription.endDate)}*.`;
-                if (plan.durationDays > 7000) { 
-                    expiryWelcomePart = "Você agora tem *acesso vitalício*! 🎉";
+                let messageToSend;
+                if (customMessage && customMessage.trim() !== '') {
+                    messageToSend = customMessage;
+                } else {
+                    const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
+                    let expiryWelcomePart = `Seu acesso agora está garantido até *${formatDate(newSubscription.endDate)}*.`;
+                    if (plan.durationDays > 7000) { 
+                        expiryWelcomePart = "Você agora tem *acesso vitalício*! 🎉";
+                    }
+                    messageToSend = `Olá, ${clientName}! ✨\n\nSua assinatura foi atualizada com sucesso para o plano *${plan.name}* pelo nosso suporte.\n\n${expiryWelcomePart}\n\nJá pode começar a usar todos os recursos. Qualquer dúvida, é só me chamar! 😉`;
                 }
-                const welcomeMessage = `Olá, ${clientName}! ✨\n\nSua assinatura foi atualizada com sucesso para o plano *${plan.name}* pelo nosso suporte.\n\n${expiryWelcomePart}\n\nJá pode começar a usar todos os recursos. Qualquer dúvida, é só me chamar! 😉`;
                 
-                await sendWhatsappMessage(client.phone, welcomeMessage);
+                await sendWhatsappMessage(client.phone, messageToSend);
                 logger.info(`[AdminService] Mensagem de confirmação de mudança de plano enviada para ${client.phone}.`);
             } catch (whatsappError) {
                 logger.error(`[AdminService] Falha ao enviar mensagem de confirmação para ${client.phone}: ${whatsappError.message}`);
@@ -233,10 +283,10 @@ async function changeUserPlan(clientId, planId) {
 }
 
 /**
- * <<< FUNÇÃO MELHORADA >>>
- * Envia uma mensagem em massa para um grupo específico de clientes.
+ * <<< FUNÇÃO ALTERADA >>>
+ * Envia uma mensagem em massa com mais opções de filtros.
  * @param {string} message - A mensagem a ser enviada.
- * @param {string} targetGroup - O grupo de destino ('all_active', 'expiring_soon').
+ * @param {string} targetGroup - O grupo de destino ('all_active', 'expiring_soon', 'expired').
  * @returns {Promise<object>} Resultado da operação.
  */
 async function sendBroadcastMessage(message, targetGroup = 'all_active') {
@@ -244,26 +294,31 @@ async function sendBroadcastMessage(message, targetGroup = 'all_active') {
     throw { statusCode: 400, message: 'A mensagem não pode ser vazia.' };
   }
   try {
-    const whereConditions = {
-        status: 'Ativo',
-        phone: { [Op.ne]: null }
-    };
+    const whereConditions = { phone: { [Op.ne]: null } };
+    const today = new Date().toISOString().split('T')[0];
 
-    if (targetGroup === 'expiring_soon') {
-        const today = new Date();
-        const sevenDaysFromNow = new Date(today);
-        sevenDaysFromNow.setDate(today.getDate() + 7);
+    switch (targetGroup) {
+        case 'all_active':
+            whereConditions.status = 'Ativo';
+            break;
+        case 'expiring_soon':
+            const sevenDaysFromNow = new Date();
+            sevenDaysFromNow.setDate(new Date().getDate() + 7);
 
-        whereConditions.accessExpiresAt = {
-            [Op.between]: [today.toISOString().split('T')[0], sevenDaysFromNow.toISOString().split('T')[0]]
-        };
-        whereConditions.accessLevel = { [Op.notIn]: ['gratuito', 'vitalicio_basico', 'vitalicio_avancado'] };
+            whereConditions.accessExpiresAt = {
+                [Op.between]: [today, sevenDaysFromNow.toISOString().split('T')[0]]
+            };
+            whereConditions.accessLevel = { [Op.notIn]: ['gratuito', 'vitalicio_basico', 'vitalicio_avancado'] };
+            break;
+        case 'expired':
+            whereConditions.status = { [Op.notIn]: ['Ativo', 'Aguardando Pagamento'] };
+            whereConditions.accessExpiresAt = { [Op.lt]: today };
+            break;
+        default:
+            throw { statusCode: 400, message: 'Grupo alvo inválido.' };
     }
 
-    const clientsToSend = await Client.findAll({
-      where: whereConditions,
-      attributes: ['id', 'phone']
-    });
+    const clientsToSend = await Client.findAll({ where: whereConditions, attributes: ['id', 'phone'] });
 
     if (clientsToSend.length === 0) {
       return { message: `Nenhum cliente encontrado no grupo '${targetGroup}' para enviar a mensagem.`, sentCount: 0, failedCount: 0 };
@@ -271,18 +326,13 @@ async function sendBroadcastMessage(message, targetGroup = 'all_active') {
     
     let sentCount = 0;
     let failedCount = 0;
-    const promises = [];
-    for (const client of clientsToSend) {
-      promises.push(
+    const promises = clientsToSend.map(client =>
         sendWhatsappMessage(client.phone, message)
-          .then(success => {
-            if (success) sentCount++;
-            else failedCount++;
-          })
+          .then(success => (success ? sentCount++ : failedCount++))
           .catch(() => failedCount++)
-      );
-    }
+    );
     await Promise.all(promises);
+
     logger.info(`[AdminService] Transmissão para '${targetGroup}' concluída. Enviadas: ${sentCount}, Falhas: ${failedCount}.`);
     return { message: 'Transmissão concluída.', sentCount, failedCount, total: clientsToSend.length };
   } catch (error) {
@@ -422,8 +472,71 @@ async function deleteClientByUser(clientId) {
     }
 }
 
+/**
+ * <<< NOVA FUNÇÃO >>>
+ * Cria um novo cliente, conta financeira e assinatura, com mensagem customizada.
+ * @param {object} clientData - Dados do novo cliente.
+ * @returns {Promise<object>} O novo cliente criado.
+ */
+async function createClientAsAdmin(clientData) {
+    const { name, email, phone, password, planId, customMessage } = clientData;
+    if (!name || !phone || !password || !planId) {
+        throw { statusCode: 400, message: 'Nome, telefone, senha e plano são obrigatórios.' };
+    }
+    const t = await sequelize.transaction();
+    try {
+        const normalizedPhone = normalizePhoneNumberToCanonical(phone);
+        if (!normalizedPhone) {
+            throw { statusCode: 400, message: 'Número de telefone inválido.' };
+        }
+        const lowerEmail = email ? email.toLowerCase().trim() : null;
+
+        const whereClause = { [Op.or]: [{ phone: normalizedPhone }] };
+        if (lowerEmail) {
+            whereClause[Op.or].push({ email: lowerEmail });
+        }
+        const existingClient = await Client.findOne({ where: whereClause, transaction: t });
+        if (existingClient) {
+            throw { statusCode: 409, message: 'Telefone ou E-mail já cadastrado.' };
+        }
+        
+        const newClient = await Client.create({
+            name,
+            email: lowerEmail,
+            phone: normalizedPhone,
+            passwordHash: password, // O hook do model fará a criptografia
+            status: 'Aguardando Pagamento',
+        }, { transaction: t });
+
+        await FinancialAccount.create({
+            clientId: newClient.id,
+            accountName: 'Pessoal',
+            accountType: 'PF',
+            isDefault: true,
+        }, { transaction: t });
+
+        // A criação da assinatura já atualiza o status do cliente para 'Ativo'
+        await subscriptionService.createSubscription(newClient.id, planId, null, 'Ativa', null, null, { transaction: t });
+
+        await t.commit();
+        logger.info(`[AdminService] Novo cliente ID ${newClient.id} criado pelo admin com plano ID ${planId}.`);
+        
+        if (newClient.phone && customMessage && customMessage.trim() !== '') {
+            await sendWhatsappMessage(newClient.phone, customMessage);
+            logger.info(`[AdminService] Mensagem de boas-vindas customizada enviada para ${newClient.phone}.`);
+        }
+
+        const clientResponse = await Client.findByPk(newClient.id);
+        return clientResponse.toJSON();
+    } catch (error) {
+        await t.rollback();
+        logger.error(`[AdminService] Erro ao criar cliente pelo admin: ${error.message}`, { error });
+        throw error;
+    }
+}
+
 module.exports = {
-  getAdminClientList, // <<< EXPORTAR NOVA FUNÇÃO
+  getAdminClientList,
   getDashboardMetrics,
   createCustomPlan,
   changeUserPlan,
@@ -433,5 +546,6 @@ module.exports = {
   updatePlan,
   clearClientBalance,
   changeClientPhoneNumber,
-  deleteClientByUser
+  deleteClientByUser,
+  createClientAsAdmin, // Exporta a nova função
 };
