@@ -1,4 +1,3 @@
-
 // src/features/WhatsappHandler/action.handler.js
 const financialService = require('../Financial/financial.service');
 const productService = require('../Product/product.service');
@@ -22,6 +21,19 @@ const formatter = require('./response.formatter'); // Importa o novo formatador
 const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
 const aiModelService = require('../../services/aiModelService');
 const checklistService = require('../Checklist/checklist.service');
+
+// <<< INÍCIO DA CORREÇÃO: Lista de Ações Exclusivas de PJ/MEI >>>
+const PJ_EXCLUSIVE_ACTIONS = [
+    'CREATE_PRODUCT', 'LIST_PRODUCTS', 'GET_PRODUCT_DETAILS', 'UPDATE_PRODUCT', 'DELETE_PRODUCT',
+    'GET_STOCK_INFO', 'RECORD_STOCK_MOVEMENT', 'RECORD_SALE', 'CREATE_SALE_TRANSACTION',
+    'CREATE_BUSINESS_CLIENT', 'LIST_BUSINESS_CLIENTS', 'GET_BUSINESS_CLIENT_DETAILS', 'UPDATE_BUSINESS_CLIENT', 'DELETE_BUSINESS_CLIENT',
+    'CREATE_SERVICE', 'LIST_SERVICES', 'UPDATE_SERVICE', 'DELETE_SERVICE',
+    'CREATE_AVAILABILITY_RULE', 'LIST_AVAILABILITY_RULES', 'UPDATE_AVAILABILITY_RULE', 'DELETE_AVAILABILITY_RULE',
+    'GET_AGENDA_VIEW', 'GET_AVAILABLE_TIME_SLOTS', 'GET_APPOINTMENT_HISTORY_FOR_CLIENT', 'GET_PROVIDER_PUBLIC_INFO',
+    'CONFIRM_APPOINTMENT', 'COMPLETE_APPOINTMENT', 'CANCEL_APPOINTMENT'
+];
+// <<< FIM DA CORREÇÃO >>>
+
 
 // Helpers que antes estavam no whatsapp.service
 async function findCreditCardIdByName(name, financialAccountId) {
@@ -78,6 +90,37 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
     let wasAnEdit = false;
 
     try {
+        // <<< INÍCIO DA CORREÇÃO: Lógica de Troca de Contexto Inteligente >>>
+        let effectiveAccountId = state.activeFinancialAccountId;
+        let effectiveAccountName = state.activeFinancialAccountName;
+        let autoSwitchMessage = "";
+
+        const isCurrentAccountPf = state.activeFinancialAccountType === 'PF';
+        const hasAdvancedPlan = state.currentAccessLevel.includes('avancado') || state.currentAccessLevel.includes('vitalicio_avancado');
+        
+        // Uma ação é considerada PJ se estiver na lista ou for um agendamento com cliente de negócio
+        const isPjAction = PJ_EXCLUSIVE_ACTIONS.includes(actionName) || (actionName === 'SCHEDULE_APPOINTMENT' && params.businessClientNames && params.businessClientNames.length > 0);
+
+        if (isCurrentAccountPf && hasAdvancedPlan && isPjAction) {
+            // Busca a conta PJ/MEI do proprietário
+            const allOwnerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true });
+            const pjAccount = allOwnerAccounts.find(acc => ['PJ', 'MEI'].includes(acc.accountType));
+
+            if (pjAccount) {
+                // Se encontrou, define a conta efetiva para esta ação como a conta PJ
+                effectiveAccountId = pjAccount.id;
+                effectiveAccountName = pjAccount.accountName;
+                autoSwitchMessage = `Notei que esta é uma tarefa do seu negócio, então já a executei na sua conta empresarial *"${effectiveAccountName}"*.`;
+                logger.info(`[AutoSwitch] Mudando contexto da ação '${actionName}' da conta PF para PJ/MEI ID ${pjAccount.id} para o ator ${actorId}.`);
+            } else {
+                // Se tem o plano mas não tem a conta, instrui o usuário
+                formattedData = `👍 Você tem o plano certo para isso! Mas primeiro, precisamos criar sua conta de negócios. É só dizer, por exemplo, "criar conta MEI com o nome Minha Empresa".`;
+                return { formattedData, resourceForButtonsContext: null, wasAnEdit: false };
+            }
+        }
+        // <<< FIM DA CORREÇÃO >>>
+
+
         switch (actionName) {
 // =================================================================
             // AÇÕES DE CRIAÇÃO (CREATE)
@@ -86,13 +129,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
             case 'CREATE_FINANCIAL_TRANSACTION': {
                 try {
                     const categoryObject = params.financialCategoryName 
-                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId) 
+                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId) 
                         : null;
                     const categoryId = categoryObject ? categoryObject.id : null;
 
                     let cardId = null;
                     if (params.creditCardName) {
-                        cardId = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
+                        cardId = await findCreditCardIdByName(params.creditCardName, effectiveAccountId);
                         if (!cardId) {
                             throw { statusCode: 404, message: `Cartão de crédito "${params.creditCardName}" não encontrado.` };
                         }
@@ -114,8 +157,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 400, message: "Dados obrigatórios (descrição, tipo, valor) ausentes ou inválidos para criar transação." };
                     }
 
-                    const newTx = await financialService.createTransaction(state.activeFinancialAccountId, txData, actorId); 
-                    const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, newTx.id);
+                    const newTx = await financialService.createTransaction(effectiveAccountId, txData, actorId); 
+                    const reloadedTx = await financialService.getTransactionById(effectiveAccountId, newTx.id);
                     
                     formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx);
                     resourceForButtonsContext.resources.push({ type: 'transaction', id: newTx.id, description: newTx.description });
@@ -126,7 +169,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     if (e.statusCode === 404 && e.message.includes('Cartão de crédito')) {
                         intro = `Hum, não encontrei o cartão "${params.creditCardName}" que você mencionou, ${clientNameToUse}.`;
-                        const { cards: existingCards } = await creditCardService.getAllCreditCards(state.activeFinancialAccountId, { isActive: true });
+                        const { cards: existingCards } = await creditCardService.getAllCreditCards(effectiveAccountId, { isActive: true });
                         if (existingCards && existingCards.length > 0) {
                             body = `Seus cartões cadastrados são: *${existingCards.map(c => c.name).join(', ')}*.\n\nVocê quis dizer um deles ou quer cadastrar um novo cartão?`;
                         } else {
@@ -141,18 +184,16 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
-            // <<< INÍCIO DO CÓDIGO A SER ADICIONADO >>>
+            
             case 'RECORD_SALE': {
                 try {
                     const { productNameOrCode, quantitySold, saleDate, notes } = params;
                     if (!productNameOrCode || !quantitySold || isNaN(parseInt(quantitySold)) || parseInt(quantitySold) <= 0) {
                         throw { statusCode: 400, message: "Para registrar uma venda, preciso do nome do produto e da quantidade vendida." };
                     }
-                    
-                    const financialAccountId = state.activeFinancialAccountId;
-                    
+                                        
                     // 1. Buscar o produto para obter o preço de venda e o ID
-                    const product = await productService.findProductByNameOrCodeForSale(financialAccountId, productNameOrCode);
+                    const product = await productService.findProductByNameOrCodeForSale(effectiveAccountId, productNameOrCode);
                     if (!product) {
                         throw { statusCode: 404, message: `Não encontrei um produto ativo chamado "${productNameOrCode}".` };
                     }
@@ -170,7 +211,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const totalSaleValue = product.salePrice * qty;
                     const transactionDescription = `Venda de ${qty}x ${product.name}`;
                     
-                    const newTx = await financialService.createTransaction(financialAccountId, {
+                    const newTx = await financialService.createTransaction(effectiveAccountId, {
                         description: transactionDescription,
                         type: 'Entrada',
                         value: totalSaleValue,
@@ -180,7 +221,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }, actorId);
 
                     // 4. Formatar a resposta combinada
-                    const reloadedTx = await financialService.getTransactionById(financialAccountId, newTx.id);
+                    const reloadedTx = await financialService.getTransactionById(effectiveAccountId, newTx.id);
                     const stockInfoAfterSale = await stockService.getProductStockBalance(product.id);
 
                     const financialPart = formatter.formatFinancialTransactionDataStructure(reloadedTx);
@@ -195,59 +236,60 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
-            // <<< FIM DO CÓDIGO A SER ADICIONADO >>>
+
             case 'CREATE_SALE_TRANSACTION': {
-    try {
-        const { productNameOrCode, quantitySold, salePricePerUnit, transactionDate, notes, businessClientName } = params;
+                try {
+                    const { productNameOrCode, quantitySold, salePricePerUnit, transactionDate, notes, businessClientName } = params;
 
-        if (!productNameOrCode || !quantitySold || isNaN(parseInt(quantitySold)) || parseInt(quantitySold) <= 0) {
-            throw { statusCode: 400, message: "Para registrar uma venda, preciso do nome do produto e da quantidade vendida." };
-        }
+                    if (!productNameOrCode || !quantitySold || isNaN(parseInt(quantitySold)) || parseInt(quantitySold) <= 0) {
+                        throw { statusCode: 400, message: "Para registrar uma venda, preciso do nome do produto e da quantidade vendida." };
+                    }
 
-        // 1. Encontrar o produto e validar
-        const productsResult = await productService.getAllProducts(state.activeFinancialAccountId, { search: productNameOrCode, limit: 1, isActive: true });
-        if (!productsResult.products || productsResult.products.length === 0) {
-            throw { statusCode: 404, message: `Produto "${productNameOrCode}" não encontrado no seu estoque.` };
-        }
-        const product = productsResult.products[0];
+                    // 1. Encontrar o produto e validar
+                    const productsResult = await productService.getAllProducts(effectiveAccountId, { search: productNameOrCode, limit: 1, isActive: true });
+                    if (!productsResult.products || productsResult.products.length === 0) {
+                        throw { statusCode: 404, message: `Produto "${productNameOrCode}" não encontrado no seu estoque.` };
+                    }
+                    const product = productsResult.products[0];
 
-        // 2. Dar baixa no estoque
-        await stockService.recordStockMovement(state.activeFinancialAccountId, product.id, {
-            movementType: 'Saída',
-            quantity: parseInt(quantitySold),
-            reason: `Venda para ${businessClientName || 'cliente'}`,
-        }, actorId);
+                    // 2. Dar baixa no estoque
+                    await stockService.recordStockMovement(product.id, {
+                        type: 'Saída',
+                        quantity: parseInt(quantitySold),
+                        reason: `Venda para ${businessClientName || 'cliente'}`,
+                    }, actorId);
 
-        // 3. Criar a transação financeira de ENTRADA
-        const finalSalePrice = salePricePerUnit ? parseFloat(salePricePerUnit) : parseFloat(product.salePrice);
-        const totalValue = finalSalePrice * parseInt(quantitySold);
+                    // 3. Criar a transação financeira de ENTRADA
+                    const finalSalePrice = salePricePerUnit ? parseFloat(salePricePerUnit) : parseFloat(product.salePrice);
+                    const totalValue = finalSalePrice * parseInt(quantitySold);
 
-        const saleDescription = `Venda de ${quantitySold}x ${product.name}${businessClientName ? ` para ${businessClientName}` : ''}`;
+                    const saleDescription = `Venda de ${quantitySold}x ${product.name}${businessClientName ? ` para ${businessClientName}` : ''}`;
 
-        const saleTransaction = await financialService.createTransaction(state.activeFinancialAccountId, {
-            description: saleDescription,
-            type: 'Entrada', // <<< AQUI ESTÁ A CORREÇÃO CRÍTICA
-            value: totalValue,
-            transactionDate: transactionDate || new Date().toISOString().split('T')[0],
-            isPayableOrReceivable: false,
-            isPaidOrReceived: true,
-            notes: notes,
-        }, actorId);
+                    const saleTransaction = await financialService.createTransaction(effectiveAccountId, {
+                        description: saleDescription,
+                        type: 'Entrada',
+                        value: totalValue,
+                        transactionDate: transactionDate || new Date().toISOString().split('T')[0],
+                        isPayableOrReceivable: false,
+                        isPaidOrReceived: true,
+                        notes: notes,
+                    }, actorId);
 
-        // 4. Formatar a resposta de sucesso
-        const reloadedTx = await financialService.getTransactionById(state.activeFinancialAccountId, saleTransaction.id);
-        formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx);
-        formattedData += `\n\n📦 Estoque de "${product.name}" atualizado com sucesso!`;
+                    // 4. Formatar a resposta de sucesso
+                    const reloadedTx = await financialService.getTransactionById(effectiveAccountId, saleTransaction.id);
+                    formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx);
+                    formattedData += `\n\n📦 Estoque de "${product.name}" atualizado com sucesso!`;
 
-        resourceForButtonsContext.resources.push({ type: 'transaction', id: saleTransaction.id, description: saleDescription });
+                    resourceForButtonsContext.resources.push({ type: 'transaction', id: saleTransaction.id, description: saleDescription });
 
-    } catch (e) {
-        logger.error(`[ACTION HANDLER] Erro em CREATE_SALE_TRANSACTION: ${e.message}`, { error: e, paramsUsed: params });
-        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui registrar a venda.\nDetalhe: ${e.message}`;
-    }
-    break;
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em CREATE_SALE_TRANSACTION: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui registrar a venda.\nDetalhe: ${e.message}`;
+                }
+                break;
             }
-                    case 'CREATE_CHECKLIST_ITEM': {
+            
+            case 'CREATE_CHECKLIST_ITEM': {
                 try {
                     const { text, priority } = detectedAction.parameters;
                     if (!text) {
@@ -255,11 +297,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
                     
                     const today = new Date().toISOString().split('T')[0];
-                    const newItem = await checklistService.addChecklistItem(state.activeFinancialAccountId, today, { text, priority });
+                    const newItem = await checklistService.addChecklistItem(effectiveAccountId, today, { text, priority });
 
                     formattedData = `✅ Tarefa adicionada ao seu checklist de hoje!\n\n> *"${newItem.text}"* (Prioridade: ${priority || 'Média'})`;
 
-                    const currentChecklist = await checklistService.getChecklistByDate(state.activeFinancialAccountId, today);
+                    const currentChecklist = await checklistService.getChecklistByDate(effectiveAccountId, today);
                     const pendingCount = currentChecklist.items.filter(item => !item.completed).length;
 
                     formattedData += `\n\nVocê tem agora *${pendingCount}* tarefa(s) pendente(s) para hoje. Vamos nessa! 💪`;
@@ -269,16 +311,17 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             
-            }            case 'COMPLETE_CHECKLIST_ITEM': {
+            }
+            
+            case 'COMPLETE_CHECKLIST_ITEM': {
                 try {
-
                     const { text } = detectedAction.parameters;
                     if (!text) {
                         throw { statusCode: 400, message: "Qual tarefa você concluiu? Preciso da descrição para marcá-la." };
                     }
                     
                     const today = new Date().toISOString().split('T')[0];
-                    const currentChecklist = await checklistService.getChecklistByDate(state.activeFinancialAccountId, today);
+                    const currentChecklist = await checklistService.getChecklistByDate(effectiveAccountId, today);
                     
                     const pendingItems = currentChecklist.items.filter(item => !item.completed);
                     if (pendingItems.length === 0) {
@@ -303,11 +346,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 404, message: `Não encontrei uma tarefa pendente parecida com "${text}".` };
                     }
 
-                    const updatedItem = await checklistService.updateChecklistItem(state.activeFinancialAccountId, bestMatch.id, { completed: true });
+                    const updatedItem = await checklistService.updateChecklistItem(effectiveAccountId, bestMatch.id, { completed: true });
 
                     formattedData = `✅ Mandou bem! Marquei a tarefa *"${updatedItem.text}"* como concluída.`;
 
-                    const updatedChecklist = await checklistService.getChecklistByDate(state.activeFinancialAccountId, today);
+                    const updatedChecklist = await checklistService.getChecklistByDate(effectiveAccountId, today);
                     const newPendingCount = updatedChecklist.items.filter(item => !item.completed).length;
 
                     if (newPendingCount === 0) {
@@ -329,13 +372,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!cardNameToSettle) {
                         throw { statusCode: 400, message: "Preciso do nome do cartão para liquidar a fatura." };
                     }
-                    const cardIdToSettle = await findCreditCardIdByName(cardNameToSettle, state.activeFinancialAccountId);
+                    const cardIdToSettle = await findCreditCardIdByName(cardNameToSettle, effectiveAccountId);
                     if (!cardIdToSettle) {
                         throw { statusCode: 404, message: `Não encontrei um cartão chamado "${cardNameToSettle}". Verifique o nome ou cadastre o cartão.` };
                     }
 
                     const paymentTransaction = await creditCardService.settleOpenCreditCardInvoice(
-                        state.activeFinancialAccountId,
+                        effectiveAccountId,
                         cardIdToSettle,
                         new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0],
                         null,
@@ -353,7 +396,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     if (e.statusCode === 404 && e.message.includes('Cartão de crédito')) {
                         intro = `Hum, não encontrei o cartão "${params.creditCardName}" que você mencionou, ${clientNameToUse}.`;
-                        const { cards: existingCards } = await creditCardService.getAllCreditCards(state.activeFinancialAccountId, { isActive: true });
+                        const { cards: existingCards } = await creditCardService.getAllCreditCards(effectiveAccountId, { isActive: true });
                         if (existingCards && existingCards.length > 0) {
                             body = `Seus cartões cadastrados são: *${existingCards.map(c => c.name).join(', ')}*.\n\nVocê quis dizer um deles?`;
                         } else {
@@ -383,20 +426,18 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         serviceIds: [],
                     };
                     
-                    if (['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
+                    if (['PJ', 'MEI'].includes(state.activeFinancialAccountType) || effectiveAccountId !== state.activeFinancialAccountId) {
                         if (params.businessClientNames && Array.isArray(params.businessClientNames)) {
                             for (const name of params.businessClientNames) {
-                                const bcId = await findBusinessClientIdByName(name, state.activeFinancialAccountId);
+                                const bcId = await findBusinessClientIdByName(name, effectiveAccountId);
                                 if (bcId) {
                                     appointmentData.businessClientIds.push(bcId);
                                 }
-                                // Se bcId for nulo, a IA já tratou o fluxo de criação de cliente,
-                                // ou o usuário optou por não criar, então o agendamento é criado sem associação.
                             }
                         }
                     }
 
-                    const newAppt = await appointmentService.scheduleAppointment(state.activeFinancialAccountId, appointmentData, actorId);
+                    const newAppt = await appointmentService.scheduleAppointment(effectiveAccountId, appointmentData, actorId);
                     
                     formattedData = formatter.formatAppointmentDataStructure(newAppt);
                     resourceForButtonsContext.resources.push({ type: 'appointment', id: newAppt.id, description: newAppt.title });
@@ -410,13 +451,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
             case 'CREATE_PARCELLED_ACCOUNT': {
                 try {
                     const categoryObject = params.financialCategoryName 
-                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId)
+                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId)
                         : null;
                     const categoryId = categoryObject ? categoryObject.id : null;
 
                     let cardId = null;
                     if (params.creditCardName) {
-                        cardId = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
+                        cardId = await findCreditCardIdByName(params.creditCardName, effectiveAccountId);
                         if (!cardId) {
                             throw { statusCode: 404, message: `Cartão de crédito "${params.creditCardName}" não encontrado.` };
                         }
@@ -443,7 +484,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         parcelData.transactionDate = params.initialDueDate;
                     }
 
-                    const parcelResult = await financialService.createParcelledAccount(state.activeFinancialAccountId, parcelData, actorId);
+                    const parcelResult = await financialService.createParcelledAccount(effectiveAccountId, parcelData, actorId);
                     
                     formattedData = formatter.formatParcelledAccountDataStructure(parcelData, parcelResult);
                     if (parcelResult.parcels && parcelResult.parcels.length > 0) {
@@ -457,7 +498,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     if (e.statusCode === 404 && e.message.includes('Cartão de crédito')) {
                         intro = `Hum, não encontrei o cartão "${params.creditCardName}" que você mencionou, ${clientNameToUse}.`;
-                        const { cards: existingCards } = await creditCardService.getAllCreditCards(state.activeFinancialAccountId, { isActive: true });
+                        const { cards: existingCards } = await creditCardService.getAllCreditCards(effectiveAccountId, { isActive: true });
                         if (existingCards && existingCards.length > 0) {
                             body = `Seus cartões cadastrados são: *${existingCards.map(c => c.name).join(', ')}*.\n\nVocê quis dizer um deles ou quer cadastrar um novo cartão?`;
                         } else {
@@ -473,7 +514,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
             case 'CREATE_RECURRING_RULE': {
                 try {
                     const categoryObjectRule = params.financialCategoryName 
-                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId)
+                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId)
                         : null;
                     const categoryIdRule = categoryObjectRule ? categoryObjectRule.id : null;
                     
@@ -496,8 +537,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 400, message: "Dados insuficientes para criar regra recorrente (desc, tipo, valor, frequência, data início)." };
                     }
                     
-                    const newRule = await recurringTransactionService.createRecurringRule(state.activeFinancialAccountId, ruleData);
-                    const reloadedRule = await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, newRule.id);
+                    const newRule = await recurringTransactionService.createRecurringRule(effectiveAccountId, ruleData);
+                    const reloadedRule = await recurringTransactionService.getRecurringRuleById(effectiveAccountId, newRule.id);
                     
                     formattedData = formatter.formatRecurringRuleDataStructure(reloadedRule);
                     resourceForButtonsContext.resources.push({ type: 'recurring_rule', id: newRule.id, description: newRule.description });
@@ -508,44 +549,17 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
-          case 'CREATE_PRODUCT': {
+            case 'CREATE_PRODUCT': {
                 try {
-                    // <<< INÍCIO DA CORREÇÃO DE LÓGICA >>>
-                    // Se estivermos em modo de edição para um produto, esta chamada DEVE ser uma atualização.
-                    // Isso protege contra a IA que pode erroneamente detectar CREATE em vez de UPDATE.
                     if (state.editingResource?.type === 'product' && state.editingResource?.id) {
                         logger.warn(`[ACTION HANDLER] IA detectou CREATE_PRODUCT, mas o sistema está em modo de edição para o produto ID ${state.editingResource.id}. Forçando uma ATUALIZAÇÃO.`);
-                        
-                        // Reutiliza a lógica de UPDATE_PRODUCT diretamente
-                        const updateParams = { 
-                            ...params, 
-                            productIdToUpdate: state.editingResource.id 
-                        };
-                        // Chamamos a função de atualização e retornamos seu resultado.
-                        // Precisamos simular a chamada da ação UPDATE_PRODUCT.
-                        // A forma mais limpa é duplicar a lógica de 'UPDATE_PRODUCT' aqui ou refatorar para uma função auxiliar.
-                        // Por simplicidade, vamos duplicar a lógica essencial aqui:
-                        
-                        const updateDataProd = {};
-                        if (params.hasOwnProperty('name')) updateDataProd.name = params.name;
-                        if (params.hasOwnProperty('salePrice') && !isNaN(parseFloat(params.salePrice))) updateDataProd.salePrice = parseFloat(params.salePrice);
-                        if (params.hasOwnProperty('code')) updateDataProd.code = params.code;
-                        if (params.hasOwnProperty('costPrice')) updateDataProd.costPrice = params.costPrice === null ? null : parseFloat(params.costPrice);
-                        // Adiciona a atualização de quantidade que a IA pode ter inferido
-                        if (params.hasOwnProperty('initialQuantity') && !isNaN(parseInt(params.initialQuantity))) updateDataProd.quantity = parseInt(params.initialQuantity);
-                        if (params.hasOwnProperty('minimumStock') && !isNaN(parseInt(params.minimumStock))) updateDataProd.minimumStock = parseInt(params.minimumStock);
-                        if (params.hasOwnProperty('unit')) updateDataProd.unit = params.unit;
-                        if (params.hasOwnProperty('description')) updateDataProd.description = params.description;
-                        
-                        const updatedProduct = await productService.updateProduct(state.activeFinancialAccountId, state.editingResource.id, updateDataProd, actorId);
-                        
+                        const updateDataProd = { ...params };
+                        const updatedProduct = await productService.updateProduct(effectiveAccountId, state.editingResource.id, updateDataProd, actorId);
                         formattedData = formatter.formatProductDataStructure(updatedProduct);
-                        wasAnEdit = true; // Sinaliza que a edição foi concluída.
-                        break; // Sai do case 'CREATE_PRODUCT'
+                        wasAnEdit = true;
+                        break;
                     }
-                    // <<< FIM DA CORREÇÃO DE LÓGICA >>>
-
-                    // Se não estiver em modo de edição, a lógica de criação normal continua.
+                    
                     const productData = {
                         name: params.name, salePrice: parseFloat(params.salePrice), code: params.code,
                         costPrice: params.costPrice ? parseFloat(params.costPrice) : null,
@@ -557,7 +571,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                          throw { statusCode: 400, message: "Nome e preço de venda são obrigatórios para o produto." };
                     }
                     
-                    const newProduct = await productService.createProduct(state.activeFinancialAccountId, productData, actorId);
+                    const newProduct = await productService.createProduct(effectiveAccountId, productData, actorId);
                     
                     formattedData = formatter.formatProductDataStructure(newProduct);
                     resourceForButtonsContext.resources.push({ type: 'product', id: newProduct.id, description: newProduct.name });
@@ -586,7 +600,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 400, message: "Dados insuficientes ou inválidos para criar cartão (nome, limite, dia fechamento/pagamento)." };
                     }
                     
-                    const newCard = await creditCardService.createCreditCard(state.activeFinancialAccountId, cardData, actorId);
+                    const newCard = await creditCardService.createCreditCard(effectiveAccountId, cardData, actorId);
                     
                     formattedData = formatter.formatCreditCardDataStructure(newCard);
                     resourceForButtonsContext.resources.push({ type: 'credit_card', id: newCard.id, description: newCard.name });
@@ -643,7 +657,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 400, message: "Nome do cliente do negócio é obrigatório." };
                     }
                     const bcData = { name: params.name, phone: params.phone, email: params.email, notes: params.notes };
-                    const newBc = await businessClientService.createBusinessClient(state.activeFinancialAccountId, bcData, actorId);
+                    const newBc = await businessClientService.createBusinessClient(effectiveAccountId, bcData, actorId);
                     
                     formattedData = formatter.formatBusinessClientDataStructure(newBc);
                     resourceForButtonsContext.resources.push({ type: 'business_client', id: newBc.id, description: newBc.name });
@@ -702,12 +716,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
-           case 'RECORD_STOCK_MOVEMENT': {
+
+            case 'RECORD_STOCK_MOVEMENT': {
                 try {
                     if(!params.productNameOrCode || !params.movementType || params.quantity === undefined || params.quantity === null) {
                         throw { statusCode: 400, message: "Produto, tipo de movimento e quantidade são obrigatórios." };
                     }
-                    const productId = await findProductIdByNameOrCode(params.productNameOrCode, state.activeFinancialAccountId);
+                    const productId = await findProductIdByNameOrCode(params.productNameOrCode, effectiveAccountId);
                     if(!productId) {
                         throw { statusCode: 404, message: `Produto "${params.productNameOrCode}" não encontrado.` };
                     }
@@ -718,12 +733,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         reason: params.reason,
                     });
 
-                    // <<< INÍCIO DA CORREÇÃO >>>
-                    // A chamada foi alterada de getProductStockInfoById para getProductStockBalance,
-                    // que é a função que realmente existe no stock.service.js.
-                    // O parâmetro financialAccountId foi removido, pois a função só espera o productId.
                     const updatedStockInfo = await stockService.getProductStockBalance(productId);
-                    // <<< FIM DA CORREÇÃO >>>
                     
                     formattedData = `✅ Movimento de ${params.movementType.toLowerCase()} (${params.quantity} ${updatedStockInfo.unit || 'UN'}) para "${updatedStockInfo.name}" registrado.\n` +
                                     `📦 Estoque Atual: *${updatedStockInfo.quantity} ${updatedStockInfo.unit || 'UN'}*.`;
@@ -734,7 +744,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     if (e.statusCode === 404 && e.message.includes('Produto')) {
                         intro = `Hum, não encontrei o produto "${params.productNameOrCode}" que você mencionou, ${clientNameToUse}.`;
-                        const { products: existingProducts } = await productService.getAllProducts(state.activeFinancialAccountId, { limit: 5, isActive: true });
+                        const { products: existingProducts } = await productService.getAllProducts(effectiveAccountId, { limit: 5, isActive: true });
                         if (existingProducts && existingProducts.length > 0) {
                             body = `Seus produtos cadastrados são: *${existingProducts.map(p => p.name).join(', ')}*.\n\nVocê quis dizer um deles?`;
                         } else {
@@ -746,6 +756,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
+
             case 'PAY_CREDIT_CARD_INVOICE': {
                 try {
                     const cardNameToPay = params.creditCardName;
@@ -754,24 +765,24 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 400, message: "Nome do cartão e valor do pagamento (maior que zero) são obrigatórios." };
                     }
 
-                    const cardIdToPay = await findCreditCardIdByName(cardNameToPay, state.activeFinancialAccountId);
+                    const cardIdToPay = await findCreditCardIdByName(cardNameToPay, effectiveAccountId);
                     if (!cardIdToPay) {
                         return; 
                     }
 
                     const paymentDateCard = params.paymentDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0];
                     let categoryNameToUseForPayment = params.financialCategoryName || "Pagamento de Fatura";
-                    let categoryObjectPay = await financialCategoryService.findFinancialCategoryByNameForAccount(categoryNameToUseForPayment, state.activeFinancialAccountId);
+                    let categoryObjectPay = await financialCategoryService.findFinancialCategoryByNameForAccount(categoryNameToUseForPayment, effectiveAccountId);
                     let categoryIdPay = categoryObjectPay ? categoryObjectPay.id : null;
 
                     if (!categoryIdPay && params.financialCategoryName) {
-                        logger.warn(`[ACTION HANDLER] Categoria "${params.financialCategoryName}" fornecida para pagamento de fatura não encontrada na conta ${state.activeFinancialAccountId}. Pagamento será sem categoria.`);
+                        logger.warn(`[ACTION HANDLER] Categoria "${params.financialCategoryName}" fornecida para pagamento de fatura não encontrada na conta ${effectiveAccountId}. Pagamento será sem categoria.`);
                     } else if (!categoryIdPay && !params.financialCategoryName) {
                         logger.warn(`[ACTION HANDLER] Categoria padrão "Pagamento de Fatura" não encontrada. Pagamento será sem categoria.`);
                     }
 
                     const paymentTransaction = await creditCardService.payCreditCardInvoice(
-                        state.activeFinancialAccountId, cardIdToPay, paymentAmount, paymentDateCard,
+                        effectiveAccountId, cardIdToPay, paymentAmount, paymentDateCard,
                         params.originatingAccountDescription, 
                         categoryIdPay,
                         actorId
@@ -788,7 +799,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     if (e.statusCode === 404 && e.message.includes('Cartão de crédito')) {
                         intro = `Hum, não encontrei o cartão "${params.creditCardName}" que você mencionou, ${clientNameToUse}.`;
-                        const { cards: existingCards } = await creditCardService.getAllCreditCards(state.activeFinancialAccountId, { isActive: true });
+                        const { cards: existingCards } = await creditCardService.getAllCreditCards(effectiveAccountId, { isActive: true });
                         if (existingCards && existingCards.length > 0) {
                             body = `Seus cartões cadastrados são: *${existingCards.map(c => c.name).join(', ')}*.\n\nVocê quis dizer um deles?`;
                         } else {
@@ -812,13 +823,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
                     let parentId = null;
                     if (parentCategoryName) {
-                        const parentCat = await financialCategoryService.findFinancialCategoryByNameForAccount(parentCategoryName, state.activeFinancialAccountId);
+                        const parentCat = await financialCategoryService.findFinancialCategoryByNameForAccount(parentCategoryName, effectiveAccountId);
                         if (!parentCat) {
                             throw { statusCode: 404, message: `A categoria pai "${parentCategoryName}" não foi encontrada.` };
                         }
                         parentId = parentCat.id;
                     }
-                    const newCategory = await financialCategoryService.createFinancialCategory(state.activeFinancialAccountId, { name, parentId });
+                    const newCategory = await financialCategoryService.createFinancialCategory(effectiveAccountId, { name, parentId });
                     formattedData = formatter.formatFinancialCategoryDataStructure(newCategory);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_FINANCIAL_CATEGORY: ${e.message}`, { error: e, paramsUsed: params });
@@ -849,7 +860,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 400, message: "Título e tipo da regra são obrigatórios." };
                     }
                     const ruleData = { title, type, rrule, startTime, endTime, specificDate, slotIntervalMinutes };
-                    const newRule = await availabilityService.createAvailabilityRule(state.activeFinancialAccountId, ruleData);
+                    const newRule = await availabilityService.createAvailabilityRule(effectiveAccountId, ruleData);
                     
                     formattedData = formatter.formatAvailabilityRuleDataStructure(newRule);
                     resourceForButtonsContext.resources.push({ type: 'availability_rule', id: newRule.id, description: newRule.title });
@@ -861,54 +872,54 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
             }
 
             case 'GET_AGENDA_VIEW': {
-    try {
-        const { dateStart, dateEnd } = params;
-        if (!dateStart || !dateEnd) {
-            throw { statusCode: 400, message: "Preciso de uma data de início e fim para mostrar a agenda." };
-        }
-        const agendaEvents = await appointmentService.getAgendaView(state.activeFinancialAccountId, dateStart, dateEnd);
-        formattedData = formatter.formatAgendaViewDataStructure(agendaEvents, dateStart, dateEnd);
-    } catch (e) {
-        logger.error(`[ACTION HANDLER] Erro em GET_AGENDA_VIEW: ${e.message}`, { error: e, paramsUsed: params });
-        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui buscar sua agenda.\nDetalhe: ${e.message}`;
-    }
-    break;
-}
+                try {
+                    const { dateStart, dateEnd } = params;
+                    if (!dateStart || !dateEnd) {
+                        throw { statusCode: 400, message: "Preciso de uma data de início e fim para mostrar a agenda." };
+                    }
+                    const agendaEvents = await appointmentService.getAgendaView(effectiveAccountId, dateStart, dateEnd);
+                    formattedData = formatter.formatAgendaViewDataStructure(agendaEvents, dateStart, dateEnd);
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em GET_AGENDA_VIEW: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui buscar sua agenda.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
 
-case 'GET_AVAILABLE_TIME_SLOTS': {
-    try {
-        const { date, serviceNames, durationMinutes } = params;
-        if (!date) {
-            throw { statusCode: 400, message: "Para qual data você gostaria de ver os horários livres?" };
-        }
+            case 'GET_AVAILABLE_TIME_SLOTS': {
+                try {
+                    const { date, serviceNames, durationMinutes } = params;
+                    if (!date) {
+                        throw { statusCode: 400, message: "Para qual data você gostaria de ver os horários livres?" };
+                    }
 
-        let totalDuration = durationMinutes ? parseInt(durationMinutes) : 0;
-        let serviceIds = [];
+                    let totalDuration = durationMinutes ? parseInt(durationMinutes) : 0;
+                    let serviceIds = [];
 
-        if (serviceNames && Array.isArray(serviceNames) && serviceNames.length > 0) {
-            const servicesFound = await serviceService.getAllServices(state.activeFinancialAccountId, { search: serviceNames.join(' '), limit: serviceNames.length });
-            serviceIds = servicesFound.services.map(s => s.id);
-            totalDuration = servicesFound.services.reduce((sum, s) => sum + s.durationMinutes, 0);
-        }
+                    if (serviceNames && Array.isArray(serviceNames) && serviceNames.length > 0) {
+                        const servicesFound = await serviceService.getAllServices(effectiveAccountId, { search: serviceNames.join(' '), limit: serviceNames.length });
+                        serviceIds = servicesFound.services.map(s => s.id);
+                        totalDuration = servicesFound.services.reduce((sum, s) => sum + s.durationMinutes, 0);
+                    }
 
-        if (totalDuration <= 0) {
-            throw { statusCode: 400, message: "Preciso saber a duração do serviço para verificar os horários. Diga, por exemplo, 'horários livres para corte de cabelo amanhã'." };
-        }
+                    if (totalDuration <= 0) {
+                        throw { statusCode: 400, message: "Preciso saber a duração do serviço para verificar os horários. Diga, por exemplo, 'horários livres para corte de cabelo amanhã'." };
+                    }
 
-        const availableSlots = await availabilityService.getAvailableTimeSlots(state.activeFinancialAccountId, date, serviceIds);
-        formattedData = formatter.formatAvailableTimeSlotsDataStructure(availableSlots, date, totalDuration);
+                    const availableSlots = await availabilityService.getAvailableTimeSlots(effectiveAccountId, date, serviceIds);
+                    formattedData = formatter.formatAvailableTimeSlotsDataStructure(availableSlots, date, totalDuration);
 
-    } catch (e) {
-        logger.error(`[ACTION HANDLER] Erro em GET_AVAILABLE_TIME_SLOTS: ${e.message}`, { error: e, paramsUsed: params });
-        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui verificar os horários disponíveis.\nDetalhe: ${e.message}`;
-    }
-    break;
-}
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em GET_AVAILABLE_TIME_SLOTS: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui verificar os horários disponíveis.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
 
             // AÇÕES DE LEITURA (GET / LIST)
             // =================================================================
 
-case 'GET_PROVIDER_PUBLIC_INFO': {
+            case 'GET_PROVIDER_PUBLIC_INFO': {
                 try {
                     // Busca TODAS as contas do usuário logado, não apenas a ativa
                     const allUserAccounts = await clientService.getClientFinancialAccounts(actorId, { isActive: true });
@@ -936,7 +947,7 @@ case 'GET_PROVIDER_PUBLIC_INFO': {
             case 'GET_FINANCIAL_SUMMARY': {
                 try {
                     const categoryObjectSummary = params.financialCategoryName 
-                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId)
+                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId)
                         : null;
                     const categoryIdSummary = categoryObjectSummary ? categoryObjectSummary.id : null;
                     
@@ -948,7 +959,7 @@ case 'GET_PROVIDER_PUBLIC_INFO': {
                         type: params.type,
                     };
 
-                    const summary = await financialService.getFinancialSummary(state.activeFinancialAccountId, filters);
+                    const summary = await financialService.getFinancialSummary(effectiveAccountId, filters);
                     
                     let summaryIntro = `Aqui está o resumo financeiro para *${summary.periodDescription}*, ${clientNameToUse}! 📊`;
                     const summaryBody = formatter.formatFinancialSummaryDataStructure(summary);
@@ -990,46 +1001,46 @@ case 'GET_PROVIDER_PUBLIC_INFO': {
                 break;
             }
 
-case 'LIST_APPOINTMENTS': {
-    try {
-        const filterParamsAppt = {
-            dateStart: params.dateStart, dateEnd: params.dateEnd, status: params.status,
-            limit: params.limit || 5, page: params.page || 1,
-            period: params.period || 'proximos_7_dias'
-        };
-        
-        const { appointments, totalItems: totalAppts, periodDescription } = await appointmentService.getAllAppointments(state.activeFinancialAccountId, filterParamsAppt);
+            case 'LIST_APPOINTMENTS': {
+                try {
+                    const filterParamsAppt = {
+                        dateStart: params.dateStart, dateEnd: params.dateEnd, status: params.status,
+                        limit: params.limit || 5, page: params.page || 1,
+                        period: params.period || 'proximos_7_dias'
+                    };
+                    
+                    const { appointments, totalItems: totalAppts, periodDescription } = await appointmentService.getAllAppointments(effectiveAccountId, filterParamsAppt);
 
-        if (totalAppts === 0) {
-            const creativeResponse = await aiModelService.generateCreativeAgendaResponse(clientNameToUse, [], periodDescription);
-            formattedData = creativeResponse.overall_summary || `Você não tem nenhum compromisso para *${periodDescription}*. 👍`;
-        } else {
-            const creativeResponse = await aiModelService.generateCreativeAgendaResponse(clientNameToUse, appointments, periodDescription);
+                    if (totalAppts === 0) {
+                        const creativeResponse = await aiModelService.generateCreativeAgendaResponse(clientNameToUse, [], periodDescription);
+                        formattedData = creativeResponse.overall_summary || `Você não tem nenhum compromisso para *${periodDescription}*. 👍`;
+                    } else {
+                        const creativeResponse = await aiModelService.generateCreativeAgendaResponse(clientNameToUse, appointments, periodDescription);
 
-            const appointmentDetails = appointments.map((appt, index) => {
-                const formattedBlock = formatter.formatAppointmentDataStructure(appt);
-                const individualPhrase = creativeResponse.individual_phrases[index] || "Fique de olho neste compromisso!";
-                return `${formattedBlock}\n_${individualPhrase}_`;
-            });
+                        const appointmentDetails = appointments.map((appt, index) => {
+                            const formattedBlock = formatter.formatAppointmentDataStructure(appt);
+                            const individualPhrase = creativeResponse.individual_phrases[index] || "Fique de olho neste compromisso!";
+                            return `${formattedBlock}\n_${individualPhrase}_`;
+                        });
 
-            let finalResponse = `${creativeResponse.overall_summary}\n\n` + appointmentDetails.join("\n\n---\n\n");
+                        let finalResponse = `${creativeResponse.overall_summary}\n\n` + appointmentDetails.join("\n\n---\n\n");
 
-            if (totalAppts > appointments.length) {
-                finalResponse += `\n\nE mais ${totalAppts - appointments.length} compromisso(s). Peça para ver mais ou veja tudo na plataforma!`;
+                        if (totalAppts > appointments.length) {
+                            finalResponse += `\n\nE mais ${totalAppts - appointments.length} compromisso(s). Peça para ver mais ou veja tudo na plataforma!`;
+                        }
+                        
+                        formattedData = finalResponse.trim();
+                    }
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em LIST_APPOINTMENTS: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui listar os compromissos.\nDetalhe: ${e.message}`;
+                }
+                break;
             }
-            
-            formattedData = finalResponse.trim();
-        }
-    } catch (e) {
-        logger.error(`[ACTION HANDLER] Erro em LIST_APPOINTMENTS: ${e.message}`, { error: e, paramsUsed: params });
-        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui listar os compromissos.\nDetalhe: ${e.message}`;
-    }
-    break;
-}
 
             case 'LIST_CREDIT_CARDS': {
                 try {
-                    const { cards, totalItems: totalCards } = await creditCardService.getAllCreditCards(state.activeFinancialAccountId, { isActive: params.isActive, includeSummary: params.includeSummary !== false });
+                    const { cards, totalItems: totalCards } = await creditCardService.getAllCreditCards(effectiveAccountId, { isActive: params.isActive, includeSummary: params.includeSummary !== false });
 
                     if (totalCards === 0) {
                         formattedData = "Você ainda não tem cartões cadastrados. Que tal adicionar um? Diga, por exemplo: \"cadastrar cartão Nubank com limite de 2000, fechamento dia 20 e pagamento dia 28\".";
@@ -1043,7 +1054,7 @@ case 'LIST_APPOINTMENTS': {
                 break;
             }
             
- case 'LIST_RECURRING_RULES': {
+            case 'LIST_RECURRING_RULES': {
                 try {
                     const filterParamsRules = {
                         ...(params.isActive !== undefined && { isActive: params.isActive }),
@@ -1056,7 +1067,7 @@ case 'LIST_APPOINTMENTS': {
                     };
                     
                     const { rules: allRulesFound, totalItems } = await recurringTransactionService.getAllRecurringRules(
-                        state.activeFinancialAccountId, 
+                        effectiveAccountId, 
                         filterParamsRules
                     );
 
@@ -1070,7 +1081,7 @@ case 'LIST_APPOINTMENTS': {
                     }
 
                     const enrichedRules = await Promise.all(allRulesFound.map(async (rule) => { 
-                        const history = await recurringTransactionService.getRecurringRuleHistory(state.activeFinancialAccountId, rule.id, { limit: 5 });
+                        const history = await recurringTransactionService.getRecurringRuleHistory(effectiveAccountId, rule.id, { limit: 5 });
                         const pendingTransactions = history.transactions.filter(tx => !tx.isPaidOrReceived);
                         
                         return {
@@ -1095,7 +1106,7 @@ case 'LIST_APPOINTMENTS': {
                     if(!params.productNameOrCode) {
                         throw { statusCode: 400, message: "Nome ou código do produto é obrigatório para ver o estoque." };
                     }
-                    const stockInfo = await stockService.getProductStockInfoByNameOrCode(state.activeFinancialAccountId, params.productNameOrCode); 
+                    const stockInfo = await stockService.getProductStockInfoByNameOrCode(effectiveAccountId, params.productNameOrCode); 
                     
                     formattedData = formatter.formatStockInfoDataStructure(stockInfo); 
                 } catch (e) {
@@ -1111,14 +1122,14 @@ case 'LIST_APPOINTMENTS': {
                     if (!cardNameForInvoice) {
                         throw { statusCode: 400, message: "Nome do cartão é obrigatório para ver a fatura." };
                     }
-                    const cardIdForInvoice = await findCreditCardIdByName(cardNameForInvoice, state.activeFinancialAccountId);
+                    const cardIdForInvoice = await findCreditCardIdByName(cardNameForInvoice, effectiveAccountId);
                     if (!cardIdForInvoice) {
                         throw { statusCode: 404, message: `Não encontrei um cartão chamado "${cardNameForInvoice}". Verifique o nome ou cadastre o cartão.` };
                     }
                     
                     const periodOpts = { type: params.invoicePeriodType || 'aberta', month: params.invoiceMonth, year: params.invoiceYear };
-                    const cardForDetails = await creditCardService.getCreditCardById(state.activeFinancialAccountId, cardIdForInvoice); 
-                    const invoiceDetails = await creditCardService.getCreditCardInvoiceDetails(state.activeFinancialAccountId, cardIdForInvoice, periodOpts);
+                    const cardForDetails = await creditCardService.getCreditCardById(effectiveAccountId, cardIdForInvoice); 
+                    const invoiceDetails = await creditCardService.getCreditCardInvoiceDetails(effectiveAccountId, cardIdForInvoice, periodOpts);
                     
                     if(cardForDetails) {
                         invoiceDetails.cardName = cardForDetails.name; 
@@ -1139,12 +1150,12 @@ case 'LIST_APPOINTMENTS': {
                     if (!cardNameForLimit) {
                         throw { statusCode: 400, message: "Nome do cartão é obrigatório para ver o limite." };
                     }
-                    const cardIdForLimit = await findCreditCardIdByName(cardNameForLimit, state.activeFinancialAccountId);
+                    const cardIdForLimit = await findCreditCardIdByName(cardNameForLimit, effectiveAccountId);
                     if (!cardIdForLimit) {
                         throw { statusCode: 404, message: `Não encontrei o cartão "${cardNameForLimit}". Verifique o nome ou cadastre o cartão.` };
                     }
                     
-                    const limitInfo = await creditCardService.getCreditCardAvailableLimit(state.activeFinancialAccountId, cardIdForLimit);
+                    const limitInfo = await creditCardService.getCreditCardAvailableLimit(effectiveAccountId, cardIdForLimit);
                     
                     formattedData = formatter.formatAvailableLimitDataStructure(limitInfo);
                 } catch (e) {
@@ -1157,7 +1168,7 @@ case 'LIST_APPOINTMENTS': {
             case 'LIST_BUSINESS_CLIENTS': {
                 try {
                     const filterParamsBC = { search: params.searchTerm, isActive: params.isActive !== undefined ? params.isActive : true, limit: params.limit || 5, page: 1 };
-                    const { businessClients, totalItems: totalBC } = await businessClientService.getAllBusinessClients(state.activeFinancialAccountId, filterParamsBC);
+                    const { businessClients, totalItems: totalBC } = await businessClientService.getAllBusinessClients(effectiveAccountId, filterParamsBC);
 
                     if (totalBC === 0) {
                         formattedData = "Nenhum cliente do negócio encontrado. Que tal cadastrar o primeiro? Diga 'cadastrar cliente [nome do cliente]'.";
@@ -1210,8 +1221,8 @@ case 'LIST_APPOINTMENTS': {
 
             case 'GET_MONTHLY_TREND': {
                 try {
-                    const trendData = await financialService.getMonthlyTrend(state.activeFinancialAccountId, params.numberOfMonths || 6);
-                    formattedData = formatter.formatMonthlyTrendDataStructure(trendData, state.activeFinancialAccountName);
+                    const trendData = await financialService.getMonthlyTrend(effectiveAccountId, params.numberOfMonths || 6);
+                    formattedData = formatter.formatMonthlyTrendDataStructure(trendData, effectiveAccountName);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_MONTHLY_TREND: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui gerar a tendência mensal.\nDetalhe: ${e.message}`;
@@ -1221,8 +1232,8 @@ case 'LIST_APPOINTMENTS': {
 
             case 'GET_EXPENSE_CATEGORY_SUMMARY': {
                 try {
-                    const summaryData = await financialService.getExpenseCategorySummary(state.activeFinancialAccountId, params.dateStart, params.dateEnd);
-                    formattedData = formatter.formatCategorySummaryDataStructure(summaryData, 'Despesas', state.activeFinancialAccountName);
+                    const summaryData = await financialService.getExpenseCategorySummary(effectiveAccountId, params.dateStart, params.dateEnd);
+                    formattedData = formatter.formatCategorySummaryDataStructure(summaryData, 'Despesas', effectiveAccountName);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_EXPENSE_CATEGORY_SUMMARY: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui gerar o resumo de despesas por categoria.\nDetalhe: ${e.message}`;
@@ -1232,8 +1243,8 @@ case 'LIST_APPOINTMENTS': {
 
             case 'GET_INCOME_CATEGORY_SUMMARY': {
                 try {
-                    const summaryData = await financialService.getIncomeCategorySummary(state.activeFinancialAccountId, params.dateStart, params.dateEnd);
-                    formattedData = formatter.formatCategorySummaryDataStructure(summaryData, 'Receitas', state.activeFinancialAccountName);
+                    const summaryData = await financialService.getIncomeCategorySummary(effectiveAccountId, params.dateStart, params.dateEnd);
+                    formattedData = formatter.formatCategorySummaryDataStructure(summaryData, 'Receitas', effectiveAccountName);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_INCOME_CATEGORY_SUMMARY: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui gerar o resumo de receitas por categoria.\nDetalhe: ${e.message}`;
@@ -1243,7 +1254,7 @@ case 'LIST_APPOINTMENTS': {
 
             case 'LIST_FINANCIAL_CATEGORIES': {
                 try {
-                    const categories = await financialCategoryService.getAllFinancialCategories(state.activeFinancialAccountId, { hierarchical: true });
+                    const categories = await financialCategoryService.getAllFinancialCategories(effectiveAccountId, { hierarchical: true });
                     formattedData = formatter.formatListFinancialCategoriesDataStructure(categories);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em LIST_FINANCIAL_CATEGORIES: ${e.message}`, { error: e, paramsUsed: params });
@@ -1254,7 +1265,7 @@ case 'LIST_APPOINTMENTS': {
 
             case 'LIST_PRODUCTS': {
                 try {
-                    const { products, totalItems } = await productService.getAllProducts(state.activeFinancialAccountId, {
+                    const { products, totalItems } = await productService.getAllProducts(effectiveAccountId, {
                         search: params.searchTerm,
                         isActive: params.isActive !== undefined ? params.isActive : true,
                         limit: params.limit || 5
@@ -1280,11 +1291,11 @@ case 'LIST_APPOINTMENTS': {
                     if (!productNameOrCode) {
                         throw { statusCode: 400, message: "Preciso do nome ou código do produto para ver os detalhes." };
                     }
-                    const productId = await findProductIdByNameOrCode(productNameOrCode, state.activeFinancialAccountId);
+                    const productId = await findProductIdByNameOrCode(productNameOrCode, effectiveAccountId);
                     if (!productId) {
                         throw { statusCode: 404, message: `Não encontrei um produto chamado "${productNameOrCode}".` };
                     }
-                    const product = await productService.getProductById(state.activeFinancialAccountId, productId);
+                    const product = await productService.getProductById(effectiveAccountId, productId);
                     formattedData = formatter.formatProductDataStructure(product);
                     resourceForButtonsContext.resources.push({ type: 'product', id: product.id, description: product.name });
                 } catch (e) {
@@ -1293,7 +1304,7 @@ case 'LIST_APPOINTMENTS': {
                     let body = `\nDetalhe: ${e.message}`;
                      if (e.statusCode === 404) {
                         intro = `Hum, não encontrei o produto "${params.productNameOrCode}", ${clientNameToUse}.`;
-                        const { products } = await productService.getAllProducts(state.activeFinancialAccountId, { limit: 5, isActive: true });
+                        const { products } = await productService.getAllProducts(effectiveAccountId, { limit: 5, isActive: true });
                         if (products && products.length > 0) {
                             body = `\n\nSeus produtos cadastrados são: *${products.map(p => p.name).join(', ')}*.\n\nVocê quis dizer um deles?`;
                         } else {
@@ -1344,7 +1355,7 @@ case 'LIST_APPOINTMENTS': {
 
             case 'LIST_AVAILABILITY_RULES': {
                 try {
-                    const rules = await availabilityService.getAllAvailabilityRules(state.activeFinancialAccountId);
+                    const rules = await availabilityService.getAllAvailabilityRules(effectiveAccountId);
                     formattedData = formatter.formatListAvailabilityRulesDataStructure(rules);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em LIST_AVAILABILITY_RULES: ${e.message}`, { error: e, paramsUsed: params });
@@ -1353,63 +1364,62 @@ case 'LIST_APPOINTMENTS': {
                 break;
             }
 
-// AÇÕES DE LEITURA (GET / LIST)
-case 'GET_BUSINESS_CLIENT_DETAILS': {
-    try {
-        const { clientName } = params;
-        if (!clientName) {
-            throw { statusCode: 400, message: "Preciso do nome do cliente para buscar os detalhes." };
-        }
-        
-        const clientsResult = await businessClientService.getAllBusinessClients(state.activeFinancialAccountId, { search: clientName, limit: 1, isActive: null });
-        if (!clientsResult.businessClients || clientsResult.businessClients.length === 0) {
-            throw { statusCode: 404, message: `Não encontrei um cliente chamado "${clientName}".` };
-        }
-        const clientId = clientsResult.businessClients[0].id;
+            case 'GET_BUSINESS_CLIENT_DETAILS': {
+                try {
+                    const { clientName } = params;
+                    if (!clientName) {
+                        throw { statusCode: 400, message: "Preciso do nome do cliente para buscar os detalhes." };
+                    }
+                    
+                    const clientsResult = await businessClientService.getAllBusinessClients(effectiveAccountId, { search: clientName, limit: 1, isActive: null });
+                    if (!clientsResult.businessClients || clientsResult.businessClients.length === 0) {
+                        throw { statusCode: 404, message: `Não encontrei um cliente chamado "${clientName}".` };
+                    }
+                    const clientId = clientsResult.businessClients[0].id;
 
-        const clientDetails = await businessClientService.getBusinessClientDetails(state.activeFinancialAccountId, clientId);
-        formattedData = formatter.formatBusinessClientDetailsDataStructure(clientDetails);
+                    const clientDetails = await businessClientService.getBusinessClientDetails(effectiveAccountId, clientId);
+                    formattedData = formatter.formatBusinessClientDetailsDataStructure(clientDetails);
 
-    } catch (e) {
-        logger.error(`[ACTION HANDLER] Erro em GET_BUSINESS_CLIENT_DETAILS: ${e.message}`, { error: e, paramsUsed: params });
-        let intro = `❌ Ops, ${clientNameToUse}! Não consegui buscar os detalhes do cliente.`;
-        let body = `\nDetalhe: ${e.message}`;
-        if (e.statusCode === 404) {
-            intro = `Hum, não encontrei o cliente "${params.clientName}", ${clientNameToUse}.`;
-            const { businessClients } = await businessClientService.getAllBusinessClients(state.activeFinancialAccountId, { limit: 5, isActive: true });
-            if (businessClients && businessClients.length > 0) {
-                body = `\n\nSeus clientes cadastrados são: *${businessClients.map(c => c.name).join(', ')}*.\n\nVocê quis dizer um deles?`;
-            } else {
-                body = `\n\nParece que você ainda não tem nenhum cliente cadastrado.`;
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em GET_BUSINESS_CLIENT_DETAILS: ${e.message}`, { error: e, paramsUsed: params });
+                    let intro = `❌ Ops, ${clientNameToUse}! Não consegui buscar os detalhes do cliente.`;
+                    let body = `\nDetalhe: ${e.message}`;
+                    if (e.statusCode === 404) {
+                        intro = `Hum, não encontrei o cliente "${params.clientName}", ${clientNameToUse}.`;
+                        const { businessClients } = await businessClientService.getAllBusinessClients(effectiveAccountId, { limit: 5, isActive: true });
+                        if (businessClients && businessClients.length > 0) {
+                            body = `\n\nSeus clientes cadastrados são: *${businessClients.map(c => c.name).join(', ')}*.\n\nVocê quis dizer um deles?`;
+                        } else {
+                            body = `\n\nParece que você ainda não tem nenhum cliente cadastrado.`;
+                        }
+                    }
+                    formattedData = intro + body;
+                }
+                break;
             }
-        }
-        formattedData = intro + body;
-    }
-    break;
-}
 
-case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
-    try {
-        const { clientName } = params;
-        if (!clientName) {
-            throw { statusCode: 400, message: "Preciso do nome do cliente para buscar o histórico." };
-        }
-        
-        const clientsResult = await businessClientService.getAllBusinessClients(state.activeFinancialAccountId, { search: clientName, limit: 1, isActive: null });
-        if (!clientsResult.businessClients || clientsResult.businessClients.length === 0) {
-            throw { statusCode: 404, message: `Não encontrei um cliente chamado "${clientName}".` };
-        }
-        const clientId = clientsResult.businessClients[0].id;
+            case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
+                try {
+                    const { clientName } = params;
+                    if (!clientName) {
+                        throw { statusCode: 400, message: "Preciso do nome do cliente para buscar o histórico." };
+                    }
+                    
+                    const clientsResult = await businessClientService.getAllBusinessClients(effectiveAccountId, { search: clientName, limit: 1, isActive: null });
+                    if (!clientsResult.businessClients || clientsResult.businessClients.length === 0) {
+                        throw { statusCode: 404, message: `Não encontrei um cliente chamado "${clientName}".` };
+                    }
+                    const clientId = clientsResult.businessClients[0].id;
 
-        const history = await businessClientService.getAppointmentHistoryForClient(state.activeFinancialAccountId, clientId);
-        formattedData = formatter.formatAppointmentHistoryForClientDataStructure(history, clientsResult.businessClients[0].name);
+                    const history = await businessClientService.getAppointmentHistoryForClient(effectiveAccountId, clientId);
+                    formattedData = formatter.formatAppointmentHistoryForClientDataStructure(history, clientsResult.businessClients[0].name);
 
-    } catch (e) {
-        logger.error(`[ACTION HANDLER] Erro em GET_APPOINTMENT_HISTORY_FOR_CLIENT: ${e.message}`, { error: e, paramsUsed: params });
-        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui buscar o histórico do cliente.\nDetalhe: ${e.message}`;
-    }
-    break;
-}
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em GET_APPOINTMENT_HISTORY_FOR_CLIENT: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui buscar o histórico do cliente.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
 
 
 
@@ -1435,13 +1445,13 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                     if (params.hasOwnProperty('isPaidOrReceived')) updateDataTx.isPaidOrReceived = params.isPaidOrReceived;
                     
                     if (params.financialCategoryName) {
-                        const categoryObject = await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId);
+                        const categoryObject = await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId);
                         updateDataTx.financialCategoryId = categoryObject ? categoryObject.id : null;
                     } else if (params.hasOwnProperty('financialCategoryName') && params.financialCategoryName === null) {
                         updateDataTx.financialCategoryId = null;
                     }
                     if (params.creditCardName) {
-                        updateDataTx.creditCardId = await findCreditCardIdByName(params.creditCardName, state.activeFinancialAccountId);
+                        updateDataTx.creditCardId = await findCreditCardIdByName(params.creditCardName, effectiveAccountId);
                     } else if (params.hasOwnProperty('creditCardName') && params.creditCardName === null) {
                         updateDataTx.creditCardId = null;
                     }
@@ -1450,8 +1460,8 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                         throw { statusCode: 400, message: "Nenhum dado válido fornecido para atualizar a transação." };
                     }
 
-                    const updatedTx = await financialService.updateTransaction(state.activeFinancialAccountId, transactionIdToUpdate, updateDataTx, actorId);
-                    const reloadedUpdatedTx = await financialService.getTransactionById(state.activeFinancialAccountId, updatedTx.id);
+                    const updatedTx = await financialService.updateTransaction(effectiveAccountId, transactionIdToUpdate, updateDataTx, actorId);
+                    const reloadedUpdatedTx = await financialService.getTransactionById(effectiveAccountId, updatedTx.id);
                     
                     formattedData = formatter.formatFinancialTransactionDataStructure(reloadedUpdatedTx);
                     wasAnEdit = true;
@@ -1482,11 +1492,11 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                     if (params.hasOwnProperty('associatedValue') && params.associatedValue !== null && !isNaN(parseFloat(params.associatedValue))) updateDataAppt.associatedValue = parseFloat(params.associatedValue);
                     if (params.hasOwnProperty('associatedTransactionType')) updateDataAppt.associatedTransactionType = params.associatedTransactionType;
                     
-                    if (params.hasOwnProperty('businessClientNames') && ['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
+                    if (params.hasOwnProperty('businessClientNames') && (['PJ', 'MEI'].includes(state.activeFinancialAccountType) || effectiveAccountId !== state.activeFinancialAccountId)) {
                         let businessClientIdsToUpdate = []; 
                         if (Array.isArray(params.businessClientNames) && params.businessClientNames.length > 0) {
                             for (const name of params.businessClientNames) {
-                                const bcId = await findBusinessClientIdByName(name, state.activeFinancialAccountId);
+                                const bcId = await findBusinessClientIdByName(name, effectiveAccountId);
                                 if (bcId) businessClientIdsToUpdate.push(bcId);
                             }
                         }
@@ -1497,8 +1507,8 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                         throw { statusCode: 400, message: "Nenhum dado válido fornecido para atualizar o compromisso." };
                     }
 
-                    const updatedAppt = await appointmentService.updateAppointment(state.activeFinancialAccountId, appointmentIdToUpdate, updateDataAppt, actorId);
-                    const reloadedUpdatedAppt = await appointmentService.getAppointmentById(state.activeFinancialAccountId, updatedAppt.id);
+                    const updatedAppt = await appointmentService.updateAppointment(effectiveAccountId, appointmentIdToUpdate, updateDataAppt, actorId);
+                    const reloadedUpdatedAppt = await appointmentService.getAppointmentById(effectiveAccountId, updatedAppt.id);
                     
                     formattedData = formatter.formatAppointmentDataStructure(reloadedUpdatedAppt);
                     wasAnEdit = true;
@@ -1517,12 +1527,12 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                     
                     const paymentDate = params.paymentDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0];
                     const categoryObjectForMark = params.financialCategoryName 
-                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId)
+                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId)
                         : null;
                     const categoryIdForMark = categoryObjectForMark ? categoryObjectForMark.id : null;
                     
                     const result = await financialService.markTransactionAsPaidOrReceived(
-                        state.activeFinancialAccountId,
+                        effectiveAccountId,
                         params.transactionDescription,
                         params.transactionValue ? parseFloat(params.transactionValue) : null,
                         paymentDate,
@@ -1538,7 +1548,7 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
 
                     if (e.statusCode === 404) {
                         intro = `Hum, não encontrei uma conta pendente com a descrição "${params.transactionDescription}", ${clientNameToUse}.`;
-                        const { transactions: pendingTxs } = await financialService.getAllTransactions(state.activeFinancialAccountId, { isPaidOrReceived: false, limit: 5 });
+                        const { transactions: pendingTxs } = await financialService.getAllTransactions(effectiveAccountId, { isPaidOrReceived: false, limit: 5 });
                         if (pendingTxs && pendingTxs.length > 0) {
                             body = `Suas contas pendentes mais recentes são:\n` + pendingTxs.map(tx => `- ${tx.description} (${formatter.formatCurrency(tx.value)})`).join('\n');
                             body += `\n\nQual delas você pagou?`;
@@ -1575,7 +1585,7 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                     if (params.hasOwnProperty('notes')) updateDataRule.notes = params.notes;
                     
                     if (params.financialCategoryName) {
-                        const categoryObjectForRule = await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, state.activeFinancialAccountId);
+                        const categoryObjectForRule = await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId);
                         updateDataRule.financialCategoryId = categoryObjectForRule ? categoryObjectForRule.id : null;
                     } else if (params.hasOwnProperty('financialCategoryName') && params.financialCategoryName === null) {
                         updateDataRule.financialCategoryId = null;
@@ -1585,8 +1595,8 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                         throw { statusCode: 400, message: "Nenhum dado válido fornecido para atualizar a regra." };
                     }
 
-                    const updatedRule = await recurringTransactionService.updateRecurringRule(state.activeFinancialAccountId, ruleIdToUpdate, updateDataRule, actorId);
-                    const reloadedUpdatedRule = await recurringTransactionService.getRecurringRuleById(state.activeFinancialAccountId, updatedRule.id);
+                    const updatedRule = await recurringTransactionService.updateRecurringRule(effectiveAccountId, ruleIdToUpdate, updateDataRule, actorId);
+                    const reloadedUpdatedRule = await recurringTransactionService.getRecurringRuleById(effectiveAccountId, updatedRule.id);
                     
                     formattedData = formatter.formatRecurringRuleDataStructure(reloadedUpdatedRule);
                     wasAnEdit = true;
@@ -1620,7 +1630,7 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                         throw { statusCode: 400, message: "Nenhum dado válido para atualizar o produto." };
                     }
 
-                    const updatedProduct = await productService.updateProduct(state.activeFinancialAccountId, productIdToUpdate, updateDataProd, actorId);
+                    const updatedProduct = await productService.updateProduct(effectiveAccountId, productIdToUpdate, updateDataProd, actorId);
                     
                     formattedData = formatter.formatProductDataStructure(updatedProduct);
                     wasAnEdit = true;
@@ -1640,7 +1650,7 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                         throw { statusCode: 400, message: "ID da compra parcelada e nova descrição são obrigatórios." };
                     }
 
-                    await financialService.updateParcelledAccountDescription(state.activeFinancialAccountId, accountIdToUpdateDesc, params.newDescription, actorId);
+                    await financialService.updateParcelledAccountDescription(effectiveAccountId, accountIdToUpdateDesc, params.newDescription, actorId);
                     
                     formattedData = `📝 Descrição da compra parcelada atualizada para: *${params.newDescription}*`;
                     wasAnEdit = true;
@@ -1661,11 +1671,11 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                     }
 
                     const newCatObject = params.newFinancialCategoryName 
-                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.newFinancialCategoryName, state.activeFinancialAccountId)
+                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.newFinancialCategoryName, effectiveAccountId)
                         : null;
                     const newCatIdParcel = newCatObject ? newCatObject.id : null;
                     
-                    const newCardIdParcel = params.newCreditCardName ? await findCreditCardIdByName(params.newCreditCardName, state.activeFinancialAccountId) : null;
+                    const newCardIdParcel = params.newCreditCardName ? await findCreditCardIdByName(params.newCreditCardName, effectiveAccountId) : null;
                     if (params.newCreditCardName && !newCardIdParcel) {
                         throw { statusCode: 404, message: `Cartão "${params.newCreditCardName}" não encontrado para a nova compra parcelada.` };
                     }
@@ -1683,7 +1693,7 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                          newParcelData.transactionDate = params.newInitialDueDate;
                     }
 
-                    const recreatedResult = await financialService.recreateParcelledAccount(state.activeFinancialAccountId, originalAccountIdToUpdate, newParcelData, actorId);
+                    const recreatedResult = await financialService.recreateParcelledAccount(effectiveAccountId, originalAccountIdToUpdate, newParcelData, actorId);
                     
                     formattedData = formatter.formatParcelledAccountDataStructure(newParcelData, recreatedResult);
                     wasAnEdit = true;
@@ -1717,7 +1727,7 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                         throw { statusCode: 400, message: "Nenhum dado válido fornecido para atualizar o cartão." };
                     }
 
-                    const updatedCard = await creditCardService.updateCreditCard(state.activeFinancialAccountId, cardIdToUpdate, updateDataCard, actorId);
+                    const updatedCard = await creditCardService.updateCreditCard(effectiveAccountId, cardIdToUpdate, updateDataCard, actorId);
                     
                     formattedData = formatter.formatCreditCardDataStructure(updatedCard);
                     wasAnEdit = true;
@@ -1736,7 +1746,7 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                     
                     let effectiveClientIdToUpdate = clientIdToUpdate;
                     if (!effectiveClientIdToUpdate && params.name) { 
-                         const foundClient = await businessClientService.getAllBusinessClients(state.activeFinancialAccountId, { search: params.name, limit: 1 }).then(r => r.businessClients?.[0]);
+                         const foundClient = await businessClientService.getAllBusinessClients(effectiveAccountId, { search: params.name, limit: 1 }).then(r => r.businessClients?.[0]);
                          if (foundClient) effectiveClientIdToUpdate = foundClient.id;
                     }
                     if (!effectiveClientIdToUpdate) {
@@ -1754,7 +1764,7 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                         throw { statusCode: 400, message: "Nenhum dado válido para atualizar o cliente." };
                     }
 
-                    const updatedBC = await businessClientService.updateBusinessClient(state.activeFinancialAccountId, effectiveClientIdToUpdate, updateDataBC, actorId);
+                    const updatedBC = await businessClientService.updateBusinessClient(effectiveAccountId, effectiveClientIdToUpdate, updateDataBC, actorId);
                     
                     formattedData = formatter.formatBusinessClientDataStructure(updatedBC);
                     wasAnEdit = true;
@@ -1852,7 +1862,7 @@ case 'GET_APPOINTMENT_HISTORY_FOR_CLIENT': {
                 break;
             }
 
-case 'UPDATE_FINANCIAL_CATEGORY': {
+            case 'UPDATE_FINANCIAL_CATEGORY': {
                 try {
                     if (state.isSharedAccessContext) {
                          throw { statusCode: 403, message: "Você não tem permissão para editar categorias nesta conta compartilhada." };
@@ -1861,7 +1871,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     if (!categoryNameToUpdate) {
                          throw { statusCode: 400, message: "Qual categoria você gostaria de atualizar?" };
                     }
-                    const categoryToUpdate = await financialCategoryService.findFinancialCategoryByNameForAccount(categoryNameToUpdate, state.activeFinancialAccountId);
+                    const categoryToUpdate = await financialCategoryService.findFinancialCategoryByNameForAccount(categoryNameToUpdate, effectiveAccountId);
                     if (!categoryToUpdate) {
                         throw { statusCode: 404, message: `Não encontrei uma categoria chamada "${categoryNameToUpdate}".` };
                     }
@@ -1869,7 +1879,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     const updateData = {};
                     if (newName) updateData.name = newName;
                     if (newParentCategoryName) {
-                        const newParentCat = await financialCategoryService.findFinancialCategoryByNameForAccount(newParentCategoryName, state.activeFinancialAccountId);
+                        const newParentCat = await financialCategoryService.findFinancialCategoryByNameForAccount(newParentCategoryName, effectiveAccountId);
                         if (!newParentCat) throw { statusCode: 404, message: `A nova categoria pai "${newParentCategoryName}" não foi encontrada.`};
                         updateData.parentId = newParentCat.id;
                     } else if (params.hasOwnProperty('newParentCategoryName') && newParentCategoryName === null) {
@@ -1880,7 +1890,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         throw { statusCode: 400, message: "Nenhum dado novo foi fornecido para a atualização." };
                     }
 
-                    const updatedCategory = await financialCategoryService.updateFinancialCategory(state.activeFinancialAccountId, categoryToUpdate.id, updateData);
+                    const updatedCategory = await financialCategoryService.updateFinancialCategory(effectiveAccountId, categoryToUpdate.id, updateData);
                     formattedData = formatter.formatFinancialCategoryDataStructure(updatedCategory);
                     wasAnEdit = true;
                 } catch (e) {
@@ -1912,7 +1922,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                 break;
             }
 
-  case 'LOG_WATER_INTAKE': {
+            case 'LOG_WATER_INTAKE': {
                 try {
                     const amount = params.amountInMl ? parseInt(params.amountInMl) : null;
                     
@@ -1929,31 +1939,31 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
             }
 
             case 'UPDATE_AVAILABILITY_RULE': {
-    try {
-        const ruleIdToUpdate = state.editingResource?.type === 'availability_rule' && state.editingResource?.id
-            ? parseInt(state.editingResource.id, 10)
-            : (params.ruleIdToUpdate ? parseInt(params.ruleIdToUpdate, 10) : null);
-        if (!ruleIdToUpdate) {
-            throw { statusCode: 400, message: "ID da regra para atualizar não foi fornecido ou não está em contexto de edição." };
-        }
+                try {
+                    const ruleIdToUpdate = state.editingResource?.type === 'availability_rule' && state.editingResource?.id
+                        ? parseInt(state.editingResource.id, 10)
+                        : (params.ruleIdToUpdate ? parseInt(params.ruleIdToUpdate, 10) : null);
+                    if (!ruleIdToUpdate) {
+                        throw { statusCode: 400, message: "ID da regra para atualizar não foi fornecido ou não está em contexto de edição." };
+                    }
 
-        const updateData = { ...params };
-        delete updateData.ruleIdToUpdate;
+                    const updateData = { ...params };
+                    delete updateData.ruleIdToUpdate;
 
-        if (Object.keys(updateData).length === 0) {
-            throw { statusCode: 400, message: "Nenhum dado válido fornecido para atualizar a regra." };
-        }
+                    if (Object.keys(updateData).length === 0) {
+                        throw { statusCode: 400, message: "Nenhum dado válido fornecido para atualizar a regra." };
+                    }
 
-        const updatedRule = await availabilityService.updateAvailabilityRule(state.activeFinancialAccountId, ruleIdToUpdate, updateData);
-        
-        formattedData = formatter.formatAvailabilityRuleDataStructure(updatedRule);
-        wasAnEdit = true;
-    } catch (e) {
-        logger.error(`[ACTION HANDLER] Erro em UPDATE_AVAILABILITY_RULE: ${e.message}`, { error: e, paramsUsed: params });
-        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui atualizar a regra.\nDetalhe: ${e.message}`;
-    }
-    break;
-}
+                    const updatedRule = await availabilityService.updateAvailabilityRule(effectiveAccountId, ruleIdToUpdate, updateData);
+                    
+                    formattedData = formatter.formatAvailabilityRuleDataStructure(updatedRule);
+                    wasAnEdit = true;
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em UPDATE_AVAILABILITY_RULE: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui atualizar a regra.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
 
 
             // =================================================================
@@ -2063,14 +2073,14 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                 try {
                     let transactionIdToDelete = params.transactionId;
                     if (!transactionIdToDelete && params.description) {
-                         const { transactions } = await financialService.getAllTransactions(state.activeFinancialAccountId, { search: params.description, limit: 1 });
+                         const { transactions } = await financialService.getAllTransactions(effectiveAccountId, { search: params.description, limit: 1 });
                          if(transactions && transactions.length > 0) transactionIdToDelete = transactions[0].id;
                     }
                     if (!transactionIdToDelete) {
                         throw { statusCode: 404, message: "Não encontrei a transação que você pediu para excluir." };
                     }
                     
-                    await financialService.deleteTransaction(state.activeFinancialAccountId, transactionIdToDelete);
+                    await financialService.deleteTransaction(effectiveAccountId, transactionIdToDelete);
                     formattedData = '✅ Transação excluída com sucesso!';
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em DELETE_FINANCIAL_TRANSACTION: ${e.message}`, { error: e, paramsUsed: params });
@@ -2085,11 +2095,11 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     if (!productNameOrCode) {
                         throw { statusCode: 400, message: "Qual produto você gostaria de excluir?" };
                     }
-                    const productIdToDelete = await findProductIdByNameOrCode(productNameOrCode, state.activeFinancialAccountId);
+                    const productIdToDelete = await findProductIdByNameOrCode(productNameOrCode, effectiveAccountId);
                     if (!productIdToDelete) {
                         throw { statusCode: 404, message: `Não encontrei um produto chamado "${productNameOrCode}".` };
                     }
-                    await productService.deleteProduct(state.activeFinancialAccountId, productIdToDelete);
+                    await productService.deleteProduct(effectiveAccountId, productIdToDelete);
                     formattedData = `✅ Produto "${productNameOrCode}" excluído com sucesso!`;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em DELETE_PRODUCT: ${e.message}`, { error: e, paramsUsed: params });
@@ -2110,7 +2120,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     if (!ruleDescription) {
                         throw { statusCode: 400, message: "Qual regra recorrente você quer excluir?" };
                     }
-                    const { rules } = await recurringTransactionService.getAllRecurringRules(state.activeFinancialAccountId, { descriptionSearch: ruleDescription });
+                    const { rules } = await recurringTransactionService.getAllRecurringRules(effectiveAccountId, { descriptionSearch: ruleDescription });
                     if (!rules || rules.length === 0) {
                         throw { statusCode: 404, message: `Não encontrei uma regra com descrição parecida com "${ruleDescription}".` };
                     }
@@ -2118,7 +2128,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                          throw { statusCode: 409, message: `Encontrei múltiplas regras com essa descrição. Por favor, seja mais específico.` };
                     }
                     const ruleIdToDelete = rules[0].id;
-                    await recurringTransactionService.deleteRecurringRule(state.activeFinancialAccountId, ruleIdToDelete);
+                    await recurringTransactionService.deleteRecurringRule(effectiveAccountId, ruleIdToDelete);
                     formattedData = `✅ Regra recorrente "${ruleDescription}" excluída com sucesso!`;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em DELETE_RECURRING_RULE: ${e.message}`, { error: e, paramsUsed: params });
@@ -2133,11 +2143,11 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     if (!clientNameToDelete) {
                         throw { statusCode: 400, message: "Qual cliente do negócio você quer excluir?" };
                     }
-                    const clientIdToDelete = await findBusinessClientIdByName(clientNameToDelete, state.activeFinancialAccountId);
+                    const clientIdToDelete = await findBusinessClientIdByName(clientNameToDelete, effectiveAccountId);
                      if (!clientIdToDelete) {
                         throw { statusCode: 404, message: `Não encontrei um cliente chamado "${clientNameToDelete}".` };
                     }
-                    await businessClientService.deleteBusinessClient(state.activeFinancialAccountId, clientIdToDelete);
+                    await businessClientService.deleteBusinessClient(effectiveAccountId, clientIdToDelete);
                     formattedData = `✅ Cliente "${clientNameToDelete}" excluído com sucesso!`;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em DELETE_BUSINESS_CLIENT: ${e.message}`, { error: e, paramsUsed: params });
@@ -2155,7 +2165,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     if (!categoryNameToDelete) {
                         throw { statusCode: 400, message: "Qual categoria você quer excluir?" };
                     }
-                    const categoryToDelete = await financialCategoryService.findFinancialCategoryByNameForAccount(categoryNameToDelete, state.activeFinancialAccountId);
+                    const categoryToDelete = await financialCategoryService.findFinancialCategoryByNameForAccount(categoryNameToDelete, effectiveAccountId);
                     if (!categoryToDelete) {
                         throw { statusCode: 404, message: `Não encontrei uma categoria chamada "${categoryNameToDelete}".` };
                     }
@@ -2165,7 +2175,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                     
                     const options = { actionForTransactions, actionForSubcategories };
                     
-                    await financialCategoryService.deleteFinancialCategory(state.activeFinancialAccountId, categoryToDelete.id, options);
+                    await financialCategoryService.deleteFinancialCategory(effectiveAccountId, categoryToDelete.id, options);
                     formattedData = `✅ Categoria "${categoryNameToDelete}" excluída com sucesso.`;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em DELETE_FINANCIAL_CATEGORY: ${e.message}`, { error: e, paramsUsed: params });
@@ -2196,25 +2206,25 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
             }
 
             case 'DELETE_AVAILABILITY_RULE': {
-    try {
-        let ruleIdToDelete = params.ruleIdToDelete;
-        if (!ruleIdToDelete && params.ruleTitleToDelete) {
-             const rules = await availabilityService.getAllAvailabilityRules(state.activeFinancialAccountId);
-             const ruleFound = rules.find(r => r.title.toLowerCase() === params.ruleTitleToDelete.toLowerCase());
-             if (ruleFound) ruleIdToDelete = ruleFound.id;
-        }
-        if (!ruleIdToDelete) {
-            throw { statusCode: 404, message: `Não encontrei a regra de disponibilidade "${params.ruleTitleToDelete || 'especificada'}" para excluir.` };
-        }
-        
-        await availabilityService.deleteAvailabilityRule(state.activeFinancialAccountId, ruleIdToDelete);
-        formattedData = '✅ Regra de disponibilidade excluída com sucesso!';
-    } catch (e) {
-        logger.error(`[ACTION HANDLER] Erro em DELETE_AVAILABILITY_RULE: ${e.message}`, { error: e, paramsUsed: params });
-        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui excluir a regra.\nDetalhe: ${e.message}`;
-    }
-    break;
-}
+                try {
+                    let ruleIdToDelete = params.ruleIdToDelete;
+                    if (!ruleIdToDelete && params.ruleTitleToDelete) {
+                        const rules = await availabilityService.getAllAvailabilityRules(effectiveAccountId);
+                        const ruleFound = rules.find(r => r.title.toLowerCase() === params.ruleTitleToDelete.toLowerCase());
+                        if (ruleFound) ruleIdToDelete = ruleFound.id;
+                    }
+                    if (!ruleIdToDelete) {
+                        throw { statusCode: 404, message: `Não encontrei a regra de disponibilidade "${params.ruleTitleToDelete || 'especificada'}" para excluir.` };
+                    }
+                    
+                    await availabilityService.deleteAvailabilityRule(effectiveAccountId, ruleIdToDelete);
+                    formattedData = '✅ Regra de disponibilidade excluída com sucesso!';
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em DELETE_AVAILABILITY_RULE: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui excluir a regra.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
 
 
             // AÇÕES DE GESTÃO DE SERVIÇOS (CRUD)
@@ -2231,7 +2241,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         throw { statusCode: 400, message: "Nome, preço e duração são obrigatórios para criar um serviço." };
                     }
 
-                    const newService = await serviceService.createService(state.activeFinancialAccountId, serviceData);
+                    const newService = await serviceService.createService(effectiveAccountId, serviceData);
                     formattedData = formatter.formatServiceDataStructure(newService);
 
                     resourceForButtonsContext.resources.push({ type: 'service', id: newService.id, description: newService.name });
@@ -2244,7 +2254,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
 
             case 'LIST_SERVICES': {
                 try {
-                    const { services, totalItems } = await serviceService.getAllServices(state.activeFinancialAccountId, {
+                    const { services, totalItems } = await serviceService.getAllServices(effectiveAccountId, {
                         search: params.searchTerm,
                         isActive: params.isActive !== undefined ? params.isActive : true,
                         limit: params.limit || 5,
@@ -2286,7 +2296,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         throw { statusCode: 400, message: "Nenhum dado válido foi fornecido para atualizar o serviço." };
                     }
 
-                    const updatedService = await serviceService.updateService(state.activeFinancialAccountId, serviceIdToUpdate, updateDataSvc);
+                    const updatedService = await serviceService.updateService(effectiveAccountId, serviceIdToUpdate, updateDataSvc);
                     formattedData = formatter.formatServiceDataStructure(updatedService);
                     wasAnEdit = true;
                 } catch (e) {
@@ -2300,14 +2310,14 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                 try {
                     let serviceIdToDelete = params.serviceId;
                     if (!serviceIdToDelete && params.serviceName) {
-                        const { services } = await serviceService.getAllServices(state.activeFinancialAccountId, { search: params.serviceName, limit: 1 });
+                        const { services } = await serviceService.getAllServices(effectiveAccountId, { search: params.serviceName, limit: 1 });
                         if(services && services.length > 0) serviceIdToDelete = services[0].id;
                     }
                     if (!serviceIdToDelete) {
                         throw { statusCode: 404, message: `Não encontrei o serviço "${params.serviceName}" para excluir.` };
                     }
 
-                    await serviceService.deleteService(state.activeFinancialAccountId, serviceIdToDelete);
+                    await serviceService.deleteService(effectiveAccountId, serviceIdToDelete);
                     formattedData = `✅ Serviço (ID: ${serviceIdToDelete}) excluído com sucesso!`;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em DELETE_SERVICE: ${e.message}`, { error: e, paramsUsed: params });
@@ -2323,26 +2333,26 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
             }
 
             // AÇÕES DE CICLO DE VIDA DO AGENDAMENTO (PJ/MEI)
-      case 'CONFIRM_APPOINTMENT': {
-    try {
-        const appointmentId = params.appointmentId ? parseInt(params.appointmentId, 10) : null;
-        if (!appointmentId) {
-            throw { statusCode: 400, message: "Preciso do ID do agendamento para confirmá-lo." };
-        }
-        
-        const confirmedAppointment = await appointmentService.confirmAppointment(state.activeFinancialAccountId, appointmentId);
-        
-        const creativeResponse = await aiModelService.generateBookingConfirmationResponse(clientNameToUse, confirmedAppointment);
-        const formattedDetails = formatter.formatAppointmentDataStructure(confirmedAppointment);
+            case 'CONFIRM_APPOINTMENT': {
+                try {
+                    const appointmentId = params.appointmentId ? parseInt(params.appointmentId, 10) : null;
+                    if (!appointmentId) {
+                        throw { statusCode: 400, message: "Preciso do ID do agendamento para confirmá-lo." };
+                    }
+                    
+                    const confirmedAppointment = await appointmentService.confirmAppointment(effectiveAccountId, appointmentId);
+                    
+                    const creativeResponse = await aiModelService.generateBookingConfirmationResponse(clientNameToUse, confirmedAppointment);
+                    const formattedDetails = formatter.formatAppointmentDataStructure(confirmedAppointment);
 
-        formattedData = `${creativeResponse}\n\n${formattedDetails}`;
+                    formattedData = `${creativeResponse}\n\n${formattedDetails}`;
 
-    } catch (e) {
-        logger.error(`[ACTION HANDLER] Erro em CONFIRM_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
-        formattedData = `❌ Ops, ${clientNameToUse}! Não consegui confirmar o agendamento.\nDetalhe: ${e.message}`;
-    }
-    break;
-}
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em CONFIRM_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui confirmar o agendamento.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
 
 
             case 'COMPLETE_APPOINTMENT': {
@@ -2352,7 +2362,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         throw { statusCode: 400, message: "Preciso do ID do agendamento para marcá-lo como concluído." };
                     }
 
-                    const completedAppointment = await appointmentService.completeAppointment(state.activeFinancialAccountId, appointmentId);
+                    const completedAppointment = await appointmentService.completeAppointment(effectiveAccountId, appointmentId);
                     
                     const totalValue = completedAppointment.services.reduce((sum, service) => sum + parseFloat(service.price), 0);
                     
@@ -2374,7 +2384,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         throw { statusCode: 400, message: "Preciso do ID do agendamento para cancelar." };
                     }
                     
-                    await appointmentService.deleteOrCancelAppointment(state.activeFinancialAccountId, appointmentId, false);
+                    await appointmentService.deleteOrCancelAppointment(effectiveAccountId, appointmentId, false);
                     formattedData = `✅ Agendamento ID ${appointmentId} cancelado com sucesso. A outra parte será notificada.`;
 
                 } catch(e) {
@@ -2385,7 +2395,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
             }
 
           // AÇÕES DE SISTEMA, ESTADO E PREFERÊNCIAS
-                  case 'SWITCH_FINANCIAL_ACCOUNT': {
+            case 'SWITCH_FINANCIAL_ACCOUNT': {
                 try {
                     const targetAccountIdentifier = params.targetAccountNameOrType;
                     if (!targetAccountIdentifier) {
@@ -2407,7 +2417,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         throw { statusCode: 404, message: `Você não tem nenhuma conta ${state.isSharedAccessContext ? `de ${state.ownerClientNameForContext} ` : ''}acessível no momento.` };
                     }
                     
-                    // Lógica de busca flexível
                     const targetLower = targetAccountIdentifier.toLowerCase();
                     const potentialMatches = accessibleAccounts.filter(acc => {
                         const nameLower = (acc.accountName || acc.name).toLowerCase();
@@ -2423,14 +2432,12 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         foundAccount = potentialMatches[0];
                     }
 
-                    // Lógica de decisão
                     if (foundAccount && foundAccount.id !== state.activeFinancialAccountId) {
                         formattedData = `Prontinho! Mudei para a conta *"${foundAccount.accountName}"* (${foundAccount.accountType}).\n\nO que vamos fazer por aqui agora?`;
                         resourceForButtonsContext = { type: 'system_action', id: 'account_switched', description: 'Troca de conta realizada', data: foundAccount };
                     } else if (foundAccount && foundAccount.id === state.activeFinancialAccountId) {
                         formattedData = `Você já está na conta "${state.activeFinancialAccountName}", ${clientNameToUse}! 😉`;
                     } else {
-                        // Se não encontrou ou encontrou múltiplos, lista as opções
                         const ownerNameForMsg = state.isSharedAccessContext ? state.ownerClientNameForContext : null;
                         const accountOptionsText = formatter.formatListClientAccountsDataStructure(accessibleAccounts, null, ownerNameForMsg);
 
@@ -2441,7 +2448,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                         
                         formattedData = `${introMessage}Para qual das seguintes contas você gostaria de mudar?\n\n${accountOptionsText}`;
                         
-                        // Sinaliza para o serviço principal que estamos aguardando uma seleção
                         resourceForButtonsContext = { 
                             type: 'system_action', 
                             id: 'awaiting_account_selection', 
@@ -2504,7 +2510,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                 break;
             }
 
-            
             case 'RESPOND_TO_INVITE': { 
                 try {
                     if (!params.responseType || !['aceitar', 'recusar'].includes(params.responseType.toLowerCase())) {
@@ -2554,6 +2559,15 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                 logger.warn(`[ACTION HANDLER] Ação da IA não implementada ou sem formatação específica no switch: ${actionName}`);
                 break;
         }
+
+        // <<< INÍCIO DA CORREÇÃO: Adiciona a mensagem de aviso ao resultado final >>>
+        if (autoSwitchMessage && formattedData) {
+            // Se houve uma troca automática e a ação foi bem-sucedida,
+            // adiciona a mensagem de aviso no início da resposta.
+            formattedData = `${autoSwitchMessage}\n\n${formattedData}`;
+        }
+        // <<< FIM DA CORREÇÃO >>>
+
     } catch (e) {
         logger.error(`[ACTION HANDLER] Erro CRÍTICO ao executar "${actionName}": ${e.message}`, { stack: e.stack, paramsUsed: params });
         formattedData = `❌ Ops! Ocorreu um erro inesperado ao tentar executar esta ação. Minha equipe já foi notificada.\nDetalhe: ${e.message}`;
@@ -2561,8 +2575,6 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
 
     return { formattedData, resourceForButtonsContext, wasAnEdit };
 }
-
-
 
 async function handleButtonInteraction(state, buttonId, senderPhone) {
     try {
@@ -2666,7 +2678,7 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
                         if (rule) resourceDescription = `A regra de disponibilidade "${rule.title}"`;
                         await availabilityService.deleteAvailabilityRule(state.activeFinancialAccountId, resourceId);
                         break;
-}
+                    }
                     default:
                         throw new Error(`Tipo de recurso "${resourceType}" não suportado para exclusão via botão.`);
                 }
@@ -2719,7 +2731,6 @@ async function recordSale(state, params, clientNameToUse, actorId) {
         
         const financialAccountId = state.activeFinancialAccountId;
         
-        // 1. Buscar o produto para obter o preço de venda e o ID
         const product = await productService.findProductByNameOrCodeForSale(financialAccountId, productNameOrCode);
         if (!product) {
             throw { statusCode: 404, message: `Não encontrei um produto ativo chamado "${productNameOrCode}".` };
@@ -2727,14 +2738,12 @@ async function recordSale(state, params, clientNameToUse, actorId) {
 
         const qty = parseInt(quantitySold);
 
-        // 2. Dar baixa no estoque
-        await stockService.recordStockMovement(financialAccountId, product.id, {
+        await stockService.recordStockMovement(product.id, {
             movementType: 'Saída',
             quantity: qty,
             reason: `Venda registrada via WhatsApp (Ator ID: ${actorId})`,
         });
 
-        // 3. Criar a transação financeira de ENTRADA
         const totalSaleValue = product.salePrice * qty;
         const transactionDescription = `Venda de ${qty}x ${product.name}`;
         
@@ -2743,9 +2752,8 @@ async function recordSale(state, params, clientNameToUse, actorId) {
             type: 'Entrada',
             value: totalSaleValue,
             transactionDate: saleDate || new Date().toISOString().split('T')[0],
-            isPaidOrReceived: true, // Vendas diretas são consideradas recebidas
+            isPaidOrReceived: true,
             notes: notes,
-            // Opcional: Vincular a uma categoria "Venda de Produtos" se existir
         }, actorId);
 
         return {
@@ -2757,10 +2765,10 @@ async function recordSale(state, params, clientNameToUse, actorId) {
 
     } catch (e) {
         logger.error(`[ACTION HANDLER] Erro em RECORD_SALE: ${e.message}`, { error: e, paramsUsed: params });
-        // Retorna uma mensagem de erro formatada para o usuário
         return { formattedData: `❌ Ops, ${clientNameToUse}! Não consegui registrar a venda.\nDetalhe: ${e.message}` };
     }
 }
+
 module.exports = {
     handleAction,
     handleButtonInteraction,
