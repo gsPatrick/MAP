@@ -5,6 +5,7 @@ const { generateToken } = require('../../utils/authUtils');
 const { Op } = require('sequelize');
 const subscriptionService = require('../Subscription/subscription.service');
 const googleCalendarService = require('../GoogleCalendar/googleCalendarService');
+const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils'); // <<< CORREÇÃO ADICIONADA AQUI
 
 
 const activationCodes = new Map();
