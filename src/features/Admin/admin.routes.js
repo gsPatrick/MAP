@@ -37,5 +37,6 @@ router.post('/admin/broadcast', adminController.sendBroadcastMessage)
 // --- <<< NOVAS ROTAS Z-API >>> ---
 router.get('/admin/zapi/status', adminController.getZapiStatus);
 router.get('/admin/zapi/qrcode-url', adminController.getZapiQrCode);
+router.post('/admin/clients/create-as-admin', adminController.createClientAsAdmin); // <<< NOVA ROTA
 
 module.exports = router;
