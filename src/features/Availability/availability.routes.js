@@ -1,7 +1,6 @@
 // src/features/Availability/availability.routes.js
 const { Router } = require('express');
 const availabilityController = require('./availability.controller');
-const { authenticateClientToken, checkFinancialAccountOwnership } = require('../../middlewares/authMiddleware');
 
 const router = Router({ mergeParams: true });
 
@@ -9,7 +8,7 @@ const router = Router({ mergeParams: true });
 // Caminho final: GET (público) ou POST (protegido) /api/availability/:financialAccountId
 router.route('/:financialAccountId')
   .post( // Apenas o POST é protegido
-    authenticateClientToken,
+    
     checkFinancialAccountOwnership,
     availabilityController.createAvailabilityRule
   )
@@ -21,22 +20,22 @@ router.route('/:financialAccountId')
 // Caminho final: GET, PATCH, PUT, DELETE /api/availability/:financialAccountId/:ruleId
 router.route('/:financialAccountId/:ruleId')
   .get( // Obter uma regra específica continua protegido
-    authenticateClientToken,
+    
     checkFinancialAccountOwnership,
     availabilityController.getAvailabilityRuleById
   )
   .patch(
-    authenticateClientToken,
+    
     checkFinancialAccountOwnership,
     availabilityController.updateAvailabilityRule
   )
   .put( // Suporte para PUT e PATCH
-    authenticateClientToken,
+    
     checkFinancialAccountOwnership,
     availabilityController.updateAvailabilityRule
   )
   .delete(
-    authenticateClientToken,
+    
     checkFinancialAccountOwnership,
     availabilityController.deleteAvailabilityRule
   );
