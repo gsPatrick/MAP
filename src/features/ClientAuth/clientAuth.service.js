@@ -522,12 +522,17 @@ async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
 }
 
 async function sendActivationCode(phone) {
-    const normalizedPhone = normalizePhoneNumberToCanonical(phone);
-    if (!normalizedPhone) {
+    // <<< INÍCIO DA CORREÇÃO >>>
+    // Número para envio (com 9º dígito) vs. Número para busca (canônico, sem o 9º)
+    const deliverablePhone = phone.replace(/\D/g, '');
+    const canonicalPhone = normalizePhoneNumberToCanonical(phone);
+    // <<< FIM DA CORREÇÃO >>>
+
+    if (!canonicalPhone) {
         throw { statusCode: 400, message: 'Número de telefone inválido.' };
     }
 
-    const client = await Client.findOne({ where: { phone: normalizedPhone } });
+    const client = await Client.findOne({ where: { phone: canonicalPhone } });
     if (!client) {
         throw { statusCode: 404, message: 'Nenhuma conta encontrada com este número de WhatsApp. Por favor, cadastre-se primeiro.' };
     }
@@ -535,25 +540,28 @@ async function sendActivationCode(phone) {
         throw { statusCode: 409, message: 'Sua conta já está ativada. Se esqueceu sua senha, use a opção "Esqueci minha senha".' };
     }
 
-    const code = Math.floor(100000 + Math.random() * 900000).toString(); // Gera um código de 6 dígitos
-    const expiration = Date.now() + 10 * 60 * 1000; // Válido por 10 minutos
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiration = Date.now() + 10 * 60 * 1000;
 
-    activationCodes.set(normalizedPhone, { code, expiration });
+    // Usa o número canônico como chave interna
+    activationCodes.set(canonicalPhone, { code, expiration });
 
     const message = `Olá! 👋 Seu código para ativar o acesso ao painel MAP no Controle é: *${code}*\n\nEste código é válido por 10 minutos.`;
     
     try {
-        await sendWhatsappMessage(normalizedPhone, message);
-        logger.info(`Código de ativação enviado para ${normalizedPhone}.`);
+        // Usa o número "entregável" para enviar a mensagem
+        await sendWhatsappMessage(deliverablePhone, message);
+        logger.info(`Código de ativação enviado para ${deliverablePhone}.`);
     } catch (error) {
-        logger.error(`Falha ao enviar código de ativação para ${normalizedPhone}`, error);
+        logger.error(`Falha ao enviar código de ativação para ${deliverablePhone}`, error);
         throw new Error('Não foi possível enviar o código para o seu WhatsApp. Tente novamente.');
     }
 }
 
 async function verifyCodeAndSetPassword(phone, code, newPassword, email = null, name = null) {
-    const normalizedPhone = normalizePhoneNumberToCanonical(phone);
-    const stored = activationCodes.get(normalizedPhone);
+    // <<< CORREÇÃO: Usa o número canônico para a busca no Map >>>
+    const canonicalPhone = normalizePhoneNumberToCanonical(phone);
+    const stored = activationCodes.get(canonicalPhone);
 
     if (!stored || stored.code !== code || Date.now() > stored.expiration) {
         throw { statusCode: 400, message: 'Código inválido ou expirado.' };
@@ -561,7 +569,7 @@ async function verifyCodeAndSetPassword(phone, code, newPassword, email = null, 
 
     const t = await sequelize.transaction();
     try {
-        const client = await Client.findOne({ where: { phone: normalizedPhone }, transaction: t });
+        const client = await Client.findOne({ where: { phone: canonicalPhone }, transaction: t });
         if (!client) {
             throw { statusCode: 404, message: 'Cliente não encontrado durante a verificação.' };
         }
@@ -569,22 +577,21 @@ async function verifyCodeAndSetPassword(phone, code, newPassword, email = null, 
         const updateData = { passwordHash: newPassword };
         if (email && !client.email) {
             const lowerEmail = email.toLowerCase().trim();
-            const existing = await Client.findOne({ where: { email: lowerEmail }, transaction: t });
+            const existing = await Client.findOne({ where: { email: lowerEmail, id: { [Op.ne]: client.id } }, transaction: t });
             if (existing) {
                 throw { statusCode: 409, message: 'Este e-mail já está em uso por outra conta.' };
             }
             updateData.email = lowerEmail;
         }
-        if (name && !client.name) {
+        if (name && (!client.name || client.name === 'Convidado')) {
             updateData.name = name;
         }
 
         await client.update(updateData, { transaction: t });
         await t.commit();
         
-        activationCodes.delete(normalizedPhone); // Remove o código após o uso
+        activationCodes.delete(canonicalPhone);
 
-        // Gera um token de login para o usuário
         const tokenPayload = { id: client.id, phone: client.phone, email: client.email || updateData.email };
         const token = generateToken(tokenPayload, 'client');
         
@@ -598,7 +605,7 @@ async function verifyCodeAndSetPassword(phone, code, newPassword, email = null, 
         };
     } catch (error) {
         await t.rollback();
-        logger.error(`Erro ao definir senha para ${normalizedPhone}`, error);
+        logger.error(`Erro ao definir senha para ${canonicalPhone}`, error);
         throw error;
     }
 }
