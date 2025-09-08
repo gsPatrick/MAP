@@ -20,6 +20,27 @@ const defaultPersonalCategoryNames = [
     'Dívidas/Empréstimos', 'Pagamento de Fatura', 'Receitas', 'Salário', 'Renda Extra', 'Investimentos'
 ];
 
+// <<< NOVA FUNÇÃO AUXILIAR >>>
+/**
+ * Garante que um número de telefone esteja no formato completo para envio (com DDI 55).
+ * @param {string} phone - O número de telefone.
+ * @returns {string} O número formatado para envio.
+ */
+function normalizePhoneForDelivery(phone) {
+    let cleanNumber = phone.replace(/\D/g, '');
+    // Se o número já tem DDI 55, retorna como está.
+    if (cleanNumber.startsWith('55') && (cleanNumber.length === 12 || cleanNumber.length === 13)) {
+        return cleanNumber;
+    }
+    // Se tem 10 ou 11 dígitos (DDD + Número), adiciona o DDI 55.
+    if (cleanNumber.length === 10 || cleanNumber.length === 11) {
+        return `55${cleanNumber}`;
+    }
+    // Retorna o número limpo como fallback.
+    return cleanNumber;
+}
+
+
 async function createDefaultCategoriesForAccount(financialAccountId, accountType, transaction) {
     logger.info(`Iniciando criação de categorias padrão para conta ID ${financialAccountId}, tipo ${accountType}.`);
     
@@ -523,8 +544,8 @@ async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
 
 async function sendActivationCode(phone) {
     // <<< INÍCIO DA CORREÇÃO >>>
-    // Número para envio (com 9º dígito) vs. Número para busca (canônico, sem o 9º)
-    const deliverablePhone = phone.replace(/\D/g, '');
+    // Usa a nova função para garantir o formato de envio com DDI.
+    const deliverablePhone = normalizePhoneForDelivery(phone);
     const canonicalPhone = normalizePhoneNumberToCanonical(phone);
     // <<< FIM DA CORREÇÃO >>>
 
@@ -543,13 +564,11 @@ async function sendActivationCode(phone) {
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const expiration = Date.now() + 10 * 60 * 1000;
 
-    // Usa o número canônico como chave interna
     activationCodes.set(canonicalPhone, { code, expiration });
 
     const message = `Olá! 👋 Seu código para ativar o acesso ao painel MAP no Controle é: *${code}*\n\nEste código é válido por 10 minutos.`;
     
     try {
-        // Usa o número "entregável" para enviar a mensagem
         await sendWhatsappMessage(deliverablePhone, message);
         logger.info(`Código de ativação enviado para ${deliverablePhone}.`);
     } catch (error) {
