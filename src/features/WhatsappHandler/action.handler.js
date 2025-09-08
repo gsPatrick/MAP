@@ -657,17 +657,18 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 404, message: `Produto "${params.productNameOrCode}" não encontrado.` };
                     }
 
-                    // <<< INÍCIO DA CORREÇÃO >>>
-                    // Corrigido o nome da propriedade de 'movementType' para 'type'
-                    // para corresponder ao que o stock.service espera.
                     await stockService.recordStockMovement(productId, {
-                        type: params.movementType, // <-- CORREÇÃO APLICADA AQUI
+                        type: params.movementType,
                         quantity: parseInt(params.quantity),
                         reason: params.reason,
                     });
-                    // <<< FIM DA CORREÇÃO >>>
 
-                    const updatedStockInfo = await stockService.getProductStockInfoById(state.activeFinancialAccountId, productId);
+                    // <<< INÍCIO DA CORREÇÃO >>>
+                    // A chamada foi alterada de getProductStockInfoById para getProductStockBalance,
+                    // que é a função que realmente existe no stock.service.js.
+                    // O parâmetro financialAccountId foi removido, pois a função só espera o productId.
+                    const updatedStockInfo = await stockService.getProductStockBalance(productId);
+                    // <<< FIM DA CORREÇÃO >>>
                     
                     formattedData = `✅ Movimento de ${params.movementType.toLowerCase()} (${params.quantity} ${updatedStockInfo.unit || 'UN'}) para "${updatedStockInfo.name}" registrado.\n` +
                                     `📦 Estoque Atual: *${updatedStockInfo.quantity} ${updatedStockInfo.unit || 'UN'}*.`;
