@@ -1,4 +1,5 @@
 // src/features/WhatsappHandler/whatsapp.service.js
+
 // --- Imports dos Serviços de Negócio (Core) ---
 const clientService = require('../Client/client.service');
 const clientAuthService = require('../ClientAuth/clientAuth.service');
@@ -20,6 +21,13 @@ const path = require('path');
 const hydrationService = require('../Hydration/hydration.service');
 const systemService = require('../System/system.service');
 
+// <<< INÍCIO DA OTIMIZAÇÃO: IMPLEMENTAÇÃO DO CACHE >>>
+const NodeCache = require('node-cache');
+// Cache de 5 minutos para os dados de contexto da conta (categorias, cartões, etc.)
+// Isso reduz drasticamente as chamadas ao DB em conversas rápidas.
+const appContextCache = new NodeCache({ stdTTL: 300, checkperiod: 120 });
+// <<< FIM DA OTIMIZAÇÃO: IMPLEMENTAÇÃO DO CACHE >>>
+
 
 // --- Gerenciamento de Estado da Conversa ---
 const conversationState = new Map();
@@ -31,13 +39,11 @@ let pushNameFromPayload = null;
 // --- Funções de Controle de Fluxo e Estado (Core do Maestro) ---
 
 async function initializeOrUpdateState(client, sharedAccessRecord = null, existingState = null, clientAccountsFromDb = [], ownerAccountsIfShared = []) {
-const nameFromDb = (client.name && client.name.trim() !== "" && client.name.toLowerCase() !== 'convidado')
-    ? client.name.split(" ")[0]
-    : null;
+    const nameFromDb = (client.name && client.name.trim() !== "" && client.name.toLowerCase() !== 'convidado')
+        ? client.name.split(" ")[0]
+        : null;
 
-// Usa o nome do banco como primeira opção. Se não houver, usa o nome do estado anterior.
-// O "pessoa incrível" se torna o último recurso.
-const clientName = nameFromDb || existingState?.clientName || "pessoa incrível";
+    const clientName = nameFromDb || existingState?.clientName || "pessoa incrível";
     
     let ownerClientIdForContext = client.id;
     let isSharedAccessContext = false; 
@@ -74,7 +80,6 @@ const clientName = nameFromDb || existingState?.clientName || "pessoa incrível"
     let clientAccessExpiresAt = ownerClientForContext.accessExpiresAt;
     let accessLevelTextForUser = "Nenhum plano ativo";
     let onboardingStage = existingState?.data?.onboardingStage;
-
 
     if (ownerClientForContext.accessLevel && ownerClientForContext.accessLevel !== 'gratuito') {
         if (ownerClientForContext.accessLevel.startsWith('vitalicio_')) {
@@ -137,7 +142,6 @@ const clientName = nameFromDb || existingState?.clientName || "pessoa incrível"
     } else if (onboardingStage === 'onboarding_complete' && isSharedAccessContext && client.passwordHash === null) {
         onboardingStage = 'setting_up_main_client_credentials';
     }
-
 
     let defaultAccount = null;
     if (onboardingStage === 'onboarding_complete' && hasPaidAccess && accountsForOperation.length > 0) {
@@ -246,8 +250,8 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
     }
 
     try {
-        const processingMessage = `🎧 Opa, ${pushName || 'você'}! Já recebi seu áudio e tô aqui processando tudinho com carinho! 💻✨\nSó um segundinho 😉`;
-        await sendWhatsappMessage(canonicalPhone, processingMessage);
+        // REMOVIDO: Envio da mensagem de "processando" para acelerar a percepção.
+        // O usuário agora aguarda a resposta final diretamente.
         const downloadedMedia = await downloadZapiMedia(mediaUrl); 
         if (downloadedMedia && downloadedMedia.stream) {
             const finalFilenameForWhisper = downloadedMedia.filename && downloadedMedia.filename.includes('.')
@@ -359,8 +363,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             state.justReactivated = false;
         }
 
-        // <<< INÍCIO DA MODIFICAÇÃO >>>
-        // Intercepta a mensagem se o plano estiver expirado, oferecendo os links de checkout.
         if (!state.isSharedAccessContext && state.data.onboardingStage === 'onboarding_complete' && !state.hasPaidAccess) {
             logger.info(`[WHATSAPP HANDLER] Bloqueando ação para ${senderPhone} devido à assinatura expirada.`);
             
@@ -379,9 +381,8 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             await sendWhatsappMessage(senderPhone, expiredMessage);
             conversationState.set(senderPhone, state);
             pushNameFromPayload = null;
-            return; // Interrompe o processamento da mensagem
+            return;
         }
-        // <<< FIM DA MODIFICAÇÃO >>>
 
         if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
             const buttonId = rawPayload.selectedButtonId;
@@ -568,25 +569,47 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             if (!state.activeFinancialAccountId) return;
         }
 
-        const availableFinancialCategoriesForAI = await financialCategoryService.getAllCategoriesForAccountAI(state.activeFinancialAccountId);
-        const availableCreditCardsForAI = await creditCardService.getActiveCreditCardsForAI(state.activeFinancialAccountId);
-        
-        let accountsForAiContext = [];
-        if (state.isSharedAccessContext) {
-            const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true });
-            accountsForAiContext = ownerAccounts.filter(acc => {
-                if (acc.accountType === 'PF') return state.sharedAccessPermissions.canAccessPersonalProfile;
-                if (acc.accountType === 'PJ' || acc.accountType === 'MEI') return state.sharedAccessPermissions.canAccessBusinessProfileId === acc.id;
-                return false;
-            });
+        // <<< INÍCIO DA OTIMIZAÇÃO: BUSCA DE CONTEXTO PARALELA E COM CACHE >>>
+        const cacheKey = `context:${state.activeFinancialAccountId}`;
+        let contextData = appContextCache.get(cacheKey);
+
+        if (!contextData) {
+            logger.info(`[CACHE] Cache miss para conta ${state.activeFinancialAccountId}. Buscando dados em paralelo...`);
+            
+            const [
+                categories,
+                cards,
+                allAccounts,
+                bizClientsResult
+            ] = await Promise.all([
+                financialCategoryService.getAllCategoriesForAccountAI(state.activeFinancialAccountId),
+                creditCardService.getActiveCreditCardsForAI(state.activeFinancialAccountId),
+                clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true }),
+                ['PJ', 'MEI'].includes(state.activeFinancialAccountType)
+                    ? businessClientService.getAllBusinessClients(state.activeFinancialAccountId, { isActive: true, limit: 50 })
+                    : Promise.resolve({ businessClients: [] })
+            ]);
+
+            let filteredAccounts = allAccounts;
+            if (state.isSharedAccessContext) {
+                filteredAccounts = allAccounts.filter(acc => {
+                    if (acc.accountType === 'PF') return state.sharedAccessPermissions.canAccessPersonalProfile;
+                    if (acc.accountType === 'PJ' || acc.accountType === 'MEI') return state.sharedAccessPermissions.canAccessBusinessProfileId === acc.id;
+                    return false;
+                });
+            }
+
+            contextData = {
+                availableFinancialCategories: categories,
+                availableCreditCards: cards,
+                availableFinancialAccounts: filteredAccounts,
+                availableBusinessClients: bizClientsResult.businessClients || [],
+            };
+            
+            appContextCache.set(cacheKey, contextData);
+            logger.info(`[CACHE] Contexto para conta ${state.activeFinancialAccountId} salvo no cache.`);
         } else {
-            accountsForAiContext = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
-        }
-        
-        let businessClientsForAI = [];
-        if (['PJ', 'MEI'].includes(state.activeFinancialAccountType)) {
-            const { businessClients } = await businessClientService.getAllBusinessClients(state.activeFinancialAccountId, { isActive: true, limit: 50 });
-            businessClientsForAI = businessClients;
+            logger.info(`[CACHE] Cache hit para conta ${state.activeFinancialAccountId}. Usando dados do cache.`);
         }
 
         const aiContext = {
@@ -597,12 +620,13 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             isSharedAccess: state.isSharedAccessContext,
             conversationHistory: state.messageHistory.slice(-MAX_HISTORY_FOR_AI * 2),
             editingResource: state.editingResource,
-            availableFinancialCategories: availableFinancialCategoriesForAI,
-            availableCreditCards: availableCreditCardsForAI,
-            availableFinancialAccounts: accountsForAiContext,
-            availableBusinessClients: businessClientsForAI,
+            availableFinancialCategories: contextData.availableFinancialCategories,
+            availableCreditCards: contextData.availableCreditCards,
+            availableFinancialAccounts: contextData.availableFinancialAccounts,
+            availableBusinessClients: contextData.availableBusinessClients,
             pendingAction: state.currentAction === 'awaiting_clarification_response' ? state.pendingConfirmation : null
         };
+        // <<< FIM DA OTIMIZAÇÃO >>>
 
         const aiResponse = await aiModelService.interpretUserMessage(messageText, aiContext);
         state.lastAiResponse = aiResponse;
@@ -616,8 +640,27 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             let mainActionResult = null;
             const isOwnerActingOnOwnBehalfGlobal = !state.isSharedAccessContext || state.ownerClientIdForContext === actorClient.id;
 
+            // <<< INÍCIO DA OTIMIZAÇÃO: Invalidação do Cache >>>
+            let contextWasMutated = false;
+            const mutatingActions = new Set([
+                'CREATE_FINANCIAL_ACCOUNT', 'UPDATE_FINANCIAL_ACCOUNT', 'DELETE_FINANCIAL_ACCOUNT',
+                'GRANT_ACCESS', 'UPDATE_GRANTED_ACCESS', 'REVOKE_ACCESS',
+                'CREATE_FINANCIAL_CATEGORY', 'UPDATE_FINANCIAL_CATEGORY', 'DELETE_FINANCIAL_CATEGORY',
+                'CREATE_CREDIT_CARD', 'UPDATE_CREDIT_CARD', 'DELETE_CREDIT_CARD',
+                'CREATE_BUSINESS_CLIENT', 'UPDATE_BUSINESS_CLIENT', 'DELETE_BUSINESS_CLIENT',
+                'SWITCH_FINANCIAL_ACCOUNT'
+            ]);
+            // <<< FIM DA OTIMIZAÇÃO >>>
+
             for (const detectedAction of aiResponse.detected_actions) {
                 const actionName = detectedAction.action || detectedAction.action_type;
+                
+                // <<< INÍCIO DA OTIMIZAÇÃO: Verificação de Mutação >>>
+                if (mutatingActions.has(actionName)) {
+                    contextWasMutated = true;
+                }
+                // <<< FIM DA OTIMIZAÇÃO >>>
+
                 const ownerOnlyActions = ['CREATE_FINANCIAL_ACCOUNT', 'UPDATE_FINANCIAL_ACCOUNT', 'DELETE_FINANCIAL_ACCOUNT', 'GRANT_ACCESS', 'LIST_GRANTED_ACCESS', 'UPDATE_GRANTED_ACCESS', 'REVOKE_ACCESS', 'CREATE_FINANCIAL_CATEGORY', 'UPDATE_FINANCIAL_CATEGORY', 'DELETE_FINANCIAL_CATEGORY', 'GET_AFFILIATE_DASHBOARD', 'CREATE_MOTIVATIONAL_PHRASE', 'UPDATE_MOTIVATIONAL_PHRASE', 'DELETE_MOTIVATIONAL_PHRASE'];
                 if (ownerOnlyActions.includes(actionName) && !isOwnerActingOnOwnBehalfGlobal) {
                     multipleActionBodiesList.push(`❌ Desculpe, ${state.clientName}, mas a ação de "${actionName.toLowerCase().replace(/_/g, " ")}" só pode ser realizada pelo proprietário da conta.`);
@@ -635,8 +678,22 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     state.activeFinancialAccountId = newAccount.id;
                     state.activeFinancialAccountName = newAccount.accountName || newAccount.name;
                     state.activeFinancialAccountType = newAccount.accountType || newAccount.type;
+                    
+                    // <<< INÍCIO DA OTIMIZAÇÃO: Invalidação Imediata >>>
+                    // Invalida o cache da conta antiga e da nova para garantir consistência
+                    appContextCache.del(cacheKey); // Invalida o cache da conta antiga
+                    appContextCache.del(`context:${newAccount.id}`); // Garante que a próxima ação na nova conta busque dados frescos
+                    logger.info(`[CACHE] Cache invalidado devido à troca de conta para ID ${newAccount.id}.`);
+                    // <<< FIM DA OTIMIZAÇÃO >>>
                 }
             }
+
+            // <<< INÍCIO DA OTIMIZAÇÃO: Lógica final de invalidação >>>
+            if (contextWasMutated && mainActionResult.resourceForButtonsContext?.id !== 'account_switched') {
+                appContextCache.del(cacheKey);
+                logger.info(`[CACHE] Cache para conta ${state.activeFinancialAccountId} invalidado devido a uma ação de mutação.`);
+            }
+            // <<< FIM DA OTIMIZAÇÃO >>>
 
             if (state.pendingChainedAction && mainActionResult) {
                 const primaryAction = aiResponse.detected_actions[0];

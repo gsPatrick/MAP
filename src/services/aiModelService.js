@@ -921,7 +921,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
       {role: "user", content: userMessage}
   ];
 
-  const modelToUse = process.env.OPENAI_MODEL || "gpt-4-turbo-preview"; 
+  const modelToUse = "gpt-4-turbo-preview"; 
 
   logger.debug('[AI SERVICE] Enviando para OpenAI:', {
       model: modelToUse,
@@ -1071,7 +1071,7 @@ Você receberá um objeto com \`clientName\`, e arrays para \`pendingTransaction
 
   try {
     const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o",
+      model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
@@ -1143,7 +1143,7 @@ Sua tarefa é receber uma lista de agendamentos em JSON e gerar duas coisas:
 
   try {
     const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o",
+      model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
@@ -1424,7 +1424,7 @@ Sua tarefa é receber o nome de um cliente e uma lista de tarefas que ele acabou
 
   try {
     const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o",
+      model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
