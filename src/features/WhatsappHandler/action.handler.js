@@ -141,6 +141,61 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
+            // <<< INÍCIO DO CÓDIGO A SER ADICIONADO >>>
+            case 'RECORD_SALE': {
+                try {
+                    const { productNameOrCode, quantitySold, saleDate, notes } = params;
+                    if (!productNameOrCode || !quantitySold || isNaN(parseInt(quantitySold)) || parseInt(quantitySold) <= 0) {
+                        throw { statusCode: 400, message: "Para registrar uma venda, preciso do nome do produto e da quantidade vendida." };
+                    }
+                    
+                    const financialAccountId = state.activeFinancialAccountId;
+                    
+                    // 1. Buscar o produto para obter o preço de venda e o ID
+                    const product = await productService.findProductByNameOrCodeForSale(financialAccountId, productNameOrCode);
+                    if (!product) {
+                        throw { statusCode: 404, message: `Não encontrei um produto ativo chamado "${productNameOrCode}".` };
+                    }
+
+                    const qty = parseInt(quantitySold);
+
+                    // 2. Dar baixa no estoque
+                    await stockService.recordStockMovement(product.id, {
+                        type: 'Saída',
+                        quantity: qty,
+                        reason: `Venda registrada via WhatsApp (Ator ID: ${actorId})`,
+                    });
+
+                    // 3. Criar a transação financeira de ENTRADA
+                    const totalSaleValue = product.salePrice * qty;
+                    const transactionDescription = `Venda de ${qty}x ${product.name}`;
+                    
+                    const newTx = await financialService.createTransaction(financialAccountId, {
+                        description: transactionDescription,
+                        type: 'Entrada',
+                        value: totalSaleValue,
+                        transactionDate: saleDate || new Date().toISOString().split('T')[0],
+                        isPaidOrReceived: true, // Vendas diretas são consideradas recebidas
+                        notes: notes,
+                    }, actorId);
+
+                    // 4. Formatar a resposta combinada
+                    const reloadedTx = await financialService.getTransactionById(financialAccountId, newTx.id);
+                    const stockInfoAfterSale = await stockService.getProductStockBalance(product.id);
+
+                    const financialPart = formatter.formatFinancialTransactionDataStructure(reloadedTx);
+                    const stockPart = `📦 Estoque de "${product.name}" atualizado para: *${stockInfoAfterSale.quantity} ${stockInfoAfterSale.unit || 'UN'}*`;
+
+                    formattedData = `${financialPart}\n\n${stockPart}`;
+                    resourceForButtonsContext.resources.push({ type: 'transaction', id: newTx.id, description: newTx.description });
+
+                } catch (e) {
+                    logger.error(`[ACTION HANDLER] Erro em RECORD_SALE: ${e.message}`, { error: e, paramsUsed: params });
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui registrar a venda.\nDetalhe: ${e.message}`;
+                }
+                break;
+            }
+            // <<< FIM DO CÓDIGO A SER ADICIONADO >>>
             case 'CREATE_SALE_TRANSACTION': {
     try {
         const { productNameOrCode, quantitySold, salePricePerUnit, transactionDate, notes, businessClientName } = params;
@@ -2449,6 +2504,7 @@ case 'UPDATE_FINANCIAL_CATEGORY': {
                 break;
             }
 
+            
             case 'RESPOND_TO_INVITE': { 
                 try {
                     if (!params.responseType || !['aceitar', 'recusar'].includes(params.responseType.toLowerCase())) {
