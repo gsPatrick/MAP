@@ -647,7 +647,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
- case 'RECORD_STOCK_MOVEMENT': {
+           case 'RECORD_STOCK_MOVEMENT': {
                 try {
                     if(!params.productNameOrCode || !params.movementType || params.quantity === undefined || params.quantity === null) {
                         throw { statusCode: 400, message: "Produto, tipo de movimento e quantidade são obrigatórios." };
@@ -658,11 +658,10 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     // <<< INÍCIO DA CORREÇÃO >>>
-                    // A chamada foi corrigida para passar 'productId' como primeiro argumento
-                    // e o objeto 'movementData' como segundo. O 'actorId' não é esperado
-                    // pela função de serviço e foi removido da chamada.
+                    // Corrigido o nome da propriedade de 'movementType' para 'type'
+                    // para corresponder ao que o stock.service espera.
                     await stockService.recordStockMovement(productId, {
-                        movementType: params.movementType,
+                        type: params.movementType, // <-- CORREÇÃO APLICADA AQUI
                         quantity: parseInt(params.quantity),
                         reason: params.reason,
                     });
@@ -691,7 +690,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
-
             case 'PAY_CREDIT_CARD_INVOICE': {
                 try {
                     const cardNameToPay = params.creditCardName;
