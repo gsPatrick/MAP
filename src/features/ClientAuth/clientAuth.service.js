@@ -484,7 +484,7 @@ async function getClientProfile(loggedInClientData, sharedAccessContext = null) 
         logger.error(`Erro ao buscar perfil para cliente logado ID ${baseClientId} (contexto compartilhado: ${!!sharedAccessContext}): ${error.message}`, { error });
         throw new Error(`Erro ao buscar perfil do cliente.`);
     }
-}
+}   
 async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
   const t = await sequelize.transaction();
   try {

@@ -1,3 +1,4 @@
+
 // src/features/Admin/admin.service.js
 const { Client, Plan, Subscription, sequelize } = require('../../database');
 const { Op } = require('sequelize');
@@ -6,6 +7,50 @@ const clientService = require('../Client/client.service');
 const subscriptionService = require('../Subscription/subscription.service');
 const { sendWhatsappMessage } = require('../../services/whatsappService');
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
+const { formatDate } = require('../../utils/formatters'); // Importar formatDate
+
+/**
+ * <<< NOVA FUNÇÃO PARA O PAINEL DE ADMIN >>>
+ * Lista todos os clientes com detalhes de plano e assinatura para o painel de admin.
+ * @param {object} queryParams - Parâmetros de consulta (page, limit, search).
+ * @returns {Promise<object>} Objeto com lista de clientes e informações de paginação.
+ */
+async function getAdminClientList(queryParams = {}) {
+  try {
+    const { page = 1, limit = 10, search } = queryParams;
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    const whereConditions = {};
+
+    if (search) {
+      whereConditions[Op.or] = [
+        { name: { [Op.iLike]: `%${search}%` } },
+        { phone: { [Op.iLike]: `%${search}%` } },
+        { email: { [Op.iLike]: `%${search}%` } },
+      ];
+    }
+
+    const { count, rows } = await Client.findAndCountAll({
+      where: whereConditions,
+      attributes: ['id', 'name', 'phone', 'email', 'status', 'accessLevel', 'accessExpiresAt', 'createdAt'],
+      limit: parseInt(limit, 10),
+      offset: offset,
+      order: [['createdAt', 'DESC']],
+      distinct: true, // Importante para contagem correta com 'include'
+    });
+
+    logger.info(`[AdminService] Listados ${rows.length} clientes para o painel de admin.`);
+    return {
+      totalItems: count,
+      totalPages: Math.ceil(count / parseInt(limit, 10)),
+      currentPage: parseInt(page, 10),
+      clients: rows.map(client => client.toJSON()),
+    };
+  } catch (error) {
+    logger.error(`Erro ao listar clientes para o painel de admin: ${error.message}`, { error });
+    throw new Error('Erro ao buscar a lista de clientes.');
+  }
+}
+
 
 /**
  * Altera o número de telefone de um cliente. (Função de Admin)
@@ -108,19 +153,19 @@ async function getDashboardMetrics() {
 async function createCustomPlan(planData) {
   try {
     const { name, price, durationDays, tier, affiliateCommissionValue = 0 } = planData;
-    if (!name || !price || !durationDays || !tier) {
+    if (!name || price === undefined || !durationDays || !tier) {
       throw { statusCode: 400, message: 'Nome, preço, duração e tier são obrigatórios para criar um plano.' };
     }
     const newPlan = await Plan.create({
       name,
-      price,
-      durationDays,
+      price: parseFloat(price),
+      durationDays: parseInt(durationDays),
       tier,
-      affiliateCommissionValue,
+      affiliateCommissionValue: parseFloat(affiliateCommissionValue),
       isActive: true,
       description: `Plano customizado criado pelo administrador em ${new Date().toLocaleDateString('pt-BR')}`
     });
-    logger.info(`[AdminService] Plano customizado "${name}" criado com sucesso.`);
+    logger.info(`[AdminService] Plano customizado "${name}" (Preço: ${price}) criado com sucesso.`);
     return newPlan.toJSON();
   } catch (error) {
     logger.error(`[AdminService] Erro ao criar plano customizado: ${error.message}`, error);
@@ -156,16 +201,15 @@ async function changeUserPlan(clientId, planId) {
             { transaction: t }
         );
         
-        await t.commit(); // Comita a transação ANTES de enviar a mensagem
+        await t.commit(); 
         
         logger.info(`[AdminService] Plano do cliente ID ${clientId} alterado para "${plan.name}" (ID: ${planId}).`);
 
-        // --- INÍCIO DA MODIFICAÇÃO: Envio de notificação proativa ---
         if (client.phone) {
             try {
                 const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
                 let expiryWelcomePart = `Seu acesso agora está garantido até *${formatDate(newSubscription.endDate)}*.`;
-                if (plan.durationDays > 7000) { // Lógica para plano vitalício
+                if (plan.durationDays > 7000) { 
                     expiryWelcomePart = "Você agora tem *acesso vitalício*! 🎉";
                 }
                 const welcomeMessage = `Olá, ${clientName}! ✨\n\nSua assinatura foi atualizada com sucesso para o plano *${plan.name}* pelo nosso suporte.\n\n${expiryWelcomePart}\n\nJá pode começar a usar todos os recursos. Qualquer dúvida, é só me chamar! 😉`;
@@ -174,10 +218,8 @@ async function changeUserPlan(clientId, planId) {
                 logger.info(`[AdminService] Mensagem de confirmação de mudança de plano enviada para ${client.phone}.`);
             } catch (whatsappError) {
                 logger.error(`[AdminService] Falha ao enviar mensagem de confirmação para ${client.phone}: ${whatsappError.message}`);
-                // Mesmo que a mensagem falhe, a operação no banco foi um sucesso, então não lançamos um erro.
             }
         }
-        // --- FIM DA MODIFICAÇÃO ---
 
         return {
             message: 'Plano do cliente alterado com sucesso.',
@@ -190,21 +232,43 @@ async function changeUserPlan(clientId, planId) {
     }
 }
 
-async function sendBroadcastMessage(message) {
+/**
+ * <<< FUNÇÃO MELHORADA >>>
+ * Envia uma mensagem em massa para um grupo específico de clientes.
+ * @param {string} message - A mensagem a ser enviada.
+ * @param {string} targetGroup - O grupo de destino ('all_active', 'expiring_soon').
+ * @returns {Promise<object>} Resultado da operação.
+ */
+async function sendBroadcastMessage(message, targetGroup = 'all_active') {
   if (!message || message.trim() === '') {
     throw { statusCode: 400, message: 'A mensagem não pode ser vazia.' };
   }
   try {
-    const clientsToSend = await Client.findAll({
-      where: {
+    const whereConditions = {
         status: 'Ativo',
         phone: { [Op.ne]: null }
-      },
+    };
+
+    if (targetGroup === 'expiring_soon') {
+        const today = new Date();
+        const sevenDaysFromNow = new Date(today);
+        sevenDaysFromNow.setDate(today.getDate() + 7);
+
+        whereConditions.accessExpiresAt = {
+            [Op.between]: [today.toISOString().split('T')[0], sevenDaysFromNow.toISOString().split('T')[0]]
+        };
+        whereConditions.accessLevel = { [Op.notIn]: ['gratuito', 'vitalicio_basico', 'vitalicio_avancado'] };
+    }
+
+    const clientsToSend = await Client.findAll({
+      where: whereConditions,
       attributes: ['id', 'phone']
     });
+
     if (clientsToSend.length === 0) {
-      return { message: 'Nenhum cliente ativo com telefone para enviar a mensagem.', sentCount: 0, failedCount: 0 };
+      return { message: `Nenhum cliente encontrado no grupo '${targetGroup}' para enviar a mensagem.`, sentCount: 0, failedCount: 0 };
     }
+    
     let sentCount = 0;
     let failedCount = 0;
     const promises = [];
@@ -219,10 +283,10 @@ async function sendBroadcastMessage(message) {
       );
     }
     await Promise.all(promises);
-    logger.info(`[AdminService] Transmissão concluída. Enviadas: ${sentCount}, Falhas: ${failedCount}.`);
+    logger.info(`[AdminService] Transmissão para '${targetGroup}' concluída. Enviadas: ${sentCount}, Falhas: ${failedCount}.`);
     return { message: 'Transmissão concluída.', sentCount, failedCount, total: clientsToSend.length };
   } catch (error) {
-    logger.error(`[AdminService] Erro ao enviar mensagem em massa: ${error.message}`, error);
+    logger.error(`[AdminService] Erro ao enviar mensagem em massa para '${targetGroup}': ${error.message}`, error);
     throw new Error('Falha ao enviar transmissão.');
   }
 }
@@ -336,7 +400,6 @@ async function clearClientBalance(clientId) {
     }
 }
 
-// <<< [CORREÇÃO] A função deleteClientByUser estava faltando aqui, foi adicionada >>>
 async function deleteClientByUser(clientId) {
     logger.warn(`[ADMIN SERVICE] Início da solicitação de EXCLUSÃO PERMANENTE para o Cliente ID: ${clientId}.`);
     const t = await sequelize.transaction();
@@ -360,6 +423,7 @@ async function deleteClientByUser(clientId) {
 }
 
 module.exports = {
+  getAdminClientList, // <<< EXPORTAR NOVA FUNÇÃO
   getDashboardMetrics,
   createCustomPlan,
   changeUserPlan,

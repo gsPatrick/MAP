@@ -1,7 +1,18 @@
+
+
 // src/features/Admin/admin.controller.js
 const adminService = require('./admin.service');
 const clientService = require('../Client/client.service');
 
+/**
+ * <<< NOVO CONTROLLER PARA O PAINEL DE ADMIN >>>
+ * Lista todos os clientes com dados detalhados para o painel de admin.
+ */
+const getAdminClientList = (req, res, next) => {
+    adminService.getAdminClientList(req.query)
+        .then(result => res.status(200).json({ status: 'success', ...result }))
+        .catch(next);
+};
 
 const changeClientPhone = (req, res, next) => {
     const clientId = parseInt(req.params.clientId, 10);
@@ -55,9 +66,13 @@ const changeUserPlan = (req, res, next) => {
         .catch(next);
 };
 
+/**
+ * <<< CONTROLLER MELHORADO >>>
+ * Envia uma mensagem em massa para um grupo alvo.
+ */
 const sendBroadcastMessage = (req, res, next) => {
-    const { message } = req.body;
-    adminService.sendBroadcastMessage(message)
+    const { message, targetGroup } = req.body;
+    adminService.sendBroadcastMessage(message, targetGroup)
         .then(result => res.status(200).json({ status: 'success', data: result }))
         .catch(next);
 };
@@ -81,7 +96,6 @@ const updatePlan = (req, res, next) => {
         .catch(next);
 };
 
-// NOVA FUNÇÃO AQUI
 const clearClientBalance = (req, res, next) => {
     const { clientId } = req.params;
     adminService.clearClientBalance(clientId)
@@ -97,14 +111,13 @@ const deleteClientAsAdmin = (req, res, next) => {
     
     adminService.deleteClientByUser(clientId)
         .then(() => {
-            // Para DELETE, a resposta de sucesso padrão é 204 No Content
             res.status(204).send();
         })
-        .catch(next); // Passa qualquer erro para o errorHandler
+        .catch(next);
 };
 
-
 module.exports = {
+  getAdminClientList, // <<< EXPORTAR NOVO CONTROLLER
   getAllClients,
   createClient,
   updateClient,
@@ -118,5 +131,5 @@ module.exports = {
   changeClientPhone,
   updatePlan,
   deleteClientAsAdmin,
-  clearClientBalance // EXPORTE A NOVA FUNÇÃO AQUI
+  clearClientBalance
 };
