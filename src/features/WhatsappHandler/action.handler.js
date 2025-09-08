@@ -647,8 +647,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
-
-            case 'RECORD_STOCK_MOVEMENT': {
+ case 'RECORD_STOCK_MOVEMENT': {
                 try {
                     if(!params.productNameOrCode || !params.movementType || params.quantity === undefined || params.quantity === null) {
                         throw { statusCode: 400, message: "Produto, tipo de movimento e quantidade são obrigatórios." };
@@ -658,11 +657,16 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 404, message: `Produto "${params.productNameOrCode}" não encontrado.` };
                     }
 
-                    await stockService.recordStockMovement(state.activeFinancialAccountId, productId, {
+                    // <<< INÍCIO DA CORREÇÃO >>>
+                    // A chamada foi corrigida para passar 'productId' como primeiro argumento
+                    // e o objeto 'movementData' como segundo. O 'actorId' não é esperado
+                    // pela função de serviço e foi removido da chamada.
+                    await stockService.recordStockMovement(productId, {
                         movementType: params.movementType,
                         quantity: parseInt(params.quantity),
                         reason: params.reason,
-                    }, actorId);
+                    });
+                    // <<< FIM DA CORREÇÃO >>>
 
                     const updatedStockInfo = await stockService.getProductStockInfoById(state.activeFinancialAccountId, productId);
                     
