@@ -921,7 +921,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
       {role: "user", content: userMessage}
   ];
 
-  const modelToUse = "gpt-4-turbo-preview"; 
+  const modelToUse = "gpt-4o"; 
 
   logger.debug('[AI SERVICE] Enviando para OpenAI:', {
       model: modelToUse,
