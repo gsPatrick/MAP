@@ -65,6 +65,7 @@ mainApiRouter.use('/system', systemRoutes);
 mainApiRouter.use('/dev-tools', devToolsRoutes);
 mainApiRouter.use('/chat', InteractiveChatRoutes);
 mainApiRouter.use('/', adminRoutes);
+mainApiRouter.use('/availability', availabilityRoutes);
 
 // --- ROTAS PRIVADAS PARA CLIENTES LOGADOS (requerem token, mas não um financialAccountId na URL) ---
 mainApiRouter.use('/shared-access', authenticateClientToken, sharedAccessRoutes);
@@ -72,7 +73,6 @@ mainApiRouter.use('/hydration', authenticateClientToken, hydrationRoutes);
 mainApiRouter.use('/affiliate', authenticateClientToken, affiliateRoutes);
 mainApiRouter.use('/mercado-pago', privateMercadoPagoRouter); // CRIAR PAGAMENTO
 mainApiRouter.use('/services', authenticateClientToken, serviceRoutes);
-mainApiRouter.use('/availability', authenticateClientToken, availabilityRoutes);
 mainApiRouter.use('/stock', authenticateClientToken, globalStockRouter); // Rota global de estoque
 
 // --- Middleware para autorização de acesso à conta financeira ---
