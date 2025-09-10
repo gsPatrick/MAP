@@ -5,13 +5,15 @@ const { generateToken } = require('../../utils/authUtils');
 const { Op } = require('sequelize');
 const subscriptionService = require('../Subscription/subscription.service');
 const googleCalendarService = require('../GoogleCalendar/googleCalendarService');
-const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils'); // <<< CORREÇÃO ADICIONADA AQUI
+const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
+const { sendWhatsappMessage } = require('../../services/whatsappService');
 
 
+// Mapa em memória para armazenar códigos de ativação temporários
 const activationCodes = new Map();
 
 // ==========================================================================================
-// === INÍCIO: Lógica de criação de categorias padrão (movida para cá para centralizar) ===
+// === INÍCIO: Lógica de criação de categorias padrão (centralizada aqui) ===
 // ==========================================================================================
 const defaultPersonalCategoryNames = [
     'Alimentação', 'Supermercado', 'Restaurantes', 'Moradia', 'Aluguel', 'Contas' , 'Conta de Água', 'Conta de Luz', 'Internet', 'Transporte', 'Combustível',
@@ -19,27 +21,6 @@ const defaultPersonalCategoryNames = [
     'Assinaturas/Streaming', 'Cuidados Pessoais', 'Compras', 'Vestuário', 'Educação',
     'Dívidas/Empréstimos', 'Pagamento de Fatura', 'Receitas', 'Salário', 'Renda Extra', 'Investimentos'
 ];
-
-// <<< NOVA FUNÇÃO AUXILIAR >>>
-/**
- * Garante que um número de telefone esteja no formato completo para envio (com DDI 55).
- * @param {string} phone - O número de telefone.
- * @returns {string} O número formatado para envio.
- */
-function normalizePhoneForDelivery(phone) {
-    let cleanNumber = phone.replace(/\D/g, '');
-    // Se o número já tem DDI 55, retorna como está.
-    if (cleanNumber.startsWith('55') && (cleanNumber.length === 12 || cleanNumber.length === 13)) {
-        return cleanNumber;
-    }
-    // Se tem 10 ou 11 dígitos (DDD + Número), adiciona o DDI 55.
-    if (cleanNumber.length === 10 || cleanNumber.length === 11) {
-        return `55${cleanNumber}`;
-    }
-    // Retorna o número limpo como fallback.
-    return cleanNumber;
-}
-
 
 async function createDefaultCategoriesForAccount(financialAccountId, accountType, transaction) {
     logger.info(`Iniciando criação de categorias padrão para conta ID ${financialAccountId}, tipo ${accountType}.`);
@@ -63,12 +44,33 @@ async function createDefaultCategoriesForAccount(financialAccountId, accountType
     await FinancialCategory.bulkCreate(categoriesToCreate, { transaction });
     logger.info(`${categoriesToCreate.length} categorias padrão do tipo '${accountType}' criadas para a conta ID ${financialAccountId}.`);
 }
+
+/**
+ * Garante que um número de telefone esteja no formato completo para envio (com DDI 55).
+ * @param {string} phone - O número de telefone.
+ * @returns {string} O número formatado para envio.
+ */
+function normalizePhoneForDelivery(phone) {
+    let cleanNumber = phone.replace(/\D/g, '');
+    if (cleanNumber.startsWith('55') && (cleanNumber.length === 12 || cleanNumber.length === 13)) {
+        return cleanNumber;
+    }
+    if (cleanNumber.length === 10 || cleanNumber.length === 11) {
+        return `55${cleanNumber}`;
+    }
+    return cleanNumber;
+}
 // ========================================================================================
 // === FIM: Lógica de criação de categorias padrão ===
 // ========================================================================================
 
 
-// <<< NOVO MÉTODO PARA CADASTRO COMPLETO >>>
+/**
+ * <<< NOVO MÉTODO PARA CADASTRO COMPLETO >>>
+ * Registra um novo cliente, cria sua conta PF e categorias padrão.
+ * @param {object} registerData - Dados do formulário de cadastro.
+ * @returns {Promise<object>} Objeto com cliente, token e contas financeiras.
+ */
 async function registerClient(registerData) {
     const t = await sequelize.transaction();
     try {
@@ -81,7 +83,7 @@ async function registerClient(registerData) {
             throw { statusCode: 400, message: 'A senha deve ter no mínimo 6 caracteres.' };
         }
 
-        const normalizedPhone = phone.replace(/\D/g, '');
+        const normalizedPhone = normalizePhoneNumberToCanonical(phone);
         const lowerEmail = email.toLowerCase().trim();
 
         const existingClient = await Client.findOne({
@@ -93,15 +95,17 @@ async function registerClient(registerData) {
             const conflictField = existingClient.phone === normalizedPhone ? 'Telefone' : 'E-mail';
             throw { statusCode: 409, message: `${conflictField} já cadastrado.` };
         }
-
-// VERSÃO NOVA E CORRETA
-const newClientPayload = {
-    name,
-    email: lowerEmail,
-    phone: normalizedPhone,
-    passwordHash: password, // <<< CORREÇÃO: Passa a senha em texto plano para o hook do modelo fazer a criptografia.
-    status: 'Aguardando Pagamento',
-};
+        
+        // <<< CORREÇÃO CRÍTICA >>>
+        // Passa a senha em texto plano para o campo 'passwordHash'.
+        // O hook 'beforeCreate' no modelo Client irá interceptar e criptografar.
+        const newClientPayload = {
+            name,
+            email: lowerEmail,
+            phone: normalizedPhone,
+            passwordHash: password,
+            status: 'Aguardando Pagamento',
+        };
         
         if (affiliateCode) {
             const referrer = await Client.findOne({ 
@@ -117,6 +121,8 @@ const newClientPayload = {
 
         const newClient = await Client.create(newClientPayload, { transaction: t });
 
+        // <<< LÓGICA ADICIONADA >>>
+        // Cria a conta financeira pessoal (PF) e as categorias padrão para o novo cliente.
         const pfAccount = await FinancialAccount.create({
             clientId: newClient.id,
             accountName: 'Pessoal',
@@ -136,7 +142,7 @@ const newClientPayload = {
         delete clientResponse.passwordHash;
 
         return {
-            client: clientResponse, // <<< O affiliateCode já está incluído aqui pelo toJSON()
+            client: clientResponse,
             token,
             financialAccounts: [pfAccount.toJSON()],
         };
@@ -149,8 +155,13 @@ const newClientPayload = {
     }
 }
 
-
-// <<< VERSÃO FINAL E CORRIGIDA DA FUNÇÃO loginClient >>>
+/**
+ * <<< VERSÃO FINAL E CORRIGIDA DA FUNÇÃO loginClient >>>
+ * Realiza o login do cliente, verificando credenciais e status da assinatura.
+ * @param {string} identifier - Email ou telefone do cliente.
+ * @param {string} password - Senha do cliente.
+ * @returns {Promise<object>} Objeto com cliente, token, contas e status da assinatura.
+ */
 async function loginClient(identifier, password) {
   try {
     if (!identifier || !password) {
@@ -158,9 +169,10 @@ async function loginClient(identifier, password) {
     }
 
     const trimmedPassword = password.trim();
-    const normalizedIdentifier = identifier.replace(/\D/g, '');
     const isEmailLogin = identifier.includes('@');
-    const loginAttemptIdentifier = isEmailLogin ? identifier.toLowerCase().trim() : normalizedIdentifier;
+    const loginAttemptIdentifier = isEmailLogin 
+        ? identifier.toLowerCase().trim() 
+        : normalizePhoneNumberToCanonical(identifier);
     
     const client = await Client.scope('withPassword').findOne({
       where: isEmailLogin ? { email: loginAttemptIdentifier } : { phone: loginAttemptIdentifier }
@@ -179,16 +191,15 @@ async function loginClient(identifier, password) {
       throw { statusCode: 401, status: 'fail', message: 'Credenciais inválidas (senha incorreta).' };
     }
 
-    // --- LÓGICA DE VERIFICAÇÃO DE PLANO SEM BLOQUEIO ---
-    let subscriptionStatus = 'active'; // Padrão
+    let subscriptionStatus = 'active';
     if (client.accessLevel && client.accessLevel !== 'gratuito') {
         if (client.accessLevel.startsWith('vitalicio_')) {
             subscriptionStatus = 'active';
         } else if (client.accessExpiresAt) {
-            const expiryDate = new Date(client.accessExpiresAt + 'T00:00:00Z');
-            const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+            const expiryDate = new Date(client.accessExpiresAt + 'T23:59:59Z');
+            const today = new Date();
             if (expiryDate < today) {
-                subscriptionStatus = 'expired'; // Apenas informa, não bloqueia
+                subscriptionStatus = 'expired';
             }
         } else {
              subscriptionStatus = 'expired';
@@ -197,7 +208,6 @@ async function loginClient(identifier, password) {
         subscriptionStatus = 'free_tier';
     }
 
-    // O login sempre prossegue e o token é gerado
     const tokenPayload = { id: client.id, phone: client.phone, email: client.email };
     const token = generateToken(tokenPayload, 'client');
     const clientResponse = client.toJSON();
@@ -211,7 +221,6 @@ async function loginClient(identifier, password) {
 
     logger.info(`Login bem-sucedido para Cliente: ${client.phone || client.email} (Status Assinatura: ${subscriptionStatus})`);
     
-    // Retorna o status da assinatura para o frontend decidir o que fazer
     return {
         client: clientResponse,
         token,
@@ -225,10 +234,6 @@ async function loginClient(identifier, password) {
     throw error;
   }
 }
-
-// ... Cole o resto do seu arquivo clientAuth.service.js aqui ...
-// (getClientProfile, updateClientProfile, etc)
-// Para ser completo, estou adicionando as outras funções que você já tinha:
 
 async function setClientCredentials(phone, password, name = null, email = null) {
   const t = await sequelize.transaction();
@@ -246,7 +251,7 @@ async function setClientCredentials(phone, password, name = null, email = null) 
       const error = new Error('A senha deve ter pelo menos 6 caracteres.');
       error.statusCode = 400; error.status = 'fail'; throw error;
     }
-    const normalizedPhone = phone.replace(/\D/g, '');
+    const normalizedPhone = normalizePhoneNumberToCanonical(phone);
     let client = await Client.findOne({ where: { phone: normalizedPhone }, transaction: t });
     if (!client) {
       await t.rollback();
@@ -255,8 +260,7 @@ async function setClientCredentials(phone, password, name = null, email = null) 
     }
 
     const updateData = {
-        passwordHash: trimmedPassword,
-        debugPassword: trimmedPassword
+        passwordHash: trimmedPassword
     };
 
     if (email) {
@@ -287,139 +291,7 @@ async function setClientCredentials(phone, password, name = null, email = null) 
     throw error;
   }
 }
-async function updateClientProfile(clientId, updateData) {
-  const t = await sequelize.transaction();
-  try {
-    const client = await Client.scope('withPassword').findByPk(clientId, { transaction: t });
-    if (!client) {
-      await t.rollback();
-      const error = new Error('Cliente não encontrado.');
-      error.statusCode = 404; error.status = 'fail'; throw error;
-    }
 
-    const { name, email, phone, password, newPassword } = updateData;
-    const dataToUpdate = {};
-    let passwordChanged = false;
-
-    if (newPassword) {
-      if (!password) {
-        await t.rollback();
-        const error = new Error('A senha atual é necessária para definir uma nova senha.');
-        error.statusCode = 400; error.status = 'fail'; throw error;
-      }
-      const isPasswordMatch = await client.isValidPassword(password);
-      if (!isPasswordMatch) {
-        await t.rollback();
-        const error = new Error('A senha atual está incorreta.');
-        error.statusCode = 403; error.status = 'fail'; throw error;
-      }
-      dataToUpdate.passwordHash = newPassword;
-      passwordChanged = true;
-    }
-
-    if (name !== undefined && name !== client.name) {
-      dataToUpdate.name = name;
-    }
-    if (phone !== undefined && phone !== client.phone) {
-      dataToUpdate.phone = phone;
-    }
-    if (email !== undefined) {
-      const lowerEmail = email.toLowerCase().trim();
-      if (lowerEmail !== client.email) {
-        const existingEmail = await Client.findOne({ 
-            where: { email: lowerEmail, id: { [Op.ne]: clientId } }, 
-            transaction: t 
-        });
-        if (existingEmail) {
-          await t.rollback();
-          const error = new Error('Este endereço de e-mail já está em uso por outro cliente.');
-          error.statusCode = 409; error.status = 'fail'; throw error;
-        }
-        dataToUpdate.email = lowerEmail;
-      }
-    }
-
-    if (Object.keys(dataToUpdate).length === 0) {
-      await t.commit(); 
-      return { client: client.toJSON(), message: 'Nenhuma informação para atualizar.' };
-    }
-
-    await client.update(dataToUpdate, { transaction: t });
-    await t.commit();
-
-    const reloadedClient = await Client.findByPk(clientId);
-    return {
-      client: reloadedClient.toJSON(),
-      message: `Perfil atualizado com sucesso.${passwordChanged ? ' A senha foi alterada.' : ''}`
-    };
-
-  } catch (error) {
-    if (t && !t.finished) await t.rollback();
-    logger.error(`Erro ao atualizar perfil do cliente ID ${clientId}: ${error.message}`, { error });
-    if (!error.statusCode) error.statusCode = 500;
-    throw error;
-  }
-}
-async function setClientCredentialsAndAffiliate(phone, password, name, email, affiliateCode) {
-    const t = await sequelize.transaction();
-    try {
-        if (!phone || !password || !name || !email) {
-            throw { statusCode: 400, message: 'Telefone, senha, nome e email são obrigatórios.' };
-        }
-        if (password.trim().length < 6) {
-            throw { statusCode: 400, message: 'A senha deve ter pelo menos 6 caracteres.' };
-        }
-
-        const normalizedPhone = phone.replace(/\D/g, '');
-        let client = await Client.findOne({ where: { phone: normalizedPhone }, transaction: t });
-        if (!client) {
-            throw { statusCode: 404, message: 'Cliente não encontrado com este número de telefone.' };
-        }
-
-        const updateData = {
-            passwordHash: password.trim(),
-            debugPassword: password.trim(),
-            name: name.trim(),
-        };
-
-        const lowerEmail = email.toLowerCase().trim();
-        const existingEmailClient = await Client.findOne({
-            where: { email: lowerEmail, id: { [Op.ne]: client.id } },
-            transaction: t
-        });
-        if (existingEmailClient) {
-            throw { statusCode: 409, message: 'Este endereço de email já está em uso por outro cliente.' };
-        }
-        updateData.email = lowerEmail;
-        
-        if (affiliateCode && !client.referredByClientId) {
-            const referrer = await Client.findOne({ 
-                where: { 
-                    affiliateCode: affiliateCode.toUpperCase(),
-                    id: { [Op.ne]: client.id }
-                }, 
-                transaction: t 
-            });
-
-            if (referrer) {
-                updateData.referredByClientId = referrer.id;
-            } else {
-                logger.warn(`[ClientAuthService] Código de afiliado "${affiliateCode}" fornecido mas não encontrado.`);
-            }
-        }
-
-        await client.update(updateData, { transaction: t });
-        await t.commit();
-        logger.info(`Credenciais e indicação (se houver) atualizadas para o Cliente ${client.phone}.`);
-        const reloadedClient = await Client.findByPk(client.id);
-        return reloadedClient.toJSON();
-
-    } catch (error) {
-        if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
-        logger.error(`Erro ao definir credenciais e afiliado para cliente ${phone}: ${error.message}`, { error });
-        throw error;
-    }
-}
 async function getClientProfile(loggedInClientData, sharedAccessContext = null) {
     try {
         let clientToFetchIdForAccountsAndSubscription = loggedInClientData.id;
@@ -484,7 +356,78 @@ async function getClientProfile(loggedInClientData, sharedAccessContext = null) 
         logger.error(`Erro ao buscar perfil para cliente logado ID ${baseClientId} (contexto compartilhado: ${!!sharedAccessContext}): ${error.message}`, { error });
         throw new Error(`Erro ao buscar perfil do cliente.`);
     }
-}   
+}
+
+async function updateClientProfile(clientId, updateData) {
+  const t = await sequelize.transaction();
+  try {
+    const client = await Client.scope('withPassword').findByPk(clientId, { transaction: t });
+    if (!client) {
+      await t.rollback();
+      const error = new Error('Cliente não encontrado.');
+      error.statusCode = 404; error.status = 'fail'; throw error;
+    }
+
+    const { name, email, phone, password, newPassword } = updateData;
+    const dataToUpdate = {};
+    let passwordChanged = false;
+
+    if (newPassword) {
+      if (!password) {
+        await t.rollback();
+        const error = new Error('A senha atual é necessária para definir uma nova senha.');
+        error.statusCode = 400; error.status = 'fail'; throw error;
+      }
+      const isPasswordMatch = await client.isValidPassword(password);
+      if (!isPasswordMatch) {
+        await t.rollback();
+        const error = new Error('A senha atual está incorreta.');
+        error.statusCode = 403; error.status = 'fail'; throw error;
+      }
+      dataToUpdate.passwordHash = newPassword;
+      passwordChanged = true;
+    }
+
+    if (name !== undefined && name !== client.name) dataToUpdate.name = name;
+    if (phone !== undefined && phone !== client.phone) dataToUpdate.phone = normalizePhoneNumberToCanonical(phone);
+    if (email !== undefined) {
+      const lowerEmail = email.toLowerCase().trim();
+      if (lowerEmail !== client.email) {
+        const existingEmail = await Client.findOne({ 
+            where: { email: lowerEmail, id: { [Op.ne]: clientId } }, 
+            transaction: t 
+        });
+        if (existingEmail) {
+          await t.rollback();
+          const error = new Error('Este endereço de e-mail já está em uso por outro cliente.');
+          error.statusCode = 409; error.status = 'fail'; throw error;
+        }
+        dataToUpdate.email = lowerEmail;
+      }
+    }
+
+    if (Object.keys(dataToUpdate).length === 0) {
+      await t.commit(); 
+      return { client: client.toJSON(), message: 'Nenhuma informação para atualizar.' };
+    }
+
+    await client.update(dataToUpdate, { transaction: t });
+    await t.commit();
+
+    const reloadedClient = await Client.findByPk(clientId);
+    return {
+      client: reloadedClient.toJSON(),
+      message: `Perfil atualizado com sucesso.${passwordChanged ? ' A senha foi alterada.' : ''}`
+    };
+
+  } catch (error) {
+    if (t && !t.finished) await t.rollback();
+    logger.error(`Erro ao atualizar perfil do cliente ID ${clientId}: ${error.message}`, { error });
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
+}
+
 async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
   const t = await sequelize.transaction();
   try {
@@ -495,47 +438,27 @@ async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
       error.statusCode = 404; error.status = 'fail'; throw error;
     }
 
-    const oldColorIdPF = client.googleCalendarColorIdPF;
-    const oldColorIdPJ = client.googleCalendarColorIdPJ;
-
     const updateData = {};
-    let pfColorChanged = false;
-    let pjColorChanged = false;
-
-    if (colorIdPF !== undefined) {
-        const newPfColor = colorIdPF ? String(colorIdPF) : null;
-        if (newPfColor !== oldColorIdPF) {
-            updateData.googleCalendarColorIdPF = newPfColor;
-            pfColorChanged = true;
-        }
-    }
-    if (colorIdPJ !== undefined) {
-        const newPjColor = colorIdPJ ? String(colorIdPJ) : null;
-        if (newPjColor !== oldColorIdPJ) {
-            updateData.googleCalendarColorIdPJ = newPjColor;
-            pjColorChanged = true;
-        }
-    }
+    if (colorIdPF !== undefined) updateData.googleCalendarColorIdPF = colorIdPF ? String(colorIdPF) : null;
+    if (colorIdPJ !== undefined) updateData.googleCalendarColorIdPJ = colorIdPJ ? String(colorIdPJ) : null;
 
     if (Object.keys(updateData).length === 0) {
         await t.commit();
-        logger.info(`[ClientAuthService] Nenhuma preferência de cor de calendário para atualizar para Cliente ID ${clientId}.`);
         return client.toJSON();
     }
 
     await client.update(updateData, { transaction: t });
     await t.commit();
     
-    // Dispara a ressincronização em background
-    if ((pfColorChanged || pjColorChanged) && client.isGoogleCalendarSynced && client.googleCalendarIdPrincipal) {
-        googleCalendarService.resyncEventColorsForClient(clientId, pfColorChanged ? client.googleCalendarColorIdPF : undefined, pjColorChanged ? client.googleCalendarColorIdPJ : undefined);
+    if ((updateData.googleCalendarColorIdPF || updateData.googleCalendarColorIdPJ) && client.isGoogleCalendarSynced) {
+        googleCalendarService.resyncEventColorsForClient(clientId, updateData.googleCalendarColorIdPF, updateData.googleCalendarColorIdPJ);
     }
     
     const reloadedClient = await Client.findByPk(clientId);
     return reloadedClient.toJSON();
 
   } catch (error) {
-    if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
+    if (t && !t.finished) await t.rollback();
     logger.error(`Erro ao atualizar preferências de cor de calendário para Cliente ID ${clientId}: ${error.message}`, { error });
     if (!error.statusCode) error.statusCode = 500;
     throw error;
@@ -543,11 +466,8 @@ async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
 }
 
 async function sendActivationCode(phone) {
-    // <<< INÍCIO DA CORREÇÃO >>>
-    // Usa a nova função para garantir o formato de envio com DDI.
     const deliverablePhone = normalizePhoneForDelivery(phone);
     const canonicalPhone = normalizePhoneNumberToCanonical(phone);
-    // <<< FIM DA CORREÇÃO >>>
 
     if (!canonicalPhone) {
         throw { statusCode: 400, message: 'Número de telefone inválido.' };
@@ -578,7 +498,6 @@ async function sendActivationCode(phone) {
 }
 
 async function verifyCodeAndSetPassword(phone, code, newPassword, email = null, name = null) {
-    // <<< CORREÇÃO: Usa o número canônico para a busca no Map >>>
     const canonicalPhone = normalizePhoneNumberToCanonical(phone);
     const stored = activationCodes.get(canonicalPhone);
 
@@ -630,13 +549,12 @@ async function verifyCodeAndSetPassword(phone, code, newPassword, email = null, 
 }
 
 module.exports = {
-  registerClient, // <<< Exporta o novo método
+  registerClient,
   setClientCredentials,
-  setClientCredentialsAndAffiliate,
   loginClient,
   getClientProfile,
   updateClientCalendarPreferences,
   updateClientProfile,
-    sendActivationCode,
+  sendActivationCode,
   verifyCodeAndSetPassword,
-}
+};

@@ -79,8 +79,7 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
     let clientAccessLevel = ownerClientForContext.accessLevel || 'gratuito';
     let clientAccessExpiresAt = ownerClientForContext.accessExpiresAt;
     let accessLevelTextForUser = "Nenhum plano ativo";
-    let onboardingStage = existingState?.data?.onboardingStage;
-
+    
     if (ownerClientForContext.accessLevel && ownerClientForContext.accessLevel !== 'gratuito') {
         if (ownerClientForContext.accessLevel.startsWith('vitalicio_')) {
             hasPaidAccess = true;
@@ -103,47 +102,43 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
         }
     }
    
-    const accountsForOperation = isSharedAccessContext ? ownerAccountsIfShared : clientAccountsFromDb;
-   
-    if (isSharedAccessContext && client.passwordHash === null) {
-        if (client.name === 'Convidado') {
-            onboardingStage = 'awaiting_shared_user_name';
+    // <<< INÍCIO DA LÓGICA DE STAGE REVISADA E SIMPLIFICADA >>>
+    let onboardingStage = existingState?.data?.onboardingStage;
+
+    if (!hasPaidAccess) {
+        onboardingStage = 'awaiting_plan_confirmation';
+    } else {
+        // Se tem acesso pago, verificamos as credenciais (para casos de admin/legado)
+        if (!client.email || !client.passwordHash) {
+            onboardingStage = 'setting_up_credentials_email';
         } else {
-            onboardingStage = 'setting_up_main_client_credentials';
-        }
-    } else if (!onboardingStage || onboardingStage === 'awaiting_plan_confirmation' || (existingState && !existingState.hasPaidAccess_whenStageLastSet) ) {
-        if (hasPaidAccess) {
-            if (!client.email || !client.passwordHash) {
-                onboardingStage = 'setting_up_credentials_email';
-            } else { 
-                if (!isSharedAccessContext) {
-                    const hasPfActor = accountsForOperation.some(acc => acc.accountType === 'PF');
-                    if (!hasPfActor) {
-                         onboardingStage = 'setting_up_pf_account_name';
-                    } else {
-                         const hasPjMeiActor = accountsForOperation.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
-                         const planTier = clientAccessLevel.startsWith('avancado') || clientAccessLevel.startsWith('vitalicio_avancado') ? 'avancado' : 'basico';
-                         if (planTier === 'avancado' && !hasPjMeiActor &&
-                             existingState?.data?.onboardingStage !== 'confirming_pj_mei_setup' &&
-                             existingState?.data?.onboardingStage !== 'awaiting_pj_mei_type' &&
-                             existingState?.data?.onboardingStage !== 'creating_pj_mei_account_name') {
-                            onboardingStage = 'confirming_pj_mei_setup';
-                         } else {
-                            onboardingStage = 'onboarding_complete';
-                         }
-                    }
-                } else { 
+            // Se tem credenciais, o próximo passo é ter contas.
+            const accountsForOperation = isSharedAccessContext ? ownerAccountsIfShared : clientAccountsFromDb;
+            
+            // Se não tem NENHUMA conta, o primeiro passo é criar a PF.
+            // Este cenário não deve mais acontecer para novos usuários, mas é um bom fallback.
+            if (accountsForOperation.length === 0) {
+                 onboardingStage = 'setting_up_pf_account_name';
+            } else {
+                // Se já tem contas, verificamos se precisa do onboarding de PJ/MEI
+                const hasPjMeiAccount = accountsForOperation.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
+                const planTier = clientAccessLevel.startsWith('avancado') || clientAccessLevel.startsWith('vitalicio_avancado') ? 'avancado' : 'basico';
+
+                // SÓ entra no onboarding de PJ se o plano for avançado E ainda não tiver conta PJ
+                if (planTier === 'avancado' && !hasPjMeiAccount) {
+                    onboardingStage = 'confirming_pj_mei_setup';
+                } else {
+                    // Em todos os outros casos, o onboarding está completo.
                     onboardingStage = 'onboarding_complete';
                 }
             }
-        } else { 
-            onboardingStage = 'awaiting_plan_confirmation';
         }
-    } else if (onboardingStage === 'onboarding_complete' && isSharedAccessContext && client.passwordHash === null) {
-        onboardingStage = 'setting_up_main_client_credentials';
     }
+    // <<< FIM DA LÓGICA DE STAGE REVISADA >>>
+
 
     let defaultAccount = null;
+    const accountsForOperation = isSharedAccessContext ? ownerAccountsIfShared : clientAccountsFromDb;
     if (onboardingStage === 'onboarding_complete' && hasPaidAccess && accountsForOperation.length > 0) {
         defaultAccount = accountsForOperation.find(a=>a.isDefault);
         if (!defaultAccount && accountsForOperation.length === 1) {
@@ -250,8 +245,6 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
     }
 
     try {
-        // REMOVIDO: Envio da mensagem de "processando" para acelerar a percepção.
-        // O usuário agora aguarda a resposta final diretamente.
         const downloadedMedia = await downloadZapiMedia(mediaUrl); 
         if (downloadedMedia && downloadedMedia.stream) {
             const finalFilenameForWhisper = downloadedMedia.filename && downloadedMedia.filename.includes('.')

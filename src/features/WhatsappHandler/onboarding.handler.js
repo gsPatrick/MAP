@@ -321,12 +321,8 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
     
-    // --- ESTÁGIO 3: CONFIRMANDO CRIAÇÃO DE CONTA EMPRESARIAL (Tratada no action.handler para botões) ---
-    // A lógica de processamento desta etapa deve estar em 'handleButtonInteraction' no whatsapp.service
-    // para capturar cliques nos botões 'onboarding_pj_yes' e 'onboarding_pj_no'.
-    
-    // Se o usuário digitar algo em vez de clicar no botão:
-    if (state.data.onboardingStage === 'confirming_pj_mei_setup' && state.currentAction === 'awaiting_pj_mei_confirm') {
+    // --- ESTÁGIO 3: CONFIRMANDO CRIAÇÃO DE CONTA EMPRESARIAL ---
+    if (state.data.onboardingStage === 'confirming_pj_mei_setup') {
         const userResponseLower = lowerMessageText;
         if (userResponseLower.includes("sim") || userResponseLower.includes("quero") || userResponseLower.includes("bora")) {
             onboardingReply = `Qual tipo de conta empresarial? PJ ou MEI?`;
@@ -339,8 +335,18 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             onboardingReply = `Tranquilo! Sua conta "${state.activeFinancialAccountName}" está pronta para uso. O que você gostaria de fazer primeiro? 🚀`;
             await sendWhatsappMessage(actorClient.phone, onboardingReply);
         } else {
-            onboardingReply = `Por favor, clique em "Sim" ou "Não" para prosseguirmos com a configuração da conta empresarial! 😊`;
-            await sendWhatsappMessage(actorClient.phone, onboardingReply);
+            // Se o usuário digitou qualquer outra coisa (como "Oi"), reenviamos a pergunta com botões.
+            logger.info(`[ONBOARDING HANDLER] Usuário no estágio 'confirming_pj_mei_setup' enviou texto não conclusivo. Reenviando pergunta.`);
+            
+            const messageTextAskPj = `Olá, ${clientNameForMessages}! Notei que você tem um Plano Avançado. Que tal configurarmos agora sua conta empresarial (PJ ou MEI)?`;
+            
+            await sendButtonListMessage(actorClient.phone, messageTextAskPj, [
+                { id: 'onboarding_pj_yes', label: 'Sim, configurar agora' },
+                { id: 'onboarding_pj_no', label: 'Deixar para depois' }
+            ], "Configurar Conta Empresarial?");
+
+            onboardingReply = 'Pergunta sobre PJ/MEI reenviada via botões.';
+            state.currentAction = 'awaiting_pj_mei_confirm'; // Garante que o estado de espera está ativo
         }
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
