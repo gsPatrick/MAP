@@ -102,43 +102,31 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
         }
     }
    
-    // <<< INÍCIO DA LÓGICA DE STAGE REVISADA E SIMPLIFICADA >>>
+    const accountsForOperation = isSharedAccessContext ? ownerAccountsIfShared : clientAccountsFromDb;
     let onboardingStage = existingState?.data?.onboardingStage;
 
     if (!hasPaidAccess) {
         onboardingStage = 'awaiting_plan_confirmation';
     } else {
-        // Se tem acesso pago, verificamos as credenciais (para casos de admin/legado)
         if (!client.email || !client.passwordHash) {
             onboardingStage = 'setting_up_credentials_email';
         } else {
-            // Se tem credenciais, o próximo passo é ter contas.
-            const accountsForOperation = isSharedAccessContext ? ownerAccountsIfShared : clientAccountsFromDb;
-            
-            // Se não tem NENHUMA conta, o primeiro passo é criar a PF.
-            // Este cenário não deve mais acontecer para novos usuários, mas é um bom fallback.
             if (accountsForOperation.length === 0) {
                  onboardingStage = 'setting_up_pf_account_name';
             } else {
-                // Se já tem contas, verificamos se precisa do onboarding de PJ/MEI
                 const hasPjMeiAccount = accountsForOperation.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
                 const planTier = clientAccessLevel.startsWith('avancado') || clientAccessLevel.startsWith('vitalicio_avancado') ? 'avancado' : 'basico';
 
-                // SÓ entra no onboarding de PJ se o plano for avançado E ainda não tiver conta PJ
                 if (planTier === 'avancado' && !hasPjMeiAccount) {
                     onboardingStage = 'confirming_pj_mei_setup';
                 } else {
-                    // Em todos os outros casos, o onboarding está completo.
                     onboardingStage = 'onboarding_complete';
                 }
             }
         }
     }
-    // <<< FIM DA LÓGICA DE STAGE REVISADA >>>
-
 
     let defaultAccount = null;
-    const accountsForOperation = isSharedAccessContext ? ownerAccountsIfShared : clientAccountsFromDb;
     if (onboardingStage === 'onboarding_complete' && hasPaidAccess && accountsForOperation.length > 0) {
         defaultAccount = accountsForOperation.find(a=>a.isDefault);
         if (!defaultAccount && accountsForOperation.length === 1) {
@@ -380,7 +368,22 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         if (rawPayload && rawPayload.selectedButtonId && typeof rawPayload.selectedButtonId === 'string') {
             const buttonId = rawPayload.selectedButtonId;
             logger.info(`[MAESTRO] Botão clicado por ${senderPhone}: ID '${buttonId}'`);
-            
+
+            if (buttonId.startsWith('onboarding_')) {
+                logger.info(`[MAESTRO] Roteando botão de onboarding para o Onboarding Handler.`);
+                const onboardingResult = await onboardingHandler.handleOnboardingStep(state, buttonId, actorClient);
+                state = onboardingResult.updatedState;
+                actorClient = onboardingResult.updatedActorClient;
+                
+                if (onboardingResult.onboardingReply) {
+                    state.messageHistory.push({ role: 'assistant', content: onboardingResult.onboardingReply });
+                    // A mensagem já é enviada DENTRO do handler de onboarding, não precisa enviar de novo.
+                }
+                conversationState.set(senderPhone, state);
+                pushNameFromPayload = null;
+                return;
+            }
+
             if (buttonId.startsWith('water_intake:')) {
                 const parts = buttonId.split(':');
                 const actionType = parts[1];
@@ -412,6 +415,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 }
             }
 
+            logger.info(`[MAESTRO] Roteando botão de ação para o Action Handler.`);
             const buttonResult = await actionHandler.handleButtonInteraction(state, buttonId, senderPhone);
             if (buttonResult.stateUpdated) {
                 conversationState.set(senderPhone, buttonResult.newState);
@@ -435,22 +439,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             }
         }
 
-        if (state.isSharedAccessContext && actorClient.passwordHash === null && 
-            (state.data.onboardingStage === 'awaiting_shared_user_name' || state.data.onboardingStage === 'setting_up_main_client_credentials')) {
-            
-            logger.info(`[WHATSAPP SERVICE] Priorizando onboarding de acesso compartilhado para ${senderPhone}, stage: ${state.data.onboardingStage}`);
-            const onboardingResult = await onboardingHandler.handleOnboardingStep(state, messageText, actorClient);
-            state = onboardingResult.updatedState;
-            actorClient = onboardingResult.updatedActorClient;
-            if (onboardingResult.onboardingReply) {
-                state.messageHistory.push({ role: 'assistant', content: onboardingResult.onboardingReply });
-                await sendWhatsappMessage(senderPhone, onboardingResult.onboardingReply);
-            }
-            conversationState.set(senderPhone, state);
-            pushNameFromPayload = null;
-            return;
-        }
-
         if (state.data.onboardingStage !== 'onboarding_complete') {
             logger.info(`[WHATSAPP SERVICE] Processando onboarding padrão para ${senderPhone}, stage: ${state.data.onboardingStage}`);
             const onboardingResult = await onboardingHandler.handleOnboardingStep(state, messageText, actorClient);
@@ -458,7 +446,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             actorClient = onboardingResult.updatedActorClient;
             if (onboardingResult.onboardingReply) {
                 state.messageHistory.push({ role: 'assistant', content: onboardingResult.onboardingReply });
-                await sendWhatsappMessage(senderPhone, onboardingResult.onboardingReply);
+                // A mensagem já é enviada dentro do handler, não precisa reenviar.
             }
             conversationState.set(senderPhone, state);
             pushNameFromPayload = null;
@@ -562,7 +550,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             if (!state.activeFinancialAccountId) return;
         }
 
-        // <<< INÍCIO DA OTIMIZAÇÃO: BUSCA DE CONTEXTO PARALELA E COM CACHE >>>
         const cacheKey = `context:${state.activeFinancialAccountId}`;
         let contextData = appContextCache.get(cacheKey);
 
@@ -619,7 +606,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             availableBusinessClients: contextData.availableBusinessClients,
             pendingAction: state.currentAction === 'awaiting_clarification_response' ? state.pendingConfirmation : null
         };
-        // <<< FIM DA OTIMIZAÇÃO >>>
 
         const aiResponse = await aiModelService.interpretUserMessage(messageText, aiContext);
         state.lastAiResponse = aiResponse;
@@ -633,7 +619,6 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             let mainActionResult = null;
             const isOwnerActingOnOwnBehalfGlobal = !state.isSharedAccessContext || state.ownerClientIdForContext === actorClient.id;
 
-            // <<< INÍCIO DA OTIMIZAÇÃO: Invalidação do Cache >>>
             let contextWasMutated = false;
             const mutatingActions = new Set([
                 'CREATE_FINANCIAL_ACCOUNT', 'UPDATE_FINANCIAL_ACCOUNT', 'DELETE_FINANCIAL_ACCOUNT',
@@ -643,16 +628,13 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 'CREATE_BUSINESS_CLIENT', 'UPDATE_BUSINESS_CLIENT', 'DELETE_BUSINESS_CLIENT',
                 'SWITCH_FINANCIAL_ACCOUNT'
             ]);
-            // <<< FIM DA OTIMIZAÇÃO >>>
 
             for (const detectedAction of aiResponse.detected_actions) {
                 const actionName = detectedAction.action || detectedAction.action_type;
                 
-                // <<< INÍCIO DA OTIMIZAÇÃO: Verificação de Mutação >>>
                 if (mutatingActions.has(actionName)) {
                     contextWasMutated = true;
                 }
-                // <<< FIM DA OTIMIZAÇÃO >>>
 
                 const ownerOnlyActions = ['CREATE_FINANCIAL_ACCOUNT', 'UPDATE_FINANCIAL_ACCOUNT', 'DELETE_FINANCIAL_ACCOUNT', 'GRANT_ACCESS', 'LIST_GRANTED_ACCESS', 'UPDATE_GRANTED_ACCESS', 'REVOKE_ACCESS', 'CREATE_FINANCIAL_CATEGORY', 'UPDATE_FINANCIAL_CATEGORY', 'DELETE_FINANCIAL_CATEGORY', 'GET_AFFILIATE_DASHBOARD', 'CREATE_MOTIVATIONAL_PHRASE', 'UPDATE_MOTIVATIONAL_PHRASE', 'DELETE_MOTIVATIONAL_PHRASE'];
                 if (ownerOnlyActions.includes(actionName) && !isOwnerActingOnOwnBehalfGlobal) {
@@ -672,21 +654,16 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     state.activeFinancialAccountName = newAccount.accountName || newAccount.name;
                     state.activeFinancialAccountType = newAccount.accountType || newAccount.type;
                     
-                    // <<< INÍCIO DA OTIMIZAÇÃO: Invalidação Imediata >>>
-                    // Invalida o cache da conta antiga e da nova para garantir consistência
-                    appContextCache.del(cacheKey); // Invalida o cache da conta antiga
-                    appContextCache.del(`context:${newAccount.id}`); // Garante que a próxima ação na nova conta busque dados frescos
+                    appContextCache.del(cacheKey);
+                    appContextCache.del(`context:${newAccount.id}`);
                     logger.info(`[CACHE] Cache invalidado devido à troca de conta para ID ${newAccount.id}.`);
-                    // <<< FIM DA OTIMIZAÇÃO >>>
                 }
             }
 
-            // <<< INÍCIO DA OTIMIZAÇÃO: Lógica final de invalidação >>>
             if (contextWasMutated && mainActionResult.resourceForButtonsContext?.id !== 'account_switched') {
                 appContextCache.del(cacheKey);
                 logger.info(`[CACHE] Cache para conta ${state.activeFinancialAccountId} invalidado devido a uma ação de mutação.`);
             }
-            // <<< FIM DA OTIMIZAÇÃO >>>
 
             if (state.pendingChainedAction && mainActionResult) {
                 const primaryAction = aiResponse.detected_actions[0];
@@ -732,7 +709,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 const resourcesForButtons = mainActionResult?.resourceForButtonsContext?.resources || [];
                 const hasMultipleResources = resourcesForButtons.length > 1;
                 if (hasMultipleResources) {
-                    const blockId = Buffer.from(JSON.stringify(resources)).toString('base64');
+                    const blockId = Buffer.from(JSON.stringify(resourcesForButtons)).toString('base64');
                     const buttons = [
                         { id: `edit:multi_action_block:${blockId}`, label: '✏️ Editar este bloco' },
                         { id: `delete:multi_action_block:${blockId}`, label: '🗑️ Excluir algo' }
