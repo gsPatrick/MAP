@@ -146,6 +146,47 @@ async function getDetails(req, res, next) {
   }
 }
 
+/**
+ * <<< NOVO CONTROLLER >>>
+ * Verifica publicamente se um Business Client existe com base no e-mail ou telefone.
+ */
+async function verifyPublicClient(req, res, next) {
+  try {
+    const { financialAccountId } = req.params;
+    const { email, phone } = req.body;
+
+    if (!email && !phone) {
+      return res.status(400).json({ status: 'fail', message: 'E-mail ou telefone é necessário para a verificação.' });
+    }
+
+    const client = await businessClientService.findExistingBusinessClient(
+      parseInt(financialAccountId, 10),
+      email,
+      phone
+    );
+
+    if (client) {
+      // Retorna apenas dados públicos e seguros
+      res.status(200).json({
+        status: 'success',
+        data: {
+          exists: true,
+          name: client.name,
+          email: client.email,
+          phone: client.phone,
+        },
+      });
+    } else {
+      res.status(200).json({
+        status: 'success',
+        data: { exists: false },
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createBusinessClient,
   getAllBusinessClients,
@@ -154,4 +195,5 @@ module.exports = {
   deleteBusinessClient,
   getAppointmentHistory,
   getDetails,
+  verifyPublicClient
 };

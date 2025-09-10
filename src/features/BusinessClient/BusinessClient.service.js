@@ -471,6 +471,47 @@ async function getBusinessClientDetails(financialAccountId, businessClientId) {
   };
 }
 
+/**
+ * <<< NOVA FUNÇÃO >>>
+ * Procura por um BusinessClient existente com base no e-mail ou telefone.
+ * @param {number} financialAccountId - ID da conta de negócio.
+ * @param {string} email - E-mail a ser pesquisado.
+ * @param {string} phone - Telefone a ser pesquisado.
+ * @param {object} options - Opções, como a transação do Sequelize.
+ * @returns {Promise<object|null>} O cliente encontrado ou null.
+ */
+async function findExistingBusinessClient(financialAccountId, email, phone, options = {}) {
+  try {
+    const whereClauses = [];
+    if (email) {
+      whereClauses.push({ email: email.toLowerCase().trim() });
+    }
+    if (phone) {
+      // Normaliza o telefone para garantir a consistência da busca
+      const normalizedPhone = phone.replace(/\D/g, '');
+      whereClauses.push({ phone: normalizedPhone });
+    }
+    
+    if (whereClauses.length === 0) {
+      return null; // Não há como buscar se não houver e-mail ou telefone
+    }
+
+    const client = await BusinessClient.findOne({
+      where: {
+        financialAccountId,
+        [Op.or]: whereClauses,
+      },
+      transaction: options.transaction || null,
+    });
+
+    return client;
+  } catch (error) {
+    logger.error(`Erro ao buscar BusinessClient existente para FA ID ${financialAccountId}: ${error.message}`, error);
+    throw error;
+  }
+}
+
+
 
 module.exports = {
   createBusinessClient,
@@ -481,4 +522,5 @@ module.exports = {
   findBusinessClientsByIdentifiers,
    getAppointmentHistoryForClient,
   getBusinessClientDetails,
+  findExistingBusinessClient
 };

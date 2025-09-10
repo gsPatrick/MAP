@@ -6,6 +6,7 @@ const businessClientController = require('./BusinessClient.controller');
 const router = Router({ mergeParams: true });
 
 // As rotas abaixo já estão sob o prefixo /financial-accounts/:financialAccountId/business-clients
+router.post('/public/verify', businessClientController.verifyPublicClient);
 
 // Rota para criar e listar clientes
 // Caminho final: POST ou GET /financial-accounts/:financialAccountId/business-clients/
