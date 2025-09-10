@@ -1,16 +1,11 @@
 // src/features/WhatsappHandler/onboarding.handler.js
-// DESCRIÇÃO:
-// Este handler é uma "máquina de estados" que gerencia o fluxo de onboarding de um cliente no WhatsApp.
-// Ele é responsável por coletar informações que não foram obtidas durante o cadastro inicial no site,
-// como a configuração de contas financeiras (PF e PJ/MEI), e guiar o usuário até que sua conta esteja
-// 100% pronta para uso.
 
 const clientService = require('../Client/client.service');
 const clientAuthService = require('../ClientAuth/clientAuth.service');
 const logger = require('../../utils/logger');
 const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
 const availabilityService = require('../Availability/availability.service');
-
+const onboardingAIService = require('./onboarding.ai.service');
 
 // ============================================================================
 // FUNÇÕES DE FORMATAÇÃO DE MENSAGEM (Templates de Resposta)
@@ -88,14 +83,19 @@ function getOnboardingAskForPJTypeMessage(clientName) {
     return `${aiIntro}\n\n${dataStructure}`;
 }
 
+// <<< NOVOS TEMPLATES PARA O FLUXO HÍBRIDO >>>
 function getOnboardingAskForWorkDaysMessage(clientName) {
     const aiIntro = `Ótimo, ${clientName}! Sua conta empresarial foi criada. Agora, vamos configurar sua agenda para que seus clientes possam marcar horários online. 🗓️`;
     const dataStructure = `Primeiro, me diga em quais dias da semana você trabalha:`;
     return `${aiIntro}\n\n${dataStructure}`;
 }
 
+function getOnboardingAskForCustomScheduleMessage(clientName) {
+    return `Entendido, ${clientName}! Por favor, descreva seus dias e horários de trabalho.\n\n*Exemplo:* "trabalho somente às terças e quintas, das 10h até as 20h"`;
+}
+
 function getOnboardingAskForWorkTimesMessage(clientName) {
-    const aiIntro = `Entendido! 👍 Agora, qual é o seu horário de trabalho nesses dias?`;
+    const aiIntro = `Perfeito! 👍 Agora, qual é o seu horário de trabalho nesses dias?`;
     const dataStructure = `Me diga a hora que você começa e a hora que termina. Por exemplo:\n\n*"das 9h às 18h"*`;
     return `${aiIntro}\n\n${dataStructure}`;
 }
@@ -105,24 +105,18 @@ function getOnboardingFinalStepsMessage(clientName, publicBookingLink) {
     const dataStructure = `Seu link público para agendamentos já está no ar:\n` +
                           `🔗 *${publicBookingLink}*\n\n` +
                           `*⚠️ Passo Final Importante:*\n` +
-                          `Para que seus clientes possam agendar, você precisa ter pelo menos um *produto/serviço* cadastrado. É super fácil!\n\n` +
+                          `Para que seus clientes possam agendar, você precisa ter pelo menos um *serviço* cadastrado. É super fácil!\n\n` +
                           `Me diga, por exemplo:\n` +
-                          `*"criar produto/serviço Consultoria com preço 150 e duração de 60 minutos"*`;
-    const outro = `Assim que criar seu primeiro produto/serviço, já pode compartilhar seu link e começar a encher sua agenda! 🚀`;
+                          `*"criar serviço Consultoria com preço 150 e duração de 60 minutos"*`;
+    const outro = `Assim que criar seu primeiro serviço, já pode compartilhar seu link e começar a encher sua agenda! 🚀`;
     return `${aiIntro}\n\n${dataStructure}\n\n${outro}`;
 }
+
 
 // ============================================================================
 // FUNÇÃO PRINCIPAL DO HANDLER (Máquina de Estados)
 // ============================================================================
 
-/**
- * Processa a mensagem do usuário com base no estágio atual do onboarding.
- * @param {object} state - O estado atual da conversa do usuário.
- * @param {string} messageText - O texto da mensagem recebida (ou ID do botão).
- * @param {object} actorClient - O objeto do cliente que está interagindo.
- * @returns {Promise<object>} Um objeto com a resposta a ser enviada e o estado atualizado.
- */
 /**
  * Processa a mensagem do usuário com base no estágio atual do onboarding.
  * @param {object} state - O estado atual da conversa do usuário.
@@ -140,7 +134,7 @@ async function handleOnboardingStep(state, messageText, actorClient) {
     const lowerMessageText = (messageText || "").toLowerCase().trim();
     const isSharedContext = state.isSharedAccessContext;
 
-    // --- ESTÁGIO DE CREDENCIAIS (Para usuários legados ou ativados pelo admin sem senha) ---
+    // --- ESTÁGIOS DE CREDENCIAIS E CONTA PF (permanecem os mesmos) ---
     if (state.data.onboardingStage === 'setting_up_credentials_email') {
         if (state.currentAction !== 'awaiting_input_email') {
             onboardingReply = getOnboardingAskForEmailMessage(clientNameForMessages);
@@ -148,7 +142,6 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             await sendWhatsappMessage(actorClient.phone, onboardingReply);
             return { onboardingReply: 'Aguardando e-mail do usuário...', updatedState: state, updatedActorClient: actorClient };
         }
-        
         const emailInput = lowerMessageText;
         if (emailInput.includes('@') && emailInput.includes('.')) {
             const existingClient = await clientService.findClientByEmail(emailInput);
@@ -157,7 +150,6 @@ async function handleOnboardingStep(state, messageText, actorClient) {
                 await sendWhatsappMessage(actorClient.phone, onboardingReply);
                 return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
             }
-
             state.data.tempEmail = emailInput;
             state.data.onboardingStage = 'setting_up_credentials_password';
             state.currentAction = 'awaiting_input_password';
@@ -176,11 +168,9 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             const emailToSet = state.data.tempEmail;
             await clientAuthService.setClientCredentials(actorClient.phone, passwordInput, null, emailToSet);
             actorClient.email = emailToSet; 
-
             delete state.data.tempEmail;
             state.data.onboardingStage = 'setting_up_full_name';
             state.currentAction = 'awaiting_full_name';
-
             onboardingReply = getOnboardingAskForFullNameMessage(clientNameForMessages, isSharedContext);
             await sendWhatsappMessage(actorClient.phone, onboardingReply);
         } else {
@@ -190,23 +180,19 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
 
-    // --- ESTÁGIO DE TRANSIÇÃO PÓS-PAGAMENTO ---
     if (state.data.onboardingStage === 'awaiting_plan_confirmation' && state.hasPaidAccess) {
         onboardingReply = getOnboardingWelcomeMessage(clientNameForMessages, state.hasPaidAccess, isSharedContext, state.accessLevelTextForUser);
         await sendWhatsappMessage(actorClient.phone, onboardingReply);
     }
 
-    // --- ESTÁGIO 1: COLETANDO NOME COMPLETO (Se necessário) ---
     if (state.data.onboardingStage === 'setting_up_full_name') {
         const fullName = messageText.trim();
         if (fullName.length >= 3 && fullName.includes(' ')) {
             await clientService.updateClientContact(actorClient.id, { name: fullName });
             actorClient.name = fullName;
             clientNameForMessages = fullName.split(' ')[0];
-            
             state.data.onboardingStage = 'setting_up_pf_account_name';
             state.currentAction = 'awaiting_input_pf_name';
-            
             onboardingReply = getOnboardingAskForPFAccountNameMessage(clientNameForMessages);
             await sendWhatsappMessage(actorClient.phone, onboardingReply);
         } else {
@@ -216,7 +202,6 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
     
-    // --- ESTÁGIO 2: CRIANDO CONTA PF (Passo obrigatório) ---
     if (state.data.onboardingStage === 'setting_up_pf_account_name') {
         const pfAccountName = messageText.trim();
         if (pfAccountName.length >= 3 && pfAccountName.length <= 50) {
@@ -227,19 +212,13 @@ async function handleOnboardingStep(state, messageText, actorClient) {
                 state.activeFinancialAccountId = newPfAccount.id;
                 state.activeFinancialAccountName = newPfAccount.accountName;
                 state.activeFinancialAccountType = newPfAccount.accountType;
-                
                 logger.info(`[ONBOARDING HANDLER] Conta PF "${pfAccountName}" criada para ATOR ${actorClient.phone}.`);
-
                 const planTier = state.currentAccessLevel.startsWith('avancado') || state.currentAccessLevel.startsWith('vitalicio_avancado') ? 'avancado' : 'basico';
-                
                 if (planTier === 'avancado') {
                     state.data.onboardingStage = 'confirming_pj_mei_setup';
                     state.currentAction = 'awaiting_pj_mei_confirm';
-                    
                     const messageTextAskPjType = `🏦 Conta Pessoal "${pfAccountName}" criada com sucesso, ${clientNameForMessages}! 🎉 Ela já está selecionada. \n\nComo você tem um Plano Avançado, vamos agora configurar sua conta empresarial.`;
-                    
                     await sendWhatsappMessage(actorClient.phone, messageTextAskPjType);
-                    // Chama a si mesmo para avançar para a próxima etapa imediatamente
                     return handleOnboardingStep(state, '', actorClient);
                 } else {
                     state.data.onboardingStage = 'onboarding_complete';
@@ -259,32 +238,27 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
     
-    // --- ESTÁGIO 3: INÍCIO OBRIGATÓRIO DA CONFIGURAÇÃO EMPRESARIAL ---
+    // --- ESTÁGIOS DO ONBOARDING EMPRESARIAL (REESTRUTURADOS) ---
+
     if (state.data.onboardingStage === 'confirming_pj_mei_setup') {
         const messageTextAskPjType = getOnboardingAskForPJTypeMessage(clientNameForMessages);
-        
         state.data.onboardingStage = 'awaiting_pj_mei_type';
         state.currentAction = 'awaiting_input_pj_mei_type';
-
         await sendButtonListMessage(actorClient.phone, messageTextAskPjType, [
             { id: 'onboarding_select_pj', label: 'Empresa (PJ)' },
             { id: 'onboarding_select_mei', label: 'MEI' }
         ], 'Tipo de Conta');
-
         return { onboardingReply: null, updatedState: state, updatedActorClient: actorClient };
     }
     
-    // --- ESTÁGIO 4: ESCOLHENDO TIPO PJ/MEI (CORRIGIDO) ---
     if (state.data.onboardingStage === 'awaiting_pj_mei_type') {
         const typeInput = messageText.trim().toLowerCase();
         let selectedType = null;
-
         if (typeInput === 'onboarding_select_pj' || typeInput === 'pj') {
             selectedType = 'PJ';
         } else if (typeInput === 'onboarding_select_mei' || typeInput === 'mei') {
             selectedType = 'MEI';
         }
-
         if (selectedType) {
             state.data.tempPjMeiType = selectedType;
             onboardingReply = `🎉 Show! Agora, qual nome vamos dar para sua potência empresarial do tipo *${selectedType}*?`;
@@ -301,29 +275,24 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
     
-    // --- ESTÁGIO 5: CRIANDO NOME DA CONTA EMPRESARIAL ---
     if (state.data.onboardingStage === 'creating_pj_mei_account_name') {
         const companyName = messageText.trim();
         const companyType = state.data.tempPjMeiType;
-        
         if (companyName.length >= 3 && companyName.length <= 50) {
             try {
                 const newAccount = await clientService.createFinancialAccount(actorClient.id, { 
                     accountName: companyName, accountType: companyType, isDefault: false
                 });
-                
                 state.data.newlyCreatedAccountId = newAccount.id;
-                
                 onboardingReply = getOnboardingAskForWorkDaysMessage(clientNameForMessages);
                 state.data.onboardingStage = 'setting_up_work_days';
                 state.currentAction = 'awaiting_work_days';
-                
                 await sendButtonListMessage(actorClient.phone, onboardingReply, [
                     { id: 'onboarding_days_seg_sex', label: 'Segunda a Sexta' },
                     { id: 'onboarding_days_seg_sab', label: 'Segunda a Sábado' },
-                    { id: 'onboarding_days_todos', label: 'Todos os dias' }
+                    { id: 'onboarding_days_todos', label: 'Todos os dias' },
+                    { id: 'onboarding_days_outro', label: 'Outro (descrever)' }
                 ], 'Dias de Trabalho');
-
             } catch (e) {
                 logger.error(`[ONBOARDING HANDLER] Erro ao criar conta ${companyType} "${companyName}": ${e.message}`);
                 onboardingReply = `Eita! 😬 Parece que o nome "${companyName}" já existe ou é inválido. Vamos tentar outro nome para a sua ${companyType}?`;
@@ -336,7 +305,6 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         return { onboardingReply: null, updatedState: state, updatedActorClient: actorClient };
     }
 
-    // --- NOVO ESTÁGIO 6: DEFININDO DIAS DE TRABALHO ---
     if (state.data.onboardingStage === 'setting_up_work_days') {
         const selection = lowerMessageText;
         const daysMap = {
@@ -351,57 +319,79 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             state.data.onboardingStage = 'setting_up_work_times';
             state.currentAction = 'awaiting_work_times';
             await sendWhatsappMessage(actorClient.phone, onboardingReply);
+        } else if (selection === 'onboarding_days_outro') {
+            onboardingReply = getOnboardingAskForCustomScheduleMessage(clientNameForMessages);
+            state.data.onboardingStage = 'setting_up_custom_schedule';
+            state.currentAction = 'awaiting_custom_schedule';
+            await sendWhatsappMessage(actorClient.phone, onboardingReply);
         } else {
             onboardingReply = getOnboardingAskForWorkDaysMessage(clientNameForMessages);
             await sendButtonListMessage(actorClient.phone, onboardingReply, [
                 { id: 'onboarding_days_seg_sex', label: 'Segunda a Sexta' },
                 { id: 'onboarding_days_seg_sab', label: 'Segunda a Sábado' },
-                { id: 'onboarding_days_todos', label: 'Todos os dias' }
+                { id: 'onboarding_days_todos', label: 'Todos os dias' },
+                { id: 'onboarding_days_outro', label: 'Outro (descrever)' }
             ], 'Dias de Trabalho');
         }
         return { onboardingReply: null, updatedState: state, updatedActorClient: actorClient };
     }
 
-    // --- NOVO ESTÁGIO 7: DEFININDO HORÁRIOS DE TRABALHO ---
     if (state.data.onboardingStage === 'setting_up_work_times') {
-        const timeRegex = /(\d{1,2})h(?:(\d{2}))?\s*às\s*(\d{1,2})h(?:(\d{2}))?/;
-        const match = lowerMessageText.match(timeRegex);
-
-        if (match) {
-            const startHour = match[1].padStart(2, '0');
-            const startMinute = match[2] || '00';
-            const endHour = match[3].padStart(2, '0');
-            const endMinute = match[4] || '00';
-            
-            const startTime = `${startHour}:${startMinute}`;
-            const endTime = `${endHour}:${endMinute}`;
-
+        const scheduleInfo = await onboardingAIService.interpretWorkSchedule(lowerMessageText);
+        if (scheduleInfo && scheduleInfo.startTime && scheduleInfo.endTime) {
+            // Horário foi interpretado com sucesso, agora finalizamos.
             try {
                 await availabilityService.createDefaultWorkRule(
                     state.data.newlyCreatedAccountId,
-                    startTime,
-                    endTime,
-                    state.data.tempWorkDays
+                    scheduleInfo.startTime,
+                    scheduleInfo.endTime,
+                    state.data.tempWorkDays // Dias já estavam salvos no estado
                 );
-
                 const publicLink = `https://www.map-nocontrole.com.br/agendar/${state.data.newlyCreatedAccountId}`;
                 onboardingReply = getOnboardingFinalStepsMessage(clientNameForMessages, publicLink);
-                
                 state.data.onboardingStage = 'onboarding_complete';
                 state.currentAction = null; 
                 delete state.data.tempWorkDays;
                 delete state.data.newlyCreatedAccountId;
                 delete state.data.tempPjMeiType;
-
                 await sendWhatsappMessage(actorClient.phone, onboardingReply);
-
             } catch (error) {
-                logger.error(`[ONBOARDING HANDLER] Erro ao criar regra de trabalho padrão: ${error.message}`);
+                logger.error(`[ONBOARDING HANDLER] Erro ao criar regra de trabalho com horário da IA: ${error.message}`);
                 onboardingReply = `Ops, tive um problema ao salvar seu horário. Vamos tentar de novo. Qual seu horário de trabalho? (Ex: das 9h às 18h)`;
                 await sendWhatsappMessage(actorClient.phone, onboardingReply);
             }
         } else {
             onboardingReply = `Não entendi o formato do horário. Por favor, tente algo como *"das 8h às 17h30"* ou *"das 10h às 19h"*.`;
+            await sendWhatsappMessage(actorClient.phone, onboardingReply);
+        }
+        return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
+    }
+    
+    if (state.data.onboardingStage === 'setting_up_custom_schedule') {
+        const scheduleInfo = await onboardingAIService.interpretWorkSchedule(lowerMessageText);
+        if (scheduleInfo && scheduleInfo.startTime && scheduleInfo.endTime && scheduleInfo.rruleDays) {
+            // IA conseguiu extrair tudo, então finalizamos.
+            try {
+                await availabilityService.createDefaultWorkRule(
+                    state.data.newlyCreatedAccountId,
+                    scheduleInfo.startTime,
+                    scheduleInfo.endTime,
+                    scheduleInfo.rruleDays
+                );
+                const publicLink = `https://www.map-nocontrole.com.br/agendar/${state.data.newlyCreatedAccountId}`;
+                onboardingReply = getOnboardingFinalStepsMessage(clientNameForMessages, publicLink);
+                state.data.onboardingStage = 'onboarding_complete';
+                state.currentAction = null;
+                delete state.data.newlyCreatedAccountId;
+                delete state.data.tempPjMeiType;
+                await sendWhatsappMessage(actorClient.phone, onboardingReply);
+            } catch (error) {
+                logger.error(`[ONBOARDING HANDLER] Erro ao criar regra de trabalho com dados custom da IA: ${error.message}`);
+                onboardingReply = `Ops, tive um problema ao salvar seu horário. Vamos tentar de novo. Por favor, descreva seus dias e horários.`;
+                await sendWhatsappMessage(actorClient.phone, onboardingReply);
+            }
+        } else {
+            onboardingReply = `Hmm, não consegui entender perfeitamente. 🤔\n\nPor favor, tente ser mais completo, dizendo os *dias e os horários* na mesma frase.\n\n*Exemplo:* "trabalho de terça a sábado, das 10h às 19h30"`;
             await sendWhatsappMessage(actorClient.phone, onboardingReply);
         }
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
@@ -414,31 +404,21 @@ async function handleOnboardingStep(state, messageText, actorClient) {
 // FUNÇÃO DE GATILHO PROATIVO
 // ============================================================================
 
-/**
- * Inicia proativamente a conversa de onboarding para um novo cliente ativado.
- * @param {string} phone - O número de telefone canônico do cliente (ex: 5511999999999).
- * @param {string} [customWelcomeMessage] - Uma mensagem de boas-vindas opcional para ser enviada antes do onboarding.
- */
 async function triggerOnboarding(phone, customWelcomeMessage = null) {
     logger.info(`[ONBOARDING TRIGGER] Iniciando onboarding proativo para ${phone}.`);
     try {
         if (customWelcomeMessage) {
             await sendWhatsappMessage(phone, customWelcomeMessage);
         }
-
         const whatsappService = require('./whatsapp.service');
         const actorClient = await clientService.findClientByPhone(phone);
         if (!actorClient) {
             logger.error(`[ONBOARDING TRIGGER] Cliente com telefone ${phone} não encontrado para iniciar onboarding.`);
             return;
         }
-
         const clientAccounts = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
-        
         const state = await whatsappService.initializeOrUpdateState(actorClient, null, null, clientAccounts, []);
-
         const { updatedState } = await handleOnboardingStep(state, '', actorClient);
-
         if (updatedState) {
             whatsappService.conversationState.set(phone, updatedState);
             logger.info(`[ONBOARDING TRIGGER] Primeira etapa do onboarding enviada e estado inicial salvo para ${phone}.`);
