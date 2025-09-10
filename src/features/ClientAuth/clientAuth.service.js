@@ -121,16 +121,18 @@ async function registerClient(registerData) {
             throw { statusCode: 409, message: `${conflictField} já cadastrado.` };
         }
         
-        // <<< LÓGICA DE GERAÇÃO DO CÓDIGO ADICIONADA AQUI >>>
         const newAffiliateCode = await generateUniqueAffiliateCode(name);
 
         const newClientPayload = {
             name,
             email: lowerEmail,
             phone: normalizedPhone,
-            passwordHash: password,
+            // <<< CORREÇÃO CRÍTICA AQUI >>>
+            // A senha em texto plano DEVE ser atribuída ao campo passwordHash.
+            // O hook 'beforeCreate' no modelo Client irá interceptar este campo e criptografá-lo.
+            passwordHash: password, 
             status: 'Aguardando Pagamento',
-            affiliateCode: newAffiliateCode, // <<< SALVA O CÓDIGO GERADO
+            affiliateCode: newAffiliateCode,
         };
         
         if (affiliateCode) {

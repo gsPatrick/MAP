@@ -130,6 +130,65 @@ async function getAffiliateDashboard(affiliateClientId) {
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
+
+  
+}
+
+
+async function processNewSubscriptionForAffiliate(newlySubscribedClientId, options = {}) {
+  // Permite que uma transação externa seja usada, ou cria uma nova se não for fornecida.
+  const transaction = options.transaction || (await sequelize.transaction());
+  try {
+    const newClient = await Client.findByPk(newlySubscribedClientId, { transaction });
+
+    if (!newClient || !newClient.referredByClientId) {
+      if (!options.transaction) await transaction.commit(); // Só comita se a transação foi criada aqui
+      return;
+    }
+
+    const referrer = await Client.findByPk(newClient.referredByClientId, { transaction });
+    if (!referrer) {
+      if (!options.transaction) await transaction.rollback();
+      return;
+    }
+
+    const activeSubscription = await Subscription.findOne({
+      where: { clientId: newlySubscribedClientId, status: 'Ativa' },
+      include: [{ model: Plan, as: 'plan' }],
+      transaction,
+    });
+
+    if (!activeSubscription || !activeSubscription.plan) {
+      if (!options.transaction) await transaction.rollback();
+      return;
+    }
+
+    const commissionValue = parseFloat(activeSubscription.plan.affiliateCommissionValue);
+    if (isNaN(commissionValue) || commissionValue <= 0) {
+      if (!options.transaction) await transaction.commit();
+      return;
+    }
+
+    await referrer.increment('balance', { by: commissionValue, transaction });
+    
+    // Só comita se a transação foi criada nesta função
+    if (!options.transaction) {
+        await transaction.commit();
+    }
+    
+    logger.info(`[AffiliateService] Comissão de R$${commissionValue.toFixed(2)} creditada para o afiliado ID ${referrer.id}.`);
+
+    if (referrer.phone) {
+      const notificationMessage = `💰 *Você recebeu uma comissão!* 💰\n\n` +
+                                  `Parabéns! Você recebeu *R$${commissionValue.toFixed(2).replace('.', ',')}* pela assinatura de *${newClient.name}* (Telefone: ${newClient.phone}).\n\n` +
+                                  `Seu novo saldo é de R$${(parseFloat(referrer.balance) + commissionValue).toFixed(2).replace('.', ',')}. Continue assim! 🚀`;
+      await sendWhatsappMessage(referrer.phone, notificationMessage);
+    }
+
+  } catch (error) {
+    if (!options.transaction) await transaction.rollback(); // Só da rollback se a transação foi criada aqui
+    logger.error(`[AffiliateService] Erro ao processar comissão para o cliente ${newlySubscribedClientId}: ${error.message}`, error);
+  }
 }
 
 module.exports = {

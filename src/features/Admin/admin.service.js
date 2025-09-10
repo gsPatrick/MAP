@@ -233,7 +233,6 @@ async function changeUserPlan(clientId, planId, customMessage) {
             throw { statusCode: 404, message: 'Plano não encontrado.' };
         }
 
-        // <<< LÓGICA DE ATIVAÇÃO VS RENOVAÇÃO >>>
         const wasActiveBefore = client.status === 'Ativo' && client.accessExpiresAt && new Date(client.accessExpiresAt) >= new Date();
 
         await Subscription.update(
@@ -250,32 +249,33 @@ async function changeUserPlan(clientId, planId, customMessage) {
             { transaction: t }
         );
         
+        // <<< ADICIONADO PROCESSAMENTO DE COMISSÃO AQUI >>>
+        // A comissão é processada antes do commit final
+        await affiliateService.processNewSubscriptionForAffiliate(clientId, { transaction: t });
+
         await t.commit(); 
         
         logger.info(`[AdminService] Plano do cliente ID ${clientId} alterado para "${plan.name}".`);
 
         if (client.phone) {
-            try {
-                let messageToSend;
-                const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
-                let expiryWelcomePart = `Seu acesso agora está garantido até *${formatDate(newSubscription.endDate)}*.`;
-                if (plan.durationDays > 7000) { 
-                    expiryWelcomePart = "Você agora tem *acesso vitalício*! 🎉";
-                }
-
-                if (customMessage && customMessage.trim() !== '') {
-                    messageToSend = customMessage;
-                } else if (wasActiveBefore) {
-                    messageToSend = `Olá, ${clientName}! ✨\n\nSua assinatura foi renovada com sucesso para o plano *${plan.name}* pelo nosso suporte.\n\n${expiryWelcomePart}\n\nContinue no controle! Qualquer dúvida, é só me chamar. 😉`;
-                } else {
-                    messageToSend = `Olá, ${clientName}! ✨\n\nSua assinatura do plano *${plan.name}* foi ativada com sucesso pelo nosso suporte.\n\n${expiryWelcomePart}\n\nJá pode começar a usar todos os recursos. Qualquer dúvida, é só me chamar! 😉`;
-                }
-                
-                await sendWhatsappMessage(client.phone, messageToSend);
-                logger.info(`[AdminService] Mensagem de confirmação de mudança de plano enviada para ${client.phone}.`);
-            } catch (whatsappError) {
-                logger.error(`[AdminService] Falha ao enviar mensagem de confirmação para ${client.phone}: ${whatsappError.message}`);
+            // Lógica de envio de mensagem para o cliente que teve o plano alterado
+            let messageToSend;
+            const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
+            let expiryWelcomePart = `Seu acesso agora está garantido até *${formatDate(newSubscription.endDate)}*.`;
+            if (plan.durationDays > 7000) { 
+                expiryWelcomePart = "Você agora tem *acesso vitalício*! 🎉";
             }
+
+            if (customMessage && customMessage.trim() !== '') {
+                messageToSend = customMessage;
+            } else if (wasActiveBefore) {
+                messageToSend = `Olá, ${clientName}! ✨\n\nSua assinatura foi renovada com sucesso para o plano *${plan.name}* pelo nosso suporte.\n\n${expiryWelcomePart}\n\nContinue no controle! Qualquer dúvida, é só me chamar. 😉`;
+            } else {
+                messageToSend = `Olá, ${clientName}! ✨\n\nSua assinatura do plano *${plan.name}* foi ativada com sucesso pelo nosso suporte.\n\n${expiryWelcomePart}\n\nJá pode começar a usar todos os recursos. Qualquer dúvida, é só me chamar! 😉`;
+            }
+            
+            await sendWhatsappMessage(client.phone, messageToSend);
+            logger.info(`[AdminService] Mensagem de confirmação de mudança de plano enviada para ${client.phone}.`);
         }
 
         return {
