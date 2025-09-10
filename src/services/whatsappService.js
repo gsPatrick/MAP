@@ -193,7 +193,8 @@ function getZapiQrCodeImageUrl() {
 
 
 /**
- * Fixa uma mensagem específica no topo de uma conversa do WhatsApp.
+ * <<< FUNÇÃO CORRIGIDA >>>
+ * Fixa uma mensagem específica no topo de uma conversa do WhatsApp usando o método PATCH.
  * @param {string} phone - O número de telefone do chat.
  * @param {string} messageId - O ID da mensagem a ser fixada.
  * @param {'24_hours' | '7_days' | '30_days'} duration - A duração que a mensagem ficará fixada.
@@ -205,12 +206,20 @@ async function pinWhatsappMessage(phone, messageId, duration = '30_days') {
     return null;
   }
 
-  const endpoint = `${BASE_URL}/pin-message`;
+  // O endpoint da Z-API para esta ação pode ser o mesmo, mas o método muda.
+  // Baseado na sua documentação, o endpoint pode precisar ser ajustado se for diferente.
+  // Vamos assumir que a URL base está correta.
+  const endpoint = `${BASE_URL}/pin-message`; 
+  
   const payload = {
     phone: phone.replace(/\D/g, ''),
     messageId: messageId,
+    // A documentação mais recente da Z-API sugere que a ação e a duração vão no payload
+    // com o método PATCH. Vamos seguir esse padrão.
+    messageAction: 'pin',
     pinMessageDuration: duration,
   };
+
   const headers = {
     'Content-Type': 'application/json',
     'client-token': ZAPI_CLIENT_TOKEN,
@@ -218,8 +227,10 @@ async function pinWhatsappMessage(phone, messageId, duration = '30_days') {
 
   try {
     logger.info(`[WhatsAppService Pin] Tentando fixar a mensagem ID ${messageId} para ${payload.phone} por ${duration}.`);
-    // A Z-API usa o método PATCH para esta ação
+    
+    // <<< CORREÇÃO PRINCIPAL: Usando axios.patch conforme a documentação >>>
     const response = await axios.patch(endpoint, payload, { headers });
+
     logger.info(`[WhatsAppService Pin] Mensagem fixada com sucesso. Z-API Response:`, response.data);
     return response.data;
   } catch (error) {

@@ -8,7 +8,7 @@ const googleCalendarService = require('../GoogleCalendar/googleCalendarService')
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 const { sendWhatsappMessage } = require('../../services/whatsappService');
 
-
+const crypto = require('node:crypto');
 // Mapa em memória para armazenar códigos de ativação temporários
 const activationCodes = new Map();
 
@@ -21,6 +21,31 @@ const defaultPersonalCategoryNames = [
     'Assinaturas/Streaming', 'Cuidados Pessoais', 'Compras', 'Vestuário', 'Educação',
     'Dívidas/Empréstimos', 'Pagamento de Fatura', 'Receitas', 'Salário', 'Renda Extra', 'Investimentos'
 ];
+
+// ADICIONE ESTA FUNÇÃO AUXILIAR NO TOPO DO ARQUIVO
+/**
+ * Gera um código de afiliado único e aleatório para um novo cliente.
+ * @param {string} clientName - O nome do cliente para basear o código.
+ * @returns {Promise<string>} O código de afiliado único gerado.
+ */
+async function generateUniqueAffiliateCode(clientName) {
+    let newCode;
+    let isUnique = false;
+    while (!isUnique) {
+        const namePart = clientName 
+            ? clientName.replace(/[^a-zA-Z]/g, '').substring(0, 4).toUpperCase()
+            : 'USER';
+        const randomPart = crypto.randomBytes(3).toString('hex').toUpperCase();
+        newCode = `MAP${namePart}${randomPart}`.substring(0, 12);
+
+        const existingCode = await Client.findOne({ where: { affiliateCode: newCode } });
+        if (!existingCode) {
+            isUnique = true;
+        }
+    }
+    logger.info(`Código de afiliado único '${newCode}' gerado para ${clientName}.`);
+    return newCode;
+}
 
 async function createDefaultCategoriesForAccount(financialAccountId, accountType, transaction) {
     logger.info(`Iniciando criação de categorias padrão para conta ID ${financialAccountId}, tipo ${accountType}.`);
@@ -96,15 +121,16 @@ async function registerClient(registerData) {
             throw { statusCode: 409, message: `${conflictField} já cadastrado.` };
         }
         
-        // <<< CORREÇÃO CRÍTICA >>>
-        // Passa a senha em texto plano para o campo 'passwordHash'.
-        // O hook 'beforeCreate' no modelo Client irá interceptar e criptografar.
+        // <<< LÓGICA DE GERAÇÃO DO CÓDIGO ADICIONADA AQUI >>>
+        const newAffiliateCode = await generateUniqueAffiliateCode(name);
+
         const newClientPayload = {
             name,
             email: lowerEmail,
             phone: normalizedPhone,
             passwordHash: password,
             status: 'Aguardando Pagamento',
+            affiliateCode: newAffiliateCode, // <<< SALVA O CÓDIGO GERADO
         };
         
         if (affiliateCode) {
@@ -121,8 +147,6 @@ async function registerClient(registerData) {
 
         const newClient = await Client.create(newClientPayload, { transaction: t });
 
-        // <<< LÓGICA ADICIONADA >>>
-        // Cria a conta financeira pessoal (PF) e as categorias padrão para o novo cliente.
         const pfAccount = await FinancialAccount.create({
             clientId: newClient.id,
             accountName: 'Pessoal',
