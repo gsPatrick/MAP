@@ -39,6 +39,7 @@ let pushNameFromPayload = null;
 // --- Funções de Controle de Fluxo e Estado (Core do Maestro) ---
 
 async function initializeOrUpdateState(client, sharedAccessRecord = null, existingState = null, clientAccountsFromDb = [], ownerAccountsIfShared = []) {
+    // --- LÓGICA DE IDENTIFICAÇÃO E PERMISSÕES (PERMANECE IGUAL) ---
     const nameFromDb = (client.name && client.name.trim() !== "" && client.name.toLowerCase() !== 'convidado')
         ? client.name.split(" ")[0]
         : null;
@@ -103,28 +104,42 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
     }
    
     const accountsForOperation = isSharedAccessContext ? ownerAccountsIfShared : clientAccountsFromDb;
-    let onboardingStage = existingState?.data?.onboardingStage;
+
+    // <<< INÍCIO DA CORREÇÃO PRINCIPAL (ANTI-LOOP) >>>
+    // Se já existe um estado e o usuário está no meio de um fluxo de onboarding, NÃO recalcule o estágio
+    // a menos que o status de pagamento tenha mudado.
+    if (existingState && existingState.data.onboardingStage && existingState.data.onboardingStage !== 'onboarding_complete') {
+        const paidStatusChanged = existingState.hasPaidAccess_whenStageLastSet !== hasPaidAccess;
+        if (!paidStatusChanged) {
+            // Apenas atualiza os dados básicos, mas mantém o estágio atual do onboarding intacto.
+            existingState.clientName = clientName;
+            existingState.ownerClientNameForContext = ownerClientNameForContext;
+            logger.debug(`[WHATSAPP SERVICE - UpdateState] Mantendo estágio de onboarding '${existingState.data.onboardingStage}' para evitar loop.`);
+            return existingState;
+        }
+    }
+    // <<< FIM DA CORREÇÃO PRINCIPAL >>>
+
+    // <<< INÍCIO DA LÓGICA DE ESTÁGIO CORRIGIDA E HIERÁRQUICA >>>
+    let onboardingStage;
 
     if (!hasPaidAccess) {
         onboardingStage = 'awaiting_plan_confirmation';
+    } else if (!client.email || !client.passwordHash) {
+        onboardingStage = 'setting_up_credentials_email';
+    } else if (accountsForOperation.length === 0) {
+        onboardingStage = 'setting_up_pf_account_name';
     } else {
-        if (!client.email || !client.passwordHash) {
-            onboardingStage = 'setting_up_credentials_email';
-        } else {
-            if (accountsForOperation.length === 0) {
-                 onboardingStage = 'setting_up_pf_account_name';
-            } else {
-                const hasPjMeiAccount = accountsForOperation.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
-                const planTier = clientAccessLevel.startsWith('avancado') || clientAccessLevel.startsWith('vitalicio_avancado') ? 'avancado' : 'basico';
+        const hasPjMeiAccount = accountsForOperation.some(acc => acc.accountType === 'PJ' || acc.accountType === 'MEI');
+        const planTier = clientAccessLevel.startsWith('avancado') || clientAccessLevel.startsWith('vitalicio_avancado') ? 'avancado' : 'basico';
 
-                if (planTier === 'avancado' && !hasPjMeiAccount) {
-                    onboardingStage = 'confirming_pj_mei_setup';
-                } else {
-                    onboardingStage = 'onboarding_complete';
-                }
-            }
+        if (planTier === 'avancado' && !hasPjMeiAccount) {
+            onboardingStage = 'confirming_pj_mei_setup';
+        } else {
+            onboardingStage = 'onboarding_complete';
         }
     }
+    // <<< FIM DA LÓGICA DE ESTÁGIO CORRIGIDA >>>
 
     let defaultAccount = null;
     if (onboardingStage === 'onboarding_complete' && hasPaidAccess && accountsForOperation.length > 0) {

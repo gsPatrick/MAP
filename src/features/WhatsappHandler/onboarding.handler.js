@@ -231,27 +231,27 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
     
-    // --- ESTÁGIO 3: CONFIRMANDO CRIAÇÃO DE CONTA EMPRESARIAL ---
     if (state.data.onboardingStage === 'confirming_pj_mei_setup') {
-        // [CORREÇÃO APLICADA AQUI]
-        // Esta lógica agora lida com os IDs dos botões ('onboarding_pj_yes', 'onboarding_pj_no')
-        // ou com texto digitado pelo usuário.
         if (lowerMessageText === 'onboarding_pj_yes' || lowerMessageText.includes("sim") || lowerMessageText.includes("quero")) {
             onboardingReply = getOnboardingAskForPJTypeMessage(clientNameForMessages);
             state.data.onboardingStage = 'awaiting_pj_mei_type';
             state.currentAction = 'awaiting_input_pj_mei_type';
-            await sendWhatsappMessage(actorClient.phone, onboardingReply);
-            return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
+            // <<< MUDANÇA AQUI: Envia com botões >>>
+            await sendButtonListMessage(actorClient.phone, onboardingReply, [
+                { id: 'onboarding_select_pj', label: 'Empresa (PJ)' },
+                { id: 'onboarding_select_mei', label: 'MEI' }
+            ], 'Tipo de Conta');
+            return { onboardingReply: null, updatedState: state, updatedActorClient: actorClient }; // Retorna null para não enviar msg duplicada
 
         } else if (lowerMessageText === 'onboarding_pj_no' || lowerMessageText.includes("não") || lowerMessageText.includes("nao")) {
             state.data.onboardingStage = 'onboarding_complete';
             state.currentAction = null;
+            // <<< CORREÇÃO AQUI: Usa o nome da conta que já existe no estado >>>
             onboardingReply = `Tranquilo! Sua conta "${state.activeFinancialAccountName}" está pronta para uso. O que você gostaria de fazer primeiro? 🚀`;
             await sendWhatsappMessage(actorClient.phone, onboardingReply);
             return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
 
         } else {
-            // Se o usuário digitou "Oi" ou outra coisa, reenviamos a pergunta original com botões.
             logger.info(`[ONBOARDING HANDLER] Usuário no estágio 'confirming_pj_mei_setup' enviou texto não conclusivo. Reenviando pergunta.`);
             
             const messageTextAskPj = `Olá, ${clientNameForMessages}! Notei que você tem um Plano Avançado. Que tal configurarmos agora sua conta empresarial (PJ ou MEI)?`;
@@ -261,7 +261,7 @@ async function handleOnboardingStep(state, messageText, actorClient) {
                 { id: 'onboarding_pj_no', label: 'Deixar para depois' }
             ], "Configurar Conta Empresarial?");
 
-            onboardingReply = null; // Evita o envio de uma mensagem de texto duplicada.
+            onboardingReply = null; 
             state.currentAction = 'awaiting_pj_mei_confirm';
             return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
         }
