@@ -581,5 +581,6 @@ module.exports = {
   updateClientProfile,
   sendActivationCode,
   verifyCodeAndSetPassword,
-  createDefaultCategoriesForAccount
+  createDefaultCategoriesForAccount,
+  generateUniqueAffiliateCode
 };
