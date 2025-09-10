@@ -21,7 +21,7 @@ async function interpretWorkSchedule(userInput) {
     - "Todos os dias" ou "diariamente" -> rruleDays: "SU,MO,TU,WE,TH,FR,SA"
     - "Finais de semana" -> rruleDays: "SA,SU"
     - Se o usuário especificar dias avulsos como "terças e quintas", use as abreviações corretas.
-    - Se o usuário disser "das 8 às 18", "de 9h até 17h30", "09:00 as 18:00", interprete e formate para "HH:MM".
+    - Se o usuário disser "das 8 às 18", "de 9h até 17h30", "09:00 as 18:00", "das 10hate as 20h", interprete e formate para "HH:MM".
     - Se alguma informação (dias ou horários) estiver faltando, retorne a chave correspondente como null.
 
     Exemplos de Resposta:
@@ -32,6 +32,8 @@ async function interpretWorkSchedule(userInput) {
   `;
 
   try {
+    // <<< CORREÇÃO DA CHAMADA AQUI >>>
+    // Acessa a instância 'openai' diretamente do 'aiModelService' importado.
     const aiResponse = await aiModelService.openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
@@ -45,8 +47,8 @@ async function interpretWorkSchedule(userInput) {
     const result = JSON.parse(aiResponse.choices[0].message.content);
     logger.info(`[OnboardingAI] Horário interpretado da IA: ${JSON.stringify(result)}`);
 
-    // Validação final
-    if ((result.startTime && result.endTime && result.rruleDays) || (result.startTime && result.endTime) || result.rruleDays) {
+    // Validação final: garante que pelo menos um dos campos foi extraído com sucesso.
+    if (result.startTime || result.endTime || result.rruleDays) {
       return result;
     }
     return null;

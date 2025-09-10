@@ -1456,6 +1456,7 @@ Sua tarefa é receber o nome de um cliente e uma lista de tarefas que ele acabou
 
 
 module.exports = {
+  openai,
   interpretUserMessage,
   ASSISTANT_NAME,
   transcribeAudioStream, 
