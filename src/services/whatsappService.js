@@ -191,6 +191,45 @@ function getZapiQrCodeImageUrl() {
     return qrCodeUrl;
 }
 
+
+/**
+ * Fixa uma mensagem específica no topo de uma conversa do WhatsApp.
+ * @param {string} phone - O número de telefone do chat.
+ * @param {string} messageId - O ID da mensagem a ser fixada.
+ * @param {'24_hours' | '7_days' | '30_days'} duration - A duração que a mensagem ficará fixada.
+ * @returns {Promise<object|null>} A resposta da API da Z-API ou null em caso de erro.
+ */
+async function pinWhatsappMessage(phone, messageId, duration = '30_days') {
+  if (!messageId || !phone) {
+    logger.error('[WhatsAppService Pin] Telefone e ID da mensagem são obrigatórios para fixar.');
+    return null;
+  }
+
+  const endpoint = `${BASE_URL}/pin-message`;
+  const payload = {
+    phone: phone.replace(/\D/g, ''),
+    messageId: messageId,
+    pinMessageDuration: duration,
+  };
+  const headers = {
+    'Content-Type': 'application/json',
+    'client-token': ZAPI_CLIENT_TOKEN,
+  };
+
+  try {
+    logger.info(`[WhatsAppService Pin] Tentando fixar a mensagem ID ${messageId} para ${payload.phone} por ${duration}.`);
+    // A Z-API usa o método PATCH para esta ação
+    const response = await axios.patch(endpoint, payload, { headers });
+    logger.info(`[WhatsAppService Pin] Mensagem fixada com sucesso. Z-API Response:`, response.data);
+    return response.data;
+  } catch (error) {
+    const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
+    const errorStatus = error.response?.status;
+    logger.error(`[WhatsAppService Pin] Erro ao fixar mensagem ID ${messageId} para ${phone}: Status ${errorStatus}`, { errorMessage });
+    return null;
+  }
+}
+
 // ========================================================================
 // <<< FIM: NOVAS FUNÇÕES DE GERENCIAMENTO DA INSTÂNCIA Z-API >>>
 // ========================================================================
@@ -200,6 +239,7 @@ module.exports = {
   sendWhatsappMessage,
   sendButtonListMessage,
   downloadZapiMedia,
+  pinWhatsappMessage,
   getZapiInstanceStatus, // <<< EXPORTAR NOVA FUNÇÃO
   getZapiQrCodeImageUrl, // <<< EXPORTAR NOVA FUNÇÃO
 };

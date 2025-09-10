@@ -3,6 +3,7 @@ const mercadopago = require('../../config/mercadoPago'); // Importa a SDK config
 const { Subscription, Plan, Client } = require('../../database');
 const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
+const { sendWhatsappMessage, pinWhatsappMessage } = require('../../services/whatsappService');
 
 /**
  * Formata uma data para o padrão ISO 8601 com fuso horário,
@@ -117,10 +118,11 @@ const mercadoPagoService = {
    * Processa as notificações de webhook enviadas pelo Mercado Pago.
    * @param {object} dados - O corpo da notificação (req.body).
    */
-  async processarWebhook(dados) {
+   async processarWebhook(dados) {
     try {
       logger.info('[Webhook MP] Dados recebidos:', JSON.stringify(dados, null, 2));
 
+      // Ignora eventos que não são de pagamento
       if (dados.type !== 'payment') {
         logger.info(`[Webhook MP] Tipo '${dados.type}' ignorado.`);
         return;
@@ -129,6 +131,7 @@ const mercadoPagoService = {
       const paymentId = dados.data.id;
       logger.info(`[Webhook MP] Processando pagamento: ${paymentId}`);
       
+      // Busca os detalhes do pagamento na API do Mercado Pago
       const paymentResponse = await mercadopago.payment.findById(paymentId);
       const paymentData = paymentResponse.body;
       
@@ -142,41 +145,64 @@ const mercadoPagoService = {
       const subscriptionId = parseInt(paymentData.external_reference, 10);
       const subscription = await Subscription.findByPk(subscriptionId, { include: ['plan', 'client'] });
 
-      if (!subscription) {
-        logger.warn(`[Webhook MP] Assinatura ${subscriptionId} não encontrada.`);
+      if (!subscription || !subscription.client) {
+        logger.warn(`[Webhook MP] Assinatura ${subscriptionId} ou cliente associado não encontrado.`);
         return;
       }
       
+      const client = subscription.client;
+      const plan = subscription.plan;
       const successStatuses = ['approved', 'accredited'];
       const failureStatuses = ['rejected', 'cancelled', 'refunded', 'charged_back'];
 
+      // Se o pagamento foi aprovado e a assinatura ainda não está ativa
       if (successStatuses.includes(paymentData.status) && subscription.status !== 'Ativa') {
-        const newEndDate = new Date();
-        newEndDate.setDate(newEndDate.getDate() + subscription.plan.durationDays);
-        
-        await subscriptionService.updateSubscriptionStatusByExternalId(
-          null, 'Ativa', newEndDate.toISOString().split('T')[0], subscription.id
-        );
-        logger.info(`[Webhook MP] ✅ PAGAMENTO APROVADO - Assinatura ${subscription.id} ativada.`);
-        
-        if (subscription.client && subscription.client.phone) {
-            const clientName = subscription.client.name ? subscription.client.name.split(' ')[0] : 'Olá';
-            let welcomeMessage;
-            
-            // <<< LÓGICA DE MENSAGEM DIFERENCIADA >>>
-            const isAdvancedPlan = subscription.plan.tier.includes('avancado') || subscription.plan.tier.includes('vitalicio');
+        // Verifica se o cliente já tinha um acesso ativo antes desta compra
+        const wasActiveBefore = client.status === 'Ativo' && client.accessExpiresAt && new Date(client.accessExpiresAt) >= new Date();
 
-            if (isAdvancedPlan) {
-                // Para planos avançados, a mensagem inicia o onboarding de PJ/MEI
-                welcomeMessage = `🎉 Pagamento confirmado, ${clientName}! Sua assinatura do plano *${subscription.plan.name}* está ativa. Vamos começar a configurar sua conta!`;
-                await onboardingHandler.triggerOnboarding(subscription.client.phone, welcomeMessage);
+        // Ativa a nova assinatura (o serviço já atualiza o status do cliente e a data de expiração)
+        await subscriptionService.updateSubscriptionStatusByExternalId(
+          null, 'Ativa', null, subscription.id
+        );
+        logger.info(`[Webhook MP] ✅ PAGAMENTO APROVADO - Assinatura ${subscription.id} ativada para o cliente ${client.id}.`);
+        
+        if (client.phone) {
+            const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
+            const dashboardUrl = "https://www.map-nocontrole.com.br/login";
+            let mainMessage, loginMessage;
+
+            // Monta a mensagem principal baseada em se é uma nova ativação ou uma renovação
+            if (wasActiveBefore) {
+                mainMessage = `Olá, ${clientName}! ✨\n\nSua assinatura do plano *${plan.name}* foi renovada com sucesso! Agradecemos por continuar conosco.\n\nContinue no controle! 😉`;
             } else {
-                // Para planos básicos (PF), envia uma mensagem de boas-vindas direta
-                welcomeMessage = `🎉 Pagamento confirmado, ${clientName}! Sua assinatura do plano *${subscription.plan.name}* está ativa e sua conta já está pronta para uso!\n\nVocê já pode começar a organizar suas finanças. Tente me dizer, por exemplo:\n\n*"gastei 25 reais no lanche"*`;
-                await sendWhatsappMessage(subscription.client.phone, welcomeMessage);
+                mainMessage = `🎉 Pagamento confirmado, ${clientName}! Sua assinatura do plano *${plan.name}* está ativa. Seja muito bem-vindo(a) ao MAP no Controle!`;
+            }
+
+            // Monta a mensagem de login que será fixada
+            loginMessage = `Para acessar o painel web com todos os relatórios e gráficos, utilize:\n`+
+                           `🔗 *Link:* ${dashboardUrl}\n` +
+                           `📧 *E-mail:* ${client.email}\n` +
+                           `🔑 *Senha:* (a que você cadastrou)`;
+
+            // 1. Envia a mensagem de boas-vindas/renovação
+            await sendWhatsappMessage(client.phone, mainMessage);
+
+            // 2. Envia a mensagem com os dados de login e captura a resposta para obter o ID
+            const loginMessageResponse = await sendWhatsappMessage(client.phone, loginMessage);
+            
+            // 3. Se a mensagem de login foi enviada com sucesso, tenta fixá-la
+            if (loginMessageResponse && loginMessageResponse.messageId) {
+                await pinWhatsappMessage(client.phone, loginMessageResponse.messageId, '30_days');
+            }
+
+            // 4. Inicia o onboarding para planos avançados, APENAS se for a primeira ativação
+            const isAdvancedPlan = plan.tier.includes('avancado') || plan.tier.includes('vitalicio');
+            if (isAdvancedPlan && !wasActiveBefore) {
+                await onboardingHandler.triggerOnboarding(client.phone, "Agora, vamos configurar sua conta empresarial rapidamente!");
             }
         }
 
+      // Se o pagamento falhou e a assinatura estava pendente
       } else if (failureStatuses.includes(paymentData.status) && subscription.status === 'Pendente') {
         await subscriptionService.updateSubscriptionStatusByExternalId(
           null, 'Pagamento Falhou', subscription.endDate, subscription.id
@@ -187,9 +213,10 @@ const mercadoPagoService = {
       }
 
     } catch (error) {
+      // É crucial capturar o erro aqui para garantir que o Mercado Pago sempre receba uma resposta 200 OK
       console.error("[Webhook MP] Erro ao processar webhook:", error);
     }
-  },
+  }
 };
 
 module.exports = mercadoPagoService;

@@ -3,7 +3,7 @@ const { Client, Plan, Subscription, FinancialAccount, sequelize } = require('../
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 const subscriptionService = require('../Subscription/subscription.service');
-const { sendWhatsappMessage } = require('../../services/whatsappService');
+const { sendWhatsappMessage, pinWhatsappMessage } = require('../../services/whatsappService');
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 const { formatDate } = require('../../utils/formatters');
 const onboardingHandler = require('../WhatsappHandler/onboarding.handler'); // Import para o trigger
@@ -230,6 +230,10 @@ async function changeUserPlan(clientId, planId, customMessage) {
         if (!plan) {
             throw { statusCode: 404, message: 'Plano não encontrado.' };
         }
+
+        // <<< LÓGICA DE ATIVAÇÃO VS RENOVAÇÃO >>>
+        const wasActiveBefore = client.status === 'Ativo' && client.accessExpiresAt && new Date(client.accessExpiresAt) >= new Date();
+
         await Subscription.update(
             { status: 'Cancelada' },
             { where: { clientId, status: 'Ativa' }, transaction: t }
@@ -251,15 +255,18 @@ async function changeUserPlan(clientId, planId, customMessage) {
         if (client.phone) {
             try {
                 let messageToSend;
+                const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
+                let expiryWelcomePart = `Seu acesso agora está garantido até *${formatDate(newSubscription.endDate)}*.`;
+                if (plan.durationDays > 7000) { 
+                    expiryWelcomePart = "Você agora tem *acesso vitalício*! 🎉";
+                }
+
                 if (customMessage && customMessage.trim() !== '') {
                     messageToSend = customMessage;
+                } else if (wasActiveBefore) {
+                    messageToSend = `Olá, ${clientName}! ✨\n\nSua assinatura foi renovada com sucesso para o plano *${plan.name}* pelo nosso suporte.\n\n${expiryWelcomePart}\n\nContinue no controle! Qualquer dúvida, é só me chamar. 😉`;
                 } else {
-                    const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
-                    let expiryWelcomePart = `Seu acesso agora está garantido até *${formatDate(newSubscription.endDate)}*.`;
-                    if (plan.durationDays > 7000) { 
-                        expiryWelcomePart = "Você agora tem *acesso vitalício*! 🎉";
-                    }
-                    messageToSend = `Olá, ${clientName}! ✨\n\nSua assinatura foi atualizada com sucesso para o plano *${plan.name}* pelo nosso suporte.\n\n${expiryWelcomePart}\n\nJá pode começar a usar todos os recursos. Qualquer dúvida, é só me chamar! 😉`;
+                    messageToSend = `Olá, ${clientName}! ✨\n\nSua assinatura do plano *${plan.name}* foi ativada com sucesso pelo nosso suporte.\n\n${expiryWelcomePart}\n\nJá pode começar a usar todos os recursos. Qualquer dúvida, é só me chamar! 😉`;
                 }
                 
                 await sendWhatsappMessage(client.phone, messageToSend);
