@@ -9,6 +9,8 @@ const clientService = require('../Client/client.service');
 const clientAuthService = require('../ClientAuth/clientAuth.service');
 const logger = require('../../utils/logger');
 const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
+const availabilityService = require('../Availability/availability.service');
+
 
 // ============================================================================
 // FUNÇÕES DE FORMATAÇÃO DE MENSAGEM (Templates de Resposta)
@@ -86,10 +88,41 @@ function getOnboardingAskForPJTypeMessage(clientName) {
     return `${aiIntro}\n\n${dataStructure}`;
 }
 
+function getOnboardingAskForWorkDaysMessage(clientName) {
+    const aiIntro = `Ótimo, ${clientName}! Sua conta empresarial foi criada. Agora, vamos configurar sua agenda para que seus clientes possam marcar horários online. 🗓️`;
+    const dataStructure = `Primeiro, me diga em quais dias da semana você trabalha:`;
+    return `${aiIntro}\n\n${dataStructure}`;
+}
+
+function getOnboardingAskForWorkTimesMessage(clientName) {
+    const aiIntro = `Entendido! 👍 Agora, qual é o seu horário de trabalho nesses dias?`;
+    const dataStructure = `Me diga a hora que você começa e a hora que termina. Por exemplo:\n\n*"das 9h às 18h"*`;
+    return `${aiIntro}\n\n${dataStructure}`;
+}
+
+function getOnboardingFinalStepsMessage(clientName, publicBookingLink) {
+    const aiIntro = `🎉 Perfeito, ${clientName}! Sua agenda está configurada!`;
+    const dataStructure = `Seu link público para agendamentos já está no ar:\n` +
+                          `🔗 *${publicBookingLink}*\n\n` +
+                          `*⚠️ Passo Final Importante:*\n` +
+                          `Para que seus clientes possam agendar, você precisa ter pelo menos um *produto/serviço* cadastrado. É super fácil!\n\n` +
+                          `Me diga, por exemplo:\n` +
+                          `*"criar produto/serviço Consultoria com preço 150 e duração de 60 minutos"*`;
+    const outro = `Assim que criar seu primeiro produto/serviço, já pode compartilhar seu link e começar a encher sua agenda! 🚀`;
+    return `${aiIntro}\n\n${dataStructure}\n\n${outro}`;
+}
+
 // ============================================================================
 // FUNÇÃO PRINCIPAL DO HANDLER (Máquina de Estados)
 // ============================================================================
 
+/**
+ * Processa a mensagem do usuário com base no estágio atual do onboarding.
+ * @param {object} state - O estado atual da conversa do usuário.
+ * @param {string} messageText - O texto da mensagem recebida (ou ID do botão).
+ * @param {object} actorClient - O objeto do cliente que está interagindo.
+ * @returns {Promise<object>} Um objeto com a resposta a ser enviada e o estado atualizado.
+ */
 /**
  * Processa a mensagem do usuário com base no estágio atual do onboarding.
  * @param {object} state - O estado atual da conversa do usuário.
@@ -275,18 +308,22 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         
         if (companyName.length >= 3 && companyName.length <= 50) {
             try {
-                await clientService.createFinancialAccount(actorClient.id, { 
+                const newAccount = await clientService.createFinancialAccount(actorClient.id, { 
                     accountName: companyName, accountType: companyType, isDefault: false
                 });
                 
-                onboardingReply = `🎊 Sensacional! Sua conta ${companyType} "*${companyName}*" foi criada e já está pronta para uso!\n\nAgora você pode registrar despesas e receitas tanto na sua conta pessoal quanto na empresarial. Eu vou entender automaticamente pela descrição!\n\nEstou a postos! 💪`;
-                logger.info(`[ONBOARDING HANDLER] Conta ${companyType} "${companyName}" criada para ATOR ${actorClient.phone}.`);
+                state.data.newlyCreatedAccountId = newAccount.id;
                 
-                state.data.onboardingStage = 'onboarding_complete';
-                state.currentAction = null; 
-                delete state.data.tempPjMeiType;
-                await sendWhatsappMessage(actorClient.phone, onboardingReply);
+                onboardingReply = getOnboardingAskForWorkDaysMessage(clientNameForMessages);
+                state.data.onboardingStage = 'setting_up_work_days';
+                state.currentAction = 'awaiting_work_days';
                 
+                await sendButtonListMessage(actorClient.phone, onboardingReply, [
+                    { id: 'onboarding_days_seg_sex', label: 'Segunda a Sexta' },
+                    { id: 'onboarding_days_seg_sab', label: 'Segunda a Sábado' },
+                    { id: 'onboarding_days_todos', label: 'Todos os dias' }
+                ], 'Dias de Trabalho');
+
             } catch (e) {
                 logger.error(`[ONBOARDING HANDLER] Erro ao criar conta ${companyType} "${companyName}": ${e.message}`);
                 onboardingReply = `Eita! 😬 Parece que o nome "${companyName}" já existe ou é inválido. Vamos tentar outro nome para a sua ${companyType}?`;
@@ -294,6 +331,77 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             }
         } else {
             onboardingReply = `O nome da sua ${companyType} deve ter entre 3 e 50 letras. Por favor, tente um nome bacana! 🌟`;
+            await sendWhatsappMessage(actorClient.phone, onboardingReply);
+        }
+        return { onboardingReply: null, updatedState: state, updatedActorClient: actorClient };
+    }
+
+    // --- NOVO ESTÁGIO 6: DEFININDO DIAS DE TRABALHO ---
+    if (state.data.onboardingStage === 'setting_up_work_days') {
+        const selection = lowerMessageText;
+        const daysMap = {
+            'onboarding_days_seg_sex': 'MO,TU,WE,TH,FR',
+            'onboarding_days_seg_sab': 'MO,TU,WE,TH,FR,SA',
+            'onboarding_days_todos': 'SU,MO,TU,WE,TH,FR,SA',
+        };
+
+        if (daysMap[selection]) {
+            state.data.tempWorkDays = daysMap[selection];
+            onboardingReply = getOnboardingAskForWorkTimesMessage(clientNameForMessages);
+            state.data.onboardingStage = 'setting_up_work_times';
+            state.currentAction = 'awaiting_work_times';
+            await sendWhatsappMessage(actorClient.phone, onboardingReply);
+        } else {
+            onboardingReply = getOnboardingAskForWorkDaysMessage(clientNameForMessages);
+            await sendButtonListMessage(actorClient.phone, onboardingReply, [
+                { id: 'onboarding_days_seg_sex', label: 'Segunda a Sexta' },
+                { id: 'onboarding_days_seg_sab', label: 'Segunda a Sábado' },
+                { id: 'onboarding_days_todos', label: 'Todos os dias' }
+            ], 'Dias de Trabalho');
+        }
+        return { onboardingReply: null, updatedState: state, updatedActorClient: actorClient };
+    }
+
+    // --- NOVO ESTÁGIO 7: DEFININDO HORÁRIOS DE TRABALHO ---
+    if (state.data.onboardingStage === 'setting_up_work_times') {
+        const timeRegex = /(\d{1,2})h(?:(\d{2}))?\s*às\s*(\d{1,2})h(?:(\d{2}))?/;
+        const match = lowerMessageText.match(timeRegex);
+
+        if (match) {
+            const startHour = match[1].padStart(2, '0');
+            const startMinute = match[2] || '00';
+            const endHour = match[3].padStart(2, '0');
+            const endMinute = match[4] || '00';
+            
+            const startTime = `${startHour}:${startMinute}`;
+            const endTime = `${endHour}:${endMinute}`;
+
+            try {
+                await availabilityService.createDefaultWorkRule(
+                    state.data.newlyCreatedAccountId,
+                    startTime,
+                    endTime,
+                    state.data.tempWorkDays
+                );
+
+                const publicLink = `https://www.map-nocontrole.com.br/agendar/${state.data.newlyCreatedAccountId}`;
+                onboardingReply = getOnboardingFinalStepsMessage(clientNameForMessages, publicLink);
+                
+                state.data.onboardingStage = 'onboarding_complete';
+                state.currentAction = null; 
+                delete state.data.tempWorkDays;
+                delete state.data.newlyCreatedAccountId;
+                delete state.data.tempPjMeiType;
+
+                await sendWhatsappMessage(actorClient.phone, onboardingReply);
+
+            } catch (error) {
+                logger.error(`[ONBOARDING HANDLER] Erro ao criar regra de trabalho padrão: ${error.message}`);
+                onboardingReply = `Ops, tive um problema ao salvar seu horário. Vamos tentar de novo. Qual seu horário de trabalho? (Ex: das 9h às 18h)`;
+                await sendWhatsappMessage(actorClient.phone, onboardingReply);
+            }
+        } else {
+            onboardingReply = `Não entendi o formato do horário. Por favor, tente algo como *"das 8h às 17h30"* ou *"das 10h às 19h"*.`;
             await sendWhatsappMessage(actorClient.phone, onboardingReply);
         }
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };

@@ -170,6 +170,31 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
   }
 }
 
+/**
+ * Cria uma regra de trabalho padrão (ex: Seg-Sex, 09h-18h) para uma nova conta.
+ * @param {number} financialAccountId - O ID da conta PJ/MEI.
+ * @param {string} startTime - Hora de início no formato 'HH:MM'.
+ * @param {string} endTime - Hora de fim no formato 'HH:MM'.
+ * @param {string} daysOfWeek - Dias da semana no formato RRULE (ex: 'MO,TU,WE,TH,FR').
+ * @returns {Promise<object>} A regra de disponibilidade criada.
+ */
+async function createDefaultWorkRule(financialAccountId, startTime, endTime, daysOfWeek) {
+  await validateServiceAccount(financialAccountId);
+  
+  const ruleData = {
+    financialAccountId,
+    title: 'Horário de Trabalho Padrão',
+    type: 'work',
+    startTime,
+    endTime,
+    rrule: `FREQ=WEEKLY;BYDAY=${daysOfWeek}`,
+    slotIntervalMinutes: 30, // Um valor padrão razoável
+  };
+
+  const newRule = await AvailabilityRule.create(ruleData);
+  logger.info(`Regra de trabalho padrão criada para FA ID ${financialAccountId}.`);
+  return newRule.toJSON();
+}
 
 module.exports = {
   createAvailabilityRule,
@@ -178,4 +203,5 @@ module.exports = {
   updateAvailabilityRule,
   deleteAvailabilityRule,
   isTimeSlotAvailable,
+  createDefaultWorkRule
 };
