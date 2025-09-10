@@ -523,18 +523,31 @@ async function createClientAsAdmin(clientData) {
         await t.commit();
         logger.info(`[AdminService] Novo cliente ID ${newClient.id} criado pelo admin com plano ID ${planId}.`);
         
-        // <<< LÓGICA DE MENSAGEM MELHORADA >>>
+        // <<< LÓGICA DE MENSAGENS E PIN CORRIGIDA >>>
         if (newClient.phone) {
-            let finalMessage = customMessage && customMessage.trim() !== '' ? customMessage : `Olá, ${name.split(' ')[0]}! Bem-vindo(a) ao MAP no Controle. Sua conta foi ativada com sucesso.`;
+            // 1. Prepara a mensagem de boas-vindas
+            const welcomeMessage = customMessage && customMessage.trim() !== '' 
+                ? customMessage 
+                : `Olá, ${name.split(' ')[0]}! Bem-vindo(a) ao MAP no Controle. Sua conta foi ativada com sucesso.`;
 
-            // Adiciona as credenciais à mensagem
-            finalMessage += `\n\nPara acessar o painel web, utilize:\n` +
-                            `📧 *E-mail:* ${lowerEmail || 'Não fornecido'}\n` +
-                            `🔑 *Senha:* ${password}\n\n` +
-                            `Por segurança, recomendamos que você acesse o painel e troque sua senha assim que possível.`;
-            
-            await onboardingHandler.triggerOnboarding(newClient.phone, finalMessage);
-            logger.info(`[AdminService] Onboarding proativo com credenciais disparado para ${newClient.phone}.`);
+            // 2. Prepara a mensagem de login separada
+            const dashboardUrl = "https://www.map-nocontrole.com.br/login";
+            const loginMessage = `Para acessar o painel web, utilize:\n` +
+                                 `🔗 *Link:* ${dashboardUrl}\n` +
+                                 `📧 *E-mail:* ${lowerEmail || 'Não fornecido'}\n` +
+                                 `🔑 *Senha:* ${password}\n\n` +
+                                 `*Dica de segurança:* Recomendamos que você acesse o painel e troque sua senha.`;
+
+            // 3. Dispara o onboarding com a mensagem de boas-vindas
+            await onboardingHandler.triggerOnboarding(newClient.phone, welcomeMessage);
+            logger.info(`[AdminService] Onboarding proativo disparado para ${newClient.phone}.`);
+
+            // 4. Envia a mensagem de login e a fixa
+            const loginMessageResponse = await sendWhatsappMessage(newClient.phone, loginMessage);
+            if (loginMessageResponse && loginMessageResponse.messageId) {
+                await pinWhatsappMessage(newClient.phone, loginMessageResponse.messageId, '30_days');
+                logger.info(`[AdminService] Mensagem de login fixada para ${newClient.phone}.`);
+            }
         }
 
         const clientResponse = await Client.findByPk(newClient.id);
@@ -544,7 +557,7 @@ async function createClientAsAdmin(clientData) {
         logger.error(`[AdminService] Erro ao criar cliente pelo admin: ${error.message}`, { error });
         throw error;
     }
-  }
+}
 module.exports = {
   getAdminClientList,
   getDashboardMetrics,
