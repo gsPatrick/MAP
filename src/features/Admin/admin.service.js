@@ -7,6 +7,7 @@ const { sendWhatsappMessage, pinWhatsappMessage } = require('../../services/what
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 const { formatDate } = require('../../utils/formatters');
 const onboardingHandler = require('../WhatsappHandler/onboarding.handler'); // Import para o trigger
+const affiliateService = require('../Affiliate/affiliate.service'); // Importe o serviço de afiliados
 
 /**
  * Lista clientes com filtros avançados para o painel de admin.
@@ -481,6 +482,13 @@ async function deleteClientByUser(clientId) {
  * @param {object} clientData - Dados do novo cliente.
  * @returns {Promise<object>} O novo cliente criado.
  */
+/**
+ * <<< VERSÃO FINAL E COMPLETA >>>
+ * Cria um novo cliente, envia mensagem de boas-vindas, inicia o onboarding,
+ * e envia uma mensagem separada com as credenciais para ser fixada.
+ * @param {object} clientData - Dados do novo cliente.
+ * @returns {Promise<object>} O novo cliente criado.
+ */
 async function createClientAsAdmin(clientData) {
     const { name, email, phone, password, planId, customMessage } = clientData;
     if (!name || !phone || !password || !planId) {
@@ -507,7 +515,7 @@ async function createClientAsAdmin(clientData) {
             name,
             email: lowerEmail,
             phone: normalizedPhone,
-            passwordHash: password,
+            passwordHash: password, // O hook do model fará a criptografia
             status: 'Aguardando Pagamento',
         }, { transaction: t });
 
@@ -523,14 +531,15 @@ async function createClientAsAdmin(clientData) {
         await t.commit();
         logger.info(`[AdminService] Novo cliente ID ${newClient.id} criado pelo admin com plano ID ${planId}.`);
         
-        // <<< LÓGICA DE MENSAGENS E PIN CORRIGIDA >>>
-        if (newClient.phone) {
-            // 1. Prepara a mensagem de boas-vindas
+        const newClientWithDetails = await Client.findByPk(newClient.id);
+
+        if (newClientWithDetails.phone) {
+            // 1. Prepara a mensagem de boas-vindas principal
             const welcomeMessage = customMessage && customMessage.trim() !== '' 
                 ? customMessage 
                 : `Olá, ${name.split(' ')[0]}! Bem-vindo(a) ao MAP no Controle. Sua conta foi ativada com sucesso.`;
 
-            // 2. Prepara a mensagem de login separada
+            // 2. Prepara a mensagem de login que será fixada
             const dashboardUrl = "https://www.map-nocontrole.com.br/login";
             const loginMessage = `Para acessar o painel web, utilize:\n` +
                                  `🔗 *Link:* ${dashboardUrl}\n` +
@@ -538,20 +547,25 @@ async function createClientAsAdmin(clientData) {
                                  `🔑 *Senha:* ${password}\n\n` +
                                  `*Dica de segurança:* Recomendamos que você acesse o painel e troque sua senha.`;
 
-            // 3. Dispara o onboarding com a mensagem de boas-vindas
-            await onboardingHandler.triggerOnboarding(newClient.phone, welcomeMessage);
-            logger.info(`[AdminService] Onboarding proativo disparado para ${newClient.phone}.`);
-
+            // 3. Envia a mensagem de boas-vindas
+            await sendWhatsappMessage(newClientWithDetails.phone, welcomeMessage);
+            
             // 4. Envia a mensagem de login e a fixa
-            const loginMessageResponse = await sendWhatsappMessage(newClient.phone, loginMessage);
+            const loginMessageResponse = await sendWhatsappMessage(newClientWithDetails.phone, loginMessage);
             if (loginMessageResponse && loginMessageResponse.messageId) {
-                await pinWhatsappMessage(newClient.phone, loginMessageResponse.messageId, '30_days');
-                logger.info(`[AdminService] Mensagem de login fixada para ${newClient.phone}.`);
+                await pinWhatsappMessage(newClientWithDetails.phone, loginMessageResponse.messageId, '30_days');
+                logger.info(`[AdminService] Mensagem de login fixada para ${newClientWithDetails.phone}.`);
             }
+            
+            // 5. Envia a notificação com o link de afiliado do novo cliente
+            await affiliateService.sendAffiliateLinkNotification(newClientWithDetails);
+
+            // 6. Dispara o início do onboarding
+            await onboardingHandler.triggerOnboarding(newClientWithDetails.phone);
+            logger.info(`[AdminService] Onboarding proativo disparado para ${newClientWithDetails.phone}.`);
         }
 
-        const clientResponse = await Client.findByPk(newClient.id);
-        return clientResponse.toJSON();
+        return newClientWithDetails.toJSON();
     } catch (error) {
         await t.rollback();
         logger.error(`[AdminService] Erro ao criar cliente pelo admin: ${error.message}`, { error });

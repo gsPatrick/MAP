@@ -172,6 +172,18 @@ async function getClientInfoByAffiliateCode(req, res, next) {
   }
 }
 
+async function getClientInfoByAffiliateCode(req, res, next) {
+  try {
+    const { affiliateCode } = req.params;
+    const clientInfo = await clientService.getClientPublicInfoByAffiliateCode(affiliateCode);
+    if (!clientInfo) {
+      return res.status(404).json({ status: 'fail', message: 'Afiliado não encontrado.' });
+    }
+    res.status(200).json({ status: 'success', data: clientInfo });
+  } catch (error) {
+    next(error);
+  }
+}
 module.exports = {
   createClientContact,
   getAllClientContacts,
@@ -185,5 +197,6 @@ module.exports = {
   deleteFinancialAccount,
   getClientsForDebug,
   backfillAffiliateCodes,
+  getClientInfoByAffiliateCode,
   getClientInfoByAffiliateCode
 };

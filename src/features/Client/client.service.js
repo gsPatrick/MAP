@@ -897,7 +897,30 @@ async function findClientByEmail(email) {
     logger.error(`Erro ao buscar cliente por email ${lowerEmail}: ${error.message}`, { error });
     throw error;
   }
+  
+async function getClientPublicInfoByAffiliateCode(affiliateCode) {
+  try {
+    if (!affiliateCode) return null;
+
+    const client = await Client.findOne({
+      where: { affiliateCode: affiliateCode.toUpperCase() },
+      attributes: ['name'], // Retorna apenas os campos seguros/públicos
+    });
+
+    if (!client) {
+      logger.warn(`[ClientService] Tentativa de buscar informações de afiliado com código inválido: ${affiliateCode}`);
+      return null;
+    }
+
+    return client.toJSON();
+  } catch (error) {
+    logger.error(`Erro ao buscar informações públicas de afiliado pelo código ${affiliateCode}: ${error.message}`, { error });
+    throw error;
+  }
 }
+
+}
+
 
 module.exports = {
   findClientByPhone,
@@ -918,6 +941,8 @@ module.exports = {
   updateClientMotivationPrefs,
   backfillAffiliateCodes,
   getClientPublicInfoByAffiliateCode,
-  findClientByEmail
+  findClientByEmail,
+  getClientPublicInfoByAffiliateCode
+  
   
 };
