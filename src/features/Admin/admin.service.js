@@ -9,6 +9,7 @@ const { formatDate } = require('../../utils/formatters');
 const onboardingHandler = require('../WhatsappHandler/onboarding.handler'); // Import para o trigger
 const affiliateService = require('../Affiliate/affiliate.service'); // Importe o serviço de afiliados
 const clientAuthService = require('../ClientAuth/clientAuth.service');
+const bcrypt = require('bcryptjs');
 
 /**
  * Lista clientes com filtros avançados para o painel de admin.
@@ -512,17 +513,18 @@ async function createClientAsAdmin(clientData) {
             throw { statusCode: 409, message: 'Telefone ou E-mail já cadastrado.' };
         }
         
-        // 1. Gera o código de afiliado ANTES de criar o cliente
         const newAffiliateCode = await clientAuthService.generateUniqueAffiliateCode(name);
         
-        // 2. Cria o cliente com o código
+        // <<< CORREÇÃO DEFINITIVA: CRIPTOGRAFIA MANUAL >>>
+        const hashedPassword = await bcrypt.hash(password, 10);
+
         const newClient = await Client.create({
             name,
             email: lowerEmail,
             phone: normalizedPhone,
-            passwordHash: password,
+            passwordHash: hashedPassword, // Salva a senha já criptografada
             status: 'Aguardando Pagamento',
-            affiliateCode: newAffiliateCode, // Salva o código
+            affiliateCode: newAffiliateCode,
         }, { transaction: t });
 
         await FinancialAccount.create({
@@ -537,13 +539,12 @@ async function createClientAsAdmin(clientData) {
         await t.commit();
         logger.info(`[AdminService] Novo cliente ID ${newClient.id} (Afiliado: ${newAffiliateCode}) criado pelo admin com plano ID ${planId}.`);
         
+        // ... (resto da função com o envio de mensagens permanece o mesmo)
         if (newClient.phone) {
-            // Prepara a mensagem de boas-vindas
             const welcomeMessage = customMessage && customMessage.trim() !== '' 
                 ? customMessage 
                 : `Olá, ${name.split(' ')[0]}! Bem-vindo(a) ao MAP no Controle. Sua conta foi ativada com sucesso.`;
 
-            // Prepara a mensagem de login
             const dashboardUrl = "https://www.map-nocontrole.com.br/login";
             const loginMessage = `Para acessar o painel web, utilize:\n` +
                                  `🔗 *Link:* ${dashboardUrl}\n` +
@@ -551,14 +552,9 @@ async function createClientAsAdmin(clientData) {
                                  `🔑 *Senha:* ${password}\n\n` +
                                  `*Dica de segurança:* Recomendamos que você acesse o painel e troque sua senha.`;
 
-            // Envia as mensagens em sequência
             await sendWhatsappMessage(newClient.phone, welcomeMessage);
             await sendWhatsappMessage(newClient.phone, loginMessage);
-            
-            // Envia a notificação com o link de afiliado
             await affiliateService.sendAffiliateLinkNotification(newClient);
-
-            // Dispara o início do onboarding
             await onboardingHandler.triggerOnboarding(newClient.phone);
             logger.info(`[AdminService] Sequência de mensagens de ativação e onboarding disparada para ${newClient.phone}.`);
         }

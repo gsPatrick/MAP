@@ -7,6 +7,7 @@ const subscriptionService = require('../Subscription/subscription.service');
 const googleCalendarService = require('../GoogleCalendar/googleCalendarService');
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 const { sendWhatsappMessage } = require('../../services/whatsappService');
+const bcrypt = require('bcryptjs');
 
 const crypto = require('node:crypto'); // Garanta que este import está no topo
 // Mapa em memória para armazenar códigos de ativação temporários
@@ -123,14 +124,14 @@ async function registerClient(registerData) {
         
         const newAffiliateCode = await generateUniqueAffiliateCode(name);
 
+        // <<< CORREÇÃO DEFINITIVA: CRIPTOGRAFIA MANUAL >>>
+        const hashedPassword = await bcrypt.hash(password, 10);
+
         const newClientPayload = {
             name,
             email: lowerEmail,
             phone: normalizedPhone,
-            // <<< CORREÇÃO CRÍTICA AQUI >>>
-            // A senha em texto plano DEVE ser atribuída ao campo passwordHash.
-            // O hook 'beforeCreate' no modelo Client irá interceptar este campo e criptografá-lo.
-            passwordHash: password, 
+            passwordHash: hashedPassword, // Salva a senha já criptografada
             status: 'Aguardando Pagamento',
             affiliateCode: newAffiliateCode,
         };
@@ -149,6 +150,7 @@ async function registerClient(registerData) {
 
         const newClient = await Client.create(newClientPayload, { transaction: t });
 
+        // ... (resto da função permanece igual)
         const pfAccount = await FinancialAccount.create({
             clientId: newClient.id,
             accountName: 'Pessoal',
