@@ -500,7 +500,7 @@ async function createClientAsAdmin(clientData) {
             name,
             email: lowerEmail,
             phone: normalizedPhone,
-            passwordHash: password, // O hook do model fará a criptografia
+            passwordHash: password,
             status: 'Aguardando Pagamento',
         }, { transaction: t });
 
@@ -511,17 +511,23 @@ async function createClientAsAdmin(clientData) {
             isDefault: true,
         }, { transaction: t });
 
-        // A criação da assinatura já atualiza o status do cliente para 'Ativo'
         await subscriptionService.createSubscription(newClient.id, planId, null, 'Ativa', null, null, { transaction: t });
 
         await t.commit();
         logger.info(`[AdminService] Novo cliente ID ${newClient.id} criado pelo admin com plano ID ${planId}.`);
         
-        // Dispara o onboarding proativo
+        // <<< LÓGICA DE MENSAGEM MELHORADA >>>
         if (newClient.phone) {
-            const welcomeMsg = customMessage && customMessage.trim() !== '' ? customMessage : null;
-            await onboardingHandler.triggerOnboarding(newClient.phone, welcomeMsg);
-            logger.info(`[AdminService] Onboarding proativo disparado para ${newClient.phone}.`);
+            let finalMessage = customMessage && customMessage.trim() !== '' ? customMessage : `Olá, ${name.split(' ')[0]}! Bem-vindo(a) ao MAP no Controle. Sua conta foi ativada com sucesso.`;
+
+            // Adiciona as credenciais à mensagem
+            finalMessage += `\n\nPara acessar o painel web, utilize:\n` +
+                            `📧 *E-mail:* ${lowerEmail || 'Não fornecido'}\n` +
+                            `🔑 *Senha:* ${password}\n\n` +
+                            `Por segurança, recomendamos que você acesse o painel e troque sua senha assim que possível.`;
+            
+            await onboardingHandler.triggerOnboarding(newClient.phone, finalMessage);
+            logger.info(`[AdminService] Onboarding proativo com credenciais disparado para ${newClient.phone}.`);
         }
 
         const clientResponse = await Client.findByPk(newClient.id);
@@ -531,8 +537,7 @@ async function createClientAsAdmin(clientData) {
         logger.error(`[AdminService] Erro ao criar cliente pelo admin: ${error.message}`, { error });
         throw error;
     }
-}
-
+  }
 module.exports = {
   getAdminClientList,
   getDashboardMetrics,

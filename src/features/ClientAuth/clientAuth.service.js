@@ -557,4 +557,5 @@ module.exports = {
   updateClientProfile,
   sendActivationCode,
   verifyCodeAndSetPassword,
+  createDefaultCategoriesForAccount
 };

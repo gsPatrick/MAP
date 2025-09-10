@@ -1,9 +1,9 @@
 // src/features/WhatsappHandler/onboarding.handler.js
 // DESCRIÇÃO:
 // Este handler é uma "máquina de estados" que gerencia o fluxo de onboarding de um cliente no WhatsApp.
-// Ele é responsável por coletar informações essenciais para a configuração da conta,
-// como a criação das contas financeiras (PF e PJ/MEI), e guiar o usuário até que sua conta esteja
-// 100% pronta para uso. O fluxo é projetado para ser proativo e, em sua maioria, guiado por botões.
+// Ele é responsável por coletar informações que não foram obtidas durante o cadastro inicial no site,
+// como a configuração de contas financeiras (PF e PJ/MEI), e guiar o usuário até que sua conta esteja
+// 100% pronta para uso.
 
 const clientService = require('../Client/client.service');
 const clientAuthService = require('../ClientAuth/clientAuth.service');
@@ -32,13 +32,40 @@ function getOnboardingAskForEmailMessage(clientName) {
     return message;
 }
 
+function getOnboardingWelcomeMessage(clientName, hasPaidAccess, isSharedContext, accessLevelTextForUser) {
+    if (isSharedContext) {
+         return `Olá, ${clientName}! Você está usando um acesso compartilhado. Me diga "oi" novamente para começar a usar a conta do proprietário.`;
+    }
+    
+    if (!hasPaidAccess) {
+        const siteUrl = process.env.PLAN_SITE_URL || "https://map-nocontrole.com.br/#planos";
+        return `🚀 Olá, ${clientName}! Você ainda está no plano Gratuito ou sua assinatura expirou. Para usar o controle total, acesse: ${siteUrl}`;
+    }
+
+    const accessText = accessLevelTextForUser || "seu plano";
+    const aiIntro = `🎉 Olá, ${clientName}! Que bom ver você por aqui! Sua assinatura *${accessText}* foi confirmada com sucesso. Agora, vamos deixar tudo 100% pronto para você começar a organizar! 💪✨`;
+    
+    return aiIntro;
+}
+
 function getOnboardingAskForPasswordMessage() {
     const message = `Perfeito, e-mail anotado! ✅\n\n` +
                     `Agora, por favor, crie uma *senha* para seu acesso (ela deve ter no mínimo 6 caracteres).`;
     return message;
 }
 
-function getOnboardingAskForFullNameMessage(clientName) {
+function getOnboardingAskForFullNameMessage(clientName, isSharedContext = false, ownerName = 'O proprietário') {
+    if (isSharedContext) {
+        const aiIntro = `Olá, ${clientName}! 👋 Bem-vindo(a) ao Acesso Compartilhado do NoControle! Que legal ter você por aqui para ajudar a gerenciar as contas de *${ownerName}*. 🤝`;
+        const dataStructure = `*O que isso significa?*\n`+
+                              `Significa que *${ownerName}* confia em você e te concedeu permissão para visualizar e registrar informações em nome dele(a). 📊 Você funcionará como um "braço direito", ajudando a manter tudo organizado!\n\n`+
+                              `*O que você poderá fazer?*\n`+
+                              `✅ Lançar despesas e receitas\n`+
+                              `✅ Agendar compromissos\n`+
+                              `✅ Consultar resumos e saldos`;
+        const linkText = `Para começarmos, e para que suas ações fiquem corretamente identificadas para o proprietário, por favor, me diga o seu *nome completo*.`;
+        return `${aiIntro}\n\n${dataStructure}\n\n${linkText}`;
+    }
     const aiIntro = `🔐 Senha guardada com todo carinho e segurança! 🗝️`;
     const dataStructure = `😊 Agora, para a gente se conhecer melhor, qual nome completo podemos usar no seu perfil?`;
     const linkText = `📊 Assim seu cadastro fica completinho e personalizado para você!`;
@@ -78,6 +105,7 @@ async function handleOnboardingStep(state, messageText, actorClient) {
 
     let clientNameForMessages = nameFromDb || state.pushNameFromPayload || "você";
     const lowerMessageText = (messageText || "").toLowerCase().trim();
+    const isSharedContext = state.isSharedAccessContext;
 
     // --- ESTÁGIO DE CREDENCIAIS (Para usuários legados ou ativados pelo admin sem senha) ---
     if (state.data.onboardingStage === 'setting_up_credentials_email') {
@@ -120,7 +148,7 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             state.data.onboardingStage = 'setting_up_full_name';
             state.currentAction = 'awaiting_full_name';
 
-            onboardingReply = getOnboardingAskForFullNameMessage(clientNameForMessages);
+            onboardingReply = getOnboardingAskForFullNameMessage(clientNameForMessages, isSharedContext);
             await sendWhatsappMessage(actorClient.phone, onboardingReply);
         } else {
             onboardingReply = `Sua senha precisa ter no mínimo 6 caracteres. Por favor, escolha uma senha mais forte.`;
@@ -128,7 +156,13 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         }
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
-    
+
+    // --- ESTÁGIO DE TRANSIÇÃO PÓS-PAGAMENTO ---
+    if (state.data.onboardingStage === 'awaiting_plan_confirmation' && state.hasPaidAccess) {
+        onboardingReply = getOnboardingWelcomeMessage(clientNameForMessages, state.hasPaidAccess, isSharedContext, state.accessLevelTextForUser);
+        await sendWhatsappMessage(actorClient.phone, onboardingReply);
+    }
+
     // --- ESTÁGIO 1: COLETANDO NOME COMPLETO (Se necessário) ---
     if (state.data.onboardingStage === 'setting_up_full_name') {
         const fullName = messageText.trim();
@@ -149,7 +183,7 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
     
-    // --- ESTÁGIO 2: CRIANDO CONTA PF (Passo obrigatório para todos) ---
+    // --- ESTÁGIO 2: CRIANDO CONTA PF (Passo obrigatório) ---
     if (state.data.onboardingStage === 'setting_up_pf_account_name') {
         const pfAccountName = messageText.trim();
         if (pfAccountName.length >= 3 && pfAccountName.length <= 50) {
@@ -167,8 +201,13 @@ async function handleOnboardingStep(state, messageText, actorClient) {
                 
                 if (planTier === 'avancado') {
                     state.data.onboardingStage = 'confirming_pj_mei_setup';
-                    // Chama recursivamente para entrar no próximo estágio imediatamente
-                    return handleOnboardingStep(state, '', actorClient); 
+                    state.currentAction = 'awaiting_pj_mei_confirm';
+                    
+                    const messageTextAskPjType = `🏦 Conta Pessoal "${pfAccountName}" criada com sucesso, ${clientNameForMessages}! 🎉 Ela já está selecionada. \n\nComo você tem um Plano Avançado, vamos agora configurar sua conta empresarial.`;
+                    
+                    await sendWhatsappMessage(actorClient.phone, messageTextAskPjType);
+                    // Chama a si mesmo para avançar para a próxima etapa imediatamente
+                    return handleOnboardingStep(state, '', actorClient);
                 } else {
                     state.data.onboardingStage = 'onboarding_complete';
                     state.currentAction = null;
@@ -189,7 +228,6 @@ async function handleOnboardingStep(state, messageText, actorClient) {
     
     // --- ESTÁGIO 3: INÍCIO OBRIGATÓRIO DA CONFIGURAÇÃO EMPRESARIAL ---
     if (state.data.onboardingStage === 'confirming_pj_mei_setup') {
-        // Agora este passo é obrigatório e não pergunta mais "sim/não".
         const messageTextAskPjType = getOnboardingAskForPJTypeMessage(clientNameForMessages);
         
         state.data.onboardingStage = 'awaiting_pj_mei_type';
@@ -200,7 +238,6 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             { id: 'onboarding_select_mei', label: 'MEI' }
         ], 'Tipo de Conta');
 
-        // Retorna null para não enviar outra mensagem de texto. Apenas o botão é enviado.
         return { onboardingReply: null, updatedState: state, updatedActorClient: actorClient };
     }
     
@@ -209,7 +246,6 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         const typeInput = messageText.trim().toLowerCase();
         let selectedType = null;
 
-        // Verifica tanto o ID do botão quanto o texto digitado
         if (typeInput === 'onboarding_select_pj' || typeInput === 'pj') {
             selectedType = 'PJ';
         } else if (typeInput === 'onboarding_select_mei' || typeInput === 'mei') {
@@ -223,7 +259,6 @@ async function handleOnboardingStep(state, messageText, actorClient) {
             state.currentAction = 'awaiting_input_pj_mei_name';
             await sendWhatsappMessage(actorClient.phone, onboardingReply);
         } else {
-            // Se o usuário digitou algo inválido, reenviamos a pergunta com botões
             onboardingReply = getOnboardingAskForPJTypeMessage(clientNameForMessages);
             await sendButtonListMessage(actorClient.phone, onboardingReply, [
                 { id: 'onboarding_select_pj', label: 'Empresa (PJ)' },
@@ -244,7 +279,7 @@ async function handleOnboardingStep(state, messageText, actorClient) {
                     accountName: companyName, accountType: companyType, isDefault: false
                 });
                 
-                onboardingReply = `🎊 Sensacional! Sua conta ${companyType} "${companyName}" foi criada e está pronta para brilhar! ✨\n\nSua conta pessoal continua ativa, mas se quiser mudar para a PJ/MEI, é só dizer "mudar para conta ${companyName}".\n\nEstou a postos! 💪`;
+                onboardingReply = `🎊 Sensacional! Sua conta ${companyType} "*${companyName}*" foi criada e já está pronta para uso!\n\nAgora você pode registrar despesas e receitas tanto na sua conta pessoal quanto na empresarial. Eu vou entender automaticamente pela descrição!\n\nEstou a postos! 💪`;
                 logger.info(`[ONBOARDING HANDLER] Conta ${companyType} "${companyName}" criada para ATOR ${actorClient.phone}.`);
                 
                 state.data.onboardingStage = 'onboarding_complete';
@@ -264,7 +299,6 @@ async function handleOnboardingStep(state, messageText, actorClient) {
         return { onboardingReply, updatedState: state, updatedActorClient: actorClient };
     }
     
-    // Fallback: se nenhum estágio for correspondido, retorna o estado sem alteração.
     return { onboardingReply: null, updatedState: state, updatedActorClient: actorClient };
 }
 
@@ -284,7 +318,6 @@ async function triggerOnboarding(phone, customWelcomeMessage = null) {
             await sendWhatsappMessage(phone, customWelcomeMessage);
         }
 
-        // Usa require() aqui para quebrar a dependência circular
         const whatsappService = require('./whatsapp.service');
         const actorClient = await clientService.findClientByPhone(phone);
         if (!actorClient) {
@@ -294,13 +327,10 @@ async function triggerOnboarding(phone, customWelcomeMessage = null) {
 
         const clientAccounts = await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
         
-        // Simula um estado inicial para o cliente
         const state = await whatsappService.initializeOrUpdateState(actorClient, null, null, clientAccounts, []);
 
-        // Chama o handler de onboarding com uma mensagem "vazia" para obter a primeira pergunta
         const { updatedState } = await handleOnboardingStep(state, '', actorClient);
 
-        // O handleOnboardingStep já envia a mensagem, então só precisamos salvar o estado final
         if (updatedState) {
             whatsappService.conversationState.set(phone, updatedState);
             logger.info(`[ONBOARDING TRIGGER] Primeira etapa do onboarding enviada e estado inicial salvo para ${phone}.`);
@@ -309,7 +339,6 @@ async function triggerOnboarding(phone, customWelcomeMessage = null) {
         logger.error(`[ONBOARDING TRIGGER] Falha ao iniciar onboarding proativo para ${phone}: ${error.message}`, { stack: error.stack });
     }
 }
-
 
 // ============================================================================
 // EXPORTS

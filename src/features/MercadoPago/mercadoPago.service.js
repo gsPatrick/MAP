@@ -140,7 +140,7 @@ const mercadoPagoService = {
       }
       
       const subscriptionId = parseInt(paymentData.external_reference, 10);
-      const subscription = await Subscription.findByPk(subscriptionId, { include: ['plan', 'client'] }); // <<< INCLUIR DADOS DO CLIENTE
+      const subscription = await Subscription.findByPk(subscriptionId, { include: ['plan', 'client'] });
 
       if (!subscription) {
         logger.warn(`[Webhook MP] Assinatura ${subscriptionId} não encontrada.`);
@@ -159,11 +159,22 @@ const mercadoPagoService = {
         );
         logger.info(`[Webhook MP] ✅ PAGAMENTO APROVADO - Assinatura ${subscription.id} ativada.`);
         
-        // <<< LÓGICA DE ONBOARDING PROATIVO ADICIONADA AQUI >>>
         if (subscription.client && subscription.client.phone) {
             const clientName = subscription.client.name ? subscription.client.name.split(' ')[0] : 'Olá';
-            const welcomeMessage = `🎉 Pagamento confirmado, ${clientName}! Sua assinatura do plano *${subscription.plan.name}* está ativa. Vamos começar a configurar sua conta!`;
-            await onboardingHandler.triggerOnboarding(subscription.client.phone, welcomeMessage);
+            let welcomeMessage;
+            
+            // <<< LÓGICA DE MENSAGEM DIFERENCIADA >>>
+            const isAdvancedPlan = subscription.plan.tier.includes('avancado') || subscription.plan.tier.includes('vitalicio');
+
+            if (isAdvancedPlan) {
+                // Para planos avançados, a mensagem inicia o onboarding de PJ/MEI
+                welcomeMessage = `🎉 Pagamento confirmado, ${clientName}! Sua assinatura do plano *${subscription.plan.name}* está ativa. Vamos começar a configurar sua conta!`;
+                await onboardingHandler.triggerOnboarding(subscription.client.phone, welcomeMessage);
+            } else {
+                // Para planos básicos (PF), envia uma mensagem de boas-vindas direta
+                welcomeMessage = `🎉 Pagamento confirmado, ${clientName}! Sua assinatura do plano *${subscription.plan.name}* está ativa e sua conta já está pronta para uso!\n\nVocê já pode começar a organizar suas finanças. Tente me dizer, por exemplo:\n\n*"gastei 25 reais no lanche"*`;
+                await sendWhatsappMessage(subscription.client.phone, welcomeMessage);
+            }
         }
 
       } else if (failureStatuses.includes(paymentData.status) && subscription.status === 'Pendente') {
