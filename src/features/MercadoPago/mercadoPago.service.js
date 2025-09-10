@@ -121,7 +121,6 @@ const mercadoPagoService = {
     try {
       logger.info('[Webhook MP] Dados recebidos:', JSON.stringify(dados, null, 2));
 
-      // Ignora eventos que não são de pagamento
       if (dados.type !== 'payment') {
         logger.info(`[Webhook MP] Tipo '${dados.type}' ignorado.`);
         return;
@@ -130,7 +129,6 @@ const mercadoPagoService = {
       const paymentId = dados.data.id;
       logger.info(`[Webhook MP] Processando pagamento: ${paymentId}`);
       
-      // Busca os detalhes do pagamento na API do Mercado Pago
       const paymentResponse = await mercadopago.payment.findById(paymentId);
       const paymentData = paymentResponse.body;
       
@@ -142,7 +140,7 @@ const mercadoPagoService = {
       }
       
       const subscriptionId = parseInt(paymentData.external_reference, 10);
-      const subscription = await Subscription.findByPk(subscriptionId, { include: ['plan'] });
+      const subscription = await Subscription.findByPk(subscriptionId, { include: ['plan', 'client'] }); // <<< INCLUIR DADOS DO CLIENTE
 
       if (!subscription) {
         logger.warn(`[Webhook MP] Assinatura ${subscriptionId} não encontrada.`);
@@ -152,7 +150,6 @@ const mercadoPagoService = {
       const successStatuses = ['approved', 'accredited'];
       const failureStatuses = ['rejected', 'cancelled', 'refunded', 'charged_back'];
 
-      // Se o pagamento foi aprovado e a assinatura ainda não está ativa
       if (successStatuses.includes(paymentData.status) && subscription.status !== 'Ativa') {
         const newEndDate = new Date();
         newEndDate.setDate(newEndDate.getDate() + subscription.plan.durationDays);
@@ -161,8 +158,14 @@ const mercadoPagoService = {
           null, 'Ativa', newEndDate.toISOString().split('T')[0], subscription.id
         );
         logger.info(`[Webhook MP] ✅ PAGAMENTO APROVADO - Assinatura ${subscription.id} ativada.`);
+        
+        // <<< LÓGICA DE ONBOARDING PROATIVO ADICIONADA AQUI >>>
+        if (subscription.client && subscription.client.phone) {
+            const clientName = subscription.client.name ? subscription.client.name.split(' ')[0] : 'Olá';
+            const welcomeMessage = `🎉 Pagamento confirmado, ${clientName}! Sua assinatura do plano *${subscription.plan.name}* está ativa. Vamos começar a configurar sua conta!`;
+            await onboardingHandler.triggerOnboarding(subscription.client.phone, welcomeMessage);
+        }
 
-      // Se o pagamento falhou e a assinatura estava pendente
       } else if (failureStatuses.includes(paymentData.status) && subscription.status === 'Pendente') {
         await subscriptionService.updateSubscriptionStatusByExternalId(
           null, 'Pagamento Falhou', subscription.endDate, subscription.id
@@ -173,7 +176,6 @@ const mercadoPagoService = {
       }
 
     } catch (error) {
-      // É crucial capturar o erro aqui para garantir que o Mercado Pago sempre receba uma resposta 200 OK
       console.error("[Webhook MP] Erro ao processar webhook:", error);
     }
   },

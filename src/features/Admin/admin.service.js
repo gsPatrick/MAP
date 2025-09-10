@@ -6,9 +6,9 @@ const subscriptionService = require('../Subscription/subscription.service');
 const { sendWhatsappMessage } = require('../../services/whatsappService');
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 const { formatDate } = require('../../utils/formatters');
+const onboardingHandler = require('../WhatsappHandler/onboarding.handler'); // Import para o trigger
 
 /**
- * <<< FUNÇÃO ALTERADA >>>
  * Lista clientes com filtros avançados para o painel de admin.
  * @param {object} queryParams - Parâmetros de consulta (page, limit, search, filter).
  * @returns {Promise<object>} Objeto com lista de clientes e informações de paginação.
@@ -121,7 +121,6 @@ async function changeClientPhoneNumber(clientId, newPhoneNumber) {
 }
 
 /**
- * <<< FUNÇÃO ALTERADA >>>
  * Lista planos, com opção de filtrar apenas os customizados (criados pelo admin).
  */
 async function getAllPlans(queryParams = {}) {
@@ -215,7 +214,6 @@ async function createCustomPlan(planData) {
 }
 
 /**
- * <<< FUNÇÃO ALTERADA >>>
  * Altera o plano de um usuário e permite enviar uma mensagem customizada.
  * @param {number} clientId - ID do cliente.
  * @param {number} planId - ID do novo plano.
@@ -283,7 +281,6 @@ async function changeUserPlan(clientId, planId, customMessage) {
 }
 
 /**
- * <<< FUNÇÃO ALTERADA >>>
  * Envia uma mensagem em massa com mais opções de filtros.
  * @param {string} message - A mensagem a ser enviada.
  * @param {string} targetGroup - O grupo de destino ('all_active', 'expiring_soon', 'expired').
@@ -473,8 +470,7 @@ async function deleteClientByUser(clientId) {
 }
 
 /**
- * <<< NOVA FUNÇÃO >>>
- * Cria um novo cliente, conta financeira e assinatura, com mensagem customizada.
+ * Cria um novo cliente, conta financeira e assinatura, com mensagem customizada e onboarding proativo.
  * @param {object} clientData - Dados do novo cliente.
  * @returns {Promise<object>} O novo cliente criado.
  */
@@ -521,9 +517,11 @@ async function createClientAsAdmin(clientData) {
         await t.commit();
         logger.info(`[AdminService] Novo cliente ID ${newClient.id} criado pelo admin com plano ID ${planId}.`);
         
-        if (newClient.phone && customMessage && customMessage.trim() !== '') {
-            await sendWhatsappMessage(newClient.phone, customMessage);
-            logger.info(`[AdminService] Mensagem de boas-vindas customizada enviada para ${newClient.phone}.`);
+        // Dispara o onboarding proativo
+        if (newClient.phone) {
+            const welcomeMsg = customMessage && customMessage.trim() !== '' ? customMessage : null;
+            await onboardingHandler.triggerOnboarding(newClient.phone, welcomeMsg);
+            logger.info(`[AdminService] Onboarding proativo disparado para ${newClient.phone}.`);
         }
 
         const clientResponse = await Client.findByPk(newClient.id);
@@ -547,5 +545,5 @@ module.exports = {
   clearClientBalance,
   changeClientPhoneNumber,
   deleteClientByUser,
-  createClientAsAdmin, // Exporta a nova função
+  createClientAsAdmin,
 };

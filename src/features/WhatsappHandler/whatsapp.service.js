@@ -787,5 +787,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 module.exports = { 
     processIncomingMessage, 
     processIncomingAudioMessage, 
-    formatAppointmentDataStructure: formatter.formatAppointmentDataStructure 
+    formatAppointmentDataStructure: formatter.formatAppointmentDataStructure,
+    initializeOrUpdateState,  // <<< ADICIONE ESTA LINHA
+    conversationState         // <<< ADICIONE ESTA LINHA
 };
