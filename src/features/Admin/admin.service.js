@@ -511,18 +511,18 @@ async function createClientAsAdmin(clientData) {
         if (existingClient) {
             throw { statusCode: 409, message: 'Telefone ou E-mail já cadastrado.' };
         }
-
-        // <<< LÓGICA DE GERAÇÃO DO CÓDIGO ADICIONADA AQUI >>>
-        // Reutilizamos a função do clientAuthService para manter a consistência
+        
+        // 1. Gera o código de afiliado ANTES de criar o cliente
         const newAffiliateCode = await clientAuthService.generateUniqueAffiliateCode(name);
         
+        // 2. Cria o cliente com o código
         const newClient = await Client.create({
             name,
             email: lowerEmail,
             phone: normalizedPhone,
             passwordHash: password,
             status: 'Aguardando Pagamento',
-            affiliateCode: newAffiliateCode, // <<< SALVA O CÓDIGO GERADO
+            affiliateCode: newAffiliateCode, // Salva o código
         }, { transaction: t });
 
         await FinancialAccount.create({
@@ -535,15 +535,15 @@ async function createClientAsAdmin(clientData) {
         await subscriptionService.createSubscription(newClient.id, planId, null, 'Ativa', null, null, { transaction: t });
 
         await t.commit();
-        logger.info(`[AdminService] Novo cliente ID ${newClient.id} criado pelo admin com plano ID ${planId}.`);
+        logger.info(`[AdminService] Novo cliente ID ${newClient.id} (Afiliado: ${newAffiliateCode}) criado pelo admin com plano ID ${planId}.`);
         
-        const newClientWithDetails = await Client.findByPk(newClient.id);
-
-        if (newClientWithDetails.phone) {
+        if (newClient.phone) {
+            // Prepara a mensagem de boas-vindas
             const welcomeMessage = customMessage && customMessage.trim() !== '' 
                 ? customMessage 
                 : `Olá, ${name.split(' ')[0]}! Bem-vindo(a) ao MAP no Controle. Sua conta foi ativada com sucesso.`;
 
+            // Prepara a mensagem de login
             const dashboardUrl = "https://www.map-nocontrole.com.br/login";
             const loginMessage = `Para acessar o painel web, utilize:\n` +
                                  `🔗 *Link:* ${dashboardUrl}\n` +
@@ -551,20 +551,20 @@ async function createClientAsAdmin(clientData) {
                                  `🔑 *Senha:* ${password}\n\n` +
                                  `*Dica de segurança:* Recomendamos que você acesse o painel e troque sua senha.`;
 
-            await sendWhatsappMessage(newClientWithDetails.phone, welcomeMessage);
+            // Envia as mensagens em sequência
+            await sendWhatsappMessage(newClient.phone, welcomeMessage);
+            await sendWhatsappMessage(newClient.phone, loginMessage);
             
-            const loginMessageResponse = await sendWhatsappMessage(newClientWithDetails.phone, loginMessage);
-            if (loginMessageResponse && loginMessageResponse.messageId) {
-                await pinWhatsappMessage(newClientWithDetails.phone, loginMessageResponse.messageId, '30_days');
-                logger.info(`[AdminService] Mensagem de login fixada para ${newClientWithDetails.phone}.`);
-            }
-            
-            await affiliateService.sendAffiliateLinkNotification(newClientWithDetails);
-            await onboardingHandler.triggerOnboarding(newClientWithDetails.phone);
-            logger.info(`[AdminService] Onboarding proativo disparado para ${newClientWithDetails.phone}.`);
+            // Envia a notificação com o link de afiliado
+            await affiliateService.sendAffiliateLinkNotification(newClient);
+
+            // Dispara o início do onboarding
+            await onboardingHandler.triggerOnboarding(newClient.phone);
+            logger.info(`[AdminService] Sequência de mensagens de ativação e onboarding disparada para ${newClient.phone}.`);
         }
 
-        return newClientWithDetails.toJSON();
+        const clientResponse = await Client.findByPk(newClient.id);
+        return clientResponse.toJSON();
     } catch (error) {
         await t.rollback();
         logger.error(`[AdminService] Erro ao criar cliente pelo admin: ${error.message}`, { error });

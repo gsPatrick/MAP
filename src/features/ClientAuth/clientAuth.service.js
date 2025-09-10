@@ -8,7 +8,7 @@ const googleCalendarService = require('../GoogleCalendar/googleCalendarService')
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 const { sendWhatsappMessage } = require('../../services/whatsappService');
 
-const crypto = require('node:crypto');
+const crypto = require('node:crypto'); // Garanta que este import está no topo
 // Mapa em memória para armazenar códigos de ativação temporários
 const activationCodes = new Map();
 
