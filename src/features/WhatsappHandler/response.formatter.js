@@ -633,11 +633,17 @@ function formatHydrationLogDataStructure(logs, prefs, clientName) {
 function formatAffiliateDashboardDataStructure(dashboardData, clientName) {
     if (!dashboardData) return "Não foi possível carregar seus dados de afiliado.";
     
+    // --- INÍCIO DA MODIFICAÇÃO ---
+    const affiliateLink = `https://www.map-nocontrole.com.br/assinar/7?ref=${dashboardData.summary.affiliateCode}`;
+
     let data = `💰 *Seu Painel de Afiliado, ${clientName}!* 💰\n\n`;
     data += `✨ Seu código de indicação: *${dashboardData.summary.affiliateCode}*\n`;
+    data += `🔗 Seu link para compartilhar:\n${affiliateLink}\n\n`;
     data += `👥 Total de indicados: *${dashboardData.totalReferrals}*\n`;
     data += `💵 Saldo disponível para saque: *${formatCurrency(dashboardData.summary.balance)}*\n\n`;
-    data += "Compartilhe seu código com amigos e ganhe comissões a cada nova assinatura que eles fizerem! 🚀";
+    data += "Copie seu link, compartilhe com amigos e ganhe comissões a cada nova assinatura que eles fizerem! 🚀";
+    // --- FIM DA MODIFICAÇÃO ---
+    
     return data.trim();
 }
 

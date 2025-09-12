@@ -202,14 +202,33 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
                 }
             }
 
-            updateSubData.endDate = newEndDate;
+            // --- INÍCIO DA CORREÇÃO ---
+            let calculatedEndDate = newEndDate;
+            if (!calculatedEndDate) {
+                // Se o webhook não fornecer uma data de expiração (renovação), calcula com base na data de hoje
+                const effectiveStartDate = new Date();
+                const endDate = new Date(effectiveStartDate);
+                endDate.setDate(endDate.getDate() + plan.durationDays);
+                calculatedEndDate = endDate.toISOString().split('T')[0];
+            }
+            
+            updateSubData.endDate = calculatedEndDate; // GARANTIDO NOT NULL
+
             const planTier = plan.tier || 'basico';
-            clientAccessLevel = `${planTier}_${plan.durationDays > 60 ? 'anual' : 'mensal'}`;
+            
             if (plan.durationDays > 7000) {
               clientAccessLevel = planTier === 'avancado' ? 'vitalicio_avancado' : 'vitalicio_basico';
+              clientAccessExpiresAt = null; // Vitalício
+            } else { 
+                // Para planos anuais e mensais
+                clientAccessLevel = planTier === 'avancado' 
+                    ? (plan.durationDays > 60 ? 'avancado_anual' : 'avancado_mensal')
+                    : (plan.durationDays > 60 ? 'basico_anual' : 'basico_mensal');
+                clientAccessExpiresAt = calculatedEndDate; // Usa a data calculada/fornecida
             }
-            clientAccessExpiresAt = newEndDate;
             clientStatus = 'Ativo';
+            // --- FIM DA CORREÇÃO ---
+
         } else if (['Cancelada', 'Expirada', 'Pagamento Falhou'].includes(newStatus)) {
             const otherActiveSubscriptions = await Subscription.count({
                 where: { clientId: subscription.clientId, status: 'Ativa', id: {[Op.ne]: subscription.id} }, transaction: t
@@ -237,12 +256,8 @@ async function updateSubscriptionStatusByExternalId(externalSubscriptionId, newS
         if (newStatus === 'Ativa' && oldSubscriptionStatus !== 'Ativa' && clientInstance.phone) {
             const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Olá';
             
-            // --- INÍCIO DA LÓGICA CORRIGIDA ---
-            // É uma renovação apenas se o status anterior do CLIENTE era 'Inativo' ou 'Pagamento Falhou'.
-            // Se era 'Aguardando Pagamento', é uma nova assinatura.
             const isRenewal = oldClientStatus === 'Inativo' || oldClientStatus === 'Pagamento Falhou';
-            // --- FIM DA LÓGICA CORRIGIDA ---
-
+            
             let welcomeMessage = isRenewal
                 ? `Uhuul, que bom te ter de volta, ${clientName}! 🎉\n\nSua assinatura do plano *${plan.name}* foi renovada com sucesso e seu acesso total já está liberado.\n\nContinue no controle! 💪`
                 : `Ebaaa, ${clientName}! 🥳\n\nSua assinatura do plano *${plan.name}* foi ativada com sucesso.\n\nSeu acesso está garantido. Para começar, que tal me dizer "oi"?`;
