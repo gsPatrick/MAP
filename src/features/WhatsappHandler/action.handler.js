@@ -21,6 +21,7 @@ const formatter = require('./response.formatter'); // Importa o novo formatador
 const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/whatsappService');
 const aiModelService = require('../../services/aiModelService');
 const checklistService = require('../Checklist/checklist.service');
+const onboardingAIService = require('./onboarding.ai.service'); // <<< ADICIONAR ESTE IMPORT
 
 // <<< INÍCIO DA CORREÇÃO: Lista de Ações Exclusivas de PJ/MEI >>>
 const PJ_EXCLUSIVE_ACTIONS = [
@@ -853,13 +854,33 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
-            case 'CREATE_AVAILABILITY_RULE': {
+             case 'CREATE_AVAILABILITY_RULE': {
                 try {
-                    const { title, type, rrule, startTime, endTime, specificDate, slotIntervalMinutes } = params;
-                    if (!title || !type) {
-                        throw { statusCode: 400, message: "Título e tipo da regra são obrigatórios." };
+                    // --- INÍCIO DA MODIFICAÇÃO ---
+                    // Usa o serviço de IA especializado para interpretar a entrada completa.
+                    // A 'userInput' será a mensagem original do usuário que a IA principal recebeu.
+                    const userInput = state.messageHistory.findLast(m => m.role === 'user')?.content || '';
+                    const scheduleInfo = await onboardingAIService.interpretWorkSchedule(userInput);
+
+                    if (!scheduleInfo || !scheduleInfo.startTime || !scheduleInfo.endTime || !scheduleInfo.rruleDays) {
+                        // Se a IA não conseguir extrair tudo, entra no fluxo de perguntas.
+                        // Esta lógica já é tratada pelo prompt da IA principal (clarifications_needed).
+                        // Se chegamos aqui, é porque a IA principal achou que tinha tudo, mas a IA especializada discorda.
+                        // Melhoramos a robustez pedindo para o usuário ser mais completo.
+                        formattedData = `Para definir seu horário de trabalho, preciso dos dias e do horário de início e fim. Tente dizer tudo em uma frase, por exemplo:\n\n*"Meu horário de trabalho é de segunda a sexta, das 9h às 18h"*`;
+                        break;
                     }
-                    const ruleData = { title, type, rrule, startTime, endTime, specificDate, slotIntervalMinutes };
+
+                    const ruleData = {
+                        title: params.title || 'Horário de Trabalho', // Mantém o título se a IA principal sugerir
+                        type: 'work',
+                        rrule: `FREQ=WEEKLY;BYDAY=${scheduleInfo.rruleDays}`,
+                        startTime: scheduleInfo.startTime,
+                        endTime: scheduleInfo.endTime,
+                        slotIntervalMinutes: params.slotIntervalMinutes || 30 // Usa um padrão se não for fornecido
+                    };
+                    // --- FIM DA MODIFICAÇÃO ---
+                    
                     const newRule = await availabilityService.createAvailabilityRule(effectiveAccountId, ruleData);
                     
                     formattedData = formatter.formatAvailabilityRuleDataStructure(newRule);
@@ -870,7 +891,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
-
             case 'GET_AGENDA_VIEW': {
                 try {
                     const { dateStart, dateEnd } = params;
@@ -1938,23 +1958,39 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
-            case 'UPDATE_AVAILABILITY_RULE': {
+             case 'UPDATE_AVAILABILITY_RULE': {
                 try {
                     const ruleIdToUpdate = state.editingResource?.type === 'availability_rule' && state.editingResource?.id
                         ? parseInt(state.editingResource.id, 10)
                         : (params.ruleIdToUpdate ? parseInt(params.ruleIdToUpdate, 10) : null);
+
                     if (!ruleIdToUpdate) {
-                        throw { statusCode: 400, message: "ID da regra para atualizar não foi fornecido ou não está em contexto de edição." };
+                        // Se não estiver em modo de edição, tentamos encontrar a regra de trabalho padrão para atualizar.
+                        const allRules = await availabilityService.getAllAvailabilityRules(effectiveAccountId);
+                        const workRule = allRules.find(r => r.type === 'work');
+                        if (!workRule) {
+                            throw { statusCode: 404, message: "Nenhuma regra de trabalho encontrada para atualizar. Crie uma primeiro." };
+                        }
+                        params.ruleIdToUpdate = workRule.id; // Atualiza o ID para a regra encontrada
                     }
 
-                    const updateData = { ...params };
-                    delete updateData.ruleIdToUpdate;
-
-                    if (Object.keys(updateData).length === 0) {
-                        throw { statusCode: 400, message: "Nenhum dado válido fornecido para atualizar a regra." };
+                    // --- INÍCIO DA MODIFICAÇÃO ---
+                    const userInputForUpdate = state.messageHistory.findLast(m => m.role === 'user')?.content || '';
+                    const scheduleInfoForUpdate = await onboardingAIService.interpretWorkSchedule(userInputForUpdate);
+                    
+                    if (!scheduleInfoForUpdate || !scheduleInfoForUpdate.startTime || !scheduleInfoForUpdate.endTime || !scheduleInfoForUpdate.rruleDays) {
+                        formattedData = `Não consegui entender completamente. Para atualizar seu horário, por favor, diga a frase completa, como:\n\n*"Meu novo horário é toda terça e quinta, das 14h às 20h"*`;
+                        break;
                     }
 
-                    const updatedRule = await availabilityService.updateAvailabilityRule(effectiveAccountId, ruleIdToUpdate, updateData);
+                    const updateData = {
+                        rrule: `FREQ=WEEKLY;BYDAY=${scheduleInfoForUpdate.rruleDays}`,
+                        startTime: scheduleInfoForUpdate.startTime,
+                        endTime: scheduleInfoForUpdate.endTime,
+                    };
+                    // --- FIM DA MODIFICAÇÃO ---
+
+                    const updatedRule = await availabilityService.updateAvailabilityRule(effectiveAccountId, params.ruleIdToUpdate || ruleIdToUpdate, updateData);
                     
                     formattedData = formatter.formatAvailabilityRuleDataStructure(updatedRule);
                     wasAnEdit = true;
@@ -1964,6 +2000,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
+
 
 
             // =================================================================
