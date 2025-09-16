@@ -117,6 +117,7 @@ async function deleteAvailabilityRule(financialAccountId, ruleId) {
     return true;
 }
 
+
 /**
  * Verifica se um determinado slot de tempo está disponível para agendamento,
  * considerando o fuso horário de São Paulo para as regras de negócio.
@@ -156,17 +157,28 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
     if (dayOffRule) return false;
 
     // 3. Encontra a regra de trabalho e verifica se o dia é de trabalho
-    const workRule = rules.find(r => r.type === 'work' && r.rrule && r.startTime && r.endTime);
+    const workRule = rules
+        .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+        .find(r => r.type === 'work' && r.rrule && r.startTime && r.endTime);
+
     if (!workRule) return false;
     
-    // Verifica se a regra de trabalho (ex: SEG-SEX) se aplica a este dia específico
-    const rrule = rrulestr(workRule.rrule, { dtstart: desiredStart });
-    if (rrule.between(desiredStart, desiredStart, true).length === 0) {
+    // --- INÍCIO DA CORREÇÃO ---
+    // Define o início e o fim do dia desejado para a verificação da RRULE.
+    const dayStart = dayjs(desiredStart).startOf('day').toDate();
+    const dayEnd = dayjs(desiredStart).endOf('day').toDate();
+    
+    // Analisa a string RRULE da regra de trabalho.
+    const rrule = rrulestr(workRule.rrule);
+
+    // Verifica se existe ALGUMA ocorrência da regra de trabalho DENTRO do dia desejado.
+    // Esta é a verificação correta para saber se é um dia de trabalho.
+    if (rrule.between(dayStart, dayEnd, true).length === 0) {
       return false; 
     }
+    // --- FIM DA CORREÇÃO ---
     
     // 4. Constrói horários de expediente e pausas no FUSO HORÁRIO DE SÃO PAULO
-    // e converte para Date objects (que serão UTC) para comparação.
     const workStart = dayjs.tz(`${desiredDateString}T${workRule.startTime}`, BRAZIL_TZ).toDate();
     const workEnd = dayjs.tz(`${desiredDateString}T${workRule.endTime}`, BRAZIL_TZ).toDate();
     
@@ -185,7 +197,7 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
       }
     }
 
-    // 7. Verifica conflito com AGENDAMENTOS EXISTENTES (ambos já estão em UTC)
+    // 7. Verifica conflito com AGENDAMENTOS EXISTENTES
     for (const existingAppt of appointmentsOnThisDay) {
       const existingStart = new Date(existingAppt.eventDateTime);
       const existingEnd = new Date(existingStart.getTime() + (existingAppt.durationMinutes || 30) * 60 * 1000);
@@ -200,10 +212,9 @@ async function isTimeSlotAvailable(financialAccountId, startDateTime, durationMi
 
   } catch (error) {
     logger.error(`[isTimeSlotAvailable] Erro ao verificar disponibilidade para FA ${financialAccountId}: ${error.message}`, { error });
-    return false; // Por segurança, retorna false em caso de erro.
+    return false;
   }
 }
-
 /**
  * Cria uma regra de trabalho padrão (ex: Seg-Sex, 09h-18h) para uma nova conta.
  * @param {number} financialAccountId - O ID da conta PJ/MEI.
