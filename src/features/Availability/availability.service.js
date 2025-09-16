@@ -36,7 +36,7 @@ async function createAvailabilityRule(financialAccountId, ruleData) {
       error.statusCode = 400; throw error;
     }
 
-    // --- INÍCIO DA CORREÇÃO ESTRUTURAL ---
+    // --- LÓGICA DE PREVENÇÃO ---
     // Se a regra é do tipo 'work', ela não deve ser duplicada, mas sim atualizada.
     if (type === 'work') {
       const existingWorkRule = await AvailabilityRule.findOne({
@@ -44,7 +44,7 @@ async function createAvailabilityRule(financialAccountId, ruleData) {
           financialAccountId: financialAccountId,
           type: 'work'
         },
-        order: [['updatedAt', 'DESC']], // Garante que pegamos a mais recente para atualizar
+        order: [['updatedAt', 'DESC']],
         transaction: t
       });
 
@@ -55,9 +55,8 @@ async function createAvailabilityRule(financialAccountId, ruleData) {
         return existingWorkRule.toJSON();
       }
     }
-    // --- FIM DA CORREÇÃO ESTRUTURAL ---
+    // --- FIM DA LÓGICA DE PREVENÇÃO ---
 
-    // Se não for do tipo 'work' ou se não houver uma regra de trabalho existente, cria uma nova.
     const newRule = await AvailabilityRule.create({ ...ruleData, financialAccountId }, { transaction: t });
     await t.commit();
     logger.info(`Nova regra de disponibilidade ID ${newRule.id} ("${newRule.title}") criada para FA ID ${financialAccountId}.`);
