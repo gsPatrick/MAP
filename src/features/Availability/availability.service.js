@@ -26,16 +26,50 @@ async function validateServiceAccount(financialAccountId, transaction = null) {
 }
 
 async function createAvailabilityRule(financialAccountId, ruleData) {
-  await validateServiceAccount(financialAccountId);
-  const { type, rrule, startTime, endTime, specificDate, title } = ruleData;
-  if (!type || !title) {
-    const error = new Error("Tipo ('work', 'break', 'day_off') e Título da regra são obrigatórios.");
-    error.statusCode = 400; throw error;
+  const t = await sequelize.transaction();
+  try {
+    await validateServiceAccount(financialAccountId, t);
+    const { type, title } = ruleData;
+
+    if (!type || !title) {
+      const error = new Error("Tipo ('work', 'break', 'day_off') e Título da regra são obrigatórios.");
+      error.statusCode = 400; throw error;
+    }
+
+    // --- INÍCIO DA CORREÇÃO ESTRUTURAL ---
+    // Se a regra é do tipo 'work', ela não deve ser duplicada, mas sim atualizada.
+    if (type === 'work') {
+      const existingWorkRule = await AvailabilityRule.findOne({
+        where: {
+          financialAccountId: financialAccountId,
+          type: 'work'
+        },
+        order: [['updatedAt', 'DESC']], // Garante que pegamos a mais recente para atualizar
+        transaction: t
+      });
+
+      if (existingWorkRule) {
+        logger.info(`Regra de trabalho existente (ID: ${existingWorkRule.id}) encontrada para FA ID ${financialAccountId}. Atualizando em vez de criar...`);
+        await existingWorkRule.update(ruleData, { transaction: t });
+        await t.commit();
+        return existingWorkRule.toJSON();
+      }
+    }
+    // --- FIM DA CORREÇÃO ESTRUTURAL ---
+
+    // Se não for do tipo 'work' ou se não houver uma regra de trabalho existente, cria uma nova.
+    const newRule = await AvailabilityRule.create({ ...ruleData, financialAccountId }, { transaction: t });
+    await t.commit();
+    logger.info(`Nova regra de disponibilidade ID ${newRule.id} ("${newRule.title}") criada para FA ID ${financialAccountId}.`);
+    return newRule.toJSON();
+
+  } catch (error) {
+    if (t && !t.finished) await t.rollback();
+    logger.error(`Erro em createAvailabilityRule para FA ID ${financialAccountId}: ${error.message}`, { error });
+    throw error;
   }
-  const newRule = await AvailabilityRule.create({ ...ruleData, financialAccountId });
-  logger.info(`Regra de disponibilidade ID ${newRule.id} ("${newRule.title}") criada para FA ID ${financialAccountId}.`);
-  return newRule.toJSON();
 }
+
 
 async function getAllAvailabilityRules(financialAccountId) {
   await validateServiceAccount(financialAccountId);

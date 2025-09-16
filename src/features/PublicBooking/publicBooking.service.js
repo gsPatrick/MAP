@@ -59,11 +59,22 @@ async function calculateTotalDuration(financialAccountId, serviceIds = []) {
 /**
  * Gera e verifica os slots de horário disponíveis para uma data e serviços específicos.
  */
+/**
+ * Gera e verifica os slots de horário disponíveis para uma data e serviços específicos.
+ */
 async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) {
   const BRAZIL_TZ = 'America/Sao_Paulo';
 
   const rules = await availabilityService.getAllAvailabilityRules(financialAccountId);
-  const workRule = rules.find(r => r.type === 'work');
+  
+  // --- INÍCIO DA CORREÇÃO ---
+  // Ordena as regras pela data de atualização, da mais nova para a mais antiga,
+  // e então pega a primeira regra do tipo 'work'. Isso garante que usamos a mais recente.
+  const workRule = rules
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+    .find(r => r.type === 'work');
+  // --- FIM DA CORREÇÃO ---
+  
   if (!workRule || !workRule.startTime || !workRule.endTime) {
     logger.warn(`[PublicBooking] Nenhum horário de trabalho (work rule) encontrado para FA ID ${financialAccountId}.`);
     return [];
@@ -77,18 +88,13 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
   const potentialSlots = [];
   const slotInterval = workRule.slotIntervalMinutes || 15;
 
-  // --- CORREÇÃO NA GERAÇÃO DOS SLOTS ---
-  // Criamos o tempo inicial e final USANDO O FUSO HORÁRIO DE SÃO PAULO
   let currentTime = dayjs.tz(`${date}T${workRule.startTime}`, BRAZIL_TZ);
   const endTime = dayjs.tz(`${date}T${workRule.endTime}`, BRAZIL_TZ);
 
-  // O loop agora compara objetos dayjs, que são cientes do fuso horário
   while (currentTime.add(totalDuration, 'minute').isBefore(endTime) || currentTime.add(totalDuration, 'minute').isSame(endTime)) {
-      // Adicionamos o objeto Date (que é sempre UTC) para a verificação
       potentialSlots.push(currentTime.toDate());
       currentTime = currentTime.add(slotInterval, 'minute');
   }
-  // --- FIM DA CORREÇÃO NA GERAÇÃO ---
 
   logger.info(`[PublicBooking] ${potentialSlots.length} slots potenciais gerados para ${date}. Verificando disponibilidade...`);
 
@@ -98,15 +104,11 @@ async function getAvailableTimeSlots(financialAccountId, date, serviceIds = []) 
 
   const results = await Promise.all(availabilityChecks);
   
-  // Filtra os slots originais (objetos Date) com base nos resultados.
   const finalSlotsDates = potentialSlots.filter((_, index) => results[index]);
 
-  // --- CORREÇÃO NA FORMATAÇÃO FINAL ---
-  // Formatamos a data para o frontend, especificando que queremos a hora LOCAL DE SÃO PAULO
   const finalSlotsFormatted = finalSlotsDates.map(slot => 
     dayjs(slot).tz(BRAZIL_TZ).format('HH:mm')
   );
-  // --- FIM DA CORREÇÃO NA FORMATAÇÃO ---
 
   logger.info(`[PublicBooking] ${finalSlotsFormatted.length} slots verificados como disponíveis.`);
   return finalSlotsFormatted;
