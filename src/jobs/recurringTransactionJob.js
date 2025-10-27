@@ -32,17 +32,16 @@ async function processRecurringTransactions() {
         include: [{ 
           model: Client, 
           as: 'ownerClient', 
-          attributes: ['id', 'name', 'phone'],
-          // --- INÍCIO DA CORREÇÃO: ADICIONA FILTRO DE ASSINATURA ATIVA ---
+          // --- INÍCIO DA MODIFICAÇÃO: ADICIONA FILTRO DE ASSINATURA ATIVA ---
           where: {
             status: 'Ativo',
             [Op.or]: [
               { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
-              { accessExpiresAt: { [Op.gte]: today } } // 'today' já está definido no escopo do job
+              { accessExpiresAt: { [Op.gte]: today } }
             ]
           },
           required: true // Garante que só traga regras de clientes com assinatura ativa
-          // --- FIM DA CORREÇÃO ---
+          // --- FIM DA MODIFICAÇÃO ---
         }]
       }],
       order: [['nextDueDate', 'ASC']],

@@ -3,7 +3,6 @@ const affiliateService = require('./affiliate.service');
 
 async function getAffiliateDashboard(req, res, next) {
     try {
-        // O ID do cliente vem do token de autenticação, que o middleware já validou
         const affiliateClientId = req.client.id;
         const dashboardData = await affiliateService.getAffiliateDashboard(affiliateClientId);
         res.status(200).json({ status: 'success', data: dashboardData });
@@ -12,6 +11,18 @@ async function getAffiliateDashboard(req, res, next) {
     }
 }
 
+// <<< NOVO CONTROLLER PARA O HISTÓRICO DE INDICAÇÕES >>>
+async function getAffiliateReferrals(req, res, next) {
+    try {
+        const affiliateClientId = req.client.id;
+        const referralsHistory = await affiliateService.getAffiliateReferralsHistory(affiliateClientId);
+        res.status(200).json({ status: 'success', data: referralsHistory });
+    } catch (error) {
+        next(error);
+    }
+}
+
 module.exports = {
     getAffiliateDashboard,
+    getAffiliateReferrals, // <<< EXPORTAR NOVO CONTROLLER
 };

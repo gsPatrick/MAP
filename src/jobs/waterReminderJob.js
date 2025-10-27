@@ -47,7 +47,7 @@ async function checkAndSendWaterReminder() {
 
     // <<< INÍCIO DA MODIFICAÇÃO >>>
     // A query agora junta com Client e filtra por assinatura ativa.
-    const clientFilter = {
+     const clientFilter = {
         status: 'Ativo',
         [Op.or]: [
             { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },

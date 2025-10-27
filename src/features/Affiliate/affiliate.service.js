@@ -3,6 +3,7 @@
 const { Client, Plan, Subscription, sequelize } = require('../../database');
 const logger = require('../../utils/logger');
 const { sendWhatsappMessage } = require('../../services/whatsappService');
+const { Op } = require('sequelize');
 
 /**
  * Envia uma notificação para um novo cliente com seu link de afiliado pessoal.
@@ -32,63 +33,95 @@ async function sendAffiliateLinkNotification(newClient) {
 }
 
 /**
- * Processa uma nova assinatura para creditar a comissão ao afiliado que indicou.
+ * <<< FUNÇÃO MODIFICADA E FINAL >>>
+ * Processa uma nova assinatura para creditar a comissão ao afiliado que indicou,
+ * APENAS se for a primeira assinatura paga do novo cliente.
  * @param {number} newlySubscribedClientId - O ID do cliente que acabou de ter sua assinatura ativada.
+ * @param {object} options - Opções, como a transação do Sequelize.
  */
-async function processNewSubscriptionForAffiliate(newlySubscribedClientId) {
-  const t = await sequelize.transaction();
+async function processNewSubscriptionForAffiliate(newlySubscribedClientId, options = {}) {
+  const transaction = options.transaction || (await sequelize.transaction());
   try {
-    const newClient = await Client.findByPk(newlySubscribedClientId, { transaction: t });
+    const newClient = await Client.findByPk(newlySubscribedClientId, { transaction });
 
-    // Se o novo cliente não foi indicado por ninguém, encerra o processo.
+    // 1. Se o novo cliente não foi indicado por ninguém, encerra o processo.
     if (!newClient || !newClient.referredByClientId) {
+      if (!options.transaction) await transaction.commit();
       logger.info(`[AffiliateService] Cliente ID ${newlySubscribedClientId} não foi indicado. Nenhuma comissão a processar.`);
-      await t.commit();
       return;
     }
 
-    const referrer = await Client.findByPk(newClient.referredByClientId, { transaction: t });
+    const referrer = await Client.findByPk(newClient.referredByClientId, { transaction });
     if (!referrer) {
+      if (!options.transaction) await transaction.rollback();
       logger.error(`[AffiliateService] Referenciador (ID: ${newClient.referredByClientId}) não encontrado para o cliente ${newClient.id}.`);
-      await t.rollback();
       return;
+    }
+
+    // <<< 2. NOVA VERIFICAÇÃO: Impede autocomissão (self-referral) >>>
+    if (referrer.id === newClient.id) {
+        if (!options.transaction) await transaction.commit();
+        logger.warn(`[AffiliateService] Tentativa de autocomissão (self-referral) pelo Cliente ID ${newClient.id}. Comissão ignorada.`);
+        return;
     }
 
     const activeSubscription = await Subscription.findOne({
       where: { clientId: newlySubscribedClientId, status: 'Ativa' },
       include: [{ model: Plan, as: 'plan' }],
-      transaction: t,
+      order: [['createdAt', 'DESC']], // Pega a mais recente
+      transaction,
     });
 
     if (!activeSubscription || !activeSubscription.plan) {
+      if (!options.transaction) await transaction.rollback();
       logger.error(`[AffiliateService] Assinatura ativa ou plano não encontrado para o cliente comissionado ${newClient.id}.`);
-      await t.rollback();
       return;
     }
+
+    // <<< 3. NOVA VERIFICAÇÃO: Garante que é a PRIMEIRA assinatura ativa do cliente >>>
+    const totalActiveSubscriptions = await Subscription.count({
+        where: {
+            clientId: newlySubscribedClientId,
+            status: 'Ativa'
+        },
+        transaction
+    });
+
+    if (totalActiveSubscriptions > 1) {
+        if (!options.transaction) await transaction.commit();
+        logger.info(`[AffiliateService] Cliente ID ${newlySubscribedClientId} já possui ${totalActiveSubscriptions} assinaturas ativas (renovação ou segunda compra). Comissão não aplicável.`);
+        return;
+    }
+    // <<< FIM DA VERIFICAÇÃO DE PRIMEIRA COMPRA >>>
 
     const commissionValue = parseFloat(activeSubscription.plan.affiliateCommissionValue);
     if (isNaN(commissionValue) || commissionValue <= 0) {
+      if (!options.transaction) await transaction.commit();
       logger.info(`[AffiliateService] Plano "${activeSubscription.plan.name}" não possui valor de comissão. Nenhuma comissão a processar.`);
-      await t.commit();
       return;
     }
 
-    // Adiciona o valor da comissão ao saldo do afiliado
-    await referrer.increment('balance', { by: commissionValue, transaction: t });
-    await t.commit();
+    // 4. Adiciona o valor da comissão ao saldo do afiliado (se todas as verificações passaram)
+    await referrer.increment('balance', { by: commissionValue, transaction });
     
-    logger.info(`[AffiliateService] Comissão de R$${commissionValue.toFixed(2)} creditada para o afiliado ID ${referrer.id} pela assinatura do cliente ID ${newClient.id}.`);
+    if (!options.transaction) {
+        await transaction.commit();
+    }
+    
+    logger.info(`[AffiliateService] Comissão de R$${commissionValue.toFixed(2)} creditada para o afiliado ID ${referrer.id} pela PRIMEIRA assinatura do cliente ID ${newClient.id}.`);
 
-    // Envia a notificação de comissão para o afiliado
+    // 5. Envia a notificação de comissão para o afiliado
     if (referrer.phone) {
+      // Recarrega o saldo do referrer para a mensagem de notificação
+      const updatedReferrer = await Client.findByPk(referrer.id);
       const notificationMessage = `💰 *Você recebeu uma comissão!* 💰\n\n` +
-                                  `Parabéns! Você recebeu *R$${commissionValue.toFixed(2).replace('.', ',')}* pela assinatura de *${newClient.name}* (Telefone: ${newClient.phone}).\n\n` +
-                                  `Seu novo saldo é de R$${(parseFloat(referrer.balance) + commissionValue).toFixed(2).replace('.', ',')}. Continue assim! 🚀`;
+                                  `Parabéns! Você recebeu *R$${commissionValue.toFixed(2).replace('.', ',')}* pela primeira assinatura de *${newClient.name}*.\n\n` +
+                                  `Seu novo saldo é de R$${parseFloat(updatedReferrer.balance).toFixed(2).replace('.', ',')}. Continue assim! 🚀`;
       await sendWhatsappMessage(referrer.phone, notificationMessage);
     }
 
   } catch (error) {
-    await t.rollback();
+    if (!options.transaction) await transaction.rollback();
     logger.error(`[AffiliateService] Erro CRÍTICO ao processar comissão para o cliente ${newlySubscribedClientId}: ${error.message}`, error);
   }
 }
@@ -130,64 +163,63 @@ async function getAffiliateDashboard(affiliateClientId) {
     if (!error.statusCode) error.statusCode = 500;
     throw error;
   }
-
-  
 }
 
-
-async function processNewSubscriptionForAffiliate(newlySubscribedClientId, options = {}) {
-  // Permite que uma transação externa seja usada, ou cria uma nova se não for fornecida.
-  const transaction = options.transaction || (await sequelize.transaction());
+/**
+ * <<< NOVA FUNÇÃO >>>
+ * Busca um histórico detalhado de todas as indicações feitas por um afiliado.
+ * @param {number} affiliateClientId - O ID do cliente afiliado.
+ * @returns {Promise<Array<object>>} Uma lista de objetos detalhando cada indicação.
+ */
+async function getAffiliateReferralsHistory(affiliateClientId) {
   try {
-    const newClient = await Client.findByPk(newlySubscribedClientId, { transaction });
-
-    if (!newClient || !newClient.referredByClientId) {
-      if (!options.transaction) await transaction.commit(); // Só comita se a transação foi criada aqui
-      return;
-    }
-
-    const referrer = await Client.findByPk(newClient.referredByClientId, { transaction });
-    if (!referrer) {
-      if (!options.transaction) await transaction.rollback();
-      return;
-    }
-
-    const activeSubscription = await Subscription.findOne({
-      where: { clientId: newlySubscribedClientId, status: 'Ativa' },
-      include: [{ model: Plan, as: 'plan' }],
-      transaction,
+    const referrals = await Client.findAll({
+      where: { referredByClientId: affiliateClientId },
+      include: [
+        {
+          model: Subscription,
+          as: 'subscriptions',
+          where: { status: 'Ativa' },
+          required: false, // LEFT JOIN para incluir indicados que talvez ainda não assinaram
+          include: [{ model: Plan, as: 'plan' }]
+        }
+      ],
+      order: [['createdAt', 'DESC']],
     });
 
-    if (!activeSubscription || !activeSubscription.plan) {
-      if (!options.transaction) await transaction.rollback();
-      return;
+    if (referrals.length === 0) {
+      return [];
     }
 
-    const commissionValue = parseFloat(activeSubscription.plan.affiliateCommissionValue);
-    if (isNaN(commissionValue) || commissionValue <= 0) {
-      if (!options.transaction) await transaction.commit();
-      return;
-    }
+    const history = referrals.map(referral => {
+      // Pega a primeira assinatura ativa, que foi a que gerou a comissão
+      const firstActiveSubscription = referral.subscriptions
+        .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+        .find(sub => sub.status === 'Ativa');
+      
+      return {
+        referredClientId: referral.id,
+        name: referral.name,
+        email: referral.email,
+        phone: referral.phone,
+        joinDate: referral.createdAt,
+        subscription: firstActiveSubscription 
+          ? {
+              planName: firstActiveSubscription.plan.name,
+              subscriptionDate: firstActiveSubscription.startDate,
+              commissionEarned: parseFloat(firstActiveSubscription.plan.affiliateCommissionValue)
+            }
+          : null // Caso o indicado ainda não tenha uma assinatura ativa
+      };
+    });
 
-    await referrer.increment('balance', { by: commissionValue, transaction });
-    
-    // Só comita se a transação foi criada nesta função
-    if (!options.transaction) {
-        await transaction.commit();
-    }
-    
-    logger.info(`[AffiliateService] Comissão de R$${commissionValue.toFixed(2)} creditada para o afiliado ID ${referrer.id}.`);
-
-    if (referrer.phone) {
-      const notificationMessage = `💰 *Você recebeu uma comissão!* 💰\n\n` +
-                                  `Parabéns! Você recebeu *R$${commissionValue.toFixed(2).replace('.', ',')}* pela assinatura de *${newClient.name}* (Telefone: ${newClient.phone}).\n\n` +
-                                  `Seu novo saldo é de R$${(parseFloat(referrer.balance) + commissionValue).toFixed(2).replace('.', ',')}. Continue assim! 🚀`;
-      await sendWhatsappMessage(referrer.phone, notificationMessage);
-    }
+    logger.info(`[AffiliateService] Histórico de ${history.length} indicações gerado para o afiliado ID ${affiliateClientId}.`);
+    return history;
 
   } catch (error) {
-    if (!options.transaction) await transaction.rollback(); // Só da rollback se a transação foi criada aqui
-    logger.error(`[AffiliateService] Erro ao processar comissão para o cliente ${newlySubscribedClientId}: ${error.message}`, error);
+    logger.error(`[AffiliateService] Erro ao buscar histórico de indicações para o afiliado ID ${affiliateClientId}: ${error.message}`, error);
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
   }
 }
 
@@ -195,4 +227,5 @@ module.exports = {
   getAffiliateDashboard,
   sendAffiliateLinkNotification,
   processNewSubscriptionForAffiliate,
+  getAffiliateReferralsHistory,
 };

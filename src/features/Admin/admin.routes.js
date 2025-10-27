@@ -39,4 +39,7 @@ router.get('/admin/zapi/status', adminController.getZapiStatus);
 router.get('/admin/zapi/qrcode-url', adminController.getZapiQrCode);
 router.post('/admin/clients/create-as-admin', adminController.createClientAsAdmin); // <<< NOVA ROTA
 
+router.put('/admin/clients/:clientId/clear-balance', adminController.clearClientBalance);
+
+
 module.exports = router;

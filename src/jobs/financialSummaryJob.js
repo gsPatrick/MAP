@@ -6,7 +6,7 @@ const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
 const formatter = require('../features/WhatsappHandler/response.formatter');
 const checklistService = require('../features/Checklist/checklist.service');
-const { Op } = require('sequelize'); // Importar Op
+const { Op } = require('sequelize');
 
 async function sendFinancialSummariesForPeriod(period) {
   logger.info(`[JOB RESUMO FINANCEIRO] Iniciando geração de resumos (${period})...`);
@@ -15,14 +15,12 @@ async function sendFinancialSummariesForPeriod(period) {
     const adminPhoneNumber = process.env.ADMIN_PHONE_FOR_SUMMARIES;
     const todayDateString = new Date().toISOString().split('T')[0];
 
-    // <<< INÍCIO DA MODIFICAÇÃO >>>
-    // A query agora busca FinancialAccounts cujo ownerClient tenha uma assinatura ativa.
     const activeFinancialAccounts = await FinancialAccount.findAll({
         where: { isActive: true },
         include: [{ 
             model: Client, 
             as: 'ownerClient', 
-            attributes: ['id', 'name', 'phone'],
+            attributes: ['id', 'name', 'phone', 'status', 'accessLevel', 'accessExpiresAt'],
             where: {
                 status: 'Ativo',
                 [Op.or]: [
@@ -32,79 +30,79 @@ async function sendFinancialSummariesForPeriod(period) {
             }
         }]
     });
-    // <<< FIM DA MODIFICAÇÃO >>>
 
     if (activeFinancialAccounts.length === 0) {
         logger.info('[JOB RESUMO FINANCEIRO] Nenhuma conta financeira ativa de clientes com plano ativo para gerar resumo.');
         return;
     }
 
+    // <<< INÍCIO DA MODIFICAÇÃO: Agrupar contas por cliente >>>
+    const accountsByClient = new Map();
     for (const account of activeFinancialAccounts) {
+        const client = account.ownerClient;
+        if (!client || !client.id) continue;
+
+        if (!accountsByClient.has(client.id)) {
+            accountsByClient.set(client.id, { clientInfo: client.toJSON(), accounts: [] });
+        }
+        accountsByClient.get(client.id).accounts.push(account);
+    }
+    // <<< FIM DA MODIFICAÇÃO: Agrupar contas por cliente >>>
+
+    // <<< INÍCIO DA MODIFICAÇÃO: Loop por cliente, não por conta >>>
+    for (const [clientId, clientData] of accountsByClient.entries()) {
+        const { clientInfo, accounts } = clientData;
+        let summarySections = [];
+
         try {
-            const clientPhone = account.ownerClient?.phone;
-            const clientName = account.ownerClient?.name ? account.ownerClient.name.split(' ')[0] : 'você';
+            const clientPhone = clientInfo.phone;
+            const clientName = clientInfo.name ? clientInfo.name.split(' ')[0] : 'você';
             const targetPhone = clientPhone || adminPhoneNumber;
 
             if (!targetPhone) {
-                logger.warn(`[JOB RESUMO FINANCEIRO] Sem destinatário para resumo da conta ${account.accountName}.`);
+                logger.warn(`[JOB RESUMO FINANCEIRO] Sem destinatário para resumo do cliente ${clientInfo.name}.`);
                 continue;
             }
 
-            const summary = await financialService.getFinancialSummary(account.id, { period });
-            
-            let introMessageTemplate;
-            switch (period) {
-                case 'daily':
-                    introMessageTemplate = "Oi, {clientName}! ☀️ Que tal um cafezinho e o resumo do seu dia na conta *{accountName}*?";
-                    break;
-                case 'weekly':
-                    introMessageTemplate = "E aí, {clientName}? 🚀 Fim de semana chegando! Hora de conferir o balanço da sua semana na conta *{accountName}*.";
-                    break;
-                case 'monthly':
-                    introMessageTemplate = "Olá, {clientName}! 🗓️ Mês novo, vida nova! Vamos dar uma olhada em como foi o último mês na sua conta *{accountName}*?";
-                    break;
-                default:
-                    introMessageTemplate = "Olá, {clientName}, aqui está o resumo da sua conta *{accountName}*:";
+            // Loop interno para gerar o resumo de cada conta do cliente
+            for (const account of accounts) {
+                const summary = await financialService.getFinancialSummary(account.id, { period });
+                const accountHeader = `*Resumo da Conta: ${account.accountName}*`;
+                const body = formatter.formatFinancialSummaryDataStructure(summary);
+                summarySections.push(`${accountHeader}\n${body}`);
             }
 
-            const intro = introMessageTemplate.replace('{clientName}', clientName).replace('{accountName}', account.accountName);
-            const body = formatter.formatFinancialSummaryDataStructure(summary);
-
+            // Adiciona o checklist apenas uma vez por cliente
+            const mainAccountForChecklist = accounts.find(acc => acc.isDefault) || accounts[0];
             let checklistSummaryText = '';
-            if (period === 'daily') {
-                const checklist = await checklistService.getChecklistByDate(account.id, todayDateString);
-                
+            if (period === 'daily' && mainAccountForChecklist) {
+                const checklist = await checklistService.getChecklistByDate(mainAccountForChecklist.id, todayDateString);
                 if (checklist && checklist.items && checklist.items.length > 0) {
-                    const completedItems = checklist.items.filter(item => item.completed);
                     const pendingItems = checklist.items.filter(item => !item.completed);
-
                     if (pendingItems.length > 0) {
-                        checklistSummaryText += `\n\n---\n\n📋 *Checklist do Dia (Pendências):*\n`;
+                        checklistSummaryText += `\n\n---\n\n📋 *Checklist do Dia (Pendências na conta ${mainAccountForChecklist.accountName}):*\n`;
                         pendingItems.forEach(item => {
                             checklistSummaryText += `> 📝 ${item.text}\n`;
                         });
-                        checklistSummaryText += `\nAmanhã é um novo dia para concluí-las! 💪`;
-                    } 
-                    else if (completedItems.length > 0) {
-                        checklistSummaryText += `\n\n---\n\n🏆 *Checklist do Dia (100% Concluído!):*\n`;
-                        completedItems.forEach(item => {
-                            checklistSummaryText += `> ✅ ${item.text}\n`;
-                        });
-                        checklistSummaryText += `\nParabéns pelo dia produtivo!`;
                     }
                 }
             }
-
+            
+            // Monta a mensagem final consolidada
+            const intro = `Oi, ${clientName}! ☀️ Que tal um cafezinho e o resumo do seu dia?`;
+            const finalBody = summarySections.join('\n\n─────────────────────\n');
             const footer = "Para ver mais detalhes, acesse a plataforma! 😉";
-            const message = `${intro}\n\n${body}${checklistSummaryText}\n\n${footer}`;
+            const message = `${intro}\n\n${finalBody}${checklistSummaryText}\n\n${footer}`;
 
             await sendWhatsappMessage(targetPhone, message);
-            logger.info(`[JOB RESUMO FINANCEIRO] Resumo ${period} para conta ${account.accountName} (ID: ${account.id}) enviado para ${targetPhone}.`);
+            logger.info(`[JOB RESUMO FINANCEIRO] Resumo ${period} consolidado para ${accounts.length} conta(s) do cliente ${clientInfo.name} (ID: ${clientId}) enviado para ${targetPhone}.`);
 
-        } catch (accountError) {
-            logger.error(`[JOB RESUMO FINANCEIRO] Erro ao gerar/enviar resumo ${period} para conta ${account.accountName} (ID: ${account.id}):`, { message: accountError.message, stack: accountError.stack });
+        } catch (clientError) {
+            logger.error(`[JOB RESUMO FINANCEIRO] Erro ao gerar/enviar resumo ${period} para cliente ${clientInfo.name} (ID: ${clientId}):`, { message: clientError.message, stack: clientError.stack });
         }
     }
+    // <<< FIM DA MODIFICAÇÃO: Loop por cliente >>>
+
      logger.info(`[JOB RESUMO FINANCEIRO] Finalizada geração de resumos (${period}).`);
   } catch (error) {
     logger.error(`[JOB RESUMO FINANCEIRO] Erro geral ao gerar/enviar resumos (${period}):`, { message: error.message, stack: error.stack });

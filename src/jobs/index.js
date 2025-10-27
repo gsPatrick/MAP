@@ -31,7 +31,7 @@ async function startJobs() {
     startFinancialSummaryJobs(preferences, models);
     startRecurringTransactionJob(preferences, models);
     startGoogleCalendarWatchRenewalJob(preferences, models); // <<< INICIA O NOVO JOB
-    startMorningBriefingJob(preferences, models); // <<< NOVO JOB INICIADO
+  //  startMorningBriefingJob(preferences, models); // <<< NOVO JOB INICIADO
     startChecklistSummaryJob(); // <<< ADICIONE ESTA LINHA
     startChecklistReminderJob();
     // <<< INÍCIO DA MODIFICAÇÃO >>>

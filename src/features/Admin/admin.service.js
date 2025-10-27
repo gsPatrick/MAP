@@ -441,14 +441,18 @@ async function clearClientBalance(clientId) {
         if (!client) {
             throw { statusCode: 404, message: 'Cliente não encontrado.' };
         }
-        if (client.balance === 0) {
-            await t.commit();
+
+        if (client.balance == 0) { // Usar == para comparar com 0 ou 0.00
+            await t.commit(); // Finaliza a transação mesmo sem alterações
             logger.info(`[AdminService] Saldo do cliente ID ${clientId} já é zero. Nenhuma ação necessária.`);
-            return;
+            return; // Retorna sem erro
         }
+
         const oldBalance = client.balance;
         await client.update({ balance: 0 }, { transaction: t });
-        logger.info(`[AdminService] Saldo do cliente ID ${clientId} zerado de R$${oldBalance} para R$0.00.`);
+        
+        logger.info(`[AdminService] AÇÃO DE PAGAMENTO: Saldo do cliente ID ${clientId} zerado de R$${oldBalance} para R$0.00 por um administrador.`);
+        
         await t.commit();
     } catch (error) {
         await t.rollback();

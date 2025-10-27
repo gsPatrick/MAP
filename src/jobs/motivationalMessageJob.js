@@ -209,7 +209,7 @@ async function checkAndSendDailyMotivation() {
 
     // <<< INÍCIO DA MODIFICAÇÃO >>>
     // A query agora filtra clientes com assinatura ativa.
-    const clientsToSend = await Client.findAll({
+const clientsToSend = await Client.findAll({
       where: {
         wantsMotivationMessage: true,
         status: 'Ativo',
@@ -220,6 +220,7 @@ async function checkAndSendDailyMotivation() {
         lastMotivationSentDate: {
           [Op.or]: [null, { [Op.lt]: todayDateString }]
         },
+        // Filtro de assinatura ativa
         [Op.or]: [
             { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
             { accessExpiresAt: { [Op.gte]: todayDateString } }

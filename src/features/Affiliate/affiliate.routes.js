@@ -7,6 +7,7 @@ const router = Router();
 // Rota para o cliente logado buscar seu próprio dashboard de afiliado
 router.get('/dashboard', affiliateController.getAffiliateDashboard);
 
-// No futuro, outras rotas de afiliado (como saque, etc.) podem ser adicionadas aqui.
+// <<< NOVA ROTA PARA O HISTÓRICO DE INDICAÇÕES >>>
+router.get('/referrals', affiliateController.getAffiliateReferrals);
 
 module.exports = router;

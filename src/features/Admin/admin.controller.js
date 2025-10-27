@@ -92,6 +92,7 @@ const updatePlan = (req, res, next) => {
         .catch(next);
 };
 
+// <<< NOVO CONTROLLER PARA ZERAR O SALDO >>>
 const clearClientBalance = (req, res, next) => {
     const { clientId } = req.params;
     adminService.clearClientBalance(clientId)
@@ -140,6 +141,8 @@ const getZapiQrCode = (req, res, next) => {
         next(error);
     }
 };
+
+
 
 module.exports = {
   getAdminClientList,
