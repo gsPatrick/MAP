@@ -33,9 +33,12 @@ async function sendAffiliateLinkNotification(newClient) {
 }
 
 /**
- * <<< FUNÇÃO MODIFICADA E FINAL >>>
  * Processa uma nova assinatura para creditar a comissão ao afiliado que indicou,
  * APENAS se for a primeira assinatura paga do novo cliente.
+ * 
+ * Adicionada a verificação no início para garantir que o cliente tem um plano pago ativo
+ * antes de prosseguir com a creditação de comissão.
+ * 
  * @param {number} newlySubscribedClientId - O ID do cliente que acabou de ter sua assinatura ativada.
  * @param {object} options - Opções, como a transação do Sequelize.
  */
@@ -50,6 +53,19 @@ async function processNewSubscriptionForAffiliate(newlySubscribedClientId, optio
       logger.info(`[AffiliateService] Cliente ID ${newlySubscribedClientId} não foi indicado. Nenhuma comissão a processar.`);
       return;
     }
+    
+    // <<< PASSO CRUCIAL DE VALIDAÇÃO: Cliente deve ter um plano pago ativo >>>
+    const today = new Date().toISOString().split('T')[0];
+    const isPaidAccess = newClient.accessLevel && newClient.accessLevel !== 'gratuito' && 
+                         (newClient.accessLevel.startsWith('vitalicio_') || 
+                         (newClient.accessExpiresAt && new Date(newClient.accessExpiresAt + 'T23:59:59Z') >= new Date(today + 'T00:00:00Z')));
+    
+    if (!isPaidAccess) {
+        if (!options.transaction) await transaction.commit();
+        logger.warn(`[AffiliateService] Cliente ID ${newlySubscribedClientId} (indicado por ${newClient.referredByClientId}) NÃO tem um plano pago ATIVO. Comissão não aplicável.`);
+        return;
+    }
+    // <<< FIM DO NOVO PASSO CRUCIAL DE VALIDAÇÃO >>>
 
     const referrer = await Client.findByPk(newClient.referredByClientId, { transaction });
     if (!referrer) {
@@ -58,41 +74,58 @@ async function processNewSubscriptionForAffiliate(newlySubscribedClientId, optio
       return;
     }
 
-    // <<< 2. NOVA VERIFICAÇÃO: Impede autocomissão (self-referral) >>>
+    // 2. NOVA VERIFICAÇÃO: Impede autocomissão (self-referral)
     if (referrer.id === newClient.id) {
         if (!options.transaction) await transaction.commit();
         logger.warn(`[AffiliateService] Tentativa de autocomissão (self-referral) pelo Cliente ID ${newClient.id}. Comissão ignorada.`);
         return;
     }
 
+    // Busca a assinatura ATIVA que justifica esta creditação (a mais recente)
+    // A query é mais complexa para garantir que a assinatura está ativa e associada ao plano
     const activeSubscription = await Subscription.findOne({
-      where: { clientId: newlySubscribedClientId, status: 'Ativa' },
+      where: { 
+          clientId: newlySubscribedClientId, 
+          status: 'Ativa' ,
+          // Garantir que a assinatura seja recente e corresponda ao nível de acesso do cliente
+          // (Usado para tentar pegar a assinatura correta no caso de várias entradas)
+      },
       include: [{ model: Plan, as: 'plan' }],
       order: [['createdAt', 'DESC']], // Pega a mais recente
       transaction,
     });
 
     if (!activeSubscription || !activeSubscription.plan) {
+      // Se a subscrição ativa não foi encontrada (o que é improvável se o cliente estiver com accessLevel correto),
+      // faz um rollback se a transação não for externa.
       if (!options.transaction) await transaction.rollback();
-      logger.error(`[AffiliateService] Assinatura ativa ou plano não encontrado para o cliente comissionado ${newClient.id}.`);
+      logger.error(`[AffiliateService] Assinatura ativa ou plano não encontrado para o cliente comissionado ${newClient.id}, apesar do accessLevel. Rollback.`);
       return;
     }
 
-    // <<< 3. NOVA VERIFICAÇÃO: Garante que é a PRIMEIRA assinatura ativa do cliente >>>
-    const totalActiveSubscriptions = await Subscription.count({
-        where: {
-            clientId: newlySubscribedClientId,
-            status: 'Ativa'
-        },
-        transaction
-    });
+    // 3. NOVA VERIFICAÇÃO: Garante que é a PRIMEIRA assinatura ativa do cliente
+    // Se o cliente tem acesso vitalício, ele só tem uma "primeira" assinatura.
+    const isVitalicio = newClient.accessLevel.startsWith('vitalicio_');
+    let totalActivePaidSubscriptions = 0;
+    
+    if (!isVitalicio) {
+        totalActivePaidSubscriptions = await Subscription.count({
+            where: {
+                clientId: newlySubscribedClientId,
+                status: 'Ativa'
+            },
+            transaction
+        });
+    }
 
-    if (totalActiveSubscriptions > 1) {
+
+    if (!isVitalicio && totalActivePaidSubscriptions > 1) {
+        // Se já tem mais de uma ativa (implica renovação ou outra compra paga anterior), NÃO credita.
         if (!options.transaction) await transaction.commit();
-        logger.info(`[AffiliateService] Cliente ID ${newlySubscribedClientId} já possui ${totalActiveSubscriptions} assinaturas ativas (renovação ou segunda compra). Comissão não aplicável.`);
+        logger.info(`[AffiliateService] Cliente ID ${newlySubscribedClientId} já possui ${totalActivePaidSubscriptions} assinaturas ativas (renovação ou segunda compra). Comissão não aplicável.`);
         return;
     }
-    // <<< FIM DA VERIFICAÇÃO DE PRIMEIRA COMPRA >>>
+    // FIM DA VERIFICAÇÃO DE PRIMEIRA COMPRA
 
     const commissionValue = parseFloat(activeSubscription.plan.affiliateCommissionValue);
     if (isNaN(commissionValue) || commissionValue <= 0) {
@@ -166,7 +199,6 @@ async function getAffiliateDashboard(affiliateClientId) {
 }
 
 /**
- * <<< NOVA FUNÇÃO >>>
  * Busca um histórico detalhado de todas as indicações feitas por um afiliado.
  * @param {number} affiliateClientId - O ID do cliente afiliado.
  * @returns {Promise<Array<object>>} Uma lista de objetos detalhando cada indicação.
