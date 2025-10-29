@@ -442,18 +442,34 @@ async function clearClientBalance(clientId) {
             throw { statusCode: 404, message: 'Cliente não encontrado.' };
         }
 
-        if (client.balance == 0) { // Usar == para comparar com 0 ou 0.00
+        const oldBalance = parseFloat(client.balance);
+
+        if (oldBalance <= 0) {
             await t.commit(); // Finaliza a transação mesmo sem alterações
             logger.info(`[AdminService] Saldo do cliente ID ${clientId} já é zero. Nenhuma ação necessária.`);
             return; // Retorna sem erro
         }
-
-        const oldBalance = client.balance;
-        await client.update({ balance: 0 }, { transaction: t });
         
-        logger.info(`[AdminService] AÇÃO DE PAGAMENTO: Saldo do cliente ID ${clientId} zerado de R$${oldBalance} para R$0.00 por um administrador.`);
+        // Zera o saldo no banco de dados
+        await client.update({ balance: 0.00 }, { transaction: t });
+        
+        // <<< LOG APRIMORADO PARA AUDITORIA >>>
+        logger.info(`[AdminService] AÇÃO DE PAGAMENTO/SAQUE: Saldo do cliente ID ${clientId} zerado de R$${oldBalance.toFixed(2)} para R$0.00 por um administrador.`);
+        // Se tivéssemos um modelo 'PayoutLedger', faríamos o registro aqui.
         
         await t.commit();
+        
+        // --- ENVIO DE NOTIFICAÇÃO (OPCIONAL, MAS BOA PRÁTICA) ---
+        if (client.phone) {
+             const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
+             const message = `💰 *Seu Saque/Pagamento de Comissão foi processado!* 💰\n\n` +
+                             `Olá, ${clientName}! Informamos que um pagamento de comissão no valor de *R$${oldBalance.toFixed(2).replace('.', ',')}* foi processado pelo nosso time e seu saldo foi zerado.\n\n` +
+                             `O prazo de pagamento (PIX) é de até 48 horas úteis. Seu novo saldo atual é R$0,00.\n\n` +
+                             `Continue indicando e ganhando! 🚀`;
+            await sendWhatsappMessage(client.phone, message).catch(err => logger.error(`[AdminService] Falha ao notificar saque para ${client.phone}: ${err.message}`));
+        }
+        // --- FIM DO ENVIO DE NOTIFICAÇÃO ---
+
     } catch (error) {
         await t.rollback();
         logger.error(`[AdminService] Erro ao zerar saldo do cliente ID ${clientId}: ${error.message}`, error);
