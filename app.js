@@ -26,36 +26,25 @@ async function initializeDatabaseAndJobs() {
     // ==========================================================================
     if (isProduction) {
       // --- MODO PRODUÇÃO ---
-      // Em produção, NUNCA sincronizamos. A estrutura do banco é gerenciada
-      // exclusivamente por arquivos de migração (migrations).
       console.log('Ambiente de PRODUÇÃO detectado.');
       console.log('Sincronização automática (sync) do banco de dados está DESATIVADA por segurança.');
       console.log('A estrutura do banco de dados não será alterada pela aplicação.');
-
     } else {
       // --- MODO DESENVOLVIMENTO ---
       if (forceReset) {
-        // Esta opção só funciona se NODE_ENV NÃO for 'production'.
         console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
         console.warn('!! ATENÇÃO: MODO DESENVOLVIMENTO com FORCE_DB_RESET=true.                 !!');
         console.warn('!! O BANCO DE DADOS SERÁ COMPLETAMENTE APAGADO E RECRIADO.                !!');
         console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
         await sequelize.sync({ alter: false });
         console.log('Banco de dados resetado com sucesso (force: true).');
-        
-        // Após um reset total, é essencial semear os dados básicos.
-   
-
       } else {
-        // Comportamento padrão para desenvolvimento: tenta alterar tabelas sem apagar.
         console.log('Ambiente de DESENVOLVIMENTO. Sincronizando modelos com { alter: true }...');
         await sequelize.sync({ alter: false });
         console.log('Modelos sincronizados com o banco de dados (alter: true).');
-        
-        // Também é seguro rodar o seeder aqui, pois ele deve ser idempotente (verificar se já existe).
-
       }
     }
+
     await initializeBasePlans();
 
     // Inicia os jobs agendados após a confirmação da conexão com o banco.
@@ -74,15 +63,38 @@ async function initializeDatabaseAndJobs() {
 function createApp() {
   const app = express();
 
-  // Middlewares Essenciais
+  // ==========================================================================
+  // CONFIGURAÇÃO SEGURA DE CORS
+  // ==========================================================================
+  const allowedOrigins = [
+    'https://www.map-nocontrole.com.br',
+    'https://map-nocontrole.com.br',
+    'http://localhost:3000' // opcional (modo desenvolvimento)
+  ];
+
   app.use(cors({
-    origin: process.env.CORS_ORIGIN || '*',
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true); // permite Postman e requests internas
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`🚫 CORS bloqueado para origem não autorizada: ${origin}`);
+        callback(new Error('CORS não permitido para esta origem.'));
+      }
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   }));
+
+  // ==========================================================================
+  // MIDDLEWARES ESSENCIAIS
+  // ==========================================================================
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+  // ==========================================================================
+  // ROTAS PRINCIPAIS
+  // ==========================================================================
   // Rota de health check básica
   app.get('/health', (req, res) => res.status(200).json({ status: 'OK', timestamp: new Date() }));
 
@@ -100,7 +112,9 @@ function createApp() {
   return app;
 }
 
-// Bloco principal para iniciar o servidor
+// ==========================================================================
+// BLOCO PRINCIPAL PARA INICIAR O SERVIDOR
+// ==========================================================================
 if (require.main === module) {
   const app = createApp();
   const PORT = process.env.PORT || 3000;
