@@ -66,11 +66,12 @@ function createApp() {
   // ==========================================================================
   // CONFIGURAÇÃO SEGURA DE CORS
   // ==========================================================================
-  const allowedOrigins = [
-    'https://www.map-nocontrole.com.br',
-    'https://map-nocontrole.com.br',
-    'http://localhost:3000' // opcional (modo desenvolvimento)
-  ];
+const allowedOrigins = [
+  'https://www.map-nocontrole.com.br',
+  'https://map-nocontrole.com.br',
+  'http://localhost:3000',
+  'https://api.z-api.io' // ✅ adicionado para permitir webhooks da Z-API
+];
 
   app.use(cors({
     origin: function (origin, callback) {
