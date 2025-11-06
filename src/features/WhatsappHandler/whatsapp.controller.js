@@ -2,9 +2,27 @@
 const whatsappService = require('./whatsapp.service'); // Este é o seu whatsapp.service.js de features/WhatsappHandler
 const logger = require('../../utils/logger');
 
+// Cache para controle de idempotência (evitar processamento duplicado de mensagens)
+const processingMessageIds = new Set();
+
 async function handleIncomingMessage(req, res, next) {
+  const payload = req.body;
+  // O ID da mensagem é a chave para o controle de duplicação
+  const messageId = payload.messageId; 
+
   try {
-    const payload = req.body;
+    // --- INÍCIO DO CONTROLE DE IDEMPOTÊNCIA ---
+    if (messageId) {
+      if (processingMessageIds.has(messageId)) {
+        logger.warn(`[IDEMPOTENCY] Mensagem duplicada recebida e ignorada. ID: ${messageId}`);
+        // Responde 200 para a Z-API saber que recebemos, mas não processamos de novo.
+        return res.status(200).json({ status: 'success', message: 'Duplicate message ignored.' });
+      }
+      // Adiciona o ID ao set para bloquear futuras duplicatas
+      processingMessageIds.add(messageId);
+    }
+    // --- FIM DO CONTROLE DE IDEMPOTÊNCIA ---
+
     logger.info('[WHATSAPP CONTROLLER] Webhook da Z-API recebido:', { payload });
 
     let senderPhone = null;
@@ -34,7 +52,6 @@ async function handleIncomingMessage(req, res, next) {
         senderPhone = senderPhone.substring(2);
     }
 
-
     // Tenta obter 'fromMe'
     if (payload.fromMe !== undefined) {
         isFromMe = payload.fromMe;
@@ -57,7 +74,6 @@ async function handleIncomingMessage(req, res, next) {
         pushName = null;
     }
     // --- Fim da Extração de Dados Comuns ---
-
 
     // --- Início da Lógica de Detecção do Tipo de Mensagem ---
     const mainWebhookType = payload.type; // Ex: "ReceivedCallback", "MessageReceived", "ChatPresence"
@@ -115,7 +131,6 @@ async function handleIncomingMessage(req, res, next) {
     }
     // --- Fim da Lógica de Detecção do Tipo de Mensagem ---
 
-
     if (isFromMe) {
       logger.info('[WHATSAPP CONTROLLER] Mensagem de mim mesmo (fromMe=true), ignorando.');
       return res.status(200).json({ status: 'success', message: 'Echo message ignored.' });
@@ -144,6 +159,14 @@ async function handleIncomingMessage(req, res, next) {
     // É importante responder 200 para a Z-API mesmo em caso de erro interno,
     // para evitar que ela continue reenviando o mesmo webhook.
     res.status(200).json({ status: 'error_processing_internally', message: 'Error processing webhook.' });
+  } finally {
+    // --- INÍCIO DA LIMPEZA DO CACHE ---
+    // Garante que o ID da mensagem seja removido do controle de duplicatas
+    // após o término do processamento (seja sucesso ou erro).
+    if (messageId) {
+      processingMessageIds.delete(messageId);
+    }
+    // --- FIM DA LIMPEZA DO CACHE ---
   }
 }
 

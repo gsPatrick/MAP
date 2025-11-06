@@ -442,6 +442,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 400, message: "Título e data/hora são obrigatórios para agendar." };
                     }
 
+                    // Objeto de dados simplificado, sem referência a 'serviceIds'
                     const appointmentData = {
                         title: params.title,
                         eventDateTime: params.eventDateTime,
@@ -450,11 +451,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         notes: params.notes,
                         reminderLeadTimeMinutes: params.reminderLeadTimeMinutes,
                         reminderEnabled: params.reminderEnabled,
-                        businessClientIds: [],
-                        serviceIds: [],
+                        businessClientIds: [], // Apenas para associar clientes de negócio em contas PJ/MEI
                     };
                     
-                    if (['PJ', 'MEI'].includes(effectiveAccountType)) {
+                    // Lógica para associar um cliente de negócio (se a conta for PJ/MEI) a um compromisso geral (como uma reunião)
+                    if (['PJ', 'MEI'].includes(state.activeFinancialAccountType) || effectiveAccountId !== state.activeFinancialAccountId) {
                         if (params.businessClientNames && Array.isArray(params.businessClientNames)) {
                             for (const name of params.businessClientNames) {
                                 const bcId = await findBusinessClientIdByName(name, effectiveAccountId);
@@ -467,7 +468,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const newAppt = await appointmentService.scheduleAppointment(effectiveAccountId, appointmentData, actorId);
                     
-                    formattedData = formatter.formatAppointmentDataStructure(newAppt, false, false, false, effectiveAccountName);
+                    // Passa o nome da conta efetiva para o formatador
+                    formattedData = formatter.formatAppointmentDataStructure(newAppt, false, null, false, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'appointment', id: newAppt.id, description: newAppt.title });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em SCHEDULE_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
