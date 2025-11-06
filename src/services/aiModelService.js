@@ -1,10 +1,11 @@
-// src/services/aiModelService.js teste
+// src/services/aiModelService.js
 const { OpenAI } = require('openai');
 const logger =require('../utils/logger');
 const axios = require('axios'); 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { triageIntent, triageCommandComplexity } = require('./aiTriage.service');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_API_KEY) {
@@ -16,84 +17,10 @@ const openai = new OpenAI({
 });
 
 const ASSISTANT_NAME = "MAP no Controle";
+const FAST_MODEL = 'gpt-3.5-turbo';
+const POWERFUL_MODEL = 'gpt-4o';
 
-// CÓDIGO MODIFICADO E OTIMIZADO da função transcribeAudioStream
-async function transcribeAudioStream(audioStream, inputFilename) {
-  if (!process.env.OPENAI_API_KEY) {
-    logger.error('[AI SERVICE - WHISPER] OPENAI_API_KEY não configurada.');
-    throw new Error('Configuração da API da OpenAI ausente para transcrição.');
-  }
-  if (!audioStream) {
-    logger.error('[AI SERVICE - WHISPER] Stream de áudio não fornecido.');
-    throw new Error('Stream de áudio é necessário para transcrição.');
-  }
-  
-  // Garante um nome de arquivo válido para o Whisper
-  const filename = inputFilename || 'audio.ogg';
-  const tempFilePath = path.join(os.tmpdir(), `whisper-${Date.now()}-${filename}`);
-  
-  try {
-    logger.info(`[AI SERVICE - WHISPER] Iniciando salvamento do áudio em arquivo temporário: ${tempFilePath}`);
-    
-    // Cria um stream de escrita para o arquivo temporário
-    const writer = fs.createWriteStream(tempFilePath);
-    
-    // Conecta o stream de download (audioStream) ao stream de escrita (writer)
-    audioStream.pipe(writer);
-
-    // Aguarda o download e o salvamento do arquivo serem concluídos
-    await new Promise((resolve, reject) => {
-      writer.on('finish', resolve);
-      writer.on('error', (err) => {
-        logger.error(`[AI SERVICE - WHISPER] Erro ao salvar o arquivo de áudio temporário: ${err.message}`);
-        reject(err);
-      });
-    });
-
-    logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário salvo com sucesso. Enviando para transcrição...`);
-
-    // Envia o arquivo salvo no disco para a API da OpenAI
-    const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(tempFilePath), // << A chave é criar um ReadStream a partir do arquivo salvo
-      model: "whisper-1",
-      language: "pt",
-      response_format: "text"
-    });
-
-    const transcribedText = String(transcription); 
-
-    if (transcribedText.trim() === "") {
-      logger.warn(`[AI SERVICE - WHISPER] Transcrição do arquivo ${filename} resultou em texto vazio.`);
-      return ""; 
-    }
-
-    logger.info(`[AI SERVICE - WHISPER] Texto transcrito de ${filename}: "${transcribedText.substring(0, 100)}..."`);
-    return transcribedText;
-
-  } catch (error) {
-    let errorMessage = `Falha ao transcrever áudio (${filename})`;
-    if (error.response && error.response.data) {
-        logger.error('[AI SERVICE - WHISPER] Erro da API OpenAI:', error.response.data);
-        errorMessage += `: ${JSON.stringify(error.response.data.error?.message || error.response.data)}`;
-    } else {
-        logger.error('[AI SERVICE - WHISPER] Erro durante a transcrição do áudio:', { message: error.message, stack: error.stack });
-        errorMessage += `: ${error.message}`;
-    }
-    throw new Error(errorMessage);
-  } finally {
-    // --- LIMPEZA ESSENCIAL ---
-    // Garante que o arquivo temporário seja sempre excluído, mesmo se ocorrer um erro.
-    fs.unlink(tempFilePath, (err) => {
-      if (err) {
-        logger.warn(`[AI SERVICE - WHISPER] Não foi possível excluir o arquivo de áudio temporário ${tempFilePath}: ${err.message}`);
-      } else {
-        logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário ${tempFilePath} excluído com sucesso.`);
-      }
-    });
-  }
-}
-
-function buildSystemPrompt(conversationContext) {
+function buildSystemPrompt(conversationContext, forSimpleCommand = false) {
   const now = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
   const today = now.toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const currentTime = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -223,7 +150,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 *   Você **DEVE** verificar se o nome do cliente fornecido pelo usuário existe na lista de \`availableBusinessClients\` fornecida no contexto no início deste prompt.
 
 *   **CENÁRIO 1: O cliente de negócio JÁ EXISTE.**
-    *   Se o nome do cliente (ex: "João Silva") está na lista de contexto, prossiga normally com a detecção da ação \`SCHEDULE_APPOINTMENT\`, preenchendo o parâmetro \`businessClientNames\`.
+    *   Se o nome do cliente (ex: "João Silva") está na lista de contexto, prossiga normalmente com a detecção da ação \`SCHEDULE_APPOINTMENT\`, preenchendo o parâmetro \`businessClientNames\`.
 
 *   **CENÁRIO 2: O cliente de negócio NÃO EXISTE.**
     *   Se o nome do cliente (ex: "Maria Nova") **NÃO** está na lista de contexto, sua tarefa é criar um agendamento **NORMAL**, mas **OMITINDO** o parâmetro \`businessClientNames\`. O nome do cliente deve fazer parte do \`title\` do agendamento.
@@ -943,86 +870,176 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     };
   }
 
-  const clientNameForPrompt = conversationContext.clientName || "pessoa incrível";
-  const systemPromptContent = buildSystemPrompt(conversationContext); 
-
-  const conversationHistoryForAPI = (conversationContext.conversationHistory || [])
-      .map(entry => ({ role: entry.role, content: entry.content }));
-
-  let finalSystemPromptContent = systemPromptContent
-      .replace("{{CONVERSATION_HISTORY}}", JSON.stringify(conversationHistoryForAPI.slice(-6)));
-
-  finalSystemPromptContent = finalSystemPromptContent.replace("MENSAGEM DO USUÁRIO:\n\"{{USER_MESSAGE}}\"", "").trim();
-
-  const messagesToSendToAPI = [
-      {role: "system", content: finalSystemPromptContent},
-      ...conversationHistoryForAPI.slice(-4), 
-      {role: "user", content: userMessage}
-  ];
-
-  const modelToUse = "gpt-4o"; 
-
-  logger.debug('[AI SERVICE] Enviando para OpenAI:', {
-      model: modelToUse,
-      messageCount: messagesToSendToAPI.length,
-      userMessageLength: userMessage.length,
-  });
+  // ETAPA 1: Triagem de Intenção Geral
+  const intent = await triageIntent(userMessage);
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: modelToUse,
-      messages: messagesToSendToAPI,
-      temperature: 0.15, 
-      response_format: { type: "json_object" },
-    });
+    switch (intent) {
+      case 'small_talk': {
+        logger.info('[AI SERVICE] Roteando para Small Talk (modelo rápido).');
+        const systemPrompt = `Você é o "${ASSISTANT_NAME}", um assistente amigável e espirituoso. Responda à conversa casual do usuário de forma breve e simpática. O nome do cliente é ${conversationContext.clientName || 'pessoa incrível'}.`;
+        const completion = await openai.chat.completions.create({
+          model: FAST_MODEL,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage }
+          ],
+          temperature: 0.7,
+        });
+        return { 
+            detected_actions: [],
+            clarifications_needed: [],
+            reply_to_user_suggestion: completion.choices[0].message.content 
+        };
+      }
 
-    const aiResultContent = completion.choices[0].message.content;
-    if (!aiResultContent) throw new Error("Resposta da IA vazia ou inválida.");
+      case 'question': {
+        logger.info('[AI SERVICE] Roteando para Pergunta (modelo rápido).');
+        const systemPrompt = `Você é o "${ASSISTANT_NAME}", um assistente prestativo. Responda à pergunta do usuário sobre como usar o sistema ou sobre seus dados. Use o contexto para dar uma resposta precisa. NÃO execute ações, apenas responda à pergunta de forma clara e amigável. Contexto de Contas: ${JSON.stringify(conversationContext.availableFinancialAccounts)}, Contexto de Cartões: ${JSON.stringify(conversationContext.availableCreditCards)}`;
+        const completion = await openai.chat.completions.create({
+          model: FAST_MODEL,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage }
+          ],
+          temperature: 0.3,
+        });
+        return { 
+            detected_actions: [],
+            clarifications_needed: [],
+            reply_to_user_suggestion: completion.choices[0].message.content 
+        };
+      }
 
-    const parsedResult = JSON.parse(aiResultContent);
-    logger.info(`[AI SERVICE] Resultado da IA (${modelToUse}) parseado com sucesso.`);
-    logger.debug('[AI SERVICE] Parsed AI Result:', parsedResult);
+      case 'command': {
+        // ETAPA 2: Triagem de Complexidade do Comando
+        const complexity = await triageCommandComplexity(userMessage);
+        const modelToUse = complexity === 'simple' ? FAST_MODEL : POWERFUL_MODEL;
+        const forSimplePrompt = complexity === 'simple';
+        
+        logger.info(`[AI SERVICE] Roteando para Comando ${complexity.toUpperCase()} (modelo: ${modelToUse}).`);
 
-    if (!parsedResult.overall_summary_suggestion && parsedResult.reply_to_user_suggestion && parsedResult.detected_actions && parsedResult.detected_actions.length > 0) {
-        if (!parsedResult.clarifications_needed || parsedResult.clarifications_needed.length === 0) {
-            if (parsedResult.reply_to_user_suggestion.includes(clientNameForPrompt) || parsedResult.detected_actions.every(a => (a.action || a.action_type)?.startsWith("GENERAL_"))) {
-                 parsedResult.overall_summary_suggestion = parsedResult.reply_to_user_suggestion;
-            }
-        }
+        const systemPromptContent = buildSystemPrompt(conversationContext, forSimplePrompt);
+        const conversationHistoryForAPI = (conversationContext.conversationHistory || []).map(entry => ({ role: entry.role, content: entry.content }));
+        
+        const messagesToSendToAPI = [
+          { role: "system", content: systemPromptContent },
+          ...conversationHistoryForAPI.slice(-4),
+          { role: "user", content: userMessage }
+        ];
+
+        const completion = await openai.chat.completions.create({
+          model: modelToUse,
+          messages: messagesToSendToAPI,
+          temperature: 0.15,
+          response_format: { type: "json_object" },
+        });
+
+        const aiResultContent = completion.choices[0].message.content;
+        if (!aiResultContent) throw new Error("Resposta da IA para comando vazia ou inválida.");
+        
+        const parsedResult = JSON.parse(aiResultContent);
+        logger.info(`[AI SERVICE] Resultado do comando (${modelToUse}) parseado com sucesso.`);
+        return parsedResult;
+      }
+
+      default:
+        logger.warn(`[AI SERVICE] Triagem retornou intenção desconhecida: ${intent}. Usando fallback para comando complexo.`);
+        const modelToUse = POWERFUL_MODEL;
+        const systemPromptContent = buildSystemPrompt(conversationContext, false);
+        const conversationHistoryForAPI = (conversationContext.conversationHistory || []).map(entry => ({ role: entry.role, content: entry.content }));
+        const messagesToSendToAPI = [
+          { role: "system", content: systemPromptContent },
+          ...conversationHistoryForAPI.slice(-4),
+          { role: "user", content: userMessage }
+        ];
+        const completion = await openai.chat.completions.create({
+          model: modelToUse,
+          messages: messagesToSendToAPI,
+          temperature: 0.15,
+          response_format: { type: "json_object" },
+        });
+        const aiResultContent = completion.choices[0].message.content;
+        if (!aiResultContent) throw new Error("Resposta da IA para comando (fallback) vazia ou inválida.");
+        const parsedResult = JSON.parse(aiResultContent);
+        logger.info(`[AI SERVICE] Resultado do comando (fallback, ${modelToUse}) parseado com sucesso.`);
+        return parsedResult;
     }
-    if (parsedResult.overall_summary_suggestion && parsedResult.overall_summary_suggestion.startsWith(`Ok, ${clientNameForPrompt}!`)) {
-        if (parsedResult.detected_actions && parsedResult.detected_actions.length === 1 && parsedResult.detected_actions[0].action_specific_reply_suggestion) {
-            parsedResult.overall_summary_suggestion = parsedResult.detected_actions[0].action_specific_reply_suggestion;
-        }
-    }
-
-    return parsedResult;
-
   } catch (error) {
-    const rawResponseForError = error.response?.data || (typeof error.message === 'string' && error.message.includes("{") ? error.message : null) || "Sem resposta bruta disponível";
-    logger.error(`[AI SERVICE] Erro ao chamar ou parsear API da OpenAI (${modelToUse}):`, {
-        errorMessage: error.message,
-        errorStack: error.stack,
-        rawApiResponse: rawResponseForError,
-        requestMessageCount: messagesToSendToAPI.length
-    });
-
-    const clientNameForError = conversationContext.clientName || "você";
-    const isJsonError = error.message.toLowerCase().includes("json");
-    const errorType = isJsonError ? "entender a resposta da minha inteligência" : "me comunicar com minha inteligência";
-    const errorMessageIntro = `Puxa vida, ${clientNameForError}! 😬 Tive um curto-circuito aqui e não consegui processar sua mensagem direito (${errorType}).`;
-    const errorDetails = `Minha equipe de engenheiros já foi notificada para dar uma olhadinha nisso! 👩‍💻👨‍💻`;
-    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://www.map-nocontrole.com.br/`;
-    const tryAgain = `Por favor, tente de novo em um momentinho. Desculpe o transtorno! 🙏`;
-    const finalErrorMessage = `${errorMessageIntro}\n\n🎯 Detalhes do Ocorrido:\n${errorDetails}\n\n${tryAgain}\n\n${platformLink}`;
-
+    logger.error(`[AI SERVICE] Erro no fluxo de interpretação com triagem: ${error.message}`, { stack: error.stack });
     return {
-        overall_summary_suggestion: errorMessageIntro,
         detected_actions: [],
         clarifications_needed: [],
-        ununderstood_segments: [userMessage],
-        reply_to_user_suggestion: finalErrorMessage
+        reply_to_user_suggestion: `Puxa, ${conversationContext.clientName || 'você'}! 😬 Tive um curto-circuito aqui. Tente novamente em um instante.`
     };
+  }
+}
+
+async function transcribeAudioStream(audioStream, inputFilename) {
+  if (!process.env.OPENAI_API_KEY) {
+    logger.error('[AI SERVICE - WHISPER] OPENAI_API_KEY não configurada.');
+    throw new Error('Configuração da API da OpenAI ausente para transcrição.');
+  }
+  if (!audioStream) {
+    logger.error('[AI SERVICE - WHISPER] Stream de áudio não fornecido.');
+    throw new Error('Stream de áudio é necessário para transcrição.');
+  }
+  
+  const filename = inputFilename || 'audio.ogg';
+  const tempFilePath = path.join(os.tmpdir(), `whisper-${Date.now()}-${filename}`);
+  
+  try {
+    logger.info(`[AI SERVICE - WHISPER] Iniciando salvamento do áudio em arquivo temporário: ${tempFilePath}`);
+    
+    const writer = fs.createWriteStream(tempFilePath);
+    
+    audioStream.pipe(writer);
+
+    await new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', (err) => {
+        logger.error(`[AI SERVICE - WHISPER] Erro ao salvar o arquivo de áudio temporário: ${err.message}`);
+        reject(err);
+      });
+    });
+
+    logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário salvo com sucesso. Enviando para transcrição...`);
+
+    const transcription = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(tempFilePath),
+      model: "whisper-1",
+      language: "pt",
+      response_format: "text"
+    });
+
+    const transcribedText = String(transcription); 
+
+    if (transcribedText.trim() === "") {
+      logger.warn(`[AI SERVICE - WHISPER] Transcrição do arquivo ${filename} resultou em texto vazio.`);
+      return ""; 
+    }
+
+    logger.info(`[AI SERVICE - WHISPER] Texto transcrito de ${filename}: "${transcribedText.substring(0, 100)}..."`);
+    return transcribedText;
+
+  } catch (error) {
+    let errorMessage = `Falha ao transcrever áudio (${filename})`;
+    if (error.response && error.response.data) {
+        logger.error('[AI SERVICE - WHISPER] Erro da API OpenAI:', error.response.data);
+        errorMessage += `: ${JSON.stringify(error.response.data.error?.message || error.response.data)}`;
+    } else {
+        logger.error('[AI SERVICE - WHISPER] Erro durante a transcrição do áudio:', { message: error.message, stack: error.stack });
+        errorMessage += `: ${error.message}`;
+    }
+    throw new Error(errorMessage);
+  } finally {
+    fs.unlink(tempFilePath, (err) => {
+      if (err) {
+        logger.warn(`[AI SERVICE - WHISPER] Não foi possível excluir o arquivo de áudio temporário ${tempFilePath}: ${err.message}`);
+      } else {
+        logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário ${tempFilePath} excluído com sucesso.`);
+      }
+    });
   }
 }
 
