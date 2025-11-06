@@ -1,11 +1,12 @@
-// src/services/aiModelService.js
+// src/services/aiModelService.js teste
 const { OpenAI } = require('openai');
 const logger =require('../utils/logger');
 const axios = require('axios'); 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { triageIntent, triageCommandComplexity } = require('./aiTriage.service');
+const { performTriage } = require('./aiTriage.service'); // --- NOVO ---
+const { getQuickResponse } = require('../utils/cannedResponses'); // --- NOVO ---
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_API_KEY) {
@@ -17,10 +18,77 @@ const openai = new OpenAI({
 });
 
 const ASSISTANT_NAME = "MAP no Controle";
-const FAST_MODEL = 'gpt-3.5-turbo';
-const POWERFUL_MODEL = 'gpt-4o';
 
-function buildSystemPrompt(conversationContext, forSimpleCommand = false) {
+// CÓDIGO MODIFICADO E OTIMIZADO da função transcribeAudioStream
+async function transcribeAudioStream(audioStream, inputFilename) {
+  if (!process.env.OPENAI_API_KEY) {
+    logger.error('[AI SERVICE - WHISPER] OPENAI_API_KEY não configurada.');
+    throw new Error('Configuração da API da OpenAI ausente para transcrição.');
+  }
+  if (!audioStream) {
+    logger.error('[AI SERVICE - WHISPER] Stream de áudio não fornecido.');
+    throw new Error('Stream de áudio é necessário para transcrição.');
+  }
+  
+  const filename = inputFilename || 'audio.ogg';
+  const tempFilePath = path.join(os.tmpdir(), `whisper-${Date.now()}-${filename}`);
+  
+  try {
+    logger.info(`[AI SERVICE - WHISPER] Iniciando salvamento do áudio em arquivo temporário: ${tempFilePath}`);
+    
+    const writer = fs.createWriteStream(tempFilePath);
+    
+    audioStream.pipe(writer);
+
+    await new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', (err) => {
+        logger.error(`[AI SERVICE - WHISPER] Erro ao salvar o arquivo de áudio temporário: ${err.message}`);
+        reject(err);
+      });
+    });
+
+    logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário salvo com sucesso. Enviando para transcrição...`);
+
+    const transcription = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(tempFilePath),
+      model: "whisper-1",
+      language: "pt",
+      response_format: "text"
+    });
+
+    const transcribedText = String(transcription); 
+
+    if (transcribedText.trim() === "") {
+      logger.warn(`[AI SERVICE - WHISPER] Transcrição do arquivo ${filename} resultou em texto vazio.`);
+      return ""; 
+    }
+
+    logger.info(`[AI SERVICE - WHISPER] Texto transcrito de ${filename}: "${transcribedText.substring(0, 100)}..."`);
+    return transcribedText;
+
+  } catch (error) {
+    let errorMessage = `Falha ao transcrever áudio (${filename})`;
+    if (error.response && error.response.data) {
+        logger.error('[AI SERVICE - WHISPER] Erro da API OpenAI:', error.response.data);
+        errorMessage += `: ${JSON.stringify(error.response.data.error?.message || error.response.data)}`;
+    } else {
+        logger.error('[AI SERVICE - WHISPER] Erro durante a transcrição do áudio:', { message: error.message, stack: error.stack });
+        errorMessage += `: ${error.message}`;
+    }
+    throw new Error(errorMessage);
+  } finally {
+    fs.unlink(tempFilePath, (err) => {
+      if (err) {
+        logger.warn(`[AI SERVICE - WHISPER] Não foi possível excluir o arquivo de áudio temporário ${tempFilePath}: ${err.message}`);
+      } else {
+        logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário ${tempFilePath} excluído com sucesso.`);
+      }
+    });
+  }
+}
+
+function buildSystemPrompt(conversationContext) {
   const now = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
   const today = now.toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const currentTime = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -53,7 +121,7 @@ function buildSystemPrompt(conversationContext, forSimpleCommand = false) {
     ? `Os clientes de negócio cadastrados nesta conta são: ${conversationContext.availableBusinessClients.map(c => `"${c.name}"`).join(', ')}.`
     : "Não há clientes de negócio cadastrados nesta conta.";
 
-let prompt = `Você é o "${ASSISTANT_NAME}", um assistente financeiro, administrativo e de bem-estar para WhatsApp. Sua personalidade é EXTREMAMENTE amigável, divertida, espirituosa, um pouco brincalhona e muito prestativa. Use emojis contextuais para dar vida às suas respostas, que devem ser de tamanho médio a longo, sempre informativas e completas, mas sem serem prolixas. Hoje é ${today}, agora são ${currentTime}. ${accountCtx} ${sharedAccessInfo}
+  let prompt = `Você é o "${ASSISTANT_NAME}", um assistente financeiro, administrativo e de bem-estar para WhatsApp. Sua personalidade é EXTREMAMENTE amigável, divertida, espirituosa, um pouco brincalhona e muito prestativa. Use emojis contextuais para dar vida às suas respostas, que devem ser de tamanho médio a longo, sempre informativas e completas, mas sem serem prolixas. Hoje é ${today}, agora são ${currentTime}. ${accountCtx} ${sharedAccessInfo}
 
 Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TODAS as ações que o usuário deseja realizar, extrair os parâmetros necessários e, SE TODOS OS DADOS OBRIGATÓRIOS ESTIVEREM PRESENTES E A CONFIANÇA FOR ALTA, executar a ação DIRETAMENTE, sem pedir confirmação desnecessária. Tente entender o usuário mesmo que ele use gírias, abreviações ou frases incompletas; se a intenção for clara e os dados puderem ser inferidos com segurança, prossiga.
 
@@ -150,7 +218,7 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 *   Você **DEVE** verificar se o nome do cliente fornecido pelo usuário existe na lista de \`availableBusinessClients\` fornecida no contexto no início deste prompt.
 
 *   **CENÁRIO 1: O cliente de negócio JÁ EXISTE.**
-    *   Se o nome do cliente (ex: "João Silva") está na lista de contexto, prossiga normalmente com a detecção da ação \`SCHEDULE_APPOINTMENT\`, preenchendo o parâmetro \`businessClientNames\`.
+    *   Se o nome do cliente (ex: "João Silva") está na lista de contexto, prossiga normally com a detecção da ação \`SCHEDULE_APPOINTMENT\`, preenchendo o parâmetro \`businessClientNames\`.
 
 *   **CENÁRIO 2: O cliente de negócio NÃO EXISTE.**
     *   Se o nome do cliente (ex: "Maria Nova") **NÃO** está na lista de contexto, sua tarefa é criar um agendamento **NORMAL**, mas **OMITINDO** o parâmetro \`businessClientNames\`. O nome do cliente deve fazer parte do \`title\` do agendamento.
@@ -216,7 +284,7 @@ O conteúdo que você deve colocar no campo \`overall_summary_suggestion\` é a 
 
 **Conversa Fluida:** Responda de forma calorosa e natural. Se nenhuma ação concreta for identificada, pergunte como pode ajudar.
 
- // **Edição após Clique em Botão 'Editar' (REGRA DE ALTA PRIORIDADE):**
+// **Edição após Clique em Botão 'Editar' (REGRA DE ALTA PRIORIDADE):**
     // * Se o contexto do sistema (\`conversationContext.editingResource\`) indicar que um recurso está em modo de edição (ex: \`editingResource: { type: 'product', id: 17 }\`), sua tarefa principal muda.
     // * Você DEVE priorizar a detecção da ação \`UPDATE_*\` correspondente (ex: \`UPDATE_PRODUCT\`).
     // * A mensagem atual do usuário deve ser interpretada como os DADOS A SEREM ATUALIZADOS.
@@ -794,15 +862,15 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
 78. GET_PROVIDER_PUBLIC_INFO (SÓ PARA CONTAS PJ/MEI): (Obter o link e informações da página pública de agendamento)
     // Sem parâmetros
 
-  79. CREATE_CHECKLIST_ITEM: (Adicionar uma tarefa ao checklist do dia atual)
-        - text: string (OBRIGATÓRIO)
-        - priority: "low", "medium", "high" (opcional, default: "medium")    
-    
-  80. RECORD_SALE (SÓ PARA CONTAS PJ/MEI): (Ação principal para vendas de produtos)
-    - productNameOrCode: string (OBRIGATÓRIO)
-    - quantitySold: integer (OBRIGATÓRIO, >0)
-    - saleDate: "YYYY-MM-DD" (opcional, default: hoje)
-    - notes: string (opcional)
+    79. CREATE_CHECKLIST_ITEM: (Adicionar uma tarefa ao checklist do dia atual)
+          - text: string (OBRIGATÓRIO)
+          - priority: "low", "medium", "high" (opcional, default: "medium")    
+      
+    80. RECORD_SALE (SÓ PARA CONTAS PJ/MEI): (Ação principal para vendas de produtos)
+      - productNameOrCode: string (OBRIGATÓRIO)
+      - quantitySold: integer (OBRIGATÓRIO, >0)
+      - saleDate: "YYYY-MM-DD" (opcional, default: hoje)
+      - notes: string (opcional)
 
 
 **FLUXO DE DECISÃO (HIERARQUIA DE COMANDOS)**
@@ -810,49 +878,59 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
 Siga esta ordem de prioridade para decidir o que fazer. Esta é a regra mais importante para sua lógica de decisão.
 
 **1. REGRA MÁXIMA - MODO COPILOTO:**
-   - Se a intenção do usuário é clara para uma ação que exige parâmetros (como \`CREATE_FINANCIAL_TRANSACTION\`, \`SCHEDULE_APPOINTMENT\`, etc.), mas faltam dados **OBRIGATÓRIOS** (como valor, descrição, data/hora), sua **PRIMEIRA E ÚNICA** ação deve ser usar o **MODO COPILOTO**.
-   - Retorne um objeto JSON com o array \`detected_actions\` **VAZIO** e preencha \`clarifications_needed\` seguindo o padrão visual definido na seção "ESTRATÉGIA DE COLETA DE DADOS".
-   - **NÃO PROSSIGA PARA OS PRÓXIMOS PASSOS SE ESTA CONDIÇÃO FOR VERDADEIRA.**
+    - Se a intenção do usuário é clara para uma ação que exige parâmetros (como \`CREATE_FINANCIAL_TRANSACTION\`, \`SCHEDULE_APPOINTMENT\`, etc.), mas faltam dados **OBRIGATÓRIOS** (como valor, descrição, data/hora), sua **PRIMEIRA E ÚNICA** ação deve ser usar o **MODO COPILOTO**.
+    - Retorne um objeto JSON com o array \`detected_actions\` **VAZIO** e preencha \`clarifications_needed\` seguindo o padrão visual definido na seção "ESTRATÉGIA DE COLETA DE DADOS".
+    - **NÃO PROSSIGA PARA OS PRÓXIMOS PASSOS SE ESTA CONDIÇÃO FOR VERDADEIRA.**
 
 **2. MODO INSTRUTOR:**
-   - Se a condição 1 não se aplica e o usuário pergunta explicitamente **COMO** usar o sistema (ex: "como lanço uma despesa?"), ative o Modo Instrutor e responda com a ação \`GENERAL_QUESTION_OR_HELP\`.
+    - Se a condição 1 não se aplica e o usuário pergunta explicitamente **COMO** usar o sistema (ex: "como lanço uma despesa?"), ative o Modo Instrutor e responda com a ação \`GENERAL_QUESTION_OR_HELP\`.
 
 **3. DETECÇÃO DE AÇÃO ESPECÍFICA (SE DADOS ESTIVEREM COMPLETOS):**
-   - Se as condições 1 e 2 não se aplicam, analise a mensagem do usuário para encontrar a ação mais apropriada, seguindo a lógica abaixo:
-   
-     a. **Ações de Edição:** Se o contexto de edição (\`editingResource.id\`) estiver presente, priorize a detecção da ação \`UPDATE_*\` correspondente.
-     
-     b. **Ações de Criação Específicas:**
-        - A mensagem descreve uma **COMPRA PARCELADA NO CARTÃO**? Priorize \`CREATE_PARCELLED_ACCOUNT\`.
-        - A mensagem indica uma **AÇÃO FINANCEIRA RECORRENTE** (usando palavras como "todo mês", "semanalmente", "assinatura")? Priorize \`CREATE_RECURRING_RULE\`.
-        - A mensagem indica uma **AÇÃO FINANCEIRA FUTURA ÚNICA** (e não é parcelada nem recorrente)? Priorize \`SCHEDULE_APPOINTMENT\`.
-        - A mensagem é uma configuração de **PREFERÊNCIA DO SISTEMA** (motivação, água)? Detecte \`SET_MOTIVATIONAL_MESSAGE_PREFERENCE\` ou \`SET_WATER_REMINDER_PREFERENCE\`.
+    - Se as condições 1 e 2 não se aplicam, analise a mensagem do usuário para encontrar a ação mais apropriada, seguindo a lógica abaixo:
+    
+      a. **Ações de Edição:** Se o contexto de edição (\`editingResource.id\`) estiver presente, priorize a detecção da ação \`UPDATE_*\` correspondente.
+      
+      b. **Ações de Criação Específicas:**
+          - A mensagem descreve uma **COMPRA PARCELADA NO CARTÃO**? Priorize \`CREATE_PARCELLED_ACCOUNT\`.
+          - A mensagem indica uma **AÇÃO FINANCEIRA RECORRENTE** (usando palavras como "todo mês", "semanalmente", "assinatura")? Priorize \`CREATE_RECURRING_RULE\`.
+          - A mensagem indica uma **AÇÃO FINANCEIRA FUTURA ÚNICA** (e não é parcelada nem recorrente)? Priorize \`SCHEDULE_APPOINTMENT\`.
+          - A mensagem é uma configuração de **PREFERÊNCIA DO SISTEMA** (motivação, água)? Detecte \`SET_MOTIVATIONAL_MESSAGE_PREFERENCE\` ou \`SET_WATER_REMINDER_PREFERENCE\`.
 
-     c. **Ações de Acesso Compartilhado:**
-        - A mensagem se refere a **CONCEDER, LISTAR, ATUALIZAR, REVOGAR ou RESPONDER** a um convite de acesso? Detecte a ação de \`SharedAccess\` apropriada (GRANT_ACCESS, LIST_*, etc.).
+      c. **Ações de Acesso Compartilhado:**
+          - A mensagem se refere a **CONCEDER, LISTAR, ATUALIZAR, REVOGAR ou RESPONDER** a um convite de acesso? Detecte a ação de \`SharedAccess\` apropriada (GRANT_ACCESS, LIST_*, etc.).
 
-     d. **Ações de Entidades de Negócio (PJ/MEI):**
-        - A mensagem se refere a **CLIENTES DO NEGÓCIO** (criar, listar, etc.)? Detecte a ação \`BusinessClient\` apropriada.
-        - A mensagem se refere a **PRODUTOS/ESTOQUE**? Detecte a ação de \`Product/Stock\` apropriada.
-        - A mensagem se refere a **SERVIÇOS, DISPONIBILIDADE ou AGENDA** (criar regra, ver horários, etc.)? Detecte a ação apropriada (\`CREATE_SERVICE\`, \`GET_AGENDA_VIEW\`, \`CREATE_AVAILABILITY_RULE\`, etc.).
+      d. **Ações de Entidades de Negócio (PJ/MEI):**
+          - A mensagem se refere a **CLIENTES DO NEGÓCIO** (criar, listar, etc.)? Detecte a ação \`BusinessClient\` apropriada.
+          - A mensagem se refere a **PRODUTOS/ESTOQUE**? Detecte a ação de \`Product/Stock\` apropriada.
+          - A mensagem se refere a **SERVIÇOS, DISPONIBILidade ou AGENDA** (criar regra, ver horários, etc.)? Detecte a ação apropriada (\`CREATE_SERVICE\`, \`GET_AGENDA_VIEW\`, \`CREATE_AVAILABILITY_RULE\`, etc.).
 
-     e. **Confirmações:**
-        - A mensagem é uma confirmação clara como "sim", "confirmo", "pode fazer" para uma ação pendente? Detecte \`ACTION_CONFIRMATION_YES\`.
-        - A mensagem é uma negação como "não", "cancela"? Detecte \`ACTION_CONFIRMATION_NO\`.
+      e. **Confirmações:**
+          - A mensagem é uma confirmação clara como "sim", "confirmo", "pode fazer" para uma ação pendente? Detecte \`ACTION_CONFIRMATION_YES\`.
+          - A mensagem é uma negação como "não", "cancela"? Detecte \`ACTION_CONFIRMATION_NO\`.
 
-     f. **Ação de Criação Genérica:** Se nenhuma das anteriores se encaixar, mas for uma ação de criação imediata (ex: "gastei 50 no mercado"), detecte \`CREATE_FINANCIAL_TRANSACTION\`.
+      f. **Ação de Criação Genérica:** Se nenhuma das anteriores se encaixar, mas for uma ação de criação imediata (ex: "gastei 50 no mercado"), detecte \`CREATE_FINANCIAL_TRANSACTION\`.
 
-        g. **Ações de Consulta:** Se o usuário pedir para **VER ou LISTAR** informações (resumo, transações, cartões), detecte a ação \`GET_*\` ou \`LIST_*\` correspondente.
-        - **PRIORIDADE MÁXIMA DE CONSULTA:** Se o pedido for sobre a **página pública de agendamento** (ex: "qual meu link da agenda?", "como meus clientes marcam horário?", "minha página de agendamento"), detecte **\`GET_PROVIDER_PUBLIC_INFO\`**. Faça isso mesmo que o usuário esteja na conta pessoal (PF).
-     h. **Conversa Geral:** Se absolutamente nenhuma ação for identificável, use \`GENERAL_GREETING_OR_SMALLTALK\`.
+          g. **Ações de Consulta:** Se o usuário pedir para **VER ou LISTAR** informações (resumo, transações, cartões), detecte a ação \`GET_*\` ou \`LIST_*\` correspondente.
+          - **PRIORIDADE MÁXIMA DE CONSULTA:** Se o pedido for sobre a **página pública de agendamento** (ex: "qual meu link da agenda?", "como meus clientes marcam horário?", "minha página de agendamento"), detecte **\`GET_PROVIDER_PUBLIC_INFO\`**. Faça isso mesmo que o usuário esteja na conta pessoal (PF).
+      h. **Conversa Geral:** Se absolutamente nenhuma ação for identificável, use \`GENERAL_GREETING_OR_SMALLTALK\`.
 
 **4. GERAÇÃO DA RESPOSTA FINAL:**
-   - Se uma ação foi detectada no passo 3 (o que significa que todos os dados obrigatórios estavam presentes), gere a resposta criativa no \`overall_summary_suggestion\` seguindo as regras de "TOM E ESTILO DA CONVERSA".
-`;
-  return prompt;
+    - Se uma ação foi detectada no passo 3 (o que significa que todos os dados obrigatórios estavam presentes), gere a resposta criativa no \`overall_summary_suggestion\` seguindo as regras de "TOM E ESTILO DA CONVERSA".
+  `;
+    return prompt;
 }
 
+// --- FUNÇÃO PRINCIPAL MODIFICADA PARA INTEGRAR A TRIAGEM ---
 async function interpretUserMessage(userMessage, conversationContext = {}) {
+  // --- NOVO: Camada 1 - Respostas Instantâneas ---
+  const quickResponse = getQuickResponse(userMessage);
+  if (quickResponse) {
+      logger.info(`[AI SERVICE - Canned] Resposta rápida encontrada para: "${userMessage}"`);
+      // Adiciona o nome do cliente à resposta, se disponível
+      const finalReply = quickResponse.reply_to_user_suggestion.replace("Olá!", `Olá, ${conversationContext.clientName || "você"}!`);
+      return { ...quickResponse, reply_to_user_suggestion: finalReply };
+  }
+
   if (!OPENAI_API_KEY) {
     logger.error('[AI SERVICE] OPENAI_API_KEY não configurada.');
     const clientNameForError = conversationContext.clientName || "você";
@@ -870,176 +948,97 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     };
   }
 
-  // ETAPA 1: Triagem de Intenção Geral
-  const intent = await triageIntent(userMessage);
+  // --- NOVO: Camada 2 - Triagem de Intenção e Complexidade ---
+  const { intent, complexity } = await performTriage(userMessage);
+
+  // --- NOVO: Seleção Dinâmica de Modelo ---
+  let modelToUse = 'gpt-3.5-turbo'; // Padrão para o modelo mais rápido e barato
+  if (intent === 'command' && complexity === 'complex') {
+      modelToUse = 'gpt-4o'; // Usa o modelo avançado apenas para comandos complexos
+  }
+  
+  logger.info(`[AI SERVICE - Triage] Resultado: { intent: '${intent}', complexity: '${complexity}' }. Modelo selecionado: ${modelToUse}`);
+
+
+  const clientNameForPrompt = conversationContext.clientName || "pessoa incrível";
+  const systemPromptContent = buildSystemPrompt(conversationContext); 
+
+  const conversationHistoryForAPI = (conversationContext.conversationHistory || [])
+      .map(entry => ({ role: entry.role, content: entry.content }));
+
+  let finalSystemPromptContent = systemPromptContent
+      .replace("{{CONVERSATION_HISTORY}}", JSON.stringify(conversationHistoryForAPI.slice(-6)));
+
+  finalSystemPromptContent = finalSystemPromptContent.replace("MENSAGEM DO USUÁRIO:\n\"{{USER_MESSAGE}}\"", "").trim();
+
+  const messagesToSendToAPI = [
+      {role: "system", content: finalSystemPromptContent},
+      ...conversationHistoryForAPI.slice(-4), 
+      {role: "user", content: userMessage}
+  ];
+
+  logger.debug('[AI SERVICE] Enviando para OpenAI:', {
+      model: modelToUse,
+      messageCount: messagesToSendToAPI.length,
+      userMessageLength: userMessage.length,
+  });
 
   try {
-    switch (intent) {
-      case 'small_talk': {
-        logger.info('[AI SERVICE] Roteando para Small Talk (modelo rápido).');
-        const systemPrompt = `Você é o "${ASSISTANT_NAME}", um assistente amigável e espirituoso. Responda à conversa casual do usuário de forma breve e simpática. O nome do cliente é ${conversationContext.clientName || 'pessoa incrível'}.`;
-        const completion = await openai.chat.completions.create({
-          model: FAST_MODEL,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userMessage }
-          ],
-          temperature: 0.7,
-        });
-        return { 
-            detected_actions: [],
-            clarifications_needed: [],
-            reply_to_user_suggestion: completion.choices[0].message.content 
-        };
-      }
+    const completion = await openai.chat.completions.create({
+      model: modelToUse, // --- MODIFICADO ---
+      messages: messagesToSendToAPI,
+      temperature: 0.15, 
+      response_format: { type: "json_object" },
+    });
 
-      case 'question': {
-        logger.info('[AI SERVICE] Roteando para Pergunta (modelo rápido).');
-        const systemPrompt = `Você é o "${ASSISTANT_NAME}", um assistente prestativo. Responda à pergunta do usuário sobre como usar o sistema ou sobre seus dados. Use o contexto para dar uma resposta precisa. NÃO execute ações, apenas responda à pergunta de forma clara e amigável. Contexto de Contas: ${JSON.stringify(conversationContext.availableFinancialAccounts)}, Contexto de Cartões: ${JSON.stringify(conversationContext.availableCreditCards)}`;
-        const completion = await openai.chat.completions.create({
-          model: FAST_MODEL,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userMessage }
-          ],
-          temperature: 0.3,
-        });
-        return { 
-            detected_actions: [],
-            clarifications_needed: [],
-            reply_to_user_suggestion: completion.choices[0].message.content 
-        };
-      }
+    const aiResultContent = completion.choices[0].message.content;
+    if (!aiResultContent) throw new Error("Resposta da IA vazia ou inválida.");
 
-      case 'command': {
-        // ETAPA 2: Triagem de Complexidade do Comando
-        const complexity = await triageCommandComplexity(userMessage);
-        const modelToUse = complexity === 'simple' ? FAST_MODEL : POWERFUL_MODEL;
-        const forSimplePrompt = complexity === 'simple';
-        
-        logger.info(`[AI SERVICE] Roteando para Comando ${complexity.toUpperCase()} (modelo: ${modelToUse}).`);
+    const parsedResult = JSON.parse(aiResultContent);
+    logger.info(`[AI SERVICE] Resultado da IA (${modelToUse}) parseado com sucesso.`);
+    logger.debug('[AI SERVICE] Parsed AI Result:', parsedResult);
 
-        const systemPromptContent = buildSystemPrompt(conversationContext, forSimplePrompt);
-        const conversationHistoryForAPI = (conversationContext.conversationHistory || []).map(entry => ({ role: entry.role, content: entry.content }));
-        
-        const messagesToSendToAPI = [
-          { role: "system", content: systemPromptContent },
-          ...conversationHistoryForAPI.slice(-4),
-          { role: "user", content: userMessage }
-        ];
-
-        const completion = await openai.chat.completions.create({
-          model: modelToUse,
-          messages: messagesToSendToAPI,
-          temperature: 0.15,
-          response_format: { type: "json_object" },
-        });
-
-        const aiResultContent = completion.choices[0].message.content;
-        if (!aiResultContent) throw new Error("Resposta da IA para comando vazia ou inválida.");
-        
-        const parsedResult = JSON.parse(aiResultContent);
-        logger.info(`[AI SERVICE] Resultado do comando (${modelToUse}) parseado com sucesso.`);
-        return parsedResult;
-      }
-
-      default:
-        logger.warn(`[AI SERVICE] Triagem retornou intenção desconhecida: ${intent}. Usando fallback para comando complexo.`);
-        const modelToUse = POWERFUL_MODEL;
-        const systemPromptContent = buildSystemPrompt(conversationContext, false);
-        const conversationHistoryForAPI = (conversationContext.conversationHistory || []).map(entry => ({ role: entry.role, content: entry.content }));
-        const messagesToSendToAPI = [
-          { role: "system", content: systemPromptContent },
-          ...conversationHistoryForAPI.slice(-4),
-          { role: "user", content: userMessage }
-        ];
-        const completion = await openai.chat.completions.create({
-          model: modelToUse,
-          messages: messagesToSendToAPI,
-          temperature: 0.15,
-          response_format: { type: "json_object" },
-        });
-        const aiResultContent = completion.choices[0].message.content;
-        if (!aiResultContent) throw new Error("Resposta da IA para comando (fallback) vazia ou inválida.");
-        const parsedResult = JSON.parse(aiResultContent);
-        logger.info(`[AI SERVICE] Resultado do comando (fallback, ${modelToUse}) parseado com sucesso.`);
-        return parsedResult;
+    // Lógica de pós-processamento para manter a consistência da resposta
+    if (!parsedResult.overall_summary_suggestion && parsedResult.reply_to_user_suggestion && parsedResult.detected_actions && parsedResult.detected_actions.length > 0) {
+        if (!parsedResult.clarifications_needed || parsedResult.clarifications_needed.length === 0) {
+            if (parsedResult.reply_to_user_suggestion.includes(clientNameForPrompt) || parsedResult.detected_actions.every(a => (a.action || a.action_type)?.startsWith("GENERAL_"))) {
+                parsedResult.overall_summary_suggestion = parsedResult.reply_to_user_suggestion;
+            }
+        }
     }
+    if (parsedResult.overall_summary_suggestion && parsedResult.overall_summary_suggestion.startsWith(`Ok, ${clientNameForPrompt}!`)) {
+        if (parsedResult.detected_actions && parsedResult.detected_actions.length === 1 && parsedResult.detected_actions[0].action_specific_reply_suggestion) {
+            parsedResult.overall_summary_suggestion = parsedResult.detected_actions[0].action_specific_reply_suggestion;
+        }
+    }
+
+    return parsedResult;
+
   } catch (error) {
-    logger.error(`[AI SERVICE] Erro no fluxo de interpretação com triagem: ${error.message}`, { stack: error.stack });
+    const rawResponseForError = error.response?.data || (typeof error.message === 'string' && error.message.includes("{") ? error.message : null) || "Sem resposta bruta disponível";
+    logger.error(`[AI SERVICE] Erro ao chamar ou parsear API da OpenAI (${modelToUse}):`, {
+        errorMessage: error.message,
+        errorStack: error.stack,
+        rawApiResponse: rawResponseForError,
+        requestMessageCount: messagesToSendToAPI.length
+    });
+
+    const clientNameForError = conversationContext.clientName || "você";
+    const isJsonError = error.message.toLowerCase().includes("json");
+    const errorType = isJsonError ? "entender a resposta da minha inteligência" : "me comunicar com minha inteligência";
+    const errorMessageIntro = `Puxa vida, ${clientNameForError}! 😬 Tive um curto-circuito aqui e não consegui processar sua mensagem direito (${errorType}).`;
+    const errorDetails = `Minha equipe de engenheiros já foi notificada para dar uma olhadinha nisso! 👩‍💻👨‍💻`;
+    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://www.map-nocontrole.com.br/`;
+    const tryAgain = `Por favor, tente de novo em um momentinho. Desculpe o transtorno! 🙏`;
+    const finalErrorMessage = `${errorMessageIntro}\n\n🎯 Detalhes do Ocorrido:\n${errorDetails}\n\n${tryAgain}\n\n${platformLink}`;
+
     return {
+        overall_summary_suggestion: errorMessageIntro,
         detected_actions: [],
         clarifications_needed: [],
-        reply_to_user_suggestion: `Puxa, ${conversationContext.clientName || 'você'}! 😬 Tive um curto-circuito aqui. Tente novamente em um instante.`
+        ununderstood_segments: [userMessage],
+        reply_to_user_suggestion: finalErrorMessage
     };
-  }
-}
-
-async function transcribeAudioStream(audioStream, inputFilename) {
-  if (!process.env.OPENAI_API_KEY) {
-    logger.error('[AI SERVICE - WHISPER] OPENAI_API_KEY não configurada.');
-    throw new Error('Configuração da API da OpenAI ausente para transcrição.');
-  }
-  if (!audioStream) {
-    logger.error('[AI SERVICE - WHISPER] Stream de áudio não fornecido.');
-    throw new Error('Stream de áudio é necessário para transcrição.');
-  }
-  
-  const filename = inputFilename || 'audio.ogg';
-  const tempFilePath = path.join(os.tmpdir(), `whisper-${Date.now()}-${filename}`);
-  
-  try {
-    logger.info(`[AI SERVICE - WHISPER] Iniciando salvamento do áudio em arquivo temporário: ${tempFilePath}`);
-    
-    const writer = fs.createWriteStream(tempFilePath);
-    
-    audioStream.pipe(writer);
-
-    await new Promise((resolve, reject) => {
-      writer.on('finish', resolve);
-      writer.on('error', (err) => {
-        logger.error(`[AI SERVICE - WHISPER] Erro ao salvar o arquivo de áudio temporário: ${err.message}`);
-        reject(err);
-      });
-    });
-
-    logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário salvo com sucesso. Enviando para transcrição...`);
-
-    const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(tempFilePath),
-      model: "whisper-1",
-      language: "pt",
-      response_format: "text"
-    });
-
-    const transcribedText = String(transcription); 
-
-    if (transcribedText.trim() === "") {
-      logger.warn(`[AI SERVICE - WHISPER] Transcrição do arquivo ${filename} resultou em texto vazio.`);
-      return ""; 
-    }
-
-    logger.info(`[AI SERVICE - WHISPER] Texto transcrito de ${filename}: "${transcribedText.substring(0, 100)}..."`);
-    return transcribedText;
-
-  } catch (error) {
-    let errorMessage = `Falha ao transcrever áudio (${filename})`;
-    if (error.response && error.response.data) {
-        logger.error('[AI SERVICE - WHISPER] Erro da API OpenAI:', error.response.data);
-        errorMessage += `: ${JSON.stringify(error.response.data.error?.message || error.response.data)}`;
-    } else {
-        logger.error('[AI SERVICE - WHISPER] Erro durante a transcrição do áudio:', { message: error.message, stack: error.stack });
-        errorMessage += `: ${error.message}`;
-    }
-    throw new Error(errorMessage);
-  } finally {
-    fs.unlink(tempFilePath, (err) => {
-      if (err) {
-        logger.warn(`[AI SERVICE - WHISPER] Não foi possível excluir o arquivo de áudio temporário ${tempFilePath}: ${err.message}`);
-      } else {
-        logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário ${tempFilePath} excluído com sucesso.`);
-      }
-    });
   }
 }
 
@@ -1059,55 +1058,55 @@ Sua tarefa é criar uma MENSAGEM DE BRIEFING MATINAL ÚNICA E PERSONALIZADA. A m
 **REGRAS DE OURO PARA A MENSAGEM:**
 
 1. **SEJA UM COACH, NÃO UM ROBÔ:** Sua principal função é ANALISAR os dados do dia e fazer COMENTÁRIOS INTELIGENTES e CONSELHOS PRÁTICOS sobre eles.
-   * **Exemplo de Análise:** Se o usuário tem uma conta a pagar de aluguel e um recebimento de salário no mesmo dia, comente sobre isso:  
-     "Vejo que hoje é dia de receber o salário e também de pagar o aluguel. Ótimo planejamento para alinhar as datas! Assim você já resolve essa despesa importante sem se preocupar."
-   * **Exemplo de Conselho:** Se o dia tem muitas reuniões:  
-     "Seu dia parece bem cheio de reuniões! Lembre-se de fazer pequenas pausas entre elas para manter a mente afiada."
-   * **Exemplo de Motivação:** Se há um grande recebimento:  
-     "Uau, hoje tem uma entrada de valor significativo! Que ótima notícia para começar o dia. Parabéns pelo seu trabalho!"
+  * **Exemplo de Análise:** Se o usuário tem uma conta a pagar de aluguel e um recebimento de salário no mesmo dia, comente sobre isso:  
+    "Vejo que hoje é dia de receber o salário e também de pagar o aluguel. Ótimo planejamento para alinhar as datas! Assim você já resolve essa despesa importante sem se preocupar."
+  * **Exemplo de Conselho:** Se o dia tem muitas reuniões:  
+    "Seu dia parece bem cheio de reuniões! Lembre-se de fazer pequenas pausas entre elas para manter a mente afiada."
+  * **Exemplo de Motivação:** Se há um grande recebimento:  
+    "Uau, hoje tem uma entrada de valor significativo! Que ótima notícia para começar o dia. Parabéns pelo seu trabalho!"
 
 2. **ESTRUTURA DA MENSAGEM (Flexível, mas com seções claras):**
 
-   a. **SAUDAÇÃO E MOTIVAÇÃO INICIAL:**  
-   Comece com uma saudação calorosa, única e uma frase motivacional curta. Use o nome do cliente.  
-   *Exemplos:*  
-   "Bom dia, \${clientName}! Lembre-se que a disciplina de hoje é a liberdade de amanhã. Vamos ver como podemos tornar seu dia mais produtivo? 🚀"  
-   "E aí, \${clientName}! Pronto para mais um dia de progresso? Cada pequena vitória conta! ✨"
+  a. **SAUDAÇÃO E MOTIVAÇÃO INICIAL:**  
+  Comece com uma saudação calorosa, única e uma frase motivacional curta. Use o nome do cliente.  
+  *Exemplos:*  
+  "Bom dia, \${clientName}! Lembre-se que a disciplina de hoje é a liberdade de amanhã. Vamos ver como podemos tornar seu dia mais produtivo? 🚀"  
+  "E aí, \${clientName}! Pronto para mais um dia de progresso? Cada pequena vitória conta! ✨"
 
-   b. **LEMBRETE PROATIVO DE HIDRATAÇÃO (CRIATIVO):**  
-   Lembre o usuário de beber água e diga que já registrou o primeiro copo. SEJA CRIATIVO.  
-   *Exemplos:*  
-   "Para lubrificar as engrenagens da produtividade, que tal um copo d'água? Já dei o 'play' no seu contador de hidratação de hoje! 😉💧"  
-   "Combustível para o cérebro: água! O primeiro copo do dia já está na conta. Saúde! 🥂"
+  b. **LEMBRETE PROATIVO DE HIDRATAÇÃO (CRIATIVO):**  
+  Lembre o usuário de beber água e diga que já registrou o primeiro copo. SEJA CRIATIVO.  
+  *Exemplos:*  
+  "Para lubrificar as engrenagens da produtividade, que tal um copo d'água? Já dei o 'play' no seu contador de hidratação de hoje! 😉💧"  
+  "Combustível para o cérebro: água! O primeiro copo do dia já está na conta. Saúde! 🥂"
 
-   c. **PANORAMA DO DIA (A PARTE MAIS IMPORTANTE):**  
-   * Introduza a seção de forma amigável:  
-     "Dei uma olhada no seu radar para hoje e aqui está o que temos pela frente:"  
-     ou  
-     "Vamos ao seu briefing do dia:"  
-   * **APRESENTE AS SEÇÕES DE LEMBRETES (FINANÇAS, AGENDA, RECORRÊNCIAS) DE FORMA INTEGRADA E COMENTADA.**  
-     Não apenas liste. Agrupe, comente e aconselhe.  
-   * **SE NÃO HOUVER ITENS EM UMA SEÇÃO**, faça um comentário positivo e estratégico.  
-     *Finanças vazias:*  
-     "Na frente financeira, hoje é um dia de paz: nenhuma conta com vencimento hoje. Excelente para respirar e planejar os próximos passos! 🧘‍♂️"  
-     *Agenda vazia:*  
-     "Sua agenda está como uma tela em branco hoje! Uma oportunidade de ouro para focar naquele projeto importante ou até mesmo adiantar tarefas da semana. Aproveite essa clareza! 🎯"
+  c. **PANORAMA DO DIA (A PARTE MAIS IMPORTANTE):**  
+  * Introduza a seção de forma amigável:  
+    "Dei uma olhada no seu radar para hoje e aqui está o que temos pela frente:"  
+    ou  
+    "Vamos ao seu briefing do dia:"  
+  * **APRESENTE AS SEÇÕES DE LEMBRETES (FINANÇAS, AGENDA, RECORRÊNCIAS) DE FORMA INTEGRADA E COMENTADA.**  
+    Não apenas liste. Agrupe, comente e aconselhe.  
+  * **SE NÃO HOUVER ITENS EM UMA SEÇÃO**, faça um comentário positivo e estratégico.  
+    *Finanças vazias:*  
+    "Na frente financeira, hoje é um dia de paz: nenhuma conta com vencimento hoje. Excelente para respirar e planejar os próximos passos! 🧘‍♂️"  
+    *Agenda vazia:*  
+    "Sua agenda está como uma tela em branco hoje! Uma oportunidade de ouro para focar naquele projeto importante ou até mesmo adiantar tarefas da semana. Aproveite essa clareza! 🎯"
 
       d. **SEÇÃO CHECKLIST (SE APLICÁVEL):**
-   *   Você receberá dados do checklist do dia. Esta seção **SÓ DEVE APARECER** se o usuário tiver uma conta de negócio.
-   *   **Se a lista de tarefas estiver VAZIA:** Incentive o usuário a começar o dia planejando.  
-       *Exemplo:*
-       "✅ *Checklist do Dia:* Sua lista de tarefas para a conta *[Nome da Conta]* está pronta para ser preenchida! Que tal começar listando as 3 tarefas mais importantes de hoje? É só me dizer 'adicionar tarefa [sua tarefa]'."
-   *   **Se a lista de tarefas JÁ TIVER ITENS:** Lembre o usuário das tarefas pendentes de forma motivacional.  
-       *Exemplo:*
-       "✅ *Checklist do Dia:* Você já tem *[Número]* tarefas planejadas para sua conta *[Nome da Conta]* hoje. A primeira da lista é '[Nome da Primeira Tarefa]'. Vamos começar com tudo!"
+  *   Você receberá dados do checklist do dia. Esta seção **SÓ DEVE APARECER** se o usuário tiver uma conta de negócio.
+  *   **Se a lista de tarefas estiver VAZIA:** Incentive o usuário a começar o dia planejando.  
+      *Exemplo:*
+      "✅ *Checklist do Dia:* Sua lista de tarefas para a conta *[Nome da Conta]* está pronta para ser preenchida! Que tal começar listando as 3 tarefas mais importantes de hoje? É só me dizer 'adicionar tarefa [sua tarefa]'."
+  *   **Se a lista de tarefas JÁ TIVER ITENS:** Lembre o usuário das tarefas pendentes de forma motivacional.  
+      *Exemplo:*
+      "✅ *Checklist do Dia:* Você já tem *[Número]* tarefas planejadas para sua conta *[Nome da Conta]* hoje. A primeira da lista é '[Nome da Primeira Tarefa]'. Vamos começar com tudo!"
 
-   e. **CONSELHO FINAL E ENCERRAMENTO:**  
-   * Termine com um conselho geral ou um incentivo baseado no panorama do dia.  
-   * Reforce a importância de registrar as movimentações.  
-   *Exemplos:*  
-   "Com base no seu dia, meu conselho é focar na reunião das 10h, ela parece ser a mais importante. No mais, continue com os ótimos registros, eles são a bússola para suas metas! Qualquer coisa, é só chamar!"  
-   "Tenha um dia fantástico, \${clientName}! Lembre-se de anotar aquele cafezinho ou o almoço. São os pequenos gastos que, somados, fazem a diferença. Estou aqui para te ajudar a enxergá-los!"
+  e. **CONSELHO FINAL E ENCERRAMENTO:**  
+  * Termine com um conselho geral ou um incentivo baseado no panorama do dia.  
+  * Reforce a importância de registrar as movimentações.  
+  *Exemplos:*  
+  "Com base no seu dia, meu conselho é focar na reunião das 10h, ela parece ser a mais importante. No mais, continue com os ótimos registros, eles são a bússola para suas metas! Qualquer coisa, é só chamar!"  
+  "Tenha um dia fantástico, \${clientName}! Lembre-se de anotar aquele cafezinho ou o almoço. São os pequenos gastos que, somados, fazem a diferença. Estou aqui para te ajudar a enxergá-los!"
 
 **DADOS FORNECIDOS (em JSON):**  
 Você receberá um objeto com \`clientName\`, e arrays para \`pendingTransactions\`, \`appointments\`, e \`recurringItems\`. Use esses dados para alimentar sua análise e a mensagem.
@@ -1518,7 +1517,7 @@ module.exports = {
   transcribeAudioStream, 
   generateMorningBriefingMessage,
   generateCreativeAgendaResponse,
-   generateNewBookingNotification,
+  generateNewBookingNotification,
   generateBookingConfirmationResponse,
   generateClientConfirmationMessage,
   generateClientReminderMessage,
