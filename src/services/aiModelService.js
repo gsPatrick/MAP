@@ -135,7 +135,12 @@ Sua principal tarefa é manter uma CONVERSA NATURAL e ENVOLVENTE, identificar TO
 *   ${availableCreditCardsList}
 *   ${availableBusinessClientsList}
 
-**AGRUPAMENTO DE INTENÇÕES SIMILARES:**
+**RECONHECIMENTO DE CONTA-ALVO (NOVA REGRA):**
+*   Se o usuário especificar em qual conta a ação deve ser executada (ex: "lançar 50 reais na conta pessoal", "agendar dentista na conta PJ", "gasto na conta mei"), você DEVE extrair essa referência.
+*   Adicione o parâmetro \`targetAccountNameOrType\` à ação detectada com o valor que o usuário especificou (ex: "pessoal", "PJ", "Empresarial", "mei", "fisica", etc.).
+*   Se nenhuma conta for mencionada, NÃO adicione este parâmetro. O sistema usará a conta padrão.
+
+**AGRUPAMENTO DE INTENÇÕES SIMILARES (NOVA REGRA):**
 *   Se o usuário disser múltiplas frases que significam a mesma coisa em sequência (ex: "bebi água, anota aí, mais 200ml"), você deve detectar apenas UMA ação. Agrupe a intenção em uma única ação \`LOG_WATER_INTAKE\` com o parâmetro mais específico fornecido (neste caso, \`amountInMl: 200\`).
 
 **MODO INSTRUTOR (Como Fazer - MUITO IMPORTANTE!):**
@@ -387,6 +392,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - type: "Entrada" ou "Saída" (OBRIGATÓRIO)
     - description: string (OBRIGATÓRIO)
     - value: float (OBRIGATÓRIO, > 0)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - transactionDate: "YYYY-MM-DD" (opcional, default: hoje)
     - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS NO CONTEXTO ou OMITIR se não houver correspondência adequada. NUNCA CRIAR NOVA.)
     - creditCardName: string (opcional, se for gasto no cartão À VISTA)
@@ -398,6 +404,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
 2.  SCHEDULE_APPOINTMENT: (Compromissos gerais, como 'consulta médica', 'reunião', E LEMBRETES DE PAGAMENTOS FUTUROS. Se o usuário mencionar um serviço que ele oferece, como "agendar corte de cabelo", o nome do serviço deve fazer parte do \`title\`, mas o parâmetro \`serviceNames\` NUNCA deve ser usado.)
     - title: string (OBRIGATÓRIO)
     - eventDateTime: "YYYY-MM-DD HH:MM" (OBRIGATÓRIO)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - durationMinutes: integer (opcional)
     - location: string (opcional)
     - reminderLeadTimeMinutes: integer (opcional, default: 15)
@@ -413,6 +420,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - totalValue: float (OBRIGATÓRIO, >0)
     - numberOfParcels: integer (OBRIGATÓRIO, min 2 se parcelamento real, 1 para compra à vista no cartão via esta ação se a IA assim decidir por alguma razão específica, mas prefira CREATE_FINANCIAL_TRANSACTION para isso)
     - initialDueDate: "YYYY-MM-DD" (OBRIGATÓRIO. Para compras no cartão, DATA DA COMPRA)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR.)
     - creditCardName: string (OBRIGATÓRIO se COMPRA PARCELADA NO CARTÃO. Se faltar, perguntar: "Entendi a compra parcelada de '[DESCRIÇÃO DA COMPRA]', ${clientNameForPrompt}! Só preciso saber em qual cartão você parcelou. Por exemplo, 'parcelei no Nubank'.")
     - notes: string (opcional)
@@ -422,6 +430,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - transactionIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto de edição)
     - description: string (opcional)
     - value: float (opcional, >0)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - transactionDate: "YYYY-MM-DD" (opcional)
     - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR. Pode ser \`null\` para remover.)
     - creditCardName: string (opcional, pode ser null para remover)
@@ -433,6 +442,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - appointmentIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto de edição)
     - title: string (opcional)
     - eventDateTime: "YYYY-MM-DD HH:MM" (opcional)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - durationMinutes: integer (opcional)
     - location: string (opcional)
     - reminderLeadTimeMinutes: integer (opcional)
@@ -446,12 +456,14 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - period: "hoje", "ontem", "esta_semana", "semana_passada", "este_mes", "mes_passado", "este_ano", "personalizado" (default: "este_mes")
     - dateStart: "YYYY-MM-DD" (se period="personalizado")
     - dateEnd: "YYYY-MM-DD" (se period="personalizado")
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - financialCategoryName: string (opcional, para filtrar por categoria. A IA usará o nome exato.)
     - type: "Entrada", "Saída" (OPCIONAL. Use 'Entrada' se o usuário pedir para ver 'receitas', 'ganhos'. Use 'Saída' se pedir para ver 'despesas', 'gastos'. OMITA para um resumo geral.)
     
 7.  MARK_TRANSACTION_AS_PAID_RECEIVED: (Marcar transação PENDENTE como liquidada)
     - transactionDescription: string (OBRIGATÓRIO, descrição da transação pendente a ser buscada)
     - transactionValue: float (opcional, para desambiguar se houver múltiplas com mesma descrição)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - paymentDate: "YYYY-MM-DD" (opcional, default: hoje)
     - financialCategoryName: string (opcional, para a transação original, se precisar atualizar ou desambiguar. A IA DEVE SELECIONAR DA LISTA.)
 
@@ -461,6 +473,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - value: float (OBRIGATÓRIO, >0)
     - frequency: "daily", "weekly", "bi-weekly", "monthly", "quarterly", "semi-annually", "annually" (OBRIGATÓRIO)
     - startDate: "YYYY-MM-DD" (OBRIGATÓRIO. Data da primeira ocorrência ou de início da regra)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - interval: integer (opcional, default: 1. Ex: a cada 2 meses, interval=2, frequency=monthly)
     - dayOfMonth: integer (opcional, para 'monthly', 'quarterly', 'semi-annually'. Ex: 30 para dia 30)
     - dayOfWeek: integer (opcional, para 'weekly', 'bi-weekly'. 0=Dom, 1=Seg,..., 6=Sab)
@@ -492,6 +505,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - period: "hoje", "amanha", "esta_semana", "proximos_7_dias", "personalizado" (default: "hoje")
     - dateStart: "YYYY-MM-DD" (opcional)
     - dateEnd: "YYYY-MM-DD" (opcional)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - status: "Scheduled", "Confirmed", "Cancelled", "Completed" (opcional)
     - limit: integer (opcional, default: 5)
 
@@ -500,6 +514,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - limit: float (OBRIGATÓRIO, >0)
     - closingDay: integer (OBRIGATÓRIO, 1-28)
     - paymentDay: integer (OBRIGATÓRIO, 1-28)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - lastFourDigits: string (opcional, 4 dígitos)
     - flag: string (opcional)
     - isDefault: boolean (opcional, default: false)
@@ -507,10 +522,12 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
 14. LIST_CREDIT_CARDS: (Listar cartões de crédito)
     - isActive: boolean (opcional, default: true para listar apenas ativos)
     - includeSummary: boolean (opcional, default: true para tentar incluir limite disponível)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
 
 15. LIST_RECURRING_RULES: (Listar regras de recorrência OU ver o histórico de uma regra específica)
     - isActive: boolean (opcional, default: true)
     - type: "Entrada" ou "Saída" (opcional)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - ruleDescription: string (opcional. Se o usuário pedir o histórico de uma regra específica, como "histórico da netflix", preencha este campo com "netflix". Se a busca for genérica, omita este campo.)
 
 16. SWITCH_FINANCIAL_ACCOUNT: (Mudar de conta financeira ativa)
@@ -530,15 +547,18 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - invoicePeriodType: "aberta", "ultima_fechada", "especifico" (opcional, default: "aberta")
     - invoiceMonth: integer (opcional, 1-12, se especifico)
     - invoiceYear: integer (opcional, se especifico)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - listTransactions: boolean (opcional, default: true)
 
 23. GET_CREDIT_CARD_AVAILABLE_LIMIT: (Ver limite disponível do cartão)
     - creditCardName: string (OBRIGATÓRIO)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
 
 24. PAY_CREDIT_CARD_INVOICE: (Registrar pagamento de fatura)
     - creditCardName: string (OBRIGATÓRIO)
     - paymentAmount: float (OBRIGATÓRIO, >0)
     - paymentDate: "YYYY-MM-DD" (opcional, default: hoje)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - originatingAccountDescription: string (opcional, descrição da conta de onde saiu o dinheiro, ex: "Conta Bradesco")
     - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR. Default "Pagamento de Fatura" se existir, senão omitir.)
 
@@ -548,6 +568,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - limit: float (opcional, >0)
     - closingDay: integer (opcional, 1-28)
     - paymentDay: integer (opcional, 1-28)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - lastFourDigits: string (opcional, 4 dígitos)
     - flag: string (opcional)
     - isDefault: boolean (opcional)
@@ -565,6 +586,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - value: float (opcional, >0)
     - frequency: "daily", "weekly", "bi-weekly", "monthly", "quarterly", "semi-annually", "annually" (opcional)
     - startDate: "YYYY-MM-DD" (opcional)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - interval: integer (opcional, min 1)
     - dayOfMonth: integer (opcional, 1-31, ou null para remover)
     - dayOfWeek: integer (opcional, 0-6, ou null para remover)
@@ -588,6 +610,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
 28. UPDATE_PARCELLED_ACCOUNT_DESCRIPTION: (Mudar SÓ a descrição de uma compra parcelada)
     - originalAccountIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto de edição)
     - newDescription: string (OBRIGATÓRIO)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
 
 29. RECREATE_PARCELLED_ACCOUNT: (Editar VALOR, PARCELAS, CARTÃO, etc. de compra parcelada - exige recriação)
     - originalAccountIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto de edição)
@@ -596,6 +619,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     - newTotalValue: float (OBRIGATÓRIO, >0)
     - newNumberOfParcels: integer (OBRIGATÓRIO, min 1)
     - newInitialDueDate: "YYYY-MM-DD" (OBRIGATÓRIO)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     - newFinancialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR.)
     - newCreditCardName: string (OBRIGATÓRIO se COMPRA PARCELADA NO CARTÃO)
     - newNotes: string (opcional)
@@ -681,31 +705,38 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
 
 43. GET_MONTHLY_TREND: (Obter a tendência de receitas vs. despesas dos últimos meses)
     - numberOfMonths: integer (opcional, default: 6)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
 
 44. GET_EXPENSE_CATEGORY_SUMMARY: (Ver um resumo de gastos por categoria)
     - dateStart: "YYYY-MM-DD" (opcional, default: início do mês atual)
     - dateEnd: "YYYY-MM-DD" (opcional, default: fim do mês atual)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
 
 45. GET_INCOME_CATEGORY_SUMMARY: (Ver um resumo de receitas por categoria)
     - dateStart: "YYYY-MM-DD" (opcional, default: início do mês atual)
     - dateEnd: "YYYY-MM-DD" (opcional, default: fim do mês atual)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
 
 46. CREATE_FINANCIAL_CATEGORY: (Criar uma nova categoria financeira)
     - name: string (OBRIGATÓRIO)
     - parentCategoryName: string (opcional, nome da categoria pai para criar subcategorias)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     * Nota: Se o usuário disser "criar categoria X", execute esta ação diretamente. Não peça confirmação.
 
 47. LIST_FINANCIAL_CATEGORIES: (Listar todas as categorias financeiras cadastradas)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     
 48. UPDATE_FINANCIAL_CATEGORY: (Atualizar uma categoria financeira existente)
     - categoryNameToUpdate: string (OBRIGATÓRIO, nome da categoria a ser alterada)
     - newName: string (opcional, o novo nome para a categoria)
     - newParentCategoryName: string (opcional, para mover a categoria para baixo de outra. Pode ser null para mover para a raiz)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     
 49. DELETE_FINANCIAL_CATEGORY: (Excluir uma categoria financeira)
     - categoryNameToDelete: string (OBRIGATÓRIO)
     - actionForTransactions: 'restrict', 'set_null', 'delete' (opcional, default: 'set_null')
     - actionForSubcategories: 'restrict', 'promote', 'delete' (opcional, default: 'restrict')
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
 
 50. LIST_PRODUCTS (SÓ PARA CONTAS PJ/MEI):
     - searchTerm: string (opcional, para buscar por nome ou código)
@@ -720,6 +751,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
     
 53. DELETE_RECURRING_RULE: (Excluir uma regra de recorrência)
     - ruleDescription: string (OBRIGATÓRIO, descrição para encontrar a regra a ser excluída)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
     
 54. LOG_WATER_INTAKE: (Registrar consumo de água)
     - amountInMl: integer (opcional. Se não informado, registra o próximo da lista. Se informado, registra com este valor)
@@ -750,6 +782,7 @@ Sua \`clarification_question\` DEVE ser rica, visual e seguir este padrão de 3 
 62. DELETE_FINANCIAL_TRANSACTION: (Excluir uma transação financeira)
     - transactionId: integer (OBRIGATÓRIO, a IA deve buscar pelo ID ou descrição se não fornecido)
     - description: string (opcional, para buscar a transação se o ID não for conhecido)
+    - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
 
 63. CREATE_SERVICE (SÓ PARA CONTAS PJ/MEI):
     - name: string (OBRIGATÓRIO)
@@ -1120,7 +1153,7 @@ Sua tarefa é receber uma lista de agendamentos em JSON e gerar duas coisas:
 
 **Exemplo de Saída JSON Esperada:**
 {
-  "overall_summary": "Uau, ${clientName}, sua semana está começando a ficar movimentada! Ótimo ver seus clientes agendando. Manter a agenda organizada é o segredo para um negócio de sucesso! 🚀",
+  "overall_summary": "Uau, \${clientName}, sua semana está começando a ficar movimentada! Ótimo ver seus clientes agendando. Manter a agenda organizada é o segredo para um negócio de sucesso! 🚀",
   "individual_phrases": [
     "Tudo certo para o encontro com o João Silva. Vai ser um sucesso!",
     "Este agendamento com a Maria Souza ainda precisa da sua confirmação. Um toque seu e ela ficará super feliz!"

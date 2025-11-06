@@ -522,7 +522,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     if (accountToSelect) {
                         state.activeFinancialAccountId = accountToSelect.id;
                         state.activeFinancialAccountName = accountToSelect.name || accountToSelect.accountName;
-                        state.activeFinancialAccountType = accountToSelect.type || accountToSelect.accountType;
+                        state.activeFinancialAccountType = accountToSelect.type || accountToSelect.type;
                         const confirmSelectionMsg = `Maravilha, ${state.clientName}!\nSelecionei a conta "${state.activeFinancialAccountName}" para você. Como posso te ajudar agora? 🚀`;
                         state.messageHistory.push({ role: 'assistant', content: confirmSelectionMsg });
                         state.currentAction = null;
@@ -622,6 +622,18 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     continue;
                 }
                 mainActionResult = await actionHandler.handleAction(state, detectedAction, state.clientName, isOwnerActingOnOwnBehalfGlobal, actorClient.id);
+
+                // =================================================================
+                // === INÍCIO DA CORREÇÃO: VERIFICAÇÃO DE ERRO PARA INTERRUPÇÃO ===
+                // =================================================================
+                if (mainActionResult && mainActionResult.formattedData && mainActionResult.formattedData.trim().startsWith('❌')) {
+                    logger.warn(`[WHATSAPP SERVICE] Erro retornado pelo Action Handler: "${mainActionResult.formattedData}". Interrompendo fluxo para ${senderPhone}.`);
+                    await sendWhatsappMessage(senderPhone, mainActionResult.formattedData);
+                    return; // Interrompe a execução aqui para não enviar mais nada.
+                }
+                // =================================================================
+                // === FIM DA CORREÇÃO: VERIFICAÇÃO DE ERRO PARA INTERRUPÇÃO ===
+                // =================================================================
 
                 if (mainActionResult && mainActionResult.resourceForButtonsContext?.id === 'start_schedule_update_flow') {
                     logger.info(`[MAESTRO] Iniciando fluxo de atualização de horário para ${senderPhone}.`);

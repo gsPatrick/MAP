@@ -91,35 +91,62 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
     let wasAnEdit = false;
 
     try {
-        // <<< INÍCIO DA CORREÇÃO: Lógica de Troca de Contexto Inteligente >>>
+        // =================================================================
+        // INÍCIO DA LÓGICA DE TROCA DE CONTEXTO INTELIGENTE
+        // =================================================================
         let effectiveAccountId = state.activeFinancialAccountId;
         let effectiveAccountName = state.activeFinancialAccountName;
+        let effectiveAccountType = state.activeFinancialAccountType;
         let autoSwitchMessage = "";
 
-        const isCurrentAccountPf = state.activeFinancialAccountType === 'PF';
-        const hasAdvancedPlan = state.currentAccessLevel.includes('avancado') || state.currentAccessLevel.includes('vitalicio_avancado');
+        const allOwnerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true });
         
-        // Uma ação é considerada PJ se estiver na lista ou for um agendamento com cliente de negócio
-        const isPjAction = PJ_EXCLUSIVE_ACTIONS.includes(actionName) || (actionName === 'SCHEDULE_APPOINTMENT' && params.businessClientNames && params.businessClientNames.length > 0);
+        // Prioridade 1: O usuário especificou a conta na mensagem.
+        if (params.targetAccountNameOrType) {
+            const targetLower = params.targetAccountNameOrType.toLowerCase();
+            const foundAccount = allOwnerAccounts.find(acc => 
+                (acc.accountName || acc.name).toLowerCase().includes(targetLower) ||
+                (acc.accountType || acc.type).toLowerCase() === targetLower ||
+                (targetLower.includes('pessoal') && acc.accountType === 'PF') ||
+                (targetLower.includes('fisica') && acc.accountType === 'PF') ||
+                (targetLower.includes('pf') && acc.accountType === 'PF') ||
+                ((targetLower.includes('empresa') || targetLower.includes('pj') || targetLower.includes('mei')) && ['PJ', 'MEI'].includes(acc.accountType))
+            );
 
-        if (isCurrentAccountPf && hasAdvancedPlan && isPjAction) {
-            // Busca a conta PJ/MEI do proprietário
-            const allOwnerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true });
-            const pjAccount = allOwnerAccounts.find(acc => ['PJ', 'MEI'].includes(acc.accountType));
-
-            if (pjAccount) {
-                // Se encontrou, define a conta efetiva para esta ação como a conta PJ
-                effectiveAccountId = pjAccount.id;
-                effectiveAccountName = pjAccount.accountName;
-                autoSwitchMessage = `Notei que esta é uma tarefa do seu negócio, então já a executei na sua conta empresarial *"${effectiveAccountName}"*.`;
-                logger.info(`[AutoSwitch] Mudando contexto da ação '${actionName}' da conta PF para PJ/MEI ID ${pjAccount.id} para o ator ${actorId}.`);
+            if (foundAccount) {
+                effectiveAccountId = foundAccount.id;
+                effectiveAccountName = foundAccount.accountName;
+                effectiveAccountType = foundAccount.accountType;
+                logger.info(`[ContextSwitch] Usuário especificou a conta. Mudando contexto da ação '${actionName}' para a conta ID ${foundAccount.id} ("${foundAccount.accountName}").`);
             } else {
-                // Se tem o plano mas não tem a conta, instrui o usuário
-                formattedData = `👍 Você tem o plano certo para isso! Mas primeiro, precisamos criar sua conta de negócios. É só dizer, por exemplo, "criar conta MEI com o nome Minha Empresa".`;
+                formattedData = `❌ Ops, ${clientNameToUse}! Não encontrei a conta "${params.targetAccountNameOrType}" que você mencionou. Suas contas disponíveis são: ${allOwnerAccounts.map(a => a.accountName).join(', ')}.`;
                 return { formattedData, resourceForButtonsContext: null, wasAnEdit: false };
             }
+        } 
+        // Prioridade 2: Auto-switch para conta de negócios se a ação for exclusiva de PJ/MEI.
+        else {
+            const isCurrentAccountPf = state.activeFinancialAccountType === 'PF';
+            const hasAdvancedPlan = state.currentAccessLevel.includes('avancado') || state.currentAccessLevel.includes('vitalicio_avancado');
+            const isPjAction = PJ_EXCLUSIVE_ACTIONS.includes(actionName) || (actionName === 'SCHEDULE_APPOINTMENT' && params.businessClientNames && params.businessClientNames.length > 0);
+
+            if (isCurrentAccountPf && hasAdvancedPlan && isPjAction) {
+                const pjAccount = allOwnerAccounts.find(acc => ['PJ', 'MEI'].includes(acc.accountType));
+
+                if (pjAccount) {
+                    effectiveAccountId = pjAccount.id;
+                    effectiveAccountName = pjAccount.accountName;
+                    effectiveAccountType = pjAccount.accountType;
+                    autoSwitchMessage = `Notei que esta é uma tarefa do seu negócio, então já a executei na sua conta empresarial *"${effectiveAccountName}"*.`;
+                    logger.info(`[AutoSwitch] Mudando contexto da ação '${actionName}' da conta PF para PJ/MEI ID ${pjAccount.id}.`);
+                } else {
+                    formattedData = `❌ Você tem o plano certo para isso, mas precisa criar sua conta de negócios primeiro. Diga, por exemplo, "criar conta MEI com o nome Minha Empresa".`;
+                    return { formattedData, resourceForButtonsContext: null, wasAnEdit: false };
+                }
+            }
         }
-        // <<< FIM DA CORREÇÃO >>>
+        // =================================================================
+        // FIM DA LÓGICA DE TROCA DE CONTEXTO INTELIGENTE
+        // =================================================================
 
 
         switch (actionName) {
@@ -161,7 +188,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const newTx = await financialService.createTransaction(effectiveAccountId, txData, actorId); 
                     const reloadedTx = await financialService.getTransactionById(effectiveAccountId, newTx.id);
                     
-                    formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx);
+                    formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'transaction', id: newTx.id, description: newTx.description });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_FINANCIAL_TRANSACTION: ${e.message}`, { error: e, paramsUsed: params });
@@ -225,7 +252,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const reloadedTx = await financialService.getTransactionById(effectiveAccountId, newTx.id);
                     const stockInfoAfterSale = await stockService.getProductStockBalance(product.id);
 
-                    const financialPart = formatter.formatFinancialTransactionDataStructure(reloadedTx);
+                    const financialPart = formatter.formatFinancialTransactionDataStructure(reloadedTx, effectiveAccountName);
                     const stockPart = `📦 Estoque de "${product.name}" atualizado para: *${stockInfoAfterSale.quantity} ${stockInfoAfterSale.unit || 'UN'}*`;
 
                     formattedData = `${financialPart}\n\n${stockPart}`;
@@ -278,7 +305,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     // 4. Formatar a resposta de sucesso
                     const reloadedTx = await financialService.getTransactionById(effectiveAccountId, saleTransaction.id);
-                    formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx);
+                    formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx, effectiveAccountName);
                     formattedData += `\n\n📦 Estoque de "${product.name}" atualizado com sucesso!`;
 
                     resourceForButtonsContext.resources.push({ type: 'transaction', id: saleTransaction.id, description: saleDescription });
@@ -427,7 +454,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         serviceIds: [],
                     };
                     
-                    if (['PJ', 'MEI'].includes(state.activeFinancialAccountType) || effectiveAccountId !== state.activeFinancialAccountId) {
+                    if (['PJ', 'MEI'].includes(effectiveAccountType)) {
                         if (params.businessClientNames && Array.isArray(params.businessClientNames)) {
                             for (const name of params.businessClientNames) {
                                 const bcId = await findBusinessClientIdByName(name, effectiveAccountId);
@@ -440,7 +467,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const newAppt = await appointmentService.scheduleAppointment(effectiveAccountId, appointmentData, actorId);
                     
-                    formattedData = formatter.formatAppointmentDataStructure(newAppt);
+                    formattedData = formatter.formatAppointmentDataStructure(newAppt, false, false, false, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'appointment', id: newAppt.id, description: newAppt.title });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em SCHEDULE_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
@@ -487,7 +514,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const parcelResult = await financialService.createParcelledAccount(effectiveAccountId, parcelData, actorId);
                     
-                    formattedData = formatter.formatParcelledAccountDataStructure(parcelData, parcelResult);
+                    formattedData = formatter.formatParcelledAccountDataStructure(parcelData, parcelResult, effectiveAccountName);
                     if (parcelResult.parcels && parcelResult.parcels.length > 0) {
                         const originalTxId = parcelResult.parcels[0].originalAccountId || parcelResult.parcels[0].id;
                         resourceForButtonsContext.resources.push({ type: 'parcelled_account', id: originalTxId, description: parcelData.description });
@@ -541,7 +568,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const newRule = await recurringTransactionService.createRecurringRule(effectiveAccountId, ruleData);
                     const reloadedRule = await recurringTransactionService.getRecurringRuleById(effectiveAccountId, newRule.id);
                     
-                    formattedData = formatter.formatRecurringRuleDataStructure(reloadedRule);
+                    formattedData = formatter.formatRecurringRuleDataStructure(reloadedRule, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'recurring_rule', id: newRule.id, description: newRule.description });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_RECURRING_RULE: ${e.message}`, { error: e, paramsUsed: params });
@@ -556,7 +583,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         logger.warn(`[ACTION HANDLER] IA detectou CREATE_PRODUCT, mas o sistema está em modo de edição para o produto ID ${state.editingResource.id}. Forçando uma ATUALIZAÇÃO.`);
                         const updateDataProd = { ...params };
                         const updatedProduct = await productService.updateProduct(effectiveAccountId, state.editingResource.id, updateDataProd, actorId);
-                        formattedData = formatter.formatProductDataStructure(updatedProduct);
+                        formattedData = formatter.formatProductDataStructure(updatedProduct, effectiveAccountName);
                         wasAnEdit = true;
                         break;
                     }
@@ -574,7 +601,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     
                     const newProduct = await productService.createProduct(effectiveAccountId, productData, actorId);
                     
-                    formattedData = formatter.formatProductDataStructure(newProduct);
+                    formattedData = formatter.formatProductDataStructure(newProduct, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'product', id: newProduct.id, description: newProduct.name });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_PRODUCT: ${e.message}`, { error: e, paramsUsed: params });
@@ -603,7 +630,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     
                     const newCard = await creditCardService.createCreditCard(effectiveAccountId, cardData, actorId);
                     
-                    formattedData = formatter.formatCreditCardDataStructure(newCard);
+                    formattedData = formatter.formatCreditCardDataStructure(newCard, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'credit_card', id: newCard.id, description: newCard.name });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_CREDIT_CARD: ${e.message}`, { error: e, paramsUsed: params });
@@ -660,7 +687,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const bcData = { name: params.name, phone: params.phone, email: params.email, notes: params.notes };
                     const newBc = await businessClientService.createBusinessClient(effectiveAccountId, bcData, actorId);
                     
-                    formattedData = formatter.formatBusinessClientDataStructure(newBc);
+                    formattedData = formatter.formatBusinessClientDataStructure(newBc, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'business_client', id: newBc.id, description: newBc.name });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_BUSINESS_CLIENT: ${e.message}`, { error: e, paramsUsed: params });
@@ -831,7 +858,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         parentId = parentCat.id;
                     }
                     const newCategory = await financialCategoryService.createFinancialCategory(effectiveAccountId, { name, parentId });
-                    formattedData = formatter.formatFinancialCategoryDataStructure(newCategory);
+                    formattedData = formatter.formatFinancialCategoryDataStructure(newCategory, effectiveAccountName);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_FINANCIAL_CATEGORY: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui criar a categoria.\nDetalhe: ${e.message}`;
@@ -960,7 +987,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const summary = await financialService.getFinancialSummary(effectiveAccountId, filters);
                     
                     let summaryIntro = `Aqui está o resumo financeiro para *${summary.periodDescription}*, ${clientNameToUse}! 📊`;
-                    const summaryBody = formatter.formatFinancialSummaryDataStructure(summary);
+                    const summaryBody = formatter.formatFinancialSummaryDataStructure(summary, effectiveAccountName);
                     
                     formattedData = `${summaryIntro}\n\n${summaryBody}`;
 
@@ -1016,7 +1043,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         const creativeResponse = await aiModelService.generateCreativeAgendaResponse(clientNameToUse, appointments, periodDescription);
 
                         const appointmentDetails = appointments.map((appt, index) => {
-                            const formattedBlock = formatter.formatAppointmentDataStructure(appt);
+                            const formattedBlock = formatter.formatAppointmentDataStructure(appt, false, false, false, effectiveAccountName);
                             const individualPhrase = creativeResponse.individual_phrases[index] || "Fique de olho neste compromisso!";
                             return `${formattedBlock}\n_${individualPhrase}_`;
                         });
@@ -1090,7 +1117,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         };
                     }));
                     
-                    formattedData = formatter.formatRichRecurringRuleList(enrichedRules, totalItems, clientNameToUse);
+                    formattedData = formatter.formatRichRecurringRuleList(enrichedRules, totalItems, clientNameToUse, effectiveAccountName);
 
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em LIST_RECURRING_RULES: ${e.message}`, { error: e, paramsUsed: params });
@@ -1106,7 +1133,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
                     const stockInfo = await stockService.getProductStockInfoByNameOrCode(effectiveAccountId, params.productNameOrCode); 
                     
-                    formattedData = formatter.formatStockInfoDataStructure(stockInfo); 
+                    formattedData = formatter.formatStockInfoDataStructure(stockInfo, effectiveAccountName); 
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_STOCK_INFO: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui consultar o estoque.\nDetalhe: ${e.message}`;
@@ -1134,7 +1161,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         invoiceDetails.cardTotalLimit = cardForDetails.limit;
                     }
 
-                    formattedData = formatter.formatCreditCardInvoiceDataStructure(invoiceDetails, params.listTransactions !== false);
+                    formattedData = formatter.formatCreditCardInvoiceDataStructure(invoiceDetails, params.listTransactions !== false, effectiveAccountName);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_CREDIT_CARD_INVOICE: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui buscar a fatura.\nDetalhe: ${e.message}`;
@@ -1155,7 +1182,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     
                     const limitInfo = await creditCardService.getCreditCardAvailableLimit(effectiveAccountId, cardIdForLimit);
                     
-                    formattedData = formatter.formatAvailableLimitDataStructure(limitInfo);
+                    formattedData = formatter.formatAvailableLimitDataStructure(limitInfo, effectiveAccountName);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_CREDIT_CARD_AVAILABLE_LIMIT: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui verificar o limite.\nDetalhe: ${e.message}`;
@@ -1294,7 +1321,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 404, message: `Não encontrei um produto chamado "${productNameOrCode}".` };
                     }
                     const product = await productService.getProductById(effectiveAccountId, productId);
-                    formattedData = formatter.formatProductDataStructure(product);
+                    formattedData = formatter.formatProductDataStructure(product, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'product', id: product.id, description: product.name });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_PRODUCT_DETAILS: ${e.message}`, { error: e, paramsUsed: params });
@@ -1461,7 +1488,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const updatedTx = await financialService.updateTransaction(effectiveAccountId, transactionIdToUpdate, updateDataTx, actorId);
                     const reloadedUpdatedTx = await financialService.getTransactionById(effectiveAccountId, updatedTx.id);
                     
-                    formattedData = formatter.formatFinancialTransactionDataStructure(reloadedUpdatedTx);
+                    formattedData = formatter.formatFinancialTransactionDataStructure(reloadedUpdatedTx, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em UPDATE_FINANCIAL_TRANSACTION: ${e.message}`, { error: e, paramsUsed: params });
@@ -1490,7 +1517,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (params.hasOwnProperty('associatedValue') && params.associatedValue !== null && !isNaN(parseFloat(params.associatedValue))) updateDataAppt.associatedValue = parseFloat(params.associatedValue);
                     if (params.hasOwnProperty('associatedTransactionType')) updateDataAppt.associatedTransactionType = params.associatedTransactionType;
                     
-                    if (params.hasOwnProperty('businessClientNames') && (['PJ', 'MEI'].includes(state.activeFinancialAccountType) || effectiveAccountId !== state.activeFinancialAccountId)) {
+                    if (params.hasOwnProperty('businessClientNames') && (['PJ', 'MEI'].includes(effectiveAccountType))) {
                         let businessClientIdsToUpdate = []; 
                         if (Array.isArray(params.businessClientNames) && params.businessClientNames.length > 0) {
                             for (const name of params.businessClientNames) {
@@ -1508,7 +1535,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const updatedAppt = await appointmentService.updateAppointment(effectiveAccountId, appointmentIdToUpdate, updateDataAppt, actorId);
                     const reloadedUpdatedAppt = await appointmentService.getAppointmentById(effectiveAccountId, updatedAppt.id);
                     
-                    formattedData = formatter.formatAppointmentDataStructure(reloadedUpdatedAppt);
+                    formattedData = formatter.formatAppointmentDataStructure(reloadedUpdatedAppt, false, false, false, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em UPDATE_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
@@ -1596,7 +1623,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const updatedRule = await recurringTransactionService.updateRecurringRule(effectiveAccountId, ruleIdToUpdate, updateDataRule, actorId);
                     const reloadedUpdatedRule = await recurringTransactionService.getRecurringRuleById(effectiveAccountId, updatedRule.id);
                     
-                    formattedData = formatter.formatRecurringRuleDataStructure(reloadedUpdatedRule);
+                    formattedData = formatter.formatRecurringRuleDataStructure(reloadedUpdatedRule, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em UPDATE_RECURRING_RULE: ${e.message}`, { error: e, paramsUsed: params });
@@ -1630,7 +1657,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const updatedProduct = await productService.updateProduct(effectiveAccountId, productIdToUpdate, updateDataProd, actorId);
                     
-                    formattedData = formatter.formatProductDataStructure(updatedProduct);
+                    formattedData = formatter.formatProductDataStructure(updatedProduct, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em UPDATE_PRODUCT: ${e.message}`, { error: e, paramsUsed: params });
@@ -1693,7 +1720,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const recreatedResult = await financialService.recreateParcelledAccount(effectiveAccountId, originalAccountIdToUpdate, newParcelData, actorId);
                     
-                    formattedData = formatter.formatParcelledAccountDataStructure(newParcelData, recreatedResult);
+                    formattedData = formatter.formatParcelledAccountDataStructure(newParcelData, recreatedResult, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em RECREATE_PARCELLED_ACCOUNT: ${e.message}`, { error: e, paramsUsed: params });
@@ -1727,7 +1754,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const updatedCard = await creditCardService.updateCreditCard(effectiveAccountId, cardIdToUpdate, updateDataCard, actorId);
                     
-                    formattedData = formatter.formatCreditCardDataStructure(updatedCard);
+                    formattedData = formatter.formatCreditCardDataStructure(updatedCard, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em UPDATE_CREDIT_CARD: ${e.message}`, { error: e, paramsUsed: params });
@@ -1764,7 +1791,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const updatedBC = await businessClientService.updateBusinessClient(effectiveAccountId, effectiveClientIdToUpdate, updateDataBC, actorId);
                     
-                    formattedData = formatter.formatBusinessClientDataStructure(updatedBC);
+                    formattedData = formatter.formatBusinessClientDataStructure(updatedBC, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em UPDATE_BUSINESS_CLIENT: ${e.message}`, { error: e, paramsUsed: params });
@@ -1889,7 +1916,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     const updatedCategory = await financialCategoryService.updateFinancialCategory(effectiveAccountId, categoryToUpdate.id, updateData);
-                    formattedData = formatter.formatFinancialCategoryDataStructure(updatedCategory);
+                    formattedData = formatter.formatFinancialCategoryDataStructure(updatedCategory, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em UPDATE_FINANCIAL_CATEGORY: ${e.message}`, { error: e, paramsUsed: params });
@@ -2230,7 +2257,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     const newService = await serviceService.createService(effectiveAccountId, serviceData);
-                    formattedData = formatter.formatServiceDataStructure(newService);
+                    formattedData = formatter.formatServiceDataStructure(newService, effectiveAccountName);
 
                     resourceForButtonsContext.resources.push({ type: 'service', id: newService.id, description: newService.name });
                 } catch (e) {
@@ -2285,7 +2312,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     const updatedService = await serviceService.updateService(effectiveAccountId, serviceIdToUpdate, updateDataSvc);
-                    formattedData = formatter.formatServiceDataStructure(updatedService);
+                    formattedData = formatter.formatServiceDataStructure(updatedService, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em UPDATE_SERVICE: ${e.message}`, { error: e, paramsUsed: params });
@@ -2331,7 +2358,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const confirmedAppointment = await appointmentService.confirmAppointment(effectiveAccountId, appointmentId);
                     
                     const creativeResponse = await aiModelService.generateBookingConfirmationResponse(clientNameToUse, confirmedAppointment);
-                    const formattedDetails = formatter.formatAppointmentDataStructure(confirmedAppointment);
+                    const formattedDetails = formatter.formatAppointmentDataStructure(confirmedAppointment, false, false, false, effectiveAccountName);
 
                     formattedData = `${creativeResponse}\n\n${formattedDetails}`;
 
@@ -2549,7 +2576,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
         }
 
         // <<< INÍCIO DA CORREÇÃO: Adiciona a mensagem de aviso ao resultado final >>>
-        if (autoSwitchMessage && formattedData) {
+        if (autoSwitchMessage && formattedData && !formattedData.startsWith("❌")) {
             // Se houve uma troca automática e a ação foi bem-sucedida,
             // adiciona a mensagem de aviso no início da resposta.
             formattedData = `${autoSwitchMessage}\n\n${formattedData}`;

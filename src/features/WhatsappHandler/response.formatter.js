@@ -61,7 +61,7 @@ function translateStatus(statusKey, defaultText = null) {
 }
 
 // Funções de formatação de "Estrutura de Dados"
-function formatFinancialTransactionDataStructure(transaction) {
+function formatFinancialTransactionDataStructure(transaction, accountName = null) {
     if (!transaction) return "🎯 Resumo da Transação:\n\nDados não disponíveis.";
     let data = `🎯 Resumo da Transação:\n\n`;
     data += `📝 Descrição: ${transaction.description || 'N/A'}\n`;
@@ -93,10 +93,13 @@ function formatFinancialTransactionDataStructure(transaction) {
     if (transaction.notes) {
         data += `🗒️ Observações: ${transaction.notes}\n`;
     }
+    if (accountName) {
+        data += `\n\n*(Executado na conta: ${accountName})*`;
+    }
     return data.trim();
 }
 
-function formatAppointmentDataStructure(appointment, forReminder = false, clientNameForReminder = "Você", isNotification = false) {
+function formatAppointmentDataStructure(appointment, forReminder = false, clientNameForReminder = "Você", isNotification = false, accountName = null) {
     if (!appointment) return "📅 Resumo do Compromisso:\n\nDados não disponíveis.";
 
     let introEmoji = "📅";
@@ -156,10 +159,14 @@ function formatAppointmentDataStructure(appointment, forReminder = false, client
         data += `🗒️ *Observações:* ${appointment.notes}\n`;
     }
 
+    if (accountName && !forReminder && !isNotification) {
+        data += `\n\n*(Executado na conta: ${accountName})*`;
+    }
+
     return data.trim();
 }
 
-function formatRecurringRuleDataStructure(rule) {
+function formatRecurringRuleDataStructure(rule, accountName = null) {
     if (!rule) return "🧾 Resumo da Transação Recorrente:\n\nDados não disponíveis.";
     let data = `🧾 Resumo da Transação Recorrente:\n\n`;
     data += `📜 Descrição: *${rule.description || 'N/A'}*\n`;
@@ -191,6 +198,9 @@ function formatRecurringRuleDataStructure(rule) {
     data += `➡️ Próximo Vencimento: ${rule.nextDueDate ? formatDate(rule.nextDueDate) : 'N/A (Regra Inativa ou Concluída)'}\n`;
     data += `⚙️ Criação Automática: ${rule.autoCreateTransaction ? 'Sim (Gera transação)' : 'Não (Apenas Lembrete)'}\n`;
     data += `🚦 Status da Regra: ${translateStatus(rule.isActive ? 'Active' : 'Inactive')}\n`;
+    if (accountName) {
+        data += `\n\n*(Executado na conta: ${accountName})*`;
+    }
     return data.trim();
 }
 
@@ -246,7 +256,7 @@ function formatRecurringRuleHistoryDataStructure(history, rule) {
 }
 
 // *** NOVA FUNÇÃO ***
-function formatServiceDataStructure(service) {
+function formatServiceDataStructure(service, accountName = null) {
     if (!service) return "🛠️ Resumo do Serviço:\n\nDados do serviço não disponíveis.";
     let data = `🛠️ Resumo do Serviço:\n\n`;
     data += `🏷️ Nome: *${service.name}*\n`;
@@ -256,6 +266,9 @@ function formatServiceDataStructure(service) {
         data += `📄 Descrição: ${service.description}\n`;
     }
     data += `🚦 Status: ${translateStatus(service.isActive ? 'Active' : 'Inactive')}\n`;
+    if (accountName) {
+        data += `\n\n*(Executado na conta: ${accountName})*`;
+    }
     return data.trim();
 }
 
@@ -273,7 +286,7 @@ function formatListServicesDataStructure(services) {
 }
 
 
-function formatCreditCardDataStructure(card) {
+function formatCreditCardDataStructure(card, accountName = null) {
     if (!card) return "💳 Resumo do Cartão:\n\nDados não disponíveis.";
     let data = `💳 Resumo do Cartão de Crédito:\n\n`;
     data += `🏦 Nome: *${card.name || 'N/A'}*\n`;
@@ -287,6 +300,9 @@ function formatCreditCardDataStructure(card) {
     if(card.flag) data += `🏳️ Bandeira: ${card.flag}\n`;
     data += `⭐ Cartão Padrão: ${card.isDefault ? 'Sim ✅' : 'Não ❌'}\n`;
     data += `🚦 Status: ${translateStatus(card.isActive ? 'Active' : 'Inactive')}\n`;
+    if (accountName) {
+        data += `\n\n*(Executado na conta: ${accountName})*`;
+    }
     return data.trim();
 }
 
@@ -350,7 +366,7 @@ function formatAvailableLimitDataStructure(limitInfo) {
     return data.trim();
 }
 
-function formatParcelledAccountDataStructure(parcelParams, parcelResult) {
+function formatParcelledAccountDataStructure(parcelParams, parcelResult, accountName = null) {
     if (!parcelResult || !parcelResult.parcels || parcelResult.parcels.length === 0) return "🎯 Resumo da Compra Parcelada:\n\nDados não disponíveis.";
     const firstParcel = parcelResult.parcels[0];
     let data = `🎯 Resumo da Compra Parcelada:\n\n`;
@@ -369,6 +385,9 @@ function formatParcelledAccountDataStructure(parcelParams, parcelResult) {
     }
     data += `📅 Data da Compra: ${formatDate(parcelParams.transactionDate || firstParcel.transactionDate)}\n`;
     data += `🗓️ Venc. 1ª Parcela: ${formatDate(parcelParams.initialDueDate || firstParcel.dueDate || firstParcel.transactionDate)}\n`;
+    if (accountName) {
+        data += `\n\n*(Executado na conta: ${accountName})*`;
+    }
     return data.trim();
 }
 
@@ -381,7 +400,7 @@ function formatListClientAccountsDataStructure(accounts, currentAccountId = null
     return data.trim();
 }
 
-function formatProductDataStructure(product) {
+function formatProductDataStructure(product, accountName = null) {
     if (!product) return "📦 Resumo do Produto:\n\nDados do produto não disponíveis.";
     let data = `📦 Resumo do Produto:\n\n`;
     data += `🏷️ Nome: *${product.name}*\n`;
@@ -392,10 +411,13 @@ function formatProductDataStructure(product) {
     if(product.minimumStock !== null && product.minimumStock !== undefined) data += `📉 Estoque Mínimo: ${product.minimumStock} ${product.unit || 'UN'}\n`;
     if(product.description && product.description.trim() !== "") data += `📄 Descrição Detalhada: ${product.description}\n`;
     data += `🚦 Status: ${translateStatus(product.isActive === false ? 'Inactive' : 'Active')}\n`;
+    if (accountName) {
+        data += `\n\n*(Executado na conta: ${accountName})*`;
+    }
     return data.trim();
 }
 
-function formatStockInfoDataStructure(stockInfo) {
+function formatStockInfoDataStructure(stockInfo, accountName = null) {
     if (!stockInfo) return "📦 Informações de Estoque:\n\nDados não disponíveis.";
     let data = `📦 Estoque de *${stockInfo.name}*:\n\n`;
     if (stockInfo.code) data += `🔢 Código: ${stockInfo.code}\n`;
@@ -406,10 +428,13 @@ function formatStockInfoDataStructure(stockInfo) {
             data += `⚠️ *Atenção: Estoque baixo ou zerado!*\n`;
         }
     }
+    if (accountName) {
+        data += `\n\n*(Executado na conta: ${accountName})*`;
+    }
     return data.trim();
 }
 
-function formatBusinessClientDataStructure(client) {
+function formatBusinessClientDataStructure(client, accountName = null) {
     if (!client) return "👥 Resumo do Cliente do Negócio:\n\nDados não disponíveis.";
     let data = `👥 Resumo do Cliente:\n\n`;
     data += `👤 Nome: *${client.name}*\n`;
@@ -417,6 +442,9 @@ function formatBusinessClientDataStructure(client) {
     if (client.email) data += `📧 E-mail: ${client.email}\n`;
     if (client.notes) data += `🗒️ Observações: ${client.notes}\n`;
     data += `🚦 Status: ${translateStatus(client.isActive === false ? 'Inactive' : 'Active')}\n`;
+    if (accountName) {
+        data += `\n\n*(Executado na conta: ${accountName})*`;
+    }
     return data.trim();
 }
 
@@ -663,7 +691,7 @@ function formatSubscriptionDataStructure(subscription, clientName) {
     return data.trim();
 }
 
-function formatFinancialCategoryDataStructure(category) {
+function formatFinancialCategoryDataStructure(category, accountName = null) {
     if (!category) return "🗂️ Resumo da Categoria:\n\nDados não disponíveis.";
     let data = `🗂️ Categoria Criada/Atualizada:\n\n`;
     data += `🏷️ Nome: *${category.name}*\n`;
@@ -673,6 +701,9 @@ function formatFinancialCategoryDataStructure(category) {
         data += `(É uma subcategoria, mas os detalhes da categoria pai não foram carregados)\n`;
     } else {
         data += `(É uma categoria principal)\n`;
+    }
+    if (accountName) {
+        data += `\n\n*(Executado na conta: ${accountName})*`;
     }
     return data.trim();
 }
@@ -885,7 +916,7 @@ function formatMorningBriefing(clientName, accountName, pendingTransactions, app
     return `${greeting}\n\n${intro}${financialSection}${appointmentSection}${footer}`.trim();
 }
 
-function formatAvailabilityRuleDataStructure(rule) {
+function formatAvailabilityRuleDataStructure(rule, accountName = null) {
     if (!rule) return "📅 Resumo da Regra de Disponibilidade:\n\nDados não disponíveis.";
     
     const typeMap = {
@@ -930,6 +961,10 @@ function formatAvailabilityRuleDataStructure(rule) {
     
     if (rule.type === 'work' && rule.slotIntervalMinutes) {
         data += `⏱️ Intervalo de Agendamento: A cada ${rule.slotIntervalMinutes} minutos\n`;
+    }
+    
+    if (accountName) {
+        data += `\n\n*(Executado na conta: ${accountName})*`;
     }
 
     return data.trim();

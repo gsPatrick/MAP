@@ -250,16 +250,11 @@ async function changeUserPlan(clientId, planId, customMessage) {
             { transaction: t }
         );
         
-        // <<< ADICIONADO PROCESSAMENTO DE COMISSÃO AQUI >>>
-        // A comissão é processada antes do commit final
-        await affiliateService.processNewSubscriptionForAffiliate(clientId, { transaction: t });
-
         await t.commit(); 
         
         logger.info(`[AdminService] Plano do cliente ID ${clientId} alterado para "${plan.name}".`);
 
         if (client.phone) {
-            // Lógica de envio de mensagem para o cliente que teve o plano alterado
             let messageToSend;
             const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
             let expiryWelcomePart = `Seu acesso agora está garantido até *${formatDate(newSubscription.endDate)}*.`;
@@ -350,6 +345,7 @@ async function sendBroadcastMessage(message, targetGroup = 'all_active') {
 
 async function getAffiliatesDashboard() {
   try {
+    // Busca afiliados que têm saldo ou que já indicaram alguém
     const affiliates = await Client.findAll({
       where: {
         [Op.or]: [
@@ -360,51 +356,76 @@ async function getAffiliatesDashboard() {
       attributes: ['id', 'name', 'email', 'phone', 'balance', 'affiliateCode'],
       order: [['name', 'ASC']],
     });
+    
     if (affiliates.length === 0) {
       return [];
     }
+    
     const affiliateIds = affiliates.map(a => a.id);
+
+    // Busca todos os indicados de uma vez para otimização
     const allReferrals = await Client.findAll({
         where: { referredByClientId: { [Op.in]: affiliateIds } },
-        attributes: ['id', 'name', 'email', 'accessLevel', 'createdAt', 'referredByClientId'],
+        attributes: ['id', 'name', 'email', 'createdAt', 'referredByClientId'],
+        include: [{
+            model: Subscription,
+            as: 'subscriptions',
+            attributes: ['planId', 'status'],
+            required: false, // LEFT JOIN
+            include: [{
+                model: Plan,
+                as: 'plan',
+                attributes: ['name', 'affiliateCommissionValue']
+            }]
+        }]
     });
-    const allPlans = await Plan.findAll({ raw: true });
-    const planCommissionMap = allPlans.reduce((acc, plan) => {
-        const parts = plan.name.toLowerCase().split(' - ')[1]?.split(' ') || [];
-        const tier = parts[0] === 'empresarial' ? 'avancado' : 'basico';
-        const duration = parts[1];
-        const key = `${tier}_${duration}`;
-        acc[key] = parseFloat(plan.affiliateCommissionValue) || 0;
-        return acc;
-    }, {});
+
     const dashboardData = affiliates.map(affiliate => {
         const myReferrals = allReferrals.filter(r => r.referredByClientId === affiliate.id);
-        let totalEarned = 0;
-        const ledger = myReferrals.map(ref => {
-            const commission = planCommissionMap[ref.accessLevel] || 0;
-            totalEarned += commission;
-            return {
+        
+        let totalEarnedHistorically = 0;
+        const detailedReferrals = [];
+
+        myReferrals.forEach(ref => {
+            // Encontra a PRIMEIRA assinatura PAGA e ATIVA do indicado
+            const firstPaidSubscription = ref.subscriptions
+                .filter(sub => sub.status === 'Ativa' && sub.plan && parseFloat(sub.plan.affiliateCommissionValue) > 0)
+                .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0]; // Ordena e pega a mais antiga
+
+            let commissionAmount = 0;
+            let planName = 'gratuito'; // Padrão
+            
+            if (firstPaidSubscription) {
+                commissionAmount = parseFloat(firstPaidSubscription.plan.affiliateCommissionValue);
+                planName = firstPaidSubscription.plan.name;
+                totalEarnedHistorically += commissionAmount;
+            }
+
+            detailedReferrals.push({
                 id: ref.id,
                 createdAt: ref.createdAt,
                 referred: { name: ref.name },
                 email: ref.email,
-                plan: { name: ref.accessLevel.replace(/_/g, ' ') },
-                commissionAmount: commission
-            };
+                plan: { name: planName },
+                commissionAmount: commissionAmount
+            });
         });
+
         return {
             ...affiliate.toJSON(),
             totalReferrals: myReferrals.length,
-            totalEarned: totalEarned,
-            referrals: ledger,
+            totalEarned: totalEarnedHistorically, // <<< CÁLCULO CORRIGIDO
+            referrals: detailedReferrals.sort((a, b) => b.commissionAmount - a.commissionAmount), // Ordena por quem deu mais comissão
         };
     });
+    
     return dashboardData;
   } catch (error) {
     logger.error(`[AdminService] Erro ao gerar dashboard de afiliados: ${error.message}`, error);
     throw new Error('Falha ao gerar dashboard de afiliados.');
   }
 }
+
 
 async function updatePlan(planId, updateData) {
   try {
@@ -434,6 +455,11 @@ async function updatePlan(planId, updateData) {
   }
 }
 
+/**
+ * <<< FUNÇÃO MODIFICADA >>>
+ * Zera o saldo de comissão E o histórico de indicados de um cliente afiliado.
+ * @param {string|number} clientId - O ID do cliente a ser resetado.
+ */
 async function clearClientBalance(clientId) {
     const t = await sequelize.transaction();
     try {
@@ -443,39 +469,38 @@ async function clearClientBalance(clientId) {
         }
 
         const oldBalance = parseFloat(client.balance);
+        const oldReferralCount = await Client.count({ where: { referredByClientId: clientId }, transaction: t });
 
-        if (oldBalance <= 0) {
-            await t.commit(); // Finaliza a transação mesmo sem alterações
-            logger.info(`[AdminService] Saldo do cliente ID ${clientId} já é zero. Nenhuma ação necessária.`);
-            return; // Retorna sem erro
-        }
-        
-        // Zera o saldo no banco de dados
+        // 1. AÇÃO DE RESET DO HISTÓRICO:
+        // Encontra todos os clientes que foram indicados por este afiliado e desvincula-os.
+        await Client.update(
+            { referredByClientId: null },
+            { where: { referredByClientId: clientId }, transaction: t }
+        );
+
+        // 2. AÇÃO DE ZERAR O SALDO:
         await client.update({ balance: 0.00 }, { transaction: t });
-        
-        // <<< LOG APRIMORADO PARA AUDITORIA >>>
-        logger.info(`[AdminService] AÇÃO DE PAGAMENTO/SAQUE: Saldo do cliente ID ${clientId} zerado de R$${oldBalance.toFixed(2)} para R$0.00 por um administrador.`);
-        // Se tivéssemos um modelo 'PayoutLedger', faríamos o registro aqui.
         
         await t.commit();
         
-        // --- ENVIO DE NOTIFICAÇÃO (OPCIONAL, MAS BOA PRÁTICA) ---
+        logger.info(`[AdminService] AÇÃO DE RESET DE AFILIADO: Saldo (de R$${oldBalance.toFixed(2)}) e Histórico de ${oldReferralCount} indicado(s) para o cliente ID ${clientId} foram ZERADOS por um administrador.`);
+        
         if (client.phone) {
              const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
-             const message = `💰 *Seu Saque/Pagamento de Comissão foi processado!* 💰\n\n` +
-                             `Olá, ${clientName}! Informamos que um pagamento de comissão no valor de *R$${oldBalance.toFixed(2).replace('.', ',')}* foi processado pelo nosso time e seu saldo foi zerado.\n\n` +
-                             `O prazo de pagamento (PIX) é de até 48 horas úteis. Seu novo saldo atual é R$0,00.\n\n` +
-                             `Continue indicando e ganhando! 🚀`;
-            await sendWhatsappMessage(client.phone, message).catch(err => logger.error(`[AdminService] Falha ao notificar saque para ${client.phone}: ${err.message}`));
+             const message = `💰 *Seu ciclo de afiliação foi finalizado!* 💰\n\n` +
+                             `Olá, ${clientName}! Informamos que o pagamento de comissão no valor de *R$${oldBalance.toFixed(2).replace('.', ',')}* foi processado.\n\n` +
+                             `Seu painel de afiliados foi zerado para o início de um novo ciclo. Seu saldo atual é R$0,00 e seu contador de indicados foi reiniciado.\n\n` +
+                             `Continue indicando e ganhando no próximo período! 🚀`;
+            await sendWhatsappMessage(client.phone, message).catch(err => logger.error(`[AdminService] Falha ao notificar reset de afiliado para ${client.phone}: ${err.message}`));
         }
-        // --- FIM DO ENVIO DE NOTIFICAÇÃO ---
 
     } catch (error) {
         await t.rollback();
-        logger.error(`[AdminService] Erro ao zerar saldo do cliente ID ${clientId}: ${error.message}`, error);
+        logger.error(`[AdminService] Erro ao zerar saldo e histórico do cliente ID ${clientId}: ${error.message}`, error);
         throw error;
     }
 }
+
 
 async function deleteClientByUser(clientId) {
     logger.warn(`[ADMIN SERVICE] Início da solicitação de EXCLUSÃO PERMANENTE para o Cliente ID: ${clientId}.`);
@@ -504,13 +529,6 @@ async function deleteClientByUser(clientId) {
  * @param {object} clientData - Dados do novo cliente.
  * @returns {Promise<object>} O novo cliente criado.
  */
-/**
- * <<< VERSÃO FINAL E COMPLETA >>>
- * Cria um novo cliente, envia mensagem de boas-vindas, inicia o onboarding,
- * e envia uma mensagem separada com as credenciais para ser fixada.
- * @param {object} clientData - Dados do novo cliente.
- * @returns {Promise<object>} O novo cliente criado.
- */
 async function createClientAsAdmin(clientData) {
     const { name, email, phone, password, planId, customMessage } = clientData;
     if (!name || !phone || !password || !planId) {
@@ -535,14 +553,13 @@ async function createClientAsAdmin(clientData) {
         
         const newAffiliateCode = await clientAuthService.generateUniqueAffiliateCode(name);
         
-        // <<< CORREÇÃO DEFINITIVA: CRIPTOGRAFIA MANUAL >>>
         const hashedPassword = await bcrypt.hash(password, 10);
 
         const newClient = await Client.create({
             name,
             email: lowerEmail,
             phone: normalizedPhone,
-            passwordHash: hashedPassword, // Salva a senha já criptografada
+            passwordHash: hashedPassword,
             status: 'Aguardando Pagamento',
             affiliateCode: newAffiliateCode,
         }, { transaction: t });
@@ -559,7 +576,6 @@ async function createClientAsAdmin(clientData) {
         await t.commit();
         logger.info(`[AdminService] Novo cliente ID ${newClient.id} (Afiliado: ${newAffiliateCode}) criado pelo admin com plano ID ${planId}.`);
         
-        // ... (resto da função com o envio de mensagens permanece o mesmo)
         if (newClient.phone) {
             const welcomeMessage = customMessage && customMessage.trim() !== '' 
                 ? customMessage 
