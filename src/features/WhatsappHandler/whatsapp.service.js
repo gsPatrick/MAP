@@ -8,7 +8,7 @@ const financialCategoryService = require('../FinancialCategory/financialCategory
 const financialService = require('../Financial/financial.service');
 const creditCardService = require('../CreditCardManagement/creditCard.service');
 const businessClientService = require('../BusinessClient/BusinessClient.service');
-const scheduleHandler = require('./schedule.handler'); // <<< NOVO IMPORT
+const scheduleHandler = require('./schedule.handler');
 
 // --- Imports dos Novos Especialistas e Utilitários ---
 const onboardingHandler = require('./onboarding.handler');
@@ -669,10 +669,32 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 // (código existente para ações encadeadas)
             }
 
-            let aiMessageIntro = aiResponse.overall_summary_suggestion || `Ok, ${state.clientName}!`;
-            if (state.pendingChainedAction === null && aiResponse.detected_actions[0]?.action === 'CREATE_CREDIT_CARD') {
-                 aiMessageIntro = `Cartão na mão e gasto anotado! ✅ Seu novo cartão foi criado e o gasto original já foi registrado nele. Simples assim!`;
+            let aiMessageIntro = aiResponse.overall_summary_suggestion || "";
+
+            // ==================================================================================
+            // === INÍCIO DA CORREÇÃO: LÓGICA DE FALLBACK PARA MENSAGEM DE SUCESSO COMPLETA ===
+            // ==================================================================================
+            // Se a sugestão da IA for muito curta ou genérica, criamos uma introdução padrão.
+            if (aiMessageIntro.trim().length < 25 || aiMessageIntro.toLowerCase().startsWith(`ok, ${state.clientName.toLowerCase()}`)) {
+                const actionName = aiResponse.detected_actions[0]?.action || 'Ação';
+                // Mapeia nomes de ação para frases mais amigáveis
+                const friendlyActionNames = {
+                    'SCHEDULE_APPOINTMENT': 'Seu compromisso foi agendado',
+                    'CREATE_FINANCIAL_TRANSACTION': 'Sua transação foi registrada',
+                    'CREATE_RECURRING_RULE': 'Sua nova regra de recorrência foi criada',
+                    'CREATE_PARCELLED_ACCOUNT': 'Sua compra parcelada foi registrada',
+                    'CREATE_PRODUCT': 'Seu produto foi cadastrado',
+                    'CREATE_CREDIT_CARD': 'Seu novo cartão foi criado',
+                    'UPDATE_FINANCIAL_TRANSACTION': 'Sua transação foi atualizada',
+                    'UPDATE_APPOINTMENT': 'Seu compromisso foi atualizado',
+                };
+                const friendlyName = friendlyActionNames[actionName] || 'Sua solicitação foi processada';
+                
+                aiMessageIntro = `Prontinho, ${state.clientName}! ✅ ${friendlyName} com sucesso. Dá uma olhada no resumo:`;
             }
+            // ================================================================================
+            // === FIM DA CORREÇÃO: LÓGICA DE FALLBACK PARA MENSAGEM DE SUCESSO COMPLETA ===
+            // ================================================================================
 
             let structuredDataBody = multipleActionBodiesList.join("\n\n---\n\n");
             finalMessageToSend = aiMessageIntro.trim();
@@ -756,6 +778,6 @@ module.exports = {
     processIncomingMessage, 
     processIncomingAudioMessage, 
     formatAppointmentDataStructure: formatter.formatAppointmentDataStructure,
-    initializeOrUpdateState,  // <<< ADICIONE ESTA LINHA
-    conversationState         // <<< ADICIONE ESTA LINHA
+    initializeOrUpdateState,
+    conversationState
 };
