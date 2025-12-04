@@ -8,8 +8,8 @@ const googleCalendarService = require('../GoogleCalendar/googleCalendarService')
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 const { sendWhatsappMessage } = require('../../services/whatsappService');
 const bcrypt = require('bcryptjs');
+const crypto = require('node:crypto');
 
-const crypto = require('node:crypto'); // Garanta que este import está no topo
 // Mapa em memória para armazenar códigos de ativação temporários
 const activationCodes = new Map();
 
@@ -17,58 +17,56 @@ const activationCodes = new Map();
 // === INÍCIO: Lógica de criação de categorias padrão (centralizada aqui) ===
 // ==========================================================================================
 const defaultPersonalCategoryNames = [
-    'Alimentação', 'Supermercado', 'Restaurantes', 'Moradia', 'Aluguel', 'Contas' , 'Conta de Água', 'Conta de Luz', 'Internet', 'Transporte', 'Combustível',
-    'Uber/99', 'Manutenção Veicular', 'Saúde', 'Farmácia', 'Plano de Saúde', 'Consultas', 'Lazer', 'Viagens',
-    'Assinaturas/Streaming', 'Cuidados Pessoais', 'Compras', 'Vestuário', 'Educação',
-    'Dívidas/Empréstimos', 'Pagamento de Fatura', 'Receitas', 'Salário', 'Renda Extra', 'Investimentos'
+  'Alimentação', 'Supermercado', 'Restaurantes', 'Moradia', 'Aluguel', 'Contas', 'Conta de Água', 'Conta de Luz', 'Internet', 'Transporte', 'Combustível',
+  'Uber/99', 'Manutenção Veicular', 'Saúde', 'Farmácia', 'Plano de Saúde', 'Consultas', 'Lazer', 'Viagens',
+  'Assinaturas/Streaming', 'Cuidados Pessoais', 'Compras', 'Vestuário', 'Educação',
+  'Dívidas/Empréstimos', 'Pagamento de Fatura', 'Receitas', 'Salário', 'Renda Extra', 'Investimentos'
 ];
 
-// ADICIONE ESTA FUNÇÃO AUXILIAR NO TOPO DO ARQUIVO
 /**
  * Gera um código de afiliado único e aleatório para um novo cliente.
  * @param {string} clientName - O nome do cliente para basear o código.
  * @returns {Promise<string>} O código de afiliado único gerado.
  */
 async function generateUniqueAffiliateCode(clientName) {
-    let newCode;
-    let isUnique = false;
-    while (!isUnique) {
-        const namePart = clientName 
-            ? clientName.replace(/[^a-zA-Z]/g, '').substring(0, 4).toUpperCase()
-            : 'USER';
-        const randomPart = crypto.randomBytes(3).toString('hex').toUpperCase();
-        newCode = `MAP${namePart}${randomPart}`.substring(0, 12);
+  let newCode;
+  let isUnique = false;
+  while (!isUnique) {
+    const namePart = clientName
+      ? clientName.replace(/[^a-zA-Z]/g, '').substring(0, 4).toUpperCase()
+      : 'USER';
+    const randomPart = crypto.randomBytes(3).toString('hex').toUpperCase();
+    newCode = `MAP${namePart}${randomPart}`.substring(0, 12);
 
-        const existingCode = await Client.findOne({ where: { affiliateCode: newCode } });
-        if (!existingCode) {
-            isUnique = true;
-        }
+    const existingCode = await Client.findOne({ where: { affiliateCode: newCode } });
+    if (!existingCode) {
+      isUnique = true;
     }
-    logger.info(`Código de afiliado único '${newCode}' gerado para ${clientName}.`);
-    return newCode;
+  }
+  logger.info(`Código de afiliado único '${newCode}' gerado para ${clientName}.`);
+  return newCode;
 }
 
 async function createDefaultCategoriesForAccount(financialAccountId, accountType, transaction) {
-    logger.info(`Iniciando criação de categorias padrão para conta ID ${financialAccountId}, tipo ${accountType}.`);
-    
-    let categoryNames = [];
-    if (accountType === 'PF') {
-        categoryNames = defaultPersonalCategoryNames;
-    }
-    // Adicionar aqui a lógica para 'PJ'/'MEI' se necessário no futuro
-    
-    if (categoryNames.length === 0) {
-        logger.warn(`Tipo de conta '${accountType}' não tem categorias padrão definidas.`);
-        return;
-    }
+  logger.info(`Iniciando criação de categorias padrão para conta ID ${financialAccountId}, tipo ${accountType}.`);
 
-    const categoriesToCreate = categoryNames.map(name => ({
-        financialAccountId,
-        name,
-    }));
+  let categoryNames = [];
+  if (accountType === 'PF') {
+    categoryNames = defaultPersonalCategoryNames;
+  }
 
-    await FinancialCategory.bulkCreate(categoriesToCreate, { transaction });
-    logger.info(`${categoriesToCreate.length} categorias padrão do tipo '${accountType}' criadas para a conta ID ${financialAccountId}.`);
+  if (categoryNames.length === 0) {
+    logger.warn(`Tipo de conta '${accountType}' não tem categorias padrão definidas.`);
+    return;
+  }
+
+  const categoriesToCreate = categoryNames.map(name => ({
+    financialAccountId,
+    name,
+  }));
+
+  await FinancialCategory.bulkCreate(categoriesToCreate, { transaction });
+  logger.info(`${categoriesToCreate.length} categorias padrão do tipo '${accountType}' criadas para a conta ID ${financialAccountId}.`);
 }
 
 /**
@@ -77,14 +75,14 @@ async function createDefaultCategoriesForAccount(financialAccountId, accountType
  * @returns {string} O número formatado para envio.
  */
 function normalizePhoneForDelivery(phone) {
-    let cleanNumber = phone.replace(/\D/g, '');
-    if (cleanNumber.startsWith('55') && (cleanNumber.length === 12 || cleanNumber.length === 13)) {
-        return cleanNumber;
-    }
-    if (cleanNumber.length === 10 || cleanNumber.length === 11) {
-        return `55${cleanNumber}`;
-    }
+  let cleanNumber = phone.replace(/\D/g, '');
+  if (cleanNumber.startsWith('55') && (cleanNumber.length === 12 || cleanNumber.length === 13)) {
     return cleanNumber;
+  }
+  if (cleanNumber.length === 10 || cleanNumber.length === 11) {
+    return `55${cleanNumber}`;
+  }
+  return cleanNumber;
 }
 // ========================================================================================
 // === FIM: Lógica de criação de categorias padrão ===
@@ -92,99 +90,95 @@ function normalizePhoneForDelivery(phone) {
 
 
 /**
- * <<< NOVO MÉTODO PARA CADASTRO COMPLETO >>>
  * Registra um novo cliente, cria sua conta PF e categorias padrão.
  * @param {object} registerData - Dados do formulário de cadastro.
  * @returns {Promise<object>} Objeto com cliente, token e contas financeiras.
  */
 async function registerClient(registerData) {
-    const t = await sequelize.transaction();
-    try {
-        const { name, email, phone, password, affiliateCode } = registerData;
+  const t = await sequelize.transaction();
+  try {
+    const { name, email, phone, password, affiliateCode } = registerData;
 
-        if (!name || !email || !phone || !password) {
-            throw { statusCode: 400, message: 'Nome, email, telefone e senha são obrigatórios.' };
-        }
-        if (password.trim().length < 6) {
-            throw { statusCode: 400, message: 'A senha deve ter no mínimo 6 caracteres.' };
-        }
-
-        const normalizedPhone = normalizePhoneNumberToCanonical(phone);
-        const lowerEmail = email.toLowerCase().trim();
-
-        const existingClient = await Client.findOne({
-            where: { [Op.or]: [{ phone: normalizedPhone }, { email: lowerEmail }] },
-            transaction: t,
-        });
-
-        if (existingClient) {
-            const conflictField = existingClient.phone === normalizedPhone ? 'Telefone' : 'E-mail';
-            throw { statusCode: 409, message: `${conflictField} já cadastrado.` };
-        }
-        
-        const newAffiliateCode = await generateUniqueAffiliateCode(name);
-
-        // <<< CORREÇÃO DEFINITIVA: CRIPTOGRAFIA MANUAL >>>
-        const hashedPassword = await bcrypt.hash(password, 10);
-
-        const newClientPayload = {
-            name,
-            email: lowerEmail,
-            phone: normalizedPhone,
-            passwordHash: hashedPassword, // Salva a senha já criptografada
-            status: 'Aguardando Pagamento',
-            affiliateCode: newAffiliateCode,
-        };
-        
-        if (affiliateCode) {
-            const referrer = await Client.findOne({ 
-                where: { affiliateCode: affiliateCode.toUpperCase() }, 
-                transaction: t 
-            });
-            if (referrer) {
-                newClientPayload.referredByClientId = referrer.id;
-            } else {
-                logger.warn(`[Register] Código de afiliado "${affiliateCode}" não encontrado.`);
-            }
-        }
-
-        const newClient = await Client.create(newClientPayload, { transaction: t });
-
-        // ... (resto da função permanece igual)
-        const pfAccount = await FinancialAccount.create({
-            clientId: newClient.id,
-            accountName: 'Pessoal',
-            accountType: 'PF',
-            isDefault: true,
-        }, { transaction: t });
-
-        await createDefaultCategoriesForAccount(pfAccount.id, 'PF', t);
-
-        await t.commit();
-        logger.info(`Novo Cliente registrado com sucesso: ID ${newClient.id}, Email: ${newClient.email}`);
-        
-        const tokenPayload = { id: newClient.id, phone: newClient.phone, email: newClient.email };
-        const token = generateToken(tokenPayload, 'client');
-        
-        const clientResponse = newClient.toJSON();
-        delete clientResponse.passwordHash;
-
-        return {
-            client: clientResponse,
-            token,
-            financialAccounts: [pfAccount.toJSON()],
-        };
-
-    } catch (error) {
-        await t.rollback();
-        logger.error(`Erro ao registrar novo cliente: ${error.message}`, { error, registerData });
-        if (!error.statusCode) error.statusCode = 500;
-        throw error;
+    if (!name || !email || !phone || !password) {
+      throw { statusCode: 400, message: 'Nome, email, telefone e senha são obrigatórios.' };
     }
+    if (password.trim().length < 6) {
+      throw { statusCode: 400, message: 'A senha deve ter no mínimo 6 caracteres.' };
+    }
+
+    const normalizedPhone = normalizePhoneNumberToCanonical(phone);
+    const lowerEmail = email.toLowerCase().trim();
+
+    const existingClient = await Client.findOne({
+      where: { [Op.or]: [{ phone: normalizedPhone }, { email: lowerEmail }] },
+      transaction: t,
+    });
+
+    if (existingClient) {
+      const conflictField = existingClient.phone === normalizedPhone ? 'Telefone' : 'E-mail';
+      throw { statusCode: 409, message: `${conflictField} já cadastrado.` };
+    }
+
+    const newAffiliateCode = await generateUniqueAffiliateCode(name);
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newClientPayload = {
+      name,
+      email: lowerEmail,
+      phone: normalizedPhone,
+      passwordHash: hashedPassword,
+      status: 'Aguardando Pagamento',
+      affiliateCode: newAffiliateCode,
+    };
+
+    if (affiliateCode) {
+      const referrer = await Client.findOne({
+        where: { affiliateCode: affiliateCode.toUpperCase() },
+        transaction: t
+      });
+      if (referrer) {
+        newClientPayload.referredByClientId = referrer.id;
+      } else {
+        logger.warn(`[Register] Código de afiliado "${affiliateCode}" não encontrado.`);
+      }
+    }
+
+    const newClient = await Client.create(newClientPayload, { transaction: t });
+
+    const pfAccount = await FinancialAccount.create({
+      clientId: newClient.id,
+      accountName: 'Pessoal',
+      accountType: 'PF',
+      isDefault: true,
+    }, { transaction: t });
+
+    await createDefaultCategoriesForAccount(pfAccount.id, 'PF', t);
+
+    await t.commit();
+    logger.info(`Novo Cliente registrado com sucesso: ID ${newClient.id}, Email: ${newClient.email}`);
+
+    const tokenPayload = { id: newClient.id, phone: newClient.phone, email: newClient.email };
+    const token = generateToken(tokenPayload, 'client');
+
+    const clientResponse = newClient.toJSON();
+    delete clientResponse.passwordHash;
+
+    return {
+      client: clientResponse,
+      token,
+      financialAccounts: [pfAccount.toJSON()],
+    };
+
+  } catch (error) {
+    await t.rollback();
+    logger.error(`Erro ao registrar novo cliente: ${error.message}`, { error, registerData });
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
 }
 
 /**
- * <<< VERSÃO FINAL E CORRIGIDA DA FUNÇÃO loginClient >>>
  * Realiza o login do cliente, verificando credenciais e status da assinatura.
  * @param {string} identifier - Email ou telefone do cliente.
  * @param {string} password - Senha do cliente.
@@ -198,10 +192,10 @@ async function loginClient(identifier, password) {
 
     const trimmedPassword = password.trim();
     const isEmailLogin = identifier.includes('@');
-    const loginAttemptIdentifier = isEmailLogin 
-        ? identifier.toLowerCase().trim() 
-        : normalizePhoneNumberToCanonical(identifier);
-    
+    const loginAttemptIdentifier = isEmailLogin
+      ? identifier.toLowerCase().trim()
+      : normalizePhoneNumberToCanonical(identifier);
+
     const client = await Client.scope('withPassword').findOne({
       where: isEmailLogin ? { email: loginAttemptIdentifier } : { phone: loginAttemptIdentifier }
     });
@@ -221,19 +215,19 @@ async function loginClient(identifier, password) {
 
     let subscriptionStatus = 'active';
     if (client.accessLevel && client.accessLevel !== 'gratuito') {
-        if (client.accessLevel.startsWith('vitalicio_')) {
-            subscriptionStatus = 'active';
-        } else if (client.accessExpiresAt) {
-            const expiryDate = new Date(client.accessExpiresAt + 'T23:59:59Z');
-            const today = new Date();
-            if (expiryDate < today) {
-                subscriptionStatus = 'expired';
-            }
-        } else {
-             subscriptionStatus = 'expired';
+      if (client.accessLevel.startsWith('vitalicio_')) {
+        subscriptionStatus = 'active';
+      } else if (client.accessExpiresAt) {
+        const expiryDate = new Date(client.accessExpiresAt + 'T23:59:59Z');
+        const today = new Date();
+        if (expiryDate < today) {
+          subscriptionStatus = 'expired';
         }
+      } else {
+        subscriptionStatus = 'expired';
+      }
     } else {
-        subscriptionStatus = 'free_tier';
+      subscriptionStatus = 'free_tier';
     }
 
     const tokenPayload = { id: client.id, phone: client.phone, email: client.email };
@@ -242,19 +236,33 @@ async function loginClient(identifier, password) {
     delete clientResponse.passwordHash;
 
     const financialAccounts = await FinancialAccount.findAll({
-        where: { clientId: client.id, isActive: true },
-        attributes: ['id', 'accountName', 'accountType', 'isDefault'],
-        order: [['isDefault', 'DESC'], ['accountName', 'ASC']]
+      where: { clientId: client.id, isActive: true },
+      attributes: ['id', 'accountName', 'accountType', 'isDefault'],
+      order: [['isDefault', 'DESC'], ['accountName', 'ASC']]
     });
 
     logger.info(`Login bem-sucedido para Cliente: ${client.phone || client.email} (Status Assinatura: ${subscriptionStatus})`);
-    
-    return {
-        client: clientResponse,
-        token,
-        financialAccounts: financialAccounts.map(acc => acc.toJSON()),
-        subscriptionStatus: subscriptionStatus
+
+    const responsePayload = {
+      client: clientResponse,
+      token,
+      financialAccounts: financialAccounts.map(acc => acc.toJSON()),
+      subscriptionStatus: subscriptionStatus,
+      latestPendingPlanId: null
     };
+
+    if (client.status === 'Aguardando Pagamento' || subscriptionStatus === 'expired' || subscriptionStatus === 'free_tier') {
+      const latestPendingSub = await Subscription.findOne({
+        where: { clientId: client.id, status: 'Pendente' },
+        order: [['createdAt', 'DESC']],
+        attributes: ['planId']
+      });
+      if (latestPendingSub) {
+        responsePayload.latestPendingPlanId = latestPendingSub.planId;
+      }
+    }
+
+    return responsePayload;
 
   } catch (error) {
     logger.error(`Erro no login do Cliente (${identifier}): ${error.message}`, { error });
@@ -263,127 +271,70 @@ async function loginClient(identifier, password) {
   }
 }
 
-async function setClientCredentials(phone, password, name = null, email = null) {
-  const t = await sequelize.transaction();
+async function getClientProfile(loggedInClientData, sharedAccessContext = null) {
   try {
-    if (!phone || !password) {
-      await t.rollback();
-      const error = new Error('Telefone e nova senha são obrigatórios.');
-      error.statusCode = 400; error.status = 'fail'; throw error;
-    }
+    let clientToFetchIdForAccountsAndSubscription = loggedInClientData.id;
+    let ownerClientDataForPlan = null;
 
-    const trimmedPassword = password.trim();
-
-    if (trimmedPassword.length < 6) {
-      await t.rollback();
-      const error = new Error('A senha deve ter pelo menos 6 caracteres.');
-      error.statusCode = 400; error.status = 'fail'; throw error;
-    }
-    const normalizedPhone = normalizePhoneNumberToCanonical(phone);
-    let client = await Client.findOne({ where: { phone: normalizedPhone }, transaction: t });
-    if (!client) {
-      await t.rollback();
-      const error = new Error('Cliente não encontrado com este número de telefone.');
-      error.statusCode = 404; error.status = 'fail'; throw error;
-    }
-
-    const updateData = {
-        passwordHash: trimmedPassword
+    let clientDataForFinalResponse = {
+      id: loggedInClientData.id,
+      name: loggedInClientData.name,
+      email: loggedInClientData.email,
+      phone: loggedInClientData.phone,
     };
 
-    if (email) {
-      const lowerEmail = email.toLowerCase().trim();
-      const existingEmailClient = await Client.findOne({
-        where: { email: lowerEmail, id: { [Op.ne]: client.id } },
-        transaction: t
-      });
-      if (existingEmailClient) {
-        await t.rollback();
-        const error = new Error('Este endereço de email já está em uso por outro cliente.');
-        error.statusCode = 409; error.status = 'fail'; throw error;
+    if (sharedAccessContext) {
+      clientToFetchIdForAccountsAndSubscription = sharedAccessContext.ownerClientId;
+      const ownerClientInstance = await Client.findByPk(clientToFetchIdForAccountsAndSubscription);
+      if (!ownerClientInstance) {
+        const error = new Error('Dono da conta compartilhada não encontrado ao buscar perfil.');
+        error.statusCode = 404; error.status = 'fail'; throw error;
       }
-      updateData.email = lowerEmail;
+      ownerClientDataForPlan = ownerClientInstance.toJSON();
+      clientDataForFinalResponse.effectiveAccessLevel = ownerClientDataForPlan.accessLevel;
+      clientDataForFinalResponse.effectiveAccessExpiresAt = ownerClientDataForPlan.accessExpiresAt;
+      clientDataForFinalResponse.ownerClientIdForContext = ownerClientDataForPlan.id;
+    } else {
+      const selfClientInstance = await Client.findByPk(loggedInClientData.id);
+      if (!selfClientInstance) {
+        const error = new Error('Cliente logado não encontrado ao buscar próprio perfil.');
+        error.statusCode = 404; error.status = 'fail'; throw error;
+      }
+      const selfClientData = selfClientInstance.toJSON();
+      clientDataForFinalResponse.status = selfClientData.status;
+      clientDataForFinalResponse.accessLevel = selfClientData.accessLevel;
+      clientDataForFinalResponse.accessExpiresAt = selfClientData.accessExpiresAt;
     }
-    if (name && name.trim() !== "" && name !== client.name) {
-        updateData.name = name.trim();
+
+    const allOwnerOrOwnAccounts = await FinancialAccount.findAll({
+      where: { clientId: clientToFetchIdForAccountsAndSubscription, isActive: true },
+      attributes: ['id', 'accountName', 'accountType', 'isDefault'],
+      order: [['isDefault', 'DESC'], ['accountName', 'ASC']]
+    });
+
+    let accessibleFinancialAccounts = allOwnerOrOwnAccounts;
+    if (sharedAccessContext) {
+      accessibleFinancialAccounts = allOwnerOrOwnAccounts.filter(acc => {
+        if (acc.accountType === 'PF') return sharedAccessContext.canAccessPersonalProfile;
+        if (acc.accountType === 'PJ' || acc.accountType === 'MEI') return sharedAccessContext.canAccessBusinessProfileId === acc.id;
+        return false;
+      });
     }
-    await client.update(updateData, { transaction: t });
-    await t.commit();
-    logger.info(`Credenciais atualizadas para o Cliente ${client.phone}.`);
-    const reloadedClient = await Client.findByPk(client.id);
-    return reloadedClient.toJSON();
+
+    const activeDbSubscription = await subscriptionService.getActiveSubscription(clientToFetchIdForAccountsAndSubscription);
+
+    return {
+      client: clientDataForFinalResponse,
+      financialAccounts: accessibleFinancialAccounts.map(acc => acc.toJSON()),
+      subscription: activeDbSubscription,
+      sharedAccessContext: sharedAccessContext
+    };
+
   } catch (error) {
-    if (t && !t.finished && t.finished !== 'rollback' && t.finished !== 'commit') await t.rollback();
-    logger.error(`Erro ao definir credenciais para cliente ${phone}: ${error.message}`, { error });
-    if (!error.statusCode) error.statusCode = 500;
-    throw error;
+    const baseClientId = loggedInClientData ? loggedInClientData.id : 'N/A';
+    logger.error(`Erro ao buscar perfil para cliente logado ID ${baseClientId} (contexto compartilhado: ${!!sharedAccessContext}): ${error.message}`, { error });
+    throw new Error(`Erro ao buscar perfil do cliente.`);
   }
-}
-
-async function getClientProfile(loggedInClientData, sharedAccessContext = null) {
-    try {
-        let clientToFetchIdForAccountsAndSubscription = loggedInClientData.id;
-        let ownerClientDataForPlan = null;
-
-        let clientDataForFinalResponse = {
-            id: loggedInClientData.id,
-            name: loggedInClientData.name,
-            email: loggedInClientData.email,
-            phone: loggedInClientData.phone,
-        };
-
-        if (sharedAccessContext) {
-            clientToFetchIdForAccountsAndSubscription = sharedAccessContext.ownerClientId;
-            const ownerClientInstance = await Client.findByPk(clientToFetchIdForAccountsAndSubscription);
-            if (!ownerClientInstance) {
-                 const error = new Error('Dono da conta compartilhada não encontrado ao buscar perfil.');
-                 error.statusCode = 404; error.status = 'fail'; throw error;
-            }
-            ownerClientDataForPlan = ownerClientInstance.toJSON();
-            clientDataForFinalResponse.effectiveAccessLevel = ownerClientDataForPlan.accessLevel;
-            clientDataForFinalResponse.effectiveAccessExpiresAt = ownerClientDataForPlan.accessExpiresAt;
-            clientDataForFinalResponse.ownerClientIdForContext = ownerClientDataForPlan.id;
-        } else {
-            const selfClientInstance = await Client.findByPk(loggedInClientData.id);
-             if (!selfClientInstance) {
-                 const error = new Error('Cliente logado não encontrado ao buscar próprio perfil.');
-                 error.statusCode = 404; error.status = 'fail'; throw error;
-            }
-            const selfClientData = selfClientInstance.toJSON();
-            clientDataForFinalResponse.status = selfClientData.status;
-            clientDataForFinalResponse.accessLevel = selfClientData.accessLevel;
-            clientDataForFinalResponse.accessExpiresAt = selfClientData.accessExpiresAt;
-        }
-
-        const allOwnerOrOwnAccounts = await FinancialAccount.findAll({
-            where: { clientId: clientToFetchIdForAccountsAndSubscription, isActive: true },
-            attributes: ['id', 'accountName', 'accountType', 'isDefault'],
-            order: [['isDefault', 'DESC'], ['accountName', 'ASC']]
-        });
-
-        let accessibleFinancialAccounts = allOwnerOrOwnAccounts;
-        if (sharedAccessContext) {
-            accessibleFinancialAccounts = allOwnerOrOwnAccounts.filter(acc => {
-                if (acc.accountType === 'PF') return sharedAccessContext.canAccessPersonalProfile;
-                if (acc.accountType === 'PJ' || acc.accountType === 'MEI') return sharedAccessContext.canAccessBusinessProfileId === acc.id;
-                return false;
-            });
-        }
-        
-        const activeDbSubscription = await subscriptionService.getActiveSubscription(clientToFetchIdForAccountsAndSubscription);
-
-        return {
-            client: clientDataForFinalResponse,
-            financialAccounts: accessibleFinancialAccounts.map(acc => acc.toJSON()),
-            subscription: activeDbSubscription,
-            sharedAccessContext: sharedAccessContext
-        };
-
-    } catch (error) {
-        const baseClientId = loggedInClientData ? loggedInClientData.id : 'N/A';
-        logger.error(`Erro ao buscar perfil para cliente logado ID ${baseClientId} (contexto compartilhado: ${!!sharedAccessContext}): ${error.message}`, { error });
-        throw new Error(`Erro ao buscar perfil do cliente.`);
-    }
 }
 
 async function updateClientProfile(clientId, updateData) {
@@ -421,9 +372,9 @@ async function updateClientProfile(clientId, updateData) {
     if (email !== undefined) {
       const lowerEmail = email.toLowerCase().trim();
       if (lowerEmail !== client.email) {
-        const existingEmail = await Client.findOne({ 
-            where: { email: lowerEmail, id: { [Op.ne]: clientId } }, 
-            transaction: t 
+        const existingEmail = await Client.findOne({
+          where: { email: lowerEmail, id: { [Op.ne]: clientId } },
+          transaction: t
         });
         if (existingEmail) {
           await t.rollback();
@@ -435,7 +386,7 @@ async function updateClientProfile(clientId, updateData) {
     }
 
     if (Object.keys(dataToUpdate).length === 0) {
-      await t.commit(); 
+      await t.commit();
       return { client: client.toJSON(), message: 'Nenhuma informação para atualizar.' };
     }
 
@@ -471,17 +422,17 @@ async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
     if (colorIdPJ !== undefined) updateData.googleCalendarColorIdPJ = colorIdPJ ? String(colorIdPJ) : null;
 
     if (Object.keys(updateData).length === 0) {
-        await t.commit();
-        return client.toJSON();
+      await t.commit();
+      return client.toJSON();
     }
 
     await client.update(updateData, { transaction: t });
     await t.commit();
-    
+
     if ((updateData.googleCalendarColorIdPF || updateData.googleCalendarColorIdPJ) && client.isGoogleCalendarSynced) {
-        googleCalendarService.resyncEventColorsForClient(clientId, updateData.googleCalendarColorIdPF, updateData.googleCalendarColorIdPJ);
+      googleCalendarService.resyncEventColorsForClient(clientId, updateData.googleCalendarColorIdPF, updateData.googleCalendarColorIdPJ);
     }
-    
+
     const reloadedClient = await Client.findByPk(clientId);
     return reloadedClient.toJSON();
 
@@ -494,92 +445,127 @@ async function updateClientCalendarPreferences(clientId, colorIdPF, colorIdPJ) {
 }
 
 async function sendActivationCode(phone) {
-    const deliverablePhone = normalizePhoneForDelivery(phone);
-    const canonicalPhone = normalizePhoneNumberToCanonical(phone);
+  const deliverablePhone = normalizePhoneForDelivery(phone);
+  const canonicalPhone = normalizePhoneNumberToCanonical(phone);
 
-    if (!canonicalPhone) {
-        throw { statusCode: 400, message: 'Número de telefone inválido.' };
-    }
+  if (!canonicalPhone) {
+    throw { statusCode: 400, message: 'Número de telefone inválido.' };
+  }
 
-    const client = await Client.findOne({ where: { phone: canonicalPhone } });
-    if (!client) {
-        throw { statusCode: 404, message: 'Nenhuma conta encontrada com este número de WhatsApp. Por favor, cadastre-se primeiro.' };
-    }
-    if (client.passwordHash) {
-        throw { statusCode: 409, message: 'Sua conta já está ativada. Se esqueceu sua senha, use a opção "Esqueci minha senha".' };
-    }
+  const client = await Client.findOne({ where: { phone: canonicalPhone } });
+  if (!client) {
+    throw { statusCode: 404, message: 'Nenhuma conta encontrada com este número de WhatsApp. Por favor, cadastre-se primeiro.' };
+  }
+  if (client.passwordHash) {
+    throw { statusCode: 409, message: 'Sua conta já está ativada. Se esqueceu sua senha, use a opção "Esqueci minha senha".' };
+  }
 
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiration = Date.now() + 10 * 60 * 1000;
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiration = Date.now() + 10 * 60 * 1000;
 
-    activationCodes.set(canonicalPhone, { code, expiration });
+  activationCodes.set(canonicalPhone, { code, expiration });
 
-    const message = `Olá! 👋 Seu código para ativar o acesso ao painel MAP no Controle é: *${code}*\n\nEste código é válido por 10 minutos.`;
-    
-    try {
-        await sendWhatsappMessage(deliverablePhone, message);
-        logger.info(`Código de ativação enviado para ${deliverablePhone}.`);
-    } catch (error) {
-        logger.error(`Falha ao enviar código de ativação para ${deliverablePhone}`, error);
-        throw new Error('Não foi possível enviar o código para o seu WhatsApp. Tente novamente.');
-    }
+  const message = `Olá! 👋 Seu código para ativar o acesso ao painel MAP no Controle é: *${code}*\n\nEste código é válido por 10 minutos.`;
+
+  try {
+    await sendWhatsappMessage(deliverablePhone, message);
+    logger.info(`Código de ativação enviado para ${deliverablePhone}.`);
+  } catch (error) {
+    logger.error(`Falha ao enviar código de ativação para ${deliverablePhone}`, error);
+    throw new Error('Não foi possível enviar o código para o seu WhatsApp. Tente novamente.');
+  }
 }
 
 async function verifyCodeAndSetPassword(phone, code, newPassword, email = null, name = null) {
+  const canonicalPhone = normalizePhoneNumberToCanonical(phone);
+  const stored = activationCodes.get(canonicalPhone);
+
+  if (!stored || stored.code !== code || Date.now() > stored.expiration) {
+    throw { statusCode: 400, message: 'Código inválido ou expirado.' };
+  }
+
+  const t = await sequelize.transaction();
+  try {
+    const client = await Client.findOne({ where: { phone: canonicalPhone }, transaction: t });
+    if (!client) {
+      throw { statusCode: 404, message: 'Cliente não encontrado durante a verificação.' };
+    }
+
+    const updateData = { passwordHash: newPassword };
+    if (email && !client.email) {
+      const lowerEmail = email.toLowerCase().trim();
+      const existing = await Client.findOne({ where: { email: lowerEmail, id: { [Op.ne]: client.id } }, transaction: t });
+      if (existing) {
+        throw { statusCode: 409, message: 'Este e-mail já está em uso por outra conta.' };
+      }
+      updateData.email = lowerEmail;
+    }
+    if (name && (!client.name || client.name === 'Convidado')) {
+      updateData.name = name;
+    }
+
+    await client.update(updateData, { transaction: t });
+    await t.commit();
+
+    activationCodes.delete(canonicalPhone);
+
+    const tokenPayload = { id: client.id, phone: client.phone, email: client.email || updateData.email };
+    const token = generateToken(tokenPayload, 'client');
+
+    const clientResponse = client.toJSON();
+    delete clientResponse.passwordHash;
+
+    return {
+      client: clientResponse,
+      token,
+      message: 'Sua conta foi ativada com sucesso! Você já pode fazer o login.'
+    };
+  } catch (error) {
+    await t.rollback();
+    logger.error(`Erro ao definir senha para ${canonicalPhone}`, error);
+    throw error;
+  }
+}
+
+async function setClientCredentials(phone, password, name = null, email = null) {
+  const t = await sequelize.transaction();
+  try {
     const canonicalPhone = normalizePhoneNumberToCanonical(phone);
-    const stored = activationCodes.get(canonicalPhone);
+    const client = await Client.findOne({ where: { phone: canonicalPhone }, transaction: t });
 
-    if (!stored || stored.code !== code || Date.now() > stored.expiration) {
-        throw { statusCode: 400, message: 'Código inválido ou expirado.' };
+    if (!client) {
+      throw { statusCode: 404, message: 'Cliente não encontrado.' };
     }
 
-    const t = await sequelize.transaction();
-    try {
-        const client = await Client.findOne({ where: { phone: canonicalPhone }, transaction: t });
-        if (!client) {
-            throw { statusCode: 404, message: 'Cliente não encontrado durante a verificação.' };
-        }
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const updateData = { passwordHash: hashedPassword };
 
-        const updateData = { passwordHash: newPassword };
-        if (email && !client.email) {
-            const lowerEmail = email.toLowerCase().trim();
-            const existing = await Client.findOne({ where: { email: lowerEmail, id: { [Op.ne]: client.id } }, transaction: t });
-            if (existing) {
-                throw { statusCode: 409, message: 'Este e-mail já está em uso por outra conta.' };
-            }
-            updateData.email = lowerEmail;
-        }
-        if (name && (!client.name || client.name === 'Convidado')) {
-            updateData.name = name;
-        }
-
-        await client.update(updateData, { transaction: t });
-        await t.commit();
-        
-        activationCodes.delete(canonicalPhone);
-
-        const tokenPayload = { id: client.id, phone: client.phone, email: client.email || updateData.email };
-        const token = generateToken(tokenPayload, 'client');
-        
-        const clientResponse = client.toJSON();
-        delete clientResponse.passwordHash;
-
-        return {
-            client: clientResponse,
-            token,
-            message: 'Sua conta foi ativada com sucesso! Você já pode fazer o login.'
-        };
-    } catch (error) {
-        await t.rollback();
-        logger.error(`Erro ao definir senha para ${canonicalPhone}`, error);
-        throw error;
+    if (name) updateData.name = name;
+    if (email) {
+      const lowerEmail = email.toLowerCase().trim();
+      const existing = await Client.findOne({ where: { email: lowerEmail, id: { [Op.ne]: client.id } }, transaction: t });
+      if (existing) throw { statusCode: 409, message: 'Email já em uso.' };
+      updateData.email = lowerEmail;
     }
+
+    await client.update(updateData, { transaction: t });
+    await t.commit();
+
+    const clientResponse = client.toJSON();
+    delete clientResponse.passwordHash;
+    return clientResponse;
+
+  } catch (error) {
+    if (t && !t.finished) await t.rollback();
+    logger.error(`Erro ao definir credenciais para ${phone}: ${error.message}`);
+    throw error;
+  }
 }
 
 module.exports = {
   registerClient,
-  setClientCredentials,
   loginClient,
+  setClientCredentials,
   getClientProfile,
   updateClientCalendarPreferences,
   updateClientProfile,
