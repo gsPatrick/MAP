@@ -142,30 +142,34 @@ async function updateSubscriptionStatusByExternalId(externalId, newStatus, optio
 
         if (newStatus === 'Ativa') {
             let calculatedEndDate = subscription.endDate;
+            const durationDays = Number(plan.durationDays);
 
             // Se estava expirada ou cancelada, ou se é uma renovação, recalculamos a data de fim
             if (oldSubscriptionStatus !== 'Ativa' || new Date(subscription.endDate) < new Date()) {
                 const effectiveStartDate = new Date();
                 const endDate = new Date(effectiveStartDate);
-                endDate.setDate(endDate.getDate() + plan.durationDays);
+                endDate.setDate(endDate.getDate() + durationDays);
                 calculatedEndDate = endDate.toISOString().split('T')[0];
             }
 
             updateSubData.endDate = calculatedEndDate;
 
             const planTier = plan.tier || 'basico';
+            logger.info(`[SubscriptionService] Atualizando nível de acesso. PlanTier: ${planTier}, DurationDays: ${durationDays}`);
 
-            if (plan.durationDays > 7000) {
+            if (durationDays > 7000) {
                 clientAccessLevel = planTier === 'avancado' ? 'vitalicio_avancado' : 'vitalicio_basico';
                 clientAccessExpiresAt = null; // Vitalício
             } else {
                 // Para planos anuais e mensais
                 clientAccessLevel = planTier === 'avancado'
-                    ? (plan.durationDays > 60 ? 'avancado_anual' : 'avancado_mensal')
-                    : (plan.durationDays > 60 ? 'basico_anual' : 'basico_mensal');
+                    ? (durationDays > 60 ? 'avancado_anual' : 'avancado_mensal')
+                    : (durationDays > 60 ? 'basico_anual' : 'basico_mensal');
                 clientAccessExpiresAt = calculatedEndDate;
             }
             clientStatus = 'Ativo';
+
+            logger.info(`[SubscriptionService] Novo AccessLevel: ${clientAccessLevel}, ExpiresAt: ${clientAccessExpiresAt}`);
 
         } else if (['Cancelada', 'Expirada', 'Pagamento Falhou'].includes(newStatus)) {
             const otherActiveSubscriptions = await Subscription.count({
