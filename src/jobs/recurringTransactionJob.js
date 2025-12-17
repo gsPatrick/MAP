@@ -12,26 +12,36 @@ const { formatCurrency, formatDate } = require('../utils/formatters');
 
 async function processRecurringTransactions() {
   logger.info('[JOB RECORRÊNCIA] Iniciando verificação de transações recorrentes...');
+
+  // <<< CHECK GLOBAL SWITCH >>>
+  const systemService = require('../features/System/system.service');
+  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  if (!isEnabled) {
+    logger.warn('[JOB RECORRÊNCIA] Job abortado: Global switch OFF.');
+    return;
+  }
+  // ---------------------------
+
   const today = new Date().toISOString().split('T')[0];
-  
+
   try {
     const rulesToProcess = await RecurringTransactionRule.findAll({
       where: {
         isActive: true,
         nextDueDate: { [Op.lte]: today },
         [Op.or]: [
-            { endDate: null },
-            { endDate: { [Op.gte]: today } }
+          { endDate: null },
+          { endDate: { [Op.gte]: today } }
         ]
       },
-// VERSÃO NOVA E SEGURA
+      // VERSÃO NOVA E SEGURA
       include: [{
         model: FinancialAccount,
         as: 'financialAccount',
         where: { isActive: true },
-        include: [{ 
-          model: Client, 
-          as: 'ownerClient', 
+        include: [{
+          model: Client,
+          as: 'ownerClient',
           // --- INÍCIO DA MODIFICAÇÃO: ADICIONA FILTRO DE ASSINATURA ATIVA ---
           where: {
             status: 'Ativo',
@@ -58,21 +68,21 @@ async function processRecurringTransactions() {
       const ruleProcessingTransaction = await sequelize.transaction();
       try {
         const currentRule = await RecurringTransactionRule.findByPk(rule.id, {
-            transaction: ruleProcessingTransaction,
-            lock: ruleProcessingTransaction.LOCK.UPDATE,
-            include: [{
-                model: FinancialAccount,
-                as: 'financialAccount',
-                include: [{ model: Client, as: 'ownerClient' }]
-            }]
+          transaction: ruleProcessingTransaction,
+          lock: ruleProcessingTransaction.LOCK.UPDATE,
+          include: [{
+            model: FinancialAccount,
+            as: 'financialAccount',
+            include: [{ model: Client, as: 'ownerClient' }]
+          }]
         });
 
-        if (!currentRule || !currentRule.isActive || new Date(currentRule.nextDueDate).toISOString().split('T')[0] > today || 
-            (currentRule.endDate && new Date(currentRule.nextDueDate) > new Date(currentRule.endDate)) ||
-            !currentRule.financialAccount || !currentRule.financialAccount.isActive) {
-            logger.info(`[JOB RECORRÊNCIA] Regra ID ${rule.id} não aplicável ou processada. Pulando.`);
-            await ruleProcessingTransaction.commit();
-            continue;
+        if (!currentRule || !currentRule.isActive || new Date(currentRule.nextDueDate).toISOString().split('T')[0] > today ||
+          (currentRule.endDate && new Date(currentRule.nextDueDate) > new Date(currentRule.endDate)) ||
+          !currentRule.financialAccount || !currentRule.financialAccount.isActive) {
+          logger.info(`[JOB RECORRÊNCIA] Regra ID ${rule.id} não aplicável ou processada. Pulando.`);
+          await ruleProcessingTransaction.commit();
+          continue;
         }
 
         const client = currentRule.financialAccount.ownerClient;
@@ -99,9 +109,9 @@ async function processRecurringTransactions() {
           if (client && client.phone) {
             const intro = `Oi, ${clientFirstName}! Passando pra te lembrar da sua conta recorrente que vence hoje! 🤓`;
             const body = `📜 *Descrição:* ${currentRule.description}\n` +
-                         `💰 *Valor:* ${formatCurrency(currentRule.value)} (${currentRule.type})\n` +
-                         `🗓️ *Vencimento:* ${formatDate(currentRule.nextDueDate)}\n` +
-                         `🏦 *Conta:* ${financialAccount.accountName}`;
+              `💰 *Valor:* ${formatCurrency(currentRule.value)} (${currentRule.type})\n` +
+              `🗓️ *Vencimento:* ${formatDate(currentRule.nextDueDate)}\n` +
+              `🏦 *Conta:* ${financialAccount.accountName}`;
             const footer = "Não se esqueça de registrar o pagamento quando fizer, ok? 😉";
             const message = `${intro}\n\n${body}\n\n${footer}`;
 

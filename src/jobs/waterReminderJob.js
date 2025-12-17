@@ -2,7 +2,7 @@
 const cron = require('node-cron');
 const { Client, WaterIntakeLog } = require('../database');
 const { Op } = require('sequelize');
-const logger =require('../utils/logger');
+const logger = require('../utils/logger');
 const { sendWhatsappMessage, sendButtonListMessage } = require('../services/whatsappService');
 const hydrationService = require('../features/Hydration/hydration.service');
 const systemService = require('../features/System/system.service');
@@ -16,14 +16,14 @@ async function formatWaterReminderMessage(log, clientName) {
   const percentage = goal > 0 ? Math.round((totalCompleted / goal) * 100) : 0;
 
   const scheduledTimeFormatted = log.scheduledTime.substring(0, 5);
-  
+
   let introMessage = "";
   if (log.status === 'pending') {
-      introMessage = `Olá, ${clientName}! 👋 É a sua hora de se hidratar agora, às *${scheduledTimeFormatted}*! 💧`;
+    introMessage = `Olá, ${clientName}! 👋 É a sua hora de se hidratar agora, às *${scheduledTimeFormatted}*! 💧`;
   } else if (log.status === 'notified') {
-      introMessage = `Psiu, ${clientName}! 😉 Ainda te esperando para seu copo d'água das *${scheduledTimeFormatted}*! ⏳`;
+    introMessage = `Psiu, ${clientName}! 😉 Ainda te esperando para seu copo d'água das *${scheduledTimeFormatted}*! ⏳`;
   }
-  
+
   let message = `${introMessage}\n\n`;
   message += `Sua dose agora: *${log.amount}ml*\n`;
   message += `Progresso do dia: *${totalCompleted}ml* de *${goal}ml* (${percentage}%)\n\n`;
@@ -39,22 +39,31 @@ async function formatWaterReminderMessage(log, clientName) {
 }
 
 async function checkAndSendWaterReminder() {
+  // <<< CHECK GLOBAL SWITCH >>>
+  const systemService = require('../features/System/system.service'); // Requiring conditionally or at top if safe. Using inside to be safe against circles.
+  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  if (!isEnabled) {
+    // logger.debug('[JOB ÁGUA] Job abortado: Global switch OFF.'); // Descomente para debugar se quiser, mas pode floodar log
+    return;
+  }
+  // ---------------------------
+
   try {
     const now = new Date();
     const currentTime = now.toTimeString().split(' ')[0];
-    const nowInTimezone = new Date(now.toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
+    const nowInTimezone = new Date(now.toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" }));
     const todayDateString = nowInTimezone.toISOString().split('T')[0];
 
     // <<< INÍCIO DA MODIFICAÇÃO >>>
     // A query agora junta com Client e filtra por assinatura ativa.
-     const clientFilter = {
-        status: 'Ativo',
-        [Op.or]: [
-            { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
-            { accessExpiresAt: { [Op.gte]: todayDateString } }
-        ]
+    const clientFilter = {
+      status: 'Ativo',
+      [Op.or]: [
+        { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+        { accessExpiresAt: { [Op.gte]: todayDateString } }
+      ]
     };
-    
+
     const pendingLogs = await WaterIntakeLog.findAll({
       where: {
         intakeDate: todayDateString,
@@ -74,7 +83,7 @@ async function checkAndSendWaterReminder() {
     const notifiedLogsToResend = await WaterIntakeLog.findAll({
       where: {
         intakeDate: todayDateString,
-        status: 'notified', 
+        status: 'notified',
         updatedAt: { [Op.lte]: fiveMinutesAgo },
       },
       include: [{
@@ -99,26 +108,26 @@ async function checkAndSendWaterReminder() {
       if (log.client && log.client.phone) {
         const clientName = log.client.name ? log.client.name.split(' ')[0] : 'pessoa incrível';
         const reminderText = await formatWaterReminderMessage(log, clientName);
-        
+
         const buttons = [
           { id: `water_intake:bebi:${log.id}`, label: 'Bebi! ✅' },
           { id: `water_intake:nao_bebi:${log.id}`, label: 'Ainda não ❌' },
         ];
-        
+
         logger.info(`[JOB ÁGUA] Enviando/Reenviando lembrete para ${log.client.name} (ID do Log: ${log.id}).`);
         const sent = await sendButtonListMessage(log.client.phone, reminderText, buttons);
-        
+
         if (sent) {
-          await log.update({ status: 'notified' }); 
+          await log.update({ status: 'notified' });
           logger.info(`[JOB ÁGUA] Lembrete para o cliente ${log.client.name} enviado/reenviado (Log ID: ${log.id}) e status marcado como 'notified'.`);
         } else {
           logger.error(`[JOB ÁGUA] Falha ao enviar/reenviar lembrete para o cliente ${log.client.name} (Log ID: ${log.id}).`);
         }
       } else {
-          logger.warn(`[JOB ÁGUA] Log ID ${log.id} não pôde ser processado pois o cliente associado não tem telefone.`);
-          if (log.status === 'pending') {
-              await log.update({ status: 'failed' }); 
-          }
+        logger.warn(`[JOB ÁGUA] Log ID ${log.id} não pôde ser processado pois o cliente associado não tem telefone.`);
+        if (log.status === 'pending') {
+          await log.update({ status: 'failed' });
+        }
       }
     }
   } catch (error) {
@@ -127,10 +136,10 @@ async function checkAndSendWaterReminder() {
 }
 
 function startWaterReminderJob(preferences) {
-  const schedule = preferences?.waterReminderJobSchedule || '*/1 * * * *'; 
-  
+  const schedule = preferences?.waterReminderJobSchedule || '*/1 * * * *';
+
   logger.info(`[JOB ÁGUA] Agendado para verificar e reenviar lembretes (schedule: ${schedule})`);
-  
+
   cron.schedule(schedule, checkAndSendWaterReminder, {
     timezone: process.env.TZ || "America/Sao_Paulo",
   });

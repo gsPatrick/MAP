@@ -46,12 +46,12 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
         : null;
 
     const clientName = nameFromDb || existingState?.clientName || "pessoa incrível";
-    
+
     let ownerClientIdForContext = client.id;
-    let isSharedAccessContext = false; 
+    let isSharedAccessContext = false;
     let sharedAccessPermissions = null;
     let ownerClientForContext = client;
-    let ownerClientNameForContext = clientName; 
+    let ownerClientNameForContext = clientName;
 
     if (sharedAccessRecord) {
         isSharedAccessContext = true;
@@ -60,18 +60,18 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
             canAccessPersonalProfile: sharedAccessRecord.canAccessPersonalProfile,
             canAccessBusinessProfileId: sharedAccessRecord.canAccessBusinessProfileId,
         };
-        if (sharedAccessRecord.ownerClient) { 
-            ownerClientForContext = sharedAccessRecord.ownerClient; 
+        if (sharedAccessRecord.ownerClient) {
+            ownerClientForContext = sharedAccessRecord.ownerClient;
             ownerClientNameForContext = ownerClientForContext.name ? ownerClientForContext.name.split(" ")[0] : "Dono(a) da Conta";
-        } else { 
+        } else {
             const ownerClientTemp = await clientService.getClientContactById(ownerClientIdForContext);
-             if(ownerClientTemp) { 
-                ownerClientForContext = ownerClientTemp; 
+            if (ownerClientTemp) {
+                ownerClientForContext = ownerClientTemp;
                 ownerClientNameForContext = ownerClientTemp.name ? ownerClientTemp.name.split(" ")[0] : "Dono(a) da Conta";
-            } else { 
+            } else {
                 logger.error(`[InitializeState] CRITICAL: Dono da conta ${ownerClientIdForContext} não encontrado para acesso compartilhado.`);
-                ownerClientNameForContext = "Dono(a) da Conta"; 
-                ownerClientForContext = { accessLevel: 'gratuito', accessExpiresAt: null, id: ownerClientIdForContext, name: "Dono Desconhecido" }; 
+                ownerClientNameForContext = "Dono(a) da Conta";
+                ownerClientForContext = { accessLevel: 'gratuito', accessExpiresAt: null, id: ownerClientIdForContext, name: "Dono Desconhecido" };
             }
         }
         logger.info(`[WHATSAPP SERVICE - Initialize/UpdateState] Contexto de Acesso Compartilhado ATIVO. Ator: ${client.id} (${client.name}), Dono: ${ownerClientIdForContext} (${ownerClientNameForContext})`);
@@ -81,7 +81,7 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
     let clientAccessLevel = ownerClientForContext.accessLevel || 'gratuito';
     let clientAccessExpiresAt = ownerClientForContext.accessExpiresAt;
     let accessLevelTextForUser = "Nenhum plano ativo";
-    
+
     if (ownerClientForContext.accessLevel && ownerClientForContext.accessLevel !== 'gratuito') {
         if (ownerClientForContext.accessLevel.startsWith('vitalicio_')) {
             hasPaidAccess = true;
@@ -103,7 +103,7 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
             clientAccessLevel = 'gratuito';
         }
     }
-   
+
     const accountsForOperation = isSharedAccessContext ? ownerAccountsIfShared : clientAccountsFromDb;
 
     // <<< INÍCIO DA CORREÇÃO PRINCIPAL (ANTI-LOOP) >>>
@@ -144,14 +144,14 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
 
     let defaultAccount = null;
     if (onboardingStage === 'onboarding_complete' && hasPaidAccess && accountsForOperation.length > 0) {
-        defaultAccount = accountsForOperation.find(a=>a.isDefault);
+        defaultAccount = accountsForOperation.find(a => a.isDefault);
         if (!defaultAccount && accountsForOperation.length === 1) {
             defaultAccount = accountsForOperation[0];
         } else if (!defaultAccount) {
             defaultAccount = accountsForOperation.find(a => a.accountType === 'PF') ||
-                             accountsForOperation.find(a => a.accountType === 'PJ') ||
-                             accountsForOperation.find(a => a.accountType === 'MEI') ||
-                             accountsForOperation[0];
+                accountsForOperation.find(a => a.accountType === 'PJ') ||
+                accountsForOperation.find(a => a.accountType === 'MEI') ||
+                accountsForOperation[0];
         }
     }
 
@@ -230,67 +230,81 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
         return;
     }
     logger.info(`[WHATSAPP SERVICE] Processando mensagem de áudio de ${canonicalPhone}. URL: ${mediaUrl}`);
-    pushNameFromPayload = pushName; 
-    let filenameFromMime = 'audio.ogg'; 
-    if (mimeType) { 
+    pushNameFromPayload = pushName;
+    let filenameFromMime = 'audio.ogg';
+    if (mimeType) {
         if (mimeType.includes('opus')) filenameFromMime = 'audio.opus';
         else if (mimeType.includes('aac')) filenameFromMime = 'audio.aac';
         else if (mimeType.includes('mpeg')) filenameFromMime = 'audio.mp3';
         else if (mimeType.includes('amr')) filenameFromMime = 'audio.amr';
     }
-     try {
+    try {
         const urlPath = new URL(mediaUrl).pathname;
         const baseName = path.basename(urlPath);
-        if (baseName && baseName.includes('.')) { 
-             filenameFromMime = baseName; 
+        if (baseName && baseName.includes('.')) {
+            filenameFromMime = baseName;
         }
-    } catch (e) { 
+    } catch (e) {
         logger.warn(`[WHATSAPP SERVICE] Não foi possível parsear a URL para extrair nome do arquivo da mídia: ${mediaUrl}. Usando nome inferido: ${filenameFromMime}`);
     }
 
+    // MUDANÇA: Skip transcrição (Whisper) e usar Multimodal
     try {
-        const downloadedMedia = await downloadZapiMedia(mediaUrl); 
+        const downloadedMedia = await downloadZapiMedia(mediaUrl);
         if (downloadedMedia && downloadedMedia.stream) {
-            const finalFilenameForWhisper = downloadedMedia.filename && downloadedMedia.filename.includes('.')
-                ? downloadedMedia.filename
-                : filenameFromMime;
-            logger.info(`[WHATSAPP SERVICE] Áudio baixado, enviando para transcrição com nome de arquivo: ${finalFilenameForWhisper}`);
-            const transcribedText = await aiModelService.transcribeAudioStream(downloadedMedia.stream, finalFilenameForWhisper);
-            if (transcribedText && transcribedText.trim() !== "") {
-                logger.info(`[WHATSAPP SERVICE] Áudio de ${canonicalPhone} transcrito com sucesso. Chamando processIncomingMessage com o texto.`);
-                return await processIncomingMessage(canonicalPhone, transcribedText, pushName, rawPayload);
-            } else {
-                logger.warn(`[WHATSAPP SERVICE] Transcrição do áudio de ${canonicalPhone} resultou em texto vazio. Notificando usuário.`);
-                await sendWhatsappMessage(canonicalPhone, "Não consegui entender o áudio que você enviou. 🤫 Pode tentar gravar novamente ou digitar, por favor?");
+
+            // Converter stream para Buffer/Base64 para envio multimodal
+            const chunks = [];
+            for await (const chunk of downloadedMedia.stream) {
+                chunks.push(chunk);
             }
+            const buffer = Buffer.concat(chunks);
+            const base64Audio = buffer.toString('base64');
+
+            // Identificar formato correto
+            let formatForOpenAI = 'ogg'; // Default para WhatsApp
+            if (filenameFromMime.endsWith('.mp3')) formatForOpenAI = 'mp3';
+            if (filenameFromMime.endsWith('.wav')) formatForOpenAI = 'wav';
+
+            logger.info(`[WHATSAPP SERVICE] Áudio baixado (${buffer.length} bytes), enviando para processamento MULTIMODAL.`);
+
+            // Passar o payload de áudio para processIncomingMessage
+            // O texto é vazio, mas enviamos um objeto extra de contexto
+            const audioPayload = {
+                data: base64Audio,
+                format: formatForOpenAI
+            };
+
+            return await processIncomingMessage(canonicalPhone, "", pushName, rawPayload, audioPayload);
+
         } else {
             logger.error(`[WHATSAPP SERVICE] Falha ao baixar áudio de ${canonicalPhone} da URL: ${mediaUrl}. Notificando usuário.`);
             await sendWhatsappMessage(canonicalPhone, "Tive um problema ao acessar o áudio que você enviou. 🙁 Poderia tentar novamente?");
         }
-    } catch (transcriptionError) {
-        logger.error(`[WHATSAPP SERVICE] Erro ao transcrever áudio de ${canonicalPhone}: ${transcriptionError.message}`, {stack: transcriptionError.stack});
-        await sendWhatsappMessage(canonicalPhone, "Puxa, tive um probleminha para processar seu áudio. 😵‍💫 Pode tentar de novo ou digitar sua mensagem?");
+    } catch (error) {
+        logger.error(`[WHATSAPP SERVICE] Erro ao processar áudio multimodal de ${canonicalPhone}: ${error.message}`, { stack: error.stack });
+        await sendWhatsappMessage(canonicalPhone, "Puxa, tive um probleminha para ouvir seu áudio. 😵‍💫 Pode tentar de novo ou digitar sua mensagem?");
     } finally {
-        pushNameFromPayload = null; 
+        pushNameFromPayload = null;
     }
 }
 
 // ============================================================================
 // === FUNÇÃO processIncomingMessage COMPLETA E ATUALIZADA ===
 // ============================================================================
-async function processIncomingMessage(senderPhoneRaw, messageText, pushName, rawPayload) {
+async function processIncomingMessage(senderPhoneRaw, messageText, pushName, rawPayload, audioPayload = null) {
     const canonicalPhone = normalizePhoneNumberToCanonical(senderPhoneRaw);
     if (!canonicalPhone) {
         logger.error(`[WHATSAPP HANDLER] Falha ao normalizar o telefone: ${senderPhoneRaw}`);
         return;
     }
     const senderPhone = canonicalPhone;
-    if (!pushNameFromPayload && pushName) { 
+    if (!pushNameFromPayload && pushName) {
         pushNameFromPayload = pushName;
     }
     const startTime = Date.now();
     let state;
-    let actorClient = null; 
+    let actorClient = null;
 
     try {
         // ETAPA 1: Obter Cliente e Estado da Sessão
@@ -306,16 +320,16 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             logger.info(`[WHATSAPP SERVICE] Identificado ACESSO COMPARTILHADO. Ator: ${actorClient.name} (ID: ${actorClient.id}), Dono: ${ownerClientIdForContext}`);
 
             if (!actorClient.status || actorClient.status !== 'Ativo') {
-                 logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas convidado (ator) ${actorClient.id} está inativo.`);
-                 await sendWhatsappMessage(senderPhone, "Olá! Seu acesso a esta conta compartilhada não está ativo. Por favor, contate o proprietário.");
-                 return;
+                logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas convidado (ator) ${actorClient.id} está inativo.`);
+                await sendWhatsappMessage(senderPhone, "Olá! Seu acesso a esta conta compartilhada não está ativo. Por favor, contate o proprietário.");
+                return;
             }
             if (!sharedAccessRecord.ownerClient || sharedAccessRecord.ownerClient.status !== 'Ativo') {
                 logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas proprietário ${ownerClientIdForContext} está inativo.`);
                 await sendWhatsappMessage(senderPhone, "Olá! O proprietário da conta que compartilhou este acesso parece não estar ativo. Tente mais tarde ou contate-o.");
                 return;
             }
-            
+
             const allOwnerAccounts = sharedAccessRecord.ownerClient.financialAccounts || [];
             if (sharedAccessRecord.canAccessPersonalProfile) {
                 const pfAccount = allOwnerAccounts.find(acc => acc.accountType === 'PF');
@@ -326,7 +340,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 if (bizAccount) ownerAccountsIfShared.push(bizAccount);
             }
 
-            if (ownerAccountsIfShared.length === 0 ) { 
+            if (ownerAccountsIfShared.length === 0) {
                 const ownerName = sharedAccessRecord.ownerClient?.name || 'o proprietário';
                 logger.warn(`[WHATSAPP SERVICE] Acesso compartilhado para ${actorClient.name} (${senderPhone}) para contas de ${ownerClientIdForContext}, mas nenhuma conta do dono acessível foi encontrada.`);
                 await sendWhatsappMessage(senderPhone, `Olá ${actorClient.name.split(" ")[0]}! Você tem um acesso compartilhado, mas parece que ${ownerName} não possui contas ativas do tipo que você pode acessar (Pessoal ou o Empresarial específico). Peça para ele verificar, por favor! 😉`);
@@ -351,11 +365,11 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 return;
             }
         }
-        
+
         const existingState = conversationState.get(senderPhone);
         state = await initializeOrUpdateState(actorClient, sharedAccessRecord, existingState, clientAccountsForOnboarding, ownerAccountsIfShared);
         state.isNewUserForSessionLogic = !existingState;
-        state.pushNameFromPayload = pushNameFromPayload; 
+        state.pushNameFromPayload = pushNameFromPayload;
 
         if (state.justReactivated) {
             const welcomeBackMessage = `🎉 Eba, que bom te ver de volta, ${state.clientName}! Sua assinatura foi reativada com sucesso e tudo está pronto para você continuar de onde parou. O que vamos organizar primeiro? 💪`;
@@ -365,9 +379,9 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
         if (!state.isSharedAccessContext && state.data.onboardingStage === 'onboarding_complete' && !state.hasPaidAccess) {
             logger.info(`[WHATSAPP HANDLER] Bloqueando ação para ${senderPhone} devido à assinatura expirada.`);
-            
+
             const checkoutBaseUrl = process.env.CHECKOUT_BASE_URL || "https://www.map-nocontrole.com.br";
-            const expiredMessage = 
+            const expiredMessage =
                 `Olá, ${state.clientName}! 👋\n\n` +
                 `Sua assinatura do MAP no Controle não está ativa. Para reativar seu acesso completo e continuar no controle, escolha um dos planos abaixo:\n\n` +
                 `*Plano Básico*\n` +
@@ -400,7 +414,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 pushNameFromPayload = null;
                 return;
             }
-            
+
             // --- INÍCIO DO NOVO FLUXO DE BOTÃO DE HORÁRIO ---
             if (buttonId.startsWith('schedule_days_')) {
                 logger.info(`[MAESTRO] Roteando botão de horário para o Schedule Handler.`);
@@ -444,7 +458,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             const buttonResult = await actionHandler.handleButtonInteraction(state, buttonId, senderPhone);
             if (buttonResult.stateUpdated) {
                 conversationState.set(senderPhone, buttonResult.newState);
-                return; 
+                return;
             }
             if (buttonResult.flowCompleted) {
                 return;
@@ -458,7 +472,8 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         }
 
         if (!(rawPayload && rawPayload.selectedButtonId)) {
-            state.messageHistory.push({ role: 'user', content: messageText || "" }); 
+            const contentToStore = audioPayload ? "[ÁUDIO ENVIADO]" : (messageText || "");
+            state.messageHistory.push({ role: 'user', content: contentToStore });
             if (state.messageHistory.length > MAX_STATE_HISTORY) {
                 state.messageHistory = state.messageHistory.slice(-MAX_STATE_HISTORY);
             }
@@ -476,7 +491,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             pushNameFromPayload = null;
             return;
         }
-        
+
         // --- INÍCIO DA MODIFICAÇÃO: VERIFICA SE ESTÁ EM UM FLUXO ATIVO ANTES DE CHAMAR A IA ---
         if (state.currentAction && state.currentAction.startsWith('awaiting_schedule_')) {
             logger.info(`[MAESTRO] Continuando fluxo de atualização de horário para ${senderPhone}. Ação: ${state.currentAction}`);
@@ -486,14 +501,14 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             return;
         }
         // --- FIM DA MODIFICAÇÃO ---
-        
+
         if (state.currentAction === 'awaiting_confirmation' && state.pendingConfirmation) {
             const pendingAction = state.pendingConfirmation;
             if (pendingAction.action === 'AWAITING_DELETION_CHOICE') {
                 // (código existente para deleção múltipla)
             }
         }
-        
+
         if (!state.activeFinancialAccountId) {
             const accountsForSelection = state.isSharedAccessContext ? ownerAccountsIfShared : await clientService.getClientFinancialAccounts(actorClient.id, { isActive: true });
             if (accountsForSelection.length > 0) {
@@ -529,7 +544,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                         await sendWhatsappMessage(senderPhone, confirmSelectionMsg);
                     } else {
                         state.currentAction = 'selecting_account_flow_active';
-                        state.data.accountsToList = accountsForSelection.map(a => ({id: a.id, name: a.accountName || a.name, type: a.accountType || a.type}));
+                        state.data.accountsToList = accountsForSelection.map(a => ({ id: a.id, name: a.accountName || a.name, type: a.accountType || a.type }));
                         const ownerNameForMsg = state.isSharedAccessContext ? state.ownerClientNameForContext : null;
                         const accountOptionsText = formatter.formatListClientAccountsDataStructure(state.data.accountsToList, null, ownerNameForMsg) + "\n\n🤔 Qual delas vamos usar hoje? Me diga o nome ou o número.";
                         state.messageHistory.push({ role: 'assistant', content: accountOptionsText });
@@ -537,7 +552,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     }
                 }
             } else {
-                 await sendWhatsappMessage(senderPhone, `Olá ${state.clientName}! Parece que não há contas financeiras acessíveis para você no momento. ${state.isSharedAccessContext ? `Peça para ${state.ownerClientNameForContext} verificar.` : 'Diga "criar conta pessoal" para começar.'}`);
+                await sendWhatsappMessage(senderPhone, `Olá ${state.clientName}! Parece que não há contas financeiras acessíveis para você no momento. ${state.isSharedAccessContext ? `Peça para ${state.ownerClientNameForContext} verificar.` : 'Diga "criar conta pessoal" para começar.'}`);
             }
             conversationState.set(senderPhone, state);
             if (!state.activeFinancialAccountId) return;
@@ -586,7 +601,8 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             availableCreditCards: contextData.availableCreditCards,
             availableFinancialAccounts: contextData.availableFinancialAccounts,
             availableBusinessClients: contextData.availableBusinessClients,
-            pendingAction: state.currentAction === 'awaiting_clarification_response' ? state.pendingConfirmation : null
+            pendingAction: state.currentAction === 'awaiting_clarification_response' ? state.pendingConfirmation : null,
+            audioPayload: audioPayload // Passar payload de áudio se existir
         };
 
         const aiResponse = await aiModelService.interpretUserMessage(messageText, aiContext);
@@ -642,7 +658,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     conversationState.set(senderPhone, state);
                     return;
                 }
-                
+
                 if (mainActionResult.formattedData) {
                     multipleActionBodiesList.push(mainActionResult.formattedData);
                 }
@@ -689,7 +705,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     'UPDATE_APPOINTMENT': 'Seu compromisso foi atualizado',
                 };
                 const friendlyName = friendlyActionNames[actionName] || 'Sua solicitação foi processada';
-                
+
                 aiMessageIntro = `Prontinho, ${state.clientName}! ✅ ${friendlyName} com sucesso. Dá uma olhada no resumo:`;
             }
             // ================================================================================
@@ -705,7 +721,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             const platformLinkFooter = formatter.formatPlatformLink();
             const platformBaseUrl = process.env.PLATFORM_URL || 'map-nocontrole.com.br/painel';
             if (!finalMessageToSend.includes(platformBaseUrl)) {
-                 finalMessageToSend += `\n\n---\n\n${platformLinkFooter.trim()}`;
+                finalMessageToSend += `\n\n---\n\n${platformLinkFooter.trim()}`;
             }
             finalMessageToSend = finalMessageToSend.replace(/\n{3,}/g, '\n\n').trim();
 
@@ -740,7 +756,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             if (clarification.parameters_so_far && clarification.parameters_so_far.chained_action_context) {
                 logger.info(`[MAESTRO] Ação encadeada detectada. Armazenando contexto para execução posterior.`);
                 state.pendingChainedAction = clarification.parameters_so_far.chained_action_context;
-                clarification.parameters_so_far = {}; 
+                clarification.parameters_so_far = {};
             }
             state.pendingConfirmation = {
                 action: clarification.original_intent_action_suggestion,
@@ -761,7 +777,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         }
 
     } catch (error) {
-        logger.error(`[WHATSAPP HANDLER] Erro CRÍTICO processando msg de ${senderPhone}: ${error.message}`, { stack: error.stack?.substring(0,1000) });
+        logger.error(`[WHATSAPP HANDLER] Erro CRÍTICO processando msg de ${senderPhone}: ${error.message}`, { stack: error.stack?.substring(0, 1000) });
         const errorMsg = `Puxa vida, ${state?.clientName || 'você'}! 😬 Tive um curto-circuito aqui... Minha equipe já foi notificada. Tente novamente em um instante.`;
         await sendWhatsappMessage(senderPhone, errorMsg);
     } finally {
@@ -774,9 +790,9 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
     }
 }
 
-module.exports = { 
-    processIncomingMessage, 
-    processIncomingAudioMessage, 
+module.exports = {
+    processIncomingMessage,
+    processIncomingAudioMessage,
     formatAppointmentDataStructure: formatter.formatAppointmentDataStructure,
     initializeOrUpdateState,
     conversationState

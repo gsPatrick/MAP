@@ -199,6 +199,13 @@ function getRandomMotivationalPhrase() {
 }
 
 async function checkAndSendDailyMotivation() {
+  // <<< CHECK GLOBAL SWITCH >>>
+  const systemService = require('../features/System/system.service');
+  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  if (!isEnabled) {
+    return;
+  }
+  // ---------------------------
   try {
     const timeZone = process.env.TZ || "America/Sao_Paulo";
     const now = new Date(new Date().toLocaleString("en-US", { timeZone }));
@@ -209,7 +216,7 @@ async function checkAndSendDailyMotivation() {
 
     // <<< INÍCIO DA MODIFICAÇÃO >>>
     // A query agora filtra clientes com assinatura ativa.
-const clientsToSend = await Client.findAll({
+    const clientsToSend = await Client.findAll({
       where: {
         wantsMotivationMessage: true,
         status: 'Ativo',
@@ -222,14 +229,14 @@ const clientsToSend = await Client.findAll({
         },
         // Filtro de assinatura ativa
         [Op.or]: [
-            { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
-            { accessExpiresAt: { [Op.gte]: todayDateString } }
+          { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+          { accessExpiresAt: { [Op.gte]: todayDateString } }
         ]
       },
       attributes: ['id', 'name', 'phone', 'motivationMessageTime']
     });
     // <<< FIM DA MODIFICAÇÃO >>>
-    
+
     if (clientsToSend.length === 0) {
       return;
     }
@@ -241,7 +248,7 @@ const clientsToSend = await Client.findAll({
       logger.warn('[JOB MOTIVAÇÃO] Nenhuma frase motivacional disponível. Abortando.');
       return;
     }
-    
+
     logger.info(`[JOB MOTIVAÇÃO] Frase do dia selecionada: "${phrase.substring(0, 50)}..."`);
 
     for (const client of clientsToSend) {
@@ -253,9 +260,9 @@ const clientsToSend = await Client.findAll({
         const body = `\n_"${phrase}"_`;
         const footer = `\n\n---\n*Dica:* Para alterar o horário ou desativar, me diga algo como "mudar horário da motivação para 8h" ou "desativar mensagem motivacional".*`;
         const finalMessage = `${header}\n${body}${footer}`;
-        
+
         const sent = await sendWhatsappMessage(client.phone, finalMessage);
-        
+
         if (sent) {
           await client.update({ lastMotivationSentDate: todayDateString });
           logger.info(`[JOB MOTIVAÇÃO] Mensagem personalizada enviada e registro atualizado para ${client.name} (${client.phone}).`);
@@ -263,7 +270,7 @@ const clientsToSend = await Client.findAll({
           logger.error(`[JOB MOTIVAÇÃO] Falha ao enviar para ${client.name} (${client.phone}).`);
         }
       } catch (clientError) {
-         logger.error(`[JOB MOTIVAÇÃO] Erro no loop de cliente para ${client.name} (${client.phone}): ${clientError.message}`);
+        logger.error(`[JOB MOTIVAÇÃO] Erro no loop de cliente para ${client.name} (${client.phone}): ${clientError.message}`);
       }
     }
   } catch (error) {
@@ -274,7 +281,7 @@ const clientsToSend = await Client.findAll({
 function startMotivationalMessageJob() {
   const schedule = '*/1 * * * *';
   logger.info(`[JOB MOTIVAÇÃO] Agendado para rodar a cada minuto (schedule: ${schedule})`);
-  
+
   cron.schedule(schedule, checkAndSendDailyMotivation, {
     timezone: process.env.TZ || "America/Sao_Paulo",
   });

@@ -15,7 +15,16 @@ const CHECKOUT_URL = process.env.MERCADO_PAGO_CHECKOUT_URL || "https://map-nocon
  */
 async function notifyExpiringSubscriptions() {
     logger.info('[JOB NOTIFICAÇÃO EXPIRAÇÃO] Iniciando verificação de planos prestes a expirar...');
-    
+
+    // <<< CHECK GLOBAL SWITCH >>>
+    const systemService = require('../features/System/system.service');
+    const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+    if (!isEnabled) {
+        logger.warn('[JOB NOTIFICAÇÃO EXPIRAÇÃO] Job abortado: Global switch OFF.');
+        return;
+    }
+    // ---------------------------
+
     const today = new Date();
     const tomorrow = new Date(today);
     tomorrow.setDate(today.getDate() + 1);
@@ -46,13 +55,13 @@ async function notifyExpiringSubscriptions() {
         for (const client of clientsToNotify) {
             const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
             const daysRemaining = client.accessExpiresAt === tomorrowStr ? 'amanhã' : 'em 3 dias';
-            
+
             const message = `👋 Olá, ${clientName}!\n\n` +
-                            `Um lembrete amigável de que sua assinatura do MAP no Controle expira *${daysRemaining}*! 😱\n\n` +
-                            `Para garantir que você não perca acesso às suas ferramentas de organização, renove seu plano a qualquer momento. É super rápido!\n\n` +
-                            `👉 Clique aqui para renovar: ${CHECKOUT_URL}\n\n` +
-                            `Qualquer dúvida, é só me chamar! 😉`;
-            
+                `Um lembrete amigável de que sua assinatura do MAP no Controle expira *${daysRemaining}*! 😱\n\n` +
+                `Para garantir que você não perca acesso às suas ferramentas de organização, renove seu plano a qualquer momento. É super rápido!\n\n` +
+                `👉 Clique aqui para renovar: ${CHECKOUT_URL}\n\n` +
+                `Qualquer dúvida, é só me chamar! 😉`;
+
             await sendWhatsappMessage(client.phone, message);
             logger.info(`[JOB NOTIFICAÇÃO EXPIRAÇÃO] Mensagem de aviso enviada para ${client.phone}.`);
         }
@@ -68,7 +77,16 @@ async function notifyExpiringSubscriptions() {
  */
 async function sendDailyRenewalRemindersToExpiredUsers() {
     logger.info('[JOB LEMBRETE EXPIRADOS] Iniciando verificação de usuários com planos expirados...');
-    
+
+    // <<< CHECK GLOBAL SWITCH >>>
+    const systemService = require('../features/System/system.service');
+    const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+    if (!isEnabled) {
+        logger.warn('[JOB LEMBRETE EXPIRADOS] Job abortado: Global switch OFF.');
+        return;
+    }
+    // ---------------------------
+
     const today = new Date().toISOString().split('T')[0];
 
     try {
@@ -91,12 +109,12 @@ async function sendDailyRenewalRemindersToExpiredUsers() {
 
         for (const client of expiredClients) {
             const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
-            
+
             const message = `Olá, ${clientName}. 😕\n\n` +
-                            `Sua assinatura do MAP no Controle expirou. Seus dados continuam guardados com segurança, mas as funcionalidades premium foram desativadas.\n\n` +
-                            `Para reativar seu acesso completo e continuar no controle, é só escolher um novo plano em nosso site:\n` +
-                            `${CHECKOUT_URL}\n\n` +
-                            `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
+                `Sua assinatura do MAP no Controle expirou. Seus dados continuam guardados com segurança, mas as funcionalidades premium foram desativadas.\n\n` +
+                `Para reativar seu acesso completo e continuar no controle, é só escolher um novo plano em nosso site:\n` +
+                `${CHECKOUT_URL}\n\n` +
+                `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
 
             await sendWhatsappMessage(client.phone, message);
             logger.info(`[JOB LEMBRETE EXPIRADOS] Mensagem de renovação enviada para ${client.phone}.`);
@@ -113,7 +131,7 @@ async function sendDailyRenewalRemindersToExpiredUsers() {
  */
 function startSubscriptionJobs() {
     // Job 1: Notificar planos que estão PRESTES a expirar. Roda todo dia às 9 da manhã.
-    const expiringSchedule = '0 9 * * *'; 
+    const expiringSchedule = '0 9 * * *';
     if (cron.validate(expiringSchedule)) {
         logger.info(`[JOB NOTIFICAÇÃO EXPIRAÇÃO] Agendado para: ${expiringSchedule}`);
         cron.schedule(expiringSchedule, notifyExpiringSubscriptions, {

@@ -143,7 +143,7 @@ const UserPreference = sequelize.define('UserPreference', {
     allowNull: false,
     comment: 'Schedule cron para o job de lembrete de água (verificação).',
   },
-  
+
   // --- Campos para controle de comportamento dos Alertas ---
   dueAlertLeadDays: {
     type: DataTypes.INTEGER,
@@ -158,6 +158,14 @@ const UserPreference = sequelize.define('UserPreference', {
     allowNull: false,
     validate: { min: 0 },
     comment: 'Dias de antecedência para alerta fiscal MEI (ex: DAS).',
+  },
+
+  // --- NOVA CONFIGURAÇÃO GLOBAL ---
+  areAutomatedJobsEnabled: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false, // Padrão: DESLIGADO conforme solicitado
+    allowNull: false,
+    comment: 'Switch global para ativar/desativar todos os disparos automáticos de mensagens.',
   },
 
 }, {

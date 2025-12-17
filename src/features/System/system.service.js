@@ -25,6 +25,20 @@ async function getSystemPreferences() {
 }
 
 /**
+ * Verifica se o processamento global de jobs automáticos está habilitado.
+ * @returns {Promise<boolean>} True se habilitado, False se desabilitado.
+ */
+async function isAutomatedJobProcessingEnabled() {
+  try {
+    const prefs = await getSystemPreferences();
+    return prefs.areAutomatedJobsEnabled === true;
+  } catch (error) {
+    logger.error(`Erro ao verificar status global dos jobs: ${error.message}`);
+    return false; // Default seguro: desligado em caso de erro
+  }
+}
+
+/**
  * Atualiza as preferências/configurações do sistema.
  * @param {object} updateData - Dados a serem atualizados no UserPreference.
  * @returns {Promise<object|null>} As configurações atualizadas.
@@ -46,7 +60,8 @@ async function updateSystemPreferences(updateData) {
         'defaultAppointmentReminderLeadTimeMinutes', 'recurringJobSchedule',
         'appointmentReminderJobSchedule', 'alertsJobSchedule', 'motivationalMessageJobSchedule',
         'waterReminderJobSchedule', 'dueAlertLeadDays', 'fiscalAlertLeadDaysMEI',
-        'googleWatchRenewalJobSchedule' // Adicionado se você tem um schedule para o job de renovação do Google Watch
+        'waterReminderJobSchedule', 'dueAlertLeadDays', 'fiscalAlertLeadDaysMEI',
+        'googleWatchRenewalJobSchedule', 'areAutomatedJobsEnabled' // Adicionado switch global
       ];
       const filteredData = {};
       for (const key of allowedUpdates) {
@@ -90,11 +105,11 @@ async function createMotivationalPhrase(phraseData) {
 }
 
 async function getAllMotivationalPhrases(queryParams = {}) {
-    const { isActive } = queryParams;
-    const whereConditions = {};
-    if (isActive !== undefined) {
-        whereConditions.isActive = (isActive === 'true' || isActive === true);
-    }
+  const { isActive } = queryParams;
+  const whereConditions = {};
+  if (isActive !== undefined) {
+    whereConditions.isActive = (isActive === 'true' || isActive === true);
+  }
   try {
     const phrases = await MotivationalPhrase.findAll({ where: whereConditions, order: [['createdAt', 'DESC']] });
     return phrases.map(p => p.toJSON());
@@ -108,18 +123,18 @@ async function updateMotivationalPhrase(phraseId, updateData) {
   try {
     const phrase = await MotivationalPhrase.findByPk(phraseId);
     if (!phrase) {
-        const e = new Error('Frase motivacional não encontrada.');
-        e.statusCode = 404; e.status = 'fail'; throw e;
+      const e = new Error('Frase motivacional não encontrada.');
+      e.statusCode = 404; e.status = 'fail'; throw e;
     }
     const allowedFields = ['text', 'isActive'];
     const filteredData = {};
     for (const key of allowedFields) {
-        if (updateData.hasOwnProperty(key)) {
-            filteredData[key] = updateData[key];
-        }
+      if (updateData.hasOwnProperty(key)) {
+        filteredData[key] = updateData[key];
+      }
     }
     if (Object.keys(filteredData).length === 0) {
-        return phrase.toJSON();
+      return phrase.toJSON();
     }
     await phrase.update(filteredData);
     logger.info(`Frase Motivacional atualizada: ID ${phrase.id}`);
@@ -135,8 +150,8 @@ async function deleteMotivationalPhrase(phraseId) {
   try {
     const phrase = await MotivationalPhrase.findByPk(phraseId);
     if (!phrase) {
-        logger.warn(`Frase motivacional ID ${phraseId} não encontrada para exclusão.`);
-        return false;
+      logger.warn(`Frase motivacional ID ${phraseId} não encontrada para exclusão.`);
+      return false;
     }
     await phrase.destroy();
     logger.info(`Frase Motivacional deletada: ID ${phrase.id}`);
@@ -159,5 +174,6 @@ module.exports = {
   getAllMotivationalPhrases,
   updateMotivationalPhrase,
   deleteMotivationalPhrase,
+  isAutomatedJobProcessingEnabled, // <<< NOVA EXPORTAÇÃO
   // findFinancialCategoryByNameAndType não é mais exportada daqui
 };

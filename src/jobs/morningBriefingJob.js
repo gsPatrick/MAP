@@ -12,6 +12,16 @@ const aiModelService = require('../services/aiModelService');
  */
 async function processAndSendBriefings() {
   logger.info('[JOB BRIEFING MATINAL] Iniciando verificação de resumos diários...');
+
+  // <<< CHECK GLOBAL SWITCH >>>
+  const systemService = require('../features/System/system.service');
+  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  if (!isEnabled) {
+    logger.warn('[JOB BRIEFING MATINAL] Job abortado: Processamento global de automações está DESLIGADO.');
+    return;
+  }
+  // ---------------------------
+
   try {
     const today = new Date();
     const startOfDay = new Date(new Date().setHours(0, 0, 0, 0));
@@ -25,8 +35,8 @@ async function processAndSendBriefings() {
         status: 'Ativo',
         phone: { [Op.ne]: null },
         [Op.or]: [
-            { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
-            { accessExpiresAt: { [Op.gte]: todayDateString } }
+          { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+          { accessExpiresAt: { [Op.gte]: todayDateString } }
         ]
       },
     });
@@ -45,7 +55,7 @@ async function processAndSendBriefings() {
         if (clientAccounts.length === 0) continue;
 
         const accountIds = clientAccounts.map(acc => acc.id);
-        
+
         const mainAccountForChecklist = clientAccounts.find(acc => acc.isDefault) || clientAccounts[0];
 
         // --- BUSCA DE DADOS FINANCEIROS E DE AGENDA (EXISTENTE) ---
@@ -69,28 +79,28 @@ async function processAndSendBriefings() {
           include: [{ model: FinancialAccount, as: 'financialAccount', attributes: ['accountName'] }],
           order: [['eventDateTime', 'ASC']],
         });
-        
+
         const recurringItems = await FinancialTransaction.findAll({
-            where: {
-                financialAccountId: { [Op.in]: accountIds },
-                recurringTransactionRuleId: { [Op.ne]: null },
-                transactionDate: todayDateString,
-            },
-            include: [{ model: FinancialAccount, as: 'financialAccount', attributes: ['accountName'] }],
-            order: [['createdAt', 'DESC']],
+          where: {
+            financialAccountId: { [Op.in]: accountIds },
+            recurringTransactionRuleId: { [Op.ne]: null },
+            transactionDate: todayDateString,
+          },
+          include: [{ model: FinancialAccount, as: 'financialAccount', attributes: ['accountName'] }],
+          order: [['createdAt', 'DESC']],
         });
 
         // --- LÓGICA DE CHECKLIST MODIFICADA ---
         let checklistData = null;
         if (mainAccountForChecklist) {
-            const checklist = await DailyChecklist.findOne({
-                where: { financialAccountId: mainAccountForChecklist.id, date: todayDateString },
-                include: [{ model: ChecklistItem, as: 'items', order: [['createdAt', 'ASC']] }]
-            });
-            checklistData = {
-                accountName: mainAccountForChecklist.accountName,
-                items: checklist ? checklist.items.map(item => item.toJSON()) : []
-            };
+          const checklist = await DailyChecklist.findOne({
+            where: { financialAccountId: mainAccountForChecklist.id, date: todayDateString },
+            include: [{ model: ChecklistItem, as: 'items', order: [['createdAt', 'ASC']] }]
+          });
+          checklistData = {
+            accountName: mainAccountForChecklist.accountName,
+            items: checklist ? checklist.items.map(item => item.toJSON()) : []
+          };
         }
 
         // Ação proativa de hidratação
@@ -105,7 +115,7 @@ async function processAndSendBriefings() {
           recurringItems,
           checklistData,
         };
-        
+
         const briefingMessage = await aiModelService.generateMorningBriefingMessage(briefingData);
 
         await sendWhatsappMessage(client.phone, briefingMessage);
@@ -126,9 +136,9 @@ async function processAndSendBriefings() {
  */
 function startMorningBriefingJob(preferences) {
   const schedule = '0 8 * * *'; // Todo dia às 8:00 da manhã
-  
+
   logger.info(`[JOB BRIEFING MATINAL] Agendado para rodar diariamente às 8h (schedule: ${schedule})`);
-  
+
   cron.schedule(schedule, processAndSendBriefings, {
     timezone: process.env.TZ || "America/Sao_Paulo",
   });

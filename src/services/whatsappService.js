@@ -4,6 +4,7 @@
 const logger = require('../utils/logger');
 const axios = require('axios');
 const path = require('path');
+const { Op } = require('sequelize');
 
 // <<< NOVAS DEPENDÊNCIAS NECESSÁRIAS PARA A LÓGICA DE RECEBIMENTO >>>
 // ESTAS DEPENDÊNCIAS SÃO REMOVIDAS DAQUI, POIS PERTENCEM AO SERVICE DE FEATURES
@@ -18,15 +19,63 @@ const path = require('path');
 const ZAPI_INSTANCE_ID = process.env.ZAPI_INSTANCE_ID || "3E036BB2BDD5306BF3C102121E6AE94B";
 const ZAPI_TOKEN = process.env.ZAPI_TOKEN || "5102B339BF1EAE5DAA24125D";
 const ZAPI_CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "Fb1aa6d984ce847a2a0cf414ce7cf9c5cS";
-const ZAPI_API_URL ="https://api.z-api.io/"
+const ZAPI_API_URL = "https://api.z-api.io/"
 const BASE_URL = `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}`;
+
 
 
 // ========================================================================
 // SUAS FUNÇÕES DE ENVIO E DOWNLOAD (100% MANTIDAS, SEM ALTERAÇÕES)
 // ========================================================================
 
-async function sendWhatsappMessage(phone, message) {
+/**
+ * Valida se o destinatário pode receber mensagens (Anti-Spam).
+ * @param {string} phone - Telefone do destinatário.
+ * @returns {Promise<boolean>} Retorna true se pode enviar, false caso contrário.
+ */
+async function validateMessageRecipient(phone) {
+  try {
+    // Importação tardia para evitar dependência circular
+    const { Client } = require('../database');
+    const { normalizePhoneNumberToCanonical } = require('../utils/phoneUtils');
+
+    const canonicalPhone = normalizePhoneNumberToCanonical(phone);
+    if (!canonicalPhone) return false;
+
+    // Se for o admin/suporte (exceção hardcoded ou env), permitir
+    // Implemente exceções se necessário, ex: if (canonicalPhone === process.env.ADMIN_PHONE) return true;
+
+    const todayDateString = new Date().toISOString().split('T')[0];
+
+    // Busca cliente ativo e com acesso (plano ou vitalício)
+    const client = await Client.findOne({
+      where: {
+        phone: canonicalPhone,
+        status: 'Ativo',
+        [Op.or]: [
+          { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+          { accessExpiresAt: { [Op.gte]: todayDateString } }
+        ]
+      }
+    });
+
+    if (client) {
+      return true;
+    }
+
+    logger.warn(`[WhatsAppService] BLOCKED: Tentativa de envio para ${canonicalPhone} bloqueada. Usuário inativo ou sem plano.`);
+    return false;
+
+  } catch (error) {
+    logger.error(`[WhatsAppService] Erro na validação de destinatário: ${error.message}`);
+    // Em caso de erro de DB, por segurança, bloqueia ou libera? 
+    // Para evitar spam massivo em erro, melhor bloquear e logar.
+    return false;
+  }
+}
+
+async function sendWhatsappMessage(phone, message, options = {}) {
+  // Options: { force: boolean } - Se true, ignora verificação de plano (usar para boas-vindas/erros críticos)
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN) {
     logger.error('[WhatsAppService] Variáveis de ambiente da Z-API não configuradas.');
     return null;
@@ -35,6 +84,16 @@ async function sendWhatsappMessage(phone, message) {
     logger.error('[WhatsAppService] Telefone e mensagem são obrigatórios para envio de texto.');
     return null;
   }
+
+  // --- ANTI-SPAM CHECK ---
+  if (!options.force) {
+    const canSend = await validateMessageRecipient(phone);
+    if (!canSend) {
+      return null; // Silenciosamente falha para não quebrar o fluxo. Warning já logado.
+    }
+  }
+  // -----------------------
+
 
   const endpoint = `${BASE_URL}/send-text`;
   const payload = {
@@ -59,7 +118,7 @@ async function sendWhatsappMessage(phone, message) {
   }
 }
 
-async function sendButtonListMessage(phone, messageText, buttons, listTitle = "Opções Disponíveis", buttonListText = "Ver Opções") {
+async function sendButtonListMessage(phone, messageText, buttons, listTitle = "Opções Disponíveis", buttonListText = "Ver Opções", options = {}) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN) {
     logger.error('[WhatsAppService] Variáveis de ambiente da Z-API não configuradas.');
     return null;
@@ -73,16 +132,25 @@ async function sendButtonListMessage(phone, messageText, buttons, listTitle = "O
     return null;
   }
 
+  // --- ANTI-SPAM CHECK ---
+  if (!options.force) {
+    const canSend = await validateMessageRecipient(phone);
+    if (!canSend) {
+      return null;
+    }
+  }
+  // -----------------------
+
   const endpoint = `${BASE_URL}/send-button-list`;
 
   const payload = {
     phone: phone.replace(/\D/g, ''),
-    message: messageText, 
+    message: messageText,
     buttonList: {
-      buttons: buttons.map(btn => ({ id: btn.id.toString(), label: btn.label })), 
+      buttons: buttons.map(btn => ({ id: btn.id.toString(), label: btn.label })),
     }
   };
-  
+
   const headers = {
     'Content-Type': 'application/json',
     'client-token': ZAPI_CLIENT_TOKEN,
@@ -122,18 +190,18 @@ async function downloadZapiMedia(mediaUrl) {
       },
       responseType: 'stream',
     });
-    
+
     let filename = 'audio.ogg';
     try {
-        const urlPath = new URL(mediaUrl).pathname;
-        const baseName = path.basename(urlPath);
-        if (baseName && baseName.includes('.')) {
-            filename = baseName;
-        }
+      const urlPath = new URL(mediaUrl).pathname;
+      const baseName = path.basename(urlPath);
+      if (baseName && baseName.includes('.')) {
+        filename = baseName;
+      }
     } catch (e) {
-        logger.warn(`[WhatsAppService - Download] Não foi possível parsear a URL para extrair nome do arquivo: ${mediaUrl}. Usando default: ${filename}`);
+      logger.warn(`[WhatsAppService - Download] Não foi possível parsear a URL para extrair nome do arquivo: ${mediaUrl}. Usando default: ${filename}`);
     }
-    
+
     logger.info(`[WhatsAppService - Download] Mídia baixada com sucesso. Nome de arquivo sugerido: ${filename}`);
     return { stream: response.data, filename };
 
@@ -167,7 +235,7 @@ async function downloadZapiMedia(mediaUrl) {
 async function getZapiInstanceStatus() {
   const endpoint = `${ZAPI_API_URL}/instances/${ZAPI_INSTANCE_ID}/status`;
   const headers = { 'client-token': ZAPI_CLIENT_TOKEN };
-  
+
   try {
     logger.info(`[WhatsAppService] Verificando status da instância Z-API: ${ZAPI_INSTANCE_ID}`);
     const response = await axios.get(endpoint, { headers });
@@ -185,10 +253,10 @@ async function getZapiInstanceStatus() {
  * @returns {string} A URL completa para ser usada em uma tag <img>.
  */
 function getZapiQrCodeImageUrl() {
-    // Este endpoint é acessado diretamente pelo frontend, então apenas montamos a URL.
-    const qrCodeUrl = `${BASE_URL}/qr-code/image`;
-    logger.info(`[WhatsAppService] Gerando URL do QR Code: ${qrCodeUrl}`);
-    return qrCodeUrl;
+  // Este endpoint é acessado diretamente pelo frontend, então apenas montamos a URL.
+  const qrCodeUrl = `${BASE_URL}/qr-code/image`;
+  logger.info(`[WhatsAppService] Gerando URL do QR Code: ${qrCodeUrl}`);
+  return qrCodeUrl;
 }
 
 
@@ -209,8 +277,8 @@ async function pinWhatsappMessage(phone, messageId, duration = '30_days') {
   // O endpoint da Z-API para esta ação pode ser o mesmo, mas o método muda.
   // Baseado na sua documentação, o endpoint pode precisar ser ajustado se for diferente.
   // Vamos assumir que a URL base está correta.
-  const endpoint = `${BASE_URL}/pin-message`; 
-  
+  const endpoint = `${BASE_URL}/pin-message`;
+
   const payload = {
     phone: phone.replace(/\D/g, ''),
     messageId: messageId,
@@ -227,7 +295,7 @@ async function pinWhatsappMessage(phone, messageId, duration = '30_days') {
 
   try {
     logger.info(`[WhatsAppService Pin] Tentando fixar a mensagem ID ${messageId} para ${payload.phone} por ${duration}.`);
-    
+
     // <<< CORREÇÃO PRINCIPAL: Usando axios.patch conforme a documentação >>>
     const response = await axios.patch(endpoint, payload, { headers });
 

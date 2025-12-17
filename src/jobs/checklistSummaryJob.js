@@ -10,6 +10,16 @@ const { sendWhatsappMessage } = require('../services/whatsappService');
  */
 async function sendChecklistSummaries() {
   logger.info('[JOB CHECKLIST] Iniciando verificação de resumos diários de checklist...');
+
+  // <<< CHECK GLOBAL SWITCH >>>
+  const systemService = require('../features/System/system.service');
+  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  if (!isEnabled) {
+    logger.warn('[JOB CHECKLIST] Job abortado: Global switch OFF.');
+    return;
+  }
+  // ---------------------------
+
   try {
     const today = new Date().toISOString().split('T')[0];
 
@@ -31,13 +41,13 @@ async function sendChecklistSummaries() {
           include: [{
             model: Client,
             as: 'ownerClient',
-            where: { 
-                status: 'Ativo', 
-                phone: { [Op.ne]: null },
-                [Op.or]: [
-                    { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
-                    { accessExpiresAt: { [Op.gte]: today } }
-                ]
+            where: {
+              status: 'Ativo',
+              phone: { [Op.ne]: null },
+              [Op.or]: [
+                { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+                { accessExpiresAt: { [Op.gte]: today } }
+              ]
             },
             required: true,
           }],
@@ -86,7 +96,7 @@ async function sendChecklistSummaries() {
       }
 
       message += `\n\nLembre-se: amanhã a lista zera para um novo começo. Para adicionar tarefas a qualquer momento, é só me dizer: *"adicionar tarefa [descrição da tarefa]"*.`;
-      
+
       try {
         await sendWhatsappMessage(client.phone, message);
         logger.info(`[JOB CHECKLIST] Resumo enviado para ${client.name} (Conta: ${checklist.financialAccount.accountName}).`);
@@ -105,9 +115,9 @@ async function sendChecklistSummaries() {
  */
 function startChecklistSummaryJob() {
   const schedule = '0 22 * * *'; // Todo dia às 22:00
-  
+
   logger.info(`[JOB CHECKLIST] Agendado para rodar diariamente às 22h (schedule: ${schedule})`);
-  
+
   cron.schedule(schedule, sendChecklistSummaries, {
     timezone: process.env.TZ || "America/Sao_Paulo",
   });

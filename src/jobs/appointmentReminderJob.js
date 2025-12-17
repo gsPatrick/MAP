@@ -6,7 +6,7 @@ const { sendWhatsappMessage } = require('../services/whatsappService');
 const formatter = require('../features/WhatsappHandler/response.formatter');
 const aiModelService = require('../services/aiModelService'); // Importado para mensagens criativas
 const { Op } = require('sequelize'); // Importar Op para queries complexas
-const { FinancialAccount, Client } = require('../database'); 
+const { FinancialAccount, Client } = require('../database');
 
 /**
  * Envia lembretes para compromissos de contas de Pessoa Física (PF).
@@ -47,7 +47,7 @@ async function sendPersonalAccountReminders() {
 
     // 2. Extrair apenas os IDs para um array de números.
     const activePfAccountIds = activePfAccounts.map(acc => acc.id);
-    
+
     // 3. Chamar o serviço de agendamentos com o array de IDs correto.
     const appointmentsToRemind = await appointmentService.getPFAppointmentsNeedingReminder(activePfAccountIds);
 
@@ -76,16 +76,16 @@ async function sendPersonalAccountReminders() {
 
         const sentSuccessfully = await sendWhatsappMessage(clientPhone, message);
         if (sentSuccessfully) {
-            logger.info(`[JOB LEMBRETE - PF] Lembrete para "${app.title}" (Conta: ${accountName}) enviado para Cliente ${clientFirstName} (${clientPhone})`);
-            await appointmentService.markReminderAsSent(app.id);
+          logger.info(`[JOB LEMBRETE - PF] Lembrete para "${app.title}" (Conta: ${accountName}) enviado para Cliente ${clientFirstName} (${clientPhone})`);
+          await appointmentService.markReminderAsSent(app.id);
         } else {
-            logger.error(`[JOB LEMBRETE - PF] Falha ao enviar lembrete via WhatsApp para compromisso ID ${app.id}.`);
+          logger.error(`[JOB LEMBRETE - PF] Falha ao enviar lembrete via WhatsApp para compromisso ID ${app.id}.`);
         }
       } catch (sendError) {
         logger.error(`[JOB LEMBRETE - PF] Erro ao processar/enviar lembrete para compromisso ID ${app.id}:`, { message: sendError.message, stack: sendError.stack });
       }
     }
-     logger.info('[JOB LEMBRETE - PF] Verificação de compromissos pessoais concluída.');
+    logger.info('[JOB LEMBRETE - PF] Verificação de compromissos pessoais concluída.');
   } catch (error) {
     logger.error('[JOB LEMBRETE - PF] Erro geral:', { message: error.message, stack: error.stack });
   }
@@ -96,82 +96,92 @@ async function sendPersonalAccountReminders() {
  * Usa a lógica de 24h e 30min antes do evento.
  */
 async function sendBusinessAccountReminders() {
-    logger.info('[JOB LEMBRETE - PJ/MEI] Verificando compromissos de contas de negócio...');
-    // <<< INÍCIO DA MODIFICAÇÃO >>>
-    // O filtro de assinatura ativa será passado para as funções do service.
-    const today = new Date().toISOString().split('T')[0];
-    const clientSubscriptionFilter = {
-        status: 'Ativo',
-        [Op.or]: [
-            { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
-            { accessExpiresAt: { [Op.gte]: today } }
-        ]
-    };
-    // <<< FIM DA MODIFICAÇÃO >>>
+  logger.info('[JOB LEMBRETE - PJ/MEI] Verificando compromissos de contas de negócio...');
+  // <<< INÍCIO DA MODIFICAÇÃO >>>
+  // O filtro de assinatura ativa será passado para as funções do service.
+  const today = new Date().toISOString().split('T')[0];
+  const clientSubscriptionFilter = {
+    status: 'Ativo',
+    [Op.or]: [
+      { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+      { accessExpiresAt: { [Op.gte]: today } }
+    ]
+  };
+  // <<< FIM DA MODIFICAÇÃO >>>
 
-    // Lembretes de 24 horas
-    try {
-        const appointments24h = await appointmentService.getPJAppointmentsNeeding24hReminder(clientSubscriptionFilter);
-        if (appointments24h.length > 0) {
-            logger.info(`[JOB LEMBRETE - PJ/MEI] ${appointments24h.length} compromissos encontrados para lembrete de 24h.`);
-            for (const app of appointments24h) {
-                const providerName = app.financialAccount.accountName || app.financialAccount.ownerClient.name;
-                for (const bClient of app.businessClients) {
-                    if (bClient.phone) {
-                        const creativeMessage = await aiModelService.generateClientReminderMessage(providerName, bClient.name, app.toJSON(), "24 horas");
-                        const formattedDetails = formatter.formatAppointmentDataStructure(app.toJSON(), true);
-                        const finalMessage = `${creativeMessage}\n\n${formattedDetails}\n\n---\nLembrete de *${providerName}* via MAP no Controle.`;
-                        
-                        const sent = await sendWhatsappMessage(bClient.phone, finalMessage);
-                        if (sent) {
-                            logger.info(`[JOB LEMBRETE - PJ/MEI] Lembrete de 24h para Appt ID ${app.id} enviado para BusinessClient ${bClient.name} (${bClient.phone}).`);
-                        }
-                    }
-                }
-                await appointmentService.mark24hReminderAsSent(app.id);
+  // Lembretes de 24 horas
+  try {
+    const appointments24h = await appointmentService.getPJAppointmentsNeeding24hReminder(clientSubscriptionFilter);
+    if (appointments24h.length > 0) {
+      logger.info(`[JOB LEMBRETE - PJ/MEI] ${appointments24h.length} compromissos encontrados para lembrete de 24h.`);
+      for (const app of appointments24h) {
+        const providerName = app.financialAccount.accountName || app.financialAccount.ownerClient.name;
+        for (const bClient of app.businessClients) {
+          if (bClient.phone) {
+            const creativeMessage = await aiModelService.generateClientReminderMessage(providerName, bClient.name, app.toJSON(), "24 horas");
+            const formattedDetails = formatter.formatAppointmentDataStructure(app.toJSON(), true);
+            const finalMessage = `${creativeMessage}\n\n${formattedDetails}\n\n---\nLembrete de *${providerName}* via MAP no Controle.`;
+
+            const sent = await sendWhatsappMessage(bClient.phone, finalMessage);
+            if (sent) {
+              logger.info(`[JOB LEMBRETE - PJ/MEI] Lembrete de 24h para Appt ID ${app.id} enviado para BusinessClient ${bClient.name} (${bClient.phone}).`);
             }
+          }
         }
-    } catch (error) {
-        logger.error('[JOB LEMBRETE - PJ/MEI] Erro ao processar lembretes de 24h:', error);
+        await appointmentService.mark24hReminderAsSent(app.id);
+      }
     }
+  } catch (error) {
+    logger.error('[JOB LEMBRETE - PJ/MEI] Erro ao processar lembretes de 24h:', error);
+  }
 
-    // Lembretes de 30 minutos
-    try {
-        const appointments30min = await appointmentService.getPJAppointmentsNeeding30minReminder(clientSubscriptionFilter);
-        if (appointments30min.length > 0) {
-            logger.info(`[JOB LEMBRETE - PJ/MEI] ${appointments30min.length} compromissos encontrados para lembrete de 30min.`);
-            for (const app of appointments30min) {
-                const providerName = app.financialAccount.accountName || app.financialAccount.ownerClient.name;
-                for (const bClient of app.businessClients) {
-                    if (bClient.phone) {
-                        const creativeMessage = await aiModelService.generateClientReminderMessage(providerName, bClient.name, app.toJSON(), "30 minutos");
-                        const formattedDetails = formatter.formatAppointmentDataStructure(app.toJSON(), true);
-                        const finalMessage = `${creativeMessage}\n\n${formattedDetails}\n\n---\nLembrete de *${providerName}* via MAP no Controle.`;
+  // Lembretes de 30 minutos
+  try {
+    const appointments30min = await appointmentService.getPJAppointmentsNeeding30minReminder(clientSubscriptionFilter);
+    if (appointments30min.length > 0) {
+      logger.info(`[JOB LEMBRETE - PJ/MEI] ${appointments30min.length} compromissos encontrados para lembrete de 30min.`);
+      for (const app of appointments30min) {
+        const providerName = app.financialAccount.accountName || app.financialAccount.ownerClient.name;
+        for (const bClient of app.businessClients) {
+          if (bClient.phone) {
+            const creativeMessage = await aiModelService.generateClientReminderMessage(providerName, bClient.name, app.toJSON(), "30 minutos");
+            const formattedDetails = formatter.formatAppointmentDataStructure(app.toJSON(), true);
+            const finalMessage = `${creativeMessage}\n\n${formattedDetails}\n\n---\nLembrete de *${providerName}* via MAP no Controle.`;
 
-                        const sent = await sendWhatsappMessage(bClient.phone, finalMessage);
-                         if (sent) {
-                            logger.info(`[JOB LEMBRETE - PJ/MEI] Lembrete de 30min para Appt ID ${app.id} enviado para BusinessClient ${bClient.name} (${bClient.phone}).`);
-                        }
-                    }
-                }
-                await appointmentService.mark30minReminderAsSent(app.id);
+            const sent = await sendWhatsappMessage(bClient.phone, finalMessage);
+            if (sent) {
+              logger.info(`[JOB LEMBRETE - PJ/MEI] Lembrete de 30min para Appt ID ${app.id} enviado para BusinessClient ${bClient.name} (${bClient.phone}).`);
             }
+          }
         }
-    } catch (error) {
-        logger.error('[JOB LEMBRETE - PJ/MEI] Erro ao processar lembretes de 30min:', error);
+        await appointmentService.mark30minReminderAsSent(app.id);
+      }
     }
-    
-    logger.info('[JOB LEMBRETE - PJ/MEI] Verificação de compromissos de negócio concluída.');
+  } catch (error) {
+    logger.error('[JOB LEMBRETE - PJ/MEI] Erro ao processar lembretes de 30min:', error);
+  }
+
+  logger.info('[JOB LEMBRETE - PJ/MEI] Verificação de compromissos de negócio concluída.');
 }
 
 /**
  * Função principal do Job, que chama as duas lógicas de lembrete.
  */
 async function sendAllAppointmentReminders() {
-    logger.info('[JOB LEMBRETE - MASTER] Iniciando ciclo de verificação de lembretes...');
-    await sendPersonalAccountReminders();
-    await sendBusinessAccountReminders();
-    logger.info('[JOB LEMBRETE - MASTER] Ciclo de verificação de lembretes finalizado.');
+  logger.info('[JOB LEMBRETE - MASTER] Iniciando ciclo de verificação de lembretes...');
+
+  // <<< CHECK GLOBAL SWITCH >>>
+  const systemService = require('../features/System/system.service');
+  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  if (!isEnabled) {
+    logger.warn('[JOB LEMBRETE - MASTER] Job abortado: Global switch OFF.');
+    return;
+  }
+  // ---------------------------
+
+  await sendPersonalAccountReminders();
+  await sendBusinessAccountReminders();
+  logger.info('[JOB LEMBRETE - MASTER] Ciclo de verificação de lembretes finalizado.');
 }
 
 

@@ -1,130 +1,130 @@
-  // src/services/aiModelService.js teste
-  const { OpenAI } = require('openai');
-  const logger =require('../utils/logger');
-  const axios = require('axios'); 
-  const fs = require('fs');
-  const path = require('path');
-  const os = require('os');
+// src/services/aiModelService.js teste
+const { OpenAI } = require('openai');
+const logger = require('../utils/logger');
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
-  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-  if (!OPENAI_API_KEY) {
-    logger.error('[AI SERVICE] OPENAI_API_KEY não está configurada no .env!');
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+if (!OPENAI_API_KEY) {
+  logger.error('[AI SERVICE] OPENAI_API_KEY não está configurada no .env!');
+}
+
+const openai = new OpenAI({
+  apiKey: OPENAI_API_KEY,
+});
+
+const ASSISTANT_NAME = "MAP no Controle";
+
+// CÓDIGO MODIFICADO E OTIMIZADO da função transcribeAudioStream
+async function transcribeAudioStream(audioStream, inputFilename) {
+  if (!process.env.OPENAI_API_KEY) {
+    logger.error('[AI SERVICE - WHISPER] OPENAI_API_KEY não configurada.');
+    throw new Error('Configuração da API da OpenAI ausente para transcrição.');
+  }
+  if (!audioStream) {
+    logger.error('[AI SERVICE - WHISPER] Stream de áudio não fornecido.');
+    throw new Error('Stream de áudio é necessário para transcrição.');
   }
 
-  const openai = new OpenAI({
-    apiKey: OPENAI_API_KEY,
-  });
+  // Garante um nome de arquivo válido para o Whisper
+  const filename = inputFilename || 'audio.ogg';
+  const tempFilePath = path.join(os.tmpdir(), `whisper-${Date.now()}-${filename}`);
 
-  const ASSISTANT_NAME = "MAP no Controle";
+  try {
+    logger.info(`[AI SERVICE - WHISPER] Iniciando salvamento do áudio em arquivo temporário: ${tempFilePath}`);
 
-  // CÓDIGO MODIFICADO E OTIMIZADO da função transcribeAudioStream
-  async function transcribeAudioStream(audioStream, inputFilename) {
-    if (!process.env.OPENAI_API_KEY) {
-      logger.error('[AI SERVICE - WHISPER] OPENAI_API_KEY não configurada.');
-      throw new Error('Configuração da API da OpenAI ausente para transcrição.');
-    }
-    if (!audioStream) {
-      logger.error('[AI SERVICE - WHISPER] Stream de áudio não fornecido.');
-      throw new Error('Stream de áudio é necessário para transcrição.');
-    }
-    
-    // Garante um nome de arquivo válido para o Whisper
-    const filename = inputFilename || 'audio.ogg';
-    const tempFilePath = path.join(os.tmpdir(), `whisper-${Date.now()}-${filename}`);
-    
-    try {
-      logger.info(`[AI SERVICE - WHISPER] Iniciando salvamento do áudio em arquivo temporário: ${tempFilePath}`);
-      
-      // Cria um stream de escrita para o arquivo temporário
-      const writer = fs.createWriteStream(tempFilePath);
-      
-      // Conecta o stream de download (audioStream) ao stream de escrita (writer)
-      audioStream.pipe(writer);
+    // Cria um stream de escrita para o arquivo temporário
+    const writer = fs.createWriteStream(tempFilePath);
 
-      // Aguarda o download e o salvamento do arquivo serem concluídos
-      await new Promise((resolve, reject) => {
-        writer.on('finish', resolve);
-        writer.on('error', (err) => {
-          logger.error(`[AI SERVICE - WHISPER] Erro ao salvar o arquivo de áudio temporário: ${err.message}`);
-          reject(err);
-        });
+    // Conecta o stream de download (audioStream) ao stream de escrita (writer)
+    audioStream.pipe(writer);
+
+    // Aguarda o download e o salvamento do arquivo serem concluídos
+    await new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', (err) => {
+        logger.error(`[AI SERVICE - WHISPER] Erro ao salvar o arquivo de áudio temporário: ${err.message}`);
+        reject(err);
       });
+    });
 
-      logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário salvo com sucesso. Enviando para transcrição...`);
+    logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário salvo com sucesso. Enviando para transcrição...`);
 
-      // Envia o arquivo salvo no disco para a API da OpenAI
-      const transcription = await openai.audio.transcriptions.create({
-        file: fs.createReadStream(tempFilePath), // << A chave é criar um ReadStream a partir do arquivo salvo
-        model: "whisper-1",
-        language: "pt",
-        response_format: "text"
-      });
+    // Envia o arquivo salvo no disco para a API da OpenAI
+    const transcription = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(tempFilePath), // << A chave é criar um ReadStream a partir do arquivo salvo
+      model: "whisper-1",
+      language: "pt",
+      response_format: "text"
+    });
 
-      const transcribedText = String(transcription); 
+    const transcribedText = String(transcription);
 
-      if (transcribedText.trim() === "") {
-        logger.warn(`[AI SERVICE - WHISPER] Transcrição do arquivo ${filename} resultou em texto vazio.`);
-        return ""; 
-      }
+    if (transcribedText.trim() === "") {
+      logger.warn(`[AI SERVICE - WHISPER] Transcrição do arquivo ${filename} resultou em texto vazio.`);
+      return "";
+    }
 
-      logger.info(`[AI SERVICE - WHISPER] Texto transcrito de ${filename}: "${transcribedText.substring(0, 100)}..."`);
-      return transcribedText;
+    logger.info(`[AI SERVICE - WHISPER] Texto transcrito de ${filename}: "${transcribedText.substring(0, 100)}..."`);
+    return transcribedText;
 
-    } catch (error) {
-      let errorMessage = `Falha ao transcrever áudio (${filename})`;
-      if (error.response && error.response.data) {
-          logger.error('[AI SERVICE - WHISPER] Erro da API OpenAI:', error.response.data);
-          errorMessage += `: ${JSON.stringify(error.response.data.error?.message || error.response.data)}`;
+  } catch (error) {
+    let errorMessage = `Falha ao transcrever áudio (${filename})`;
+    if (error.response && error.response.data) {
+      logger.error('[AI SERVICE - WHISPER] Erro da API OpenAI:', error.response.data);
+      errorMessage += `: ${JSON.stringify(error.response.data.error?.message || error.response.data)}`;
+    } else {
+      logger.error('[AI SERVICE - WHISPER] Erro durante a transcrição do áudio:', { message: error.message, stack: error.stack });
+      errorMessage += `: ${error.message}`;
+    }
+    throw new Error(errorMessage);
+  } finally {
+    // --- LIMPEZA ESSENCIAL ---
+    // Garante que o arquivo temporário seja sempre excluído, mesmo se ocorrer um erro.
+    fs.unlink(tempFilePath, (err) => {
+      if (err) {
+        logger.warn(`[AI SERVICE - WHISPER] Não foi possível excluir o arquivo de áudio temporário ${tempFilePath}: ${err.message}`);
       } else {
-          logger.error('[AI SERVICE - WHISPER] Erro durante a transcrição do áudio:', { message: error.message, stack: error.stack });
-          errorMessage += `: ${error.message}`;
+        logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário ${tempFilePath} excluído com sucesso.`);
       }
-      throw new Error(errorMessage);
-    } finally {
-      // --- LIMPEZA ESSENCIAL ---
-      // Garante que o arquivo temporário seja sempre excluído, mesmo se ocorrer um erro.
-      fs.unlink(tempFilePath, (err) => {
-        if (err) {
-          logger.warn(`[AI SERVICE - WHISPER] Não foi possível excluir o arquivo de áudio temporário ${tempFilePath}: ${err.message}`);
-        } else {
-          logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário ${tempFilePath} excluído com sucesso.`);
-        }
-      });
-    }
+    });
+  }
+}
+
+function buildSystemPrompt(conversationContext) {
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" }));
+  const today = now.toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const currentTime = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+  const accountCtx = conversationContext.currentFinancialAccountId
+    ? `Você está operando na conta financeira "${conversationContext.currentFinancialAccountName}" (ID: ${conversationContext.currentFinancialAccountId}, Tipo: ${conversationContext.currentFinancialAccountType}).`
+    : "Nenhuma conta financeira foi selecionada ainda. Se o usuário tentar realizar uma ação que necessite de uma conta, você deve primeiro guiá-lo a selecionar ou criar uma.";
+
+  const clientNameForPrompt = conversationContext.clientName || "pessoa incrível";
+
+  const sharedAccessInfo = conversationContext.isSharedAccess
+    ? `Importante: Você está em MODO DE ACESSO COMPARTILHADO. O usuário logado, '${clientNameForPrompt}', é um convidado gerenciando a conta em nome de outra pessoa. Portanto, ${clientNameForPrompt} NÃO PODE realizar ações que modifiquem a estrutura da conta do proprietário (como criar/deletar contas financeiras do dono, alterar dados cadastrais do dono, gerenciar outros compartilhamentos em nome do dono). Foque em responder como um assistente para o convidado, mas sempre reconhecendo que as operações são para a conta do proprietário. NUNCA detecte ações como CREATE_FINANCIAL_ACCOUNT ou GRANT_ACCESS neste modo.`
+    : "";
+
+  let availableCategoriesText = "Nenhuma categoria financeira cadastrada para esta conta.";
+  if (conversationContext.availableFinancialCategories && conversationContext.availableFinancialCategories.length > 0) {
+    availableCategoriesText = "As categorias financeiras disponíveis para esta conta são: " +
+      conversationContext.availableFinancialCategories.map(cat => `"${cat.name}" (ID: ${cat.id})`).join(', ') + ".";
   }
 
-  function buildSystemPrompt(conversationContext) {
-    const now = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
-    const today = now.toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-    const currentTime = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const availableFinancialAccountsList = conversationContext.availableFinancialAccounts && conversationContext.availableFinancialAccounts.length > 0
+    ? `As contas financeiras que você pode gerenciar para este usuário são: ${conversationContext.availableFinancialAccounts.map(acc => `"${acc.accountName || acc.name}" (do tipo ${acc.accountType || acc.type})`).join(', ')}.`
+    : "Nenhuma conta financeira acessível foi encontrada para este usuário.";
 
-    const accountCtx = conversationContext.currentFinancialAccountId
-      ? `Você está operando na conta financeira "${conversationContext.currentFinancialAccountName}" (ID: ${conversationContext.currentFinancialAccountId}, Tipo: ${conversationContext.currentFinancialAccountType}).`
-      : "Nenhuma conta financeira foi selecionada ainda. Se o usuário tentar realizar uma ação que necessite de uma conta, você deve primeiro guiá-lo a selecionar ou criar uma.";
-    
-    const clientNameForPrompt = conversationContext.clientName || "pessoa incrível";
+  const availableCreditCardsList = conversationContext.availableCreditCards && conversationContext.availableCreditCards.length > 0
+    ? `Os cartões de crédito disponíveis nesta conta são: ${conversationContext.availableCreditCards.map(c => `"${c.name}"`).join(', ')}.`
+    : "Não há cartões de crédito cadastrados nesta conta.";
 
-    const sharedAccessInfo = conversationContext.isSharedAccess
-      ? `Importante: Você está em MODO DE ACESSO COMPARTILHADO. O usuário logado, '${clientNameForPrompt}', é um convidado gerenciando a conta em nome de outra pessoa. Portanto, ${clientNameForPrompt} NÃO PODE realizar ações que modifiquem a estrutura da conta do proprietário (como criar/deletar contas financeiras do dono, alterar dados cadastrais do dono, gerenciar outros compartilhamentos em nome do dono). Foque em responder como um assistente para o convidado, mas sempre reconhecendo que as operações são para a conta do proprietário. NUNCA detecte ações como CREATE_FINANCIAL_ACCOUNT ou GRANT_ACCESS neste modo.`
-      : "";
-
-    let availableCategoriesText = "Nenhuma categoria financeira cadastrada para esta conta.";
-    if (conversationContext.availableFinancialCategories && conversationContext.availableFinancialCategories.length > 0) {
-        availableCategoriesText = "As categorias financeiras disponíveis para esta conta são: " +
-            conversationContext.availableFinancialCategories.map(cat => `"${cat.name}" (ID: ${cat.id})`).join(', ') + ".";
-    }
-
-    const availableFinancialAccountsList = conversationContext.availableFinancialAccounts && conversationContext.availableFinancialAccounts.length > 0
-      ? `As contas financeiras que você pode gerenciar para este usuário são: ${conversationContext.availableFinancialAccounts.map(acc => `"${acc.accountName || acc.name}" (do tipo ${acc.accountType || acc.type})`).join(', ')}.`
-      : "Nenhuma conta financeira acessível foi encontrada para este usuário.";
-
-    const availableCreditCardsList = conversationContext.availableCreditCards && conversationContext.availableCreditCards.length > 0
-      ? `Os cartões de crédito disponíveis nesta conta são: ${conversationContext.availableCreditCards.map(c => `"${c.name}"`).join(', ')}.`
-      : "Não há cartões de crédito cadastrados nesta conta.";
-
-    const availableBusinessClientsList = conversationContext.availableBusinessClients && conversationContext.availableBusinessClients.length > 0
-      ? `Os clientes de negócio cadastrados nesta conta são: ${conversationContext.availableBusinessClients.map(c => `"${c.name}"`).join(', ')}.`
-      : "Não há clientes de negócio cadastrados nesta conta.";
+  const availableBusinessClientsList = conversationContext.availableBusinessClients && conversationContext.availableBusinessClients.length > 0
+    ? `Os clientes de negócio cadastrados nesta conta são: ${conversationContext.availableBusinessClients.map(c => `"${c.name}"`).join(', ')}.`
+    : "Não há clientes de negócio cadastrados nesta conta.";
 
   let prompt = `Você é o "${ASSISTANT_NAME}", um assistente financeiro, administrativo e de bem-estar para WhatsApp. Sua personalidade é EXTREMAMENTE amigável, divertida, espirituosa, um pouco brincalhona e muito prestativa. Use emojis contextuais para dar vida às suas respostas, que devem ser de tamanho médio a longo, sempre informativas e completas, mas sem serem prolixas. Hoje é ${today}, agora são ${currentTime}. ${accountCtx} ${sharedAccessInfo}
 
@@ -922,119 +922,141 @@
   **4. GERAÇÃO DA RESPOSTA FINAL:**
     - Se uma ação foi detectada no passo 3 (o que significa que todos os dados obrigatórios estavam presentes), gere a resposta criativa no \`overall_summary_suggestion\` seguindo as regras de "TOM E ESTILO DA CONVERSA".
   `;
-    return prompt;
+  return prompt;
+}
+
+async function interpretUserMessage(userMessage, conversationContext = {}) {
+  if (!OPENAI_API_KEY) {
+    logger.error('[AI SERVICE] OPENAI_API_KEY não configurada.');
+    const clientNameForError = conversationContext.clientName || "você";
+    const errorMessageIntro = `Puxa, ${clientNameForError}! 🧠💥 Parece que estou com um probleminha técnico para acessar minha inteligência...`;
+    const errorDetails = `Não consigo pensar direito agora porque minha chave da OpenAI não está configurada.`;
+    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://www.map-nocontrole.com.br/`;
+    const finalErrorMessage = `${errorMessageIntro}\n\n🎯 Detalhes do Problema:\n\n${errorDetails}\n\n${platformLink}`;
+
+    return {
+      overall_summary_suggestion: errorMessageIntro,
+      detected_actions: [],
+      clarifications_needed: [],
+      ununderstood_segments: [userMessage],
+      reply_to_user_suggestion: finalErrorMessage
+    };
   }
 
-  async function interpretUserMessage(userMessage, conversationContext = {}) {
-    if (!OPENAI_API_KEY) {
-      logger.error('[AI SERVICE] OPENAI_API_KEY não configurada.');
-      const clientNameForError = conversationContext.clientName || "você";
-      const errorMessageIntro = `Puxa, ${clientNameForError}! 🧠💥 Parece que estou com um probleminha técnico para acessar minha inteligência...`;
-      const errorDetails = `Não consigo pensar direito agora porque minha chave da OpenAI não está configurada.`;
-      const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://www.map-nocontrole.com.br/`;
-      const finalErrorMessage = `${errorMessageIntro}\n\n🎯 Detalhes do Problema:\n\n${errorDetails}\n\n${platformLink}`;
+  const clientNameForPrompt = conversationContext.clientName || "pessoa incrível";
+  const systemPromptContent = buildSystemPrompt(conversationContext);
 
-      return {
-          overall_summary_suggestion: errorMessageIntro,
-          detected_actions: [],
-          clarifications_needed: [],
-          ununderstood_segments: [userMessage],
-          reply_to_user_suggestion: finalErrorMessage
-      };
+  const conversationHistoryForAPI = (conversationContext.conversationHistory || [])
+    .map(entry => ({ role: entry.role, content: entry.content }));
+
+  let finalSystemPromptContent = systemPromptContent
+    .replace("{{CONVERSATION_HISTORY}}", JSON.stringify(conversationHistoryForAPI.slice(-6)));
+
+  finalSystemPromptContent = finalSystemPromptContent.replace("MENSAGEM DO USUÁRIO:\n\"{{USER_MESSAGE}}\"", "").trim();
+
+  // Modificando para suportar Multimodal (Texto ou Áudio)
+  let userMessageContent = [];
+
+  if (conversationContext.audioPayload) {
+    // Se houver áudio, construímos o payload multimodal
+    logger.info('[AI SERVICE] Preparando payload MULTIMODAL (audio) para OpenAI.');
+    userMessageContent.push({
+      type: "input_audio",
+      input_audio: {
+        data: conversationContext.audioPayload.data, // Base64
+        format: conversationContext.audioPayload.format || "ogg"
+      }
+    });
+    // Opcional: Adicionar texto se houver (neste caso, messageText é vazio ou placeholder)
+    if (userMessage && userMessage.trim() !== "") {
+      userMessageContent.push({ type: "text", text: userMessage });
     }
+  } else {
+    // Payload de texto padrão
+    userMessageContent = userMessage;
+  }
 
-    const clientNameForPrompt = conversationContext.clientName || "pessoa incrível";
-    const systemPromptContent = buildSystemPrompt(conversationContext); 
+  const messagesToSendToAPI = [
+    { role: "system", content: finalSystemPromptContent },
+    ...conversationHistoryForAPI.slice(-4),
+    { role: "user", content: userMessageContent }
+  ];
 
-    const conversationHistoryForAPI = (conversationContext.conversationHistory || [])
-        .map(entry => ({ role: entry.role, content: entry.content }));
+  const modelToUse = "gpt-4o";
 
-    let finalSystemPromptContent = systemPromptContent
-        .replace("{{CONVERSATION_HISTORY}}", JSON.stringify(conversationHistoryForAPI.slice(-6)));
+  logger.debug('[AI SERVICE] Enviando para OpenAI:', {
+    model: modelToUse,
+    messageCount: messagesToSendToAPI.length,
+    userMessageLength: userMessage.length,
+  });
 
-    finalSystemPromptContent = finalSystemPromptContent.replace("MENSAGEM DO USUÁRIO:\n\"{{USER_MESSAGE}}\"", "").trim();
-
-    const messagesToSendToAPI = [
-        {role: "system", content: finalSystemPromptContent},
-        ...conversationHistoryForAPI.slice(-4), 
-        {role: "user", content: userMessage}
-    ];
-
-    const modelToUse = "gpt-4o"; 
-
-    logger.debug('[AI SERVICE] Enviando para OpenAI:', {
-        model: modelToUse,
-        messageCount: messagesToSendToAPI.length,
-        userMessageLength: userMessage.length,
+  try {
+    const completion = await openai.chat.completions.create({
+      model: modelToUse,
+      messages: messagesToSendToAPI,
+      temperature: 0.15,
+      response_format: { type: "json_object" },
     });
 
-    try {
-      const completion = await openai.chat.completions.create({
-        model: modelToUse,
-        messages: messagesToSendToAPI,
-        temperature: 0.15, 
-        response_format: { type: "json_object" },
-      });
+    const aiResultContent = completion.choices[0].message.content;
+    if (!aiResultContent) throw new Error("Resposta da IA vazia ou inválida.");
 
-      const aiResultContent = completion.choices[0].message.content;
-      if (!aiResultContent) throw new Error("Resposta da IA vazia ou inválida.");
+    const parsedResult = JSON.parse(aiResultContent);
+    logger.info(`[AI SERVICE] Resultado da IA (${modelToUse}) parseado com sucesso.`);
+    logger.debug('[AI SERVICE] Parsed AI Result:', parsedResult);
 
-      const parsedResult = JSON.parse(aiResultContent);
-      logger.info(`[AI SERVICE] Resultado da IA (${modelToUse}) parseado com sucesso.`);
-      logger.debug('[AI SERVICE] Parsed AI Result:', parsedResult);
-
-      if (!parsedResult.overall_summary_suggestion && parsedResult.reply_to_user_suggestion && parsedResult.detected_actions && parsedResult.detected_actions.length > 0) {
-          if (!parsedResult.clarifications_needed || parsedResult.clarifications_needed.length === 0) {
-              if (parsedResult.reply_to_user_suggestion.includes(clientNameForPrompt) || parsedResult.detected_actions.every(a => (a.action || a.action_type)?.startsWith("GENERAL_"))) {
-                  parsedResult.overall_summary_suggestion = parsedResult.reply_to_user_suggestion;
-              }
-          }
+    if (!parsedResult.overall_summary_suggestion && parsedResult.reply_to_user_suggestion && parsedResult.detected_actions && parsedResult.detected_actions.length > 0) {
+      if (!parsedResult.clarifications_needed || parsedResult.clarifications_needed.length === 0) {
+        if (parsedResult.reply_to_user_suggestion.includes(clientNameForPrompt) || parsedResult.detected_actions.every(a => (a.action || a.action_type)?.startsWith("GENERAL_"))) {
+          parsedResult.overall_summary_suggestion = parsedResult.reply_to_user_suggestion;
+        }
       }
-      if (parsedResult.overall_summary_suggestion && parsedResult.overall_summary_suggestion.startsWith(`Ok, ${clientNameForPrompt}!`)) {
-          if (parsedResult.detected_actions && parsedResult.detected_actions.length === 1 && parsedResult.detected_actions[0].action_specific_reply_suggestion) {
-              parsedResult.overall_summary_suggestion = parsedResult.detected_actions[0].action_specific_reply_suggestion;
-          }
-      }
-
-      return parsedResult;
-
-    } catch (error) {
-      const rawResponseForError = error.response?.data || (typeof error.message === 'string' && error.message.includes("{") ? error.message : null) || "Sem resposta bruta disponível";
-      logger.error(`[AI SERVICE] Erro ao chamar ou parsear API da OpenAI (${modelToUse}):`, {
-          errorMessage: error.message,
-          errorStack: error.stack,
-          rawApiResponse: rawResponseForError,
-          requestMessageCount: messagesToSendToAPI.length
-      });
-
-      const clientNameForError = conversationContext.clientName || "você";
-      const isJsonError = error.message.toLowerCase().includes("json");
-      const errorType = isJsonError ? "entender a resposta da minha inteligência" : "me comunicar com minha inteligência";
-      const errorMessageIntro = `Puxa vida, ${clientNameForError}! 😬 Tive um curto-circuito aqui e não consegui processar sua mensagem direito (${errorType}).`;
-      const errorDetails = `Minha equipe de engenheiros já foi notificada para dar uma olhadinha nisso! 👩‍💻👨‍💻`;
-      const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://www.map-nocontrole.com.br/`;
-      const tryAgain = `Por favor, tente de novo em um momentinho. Desculpe o transtorno! 🙏`;
-      const finalErrorMessage = `${errorMessageIntro}\n\n🎯 Detalhes do Ocorrido:\n${errorDetails}\n\n${tryAgain}\n\n${platformLink}`;
-
-      return {
-          overall_summary_suggestion: errorMessageIntro,
-          detected_actions: [],
-          clarifications_needed: [],
-          ununderstood_segments: [userMessage],
-          reply_to_user_suggestion: finalErrorMessage
-      };
     }
+    if (parsedResult.overall_summary_suggestion && parsedResult.overall_summary_suggestion.startsWith(`Ok, ${clientNameForPrompt}!`)) {
+      if (parsedResult.detected_actions && parsedResult.detected_actions.length === 1 && parsedResult.detected_actions[0].action_specific_reply_suggestion) {
+        parsedResult.overall_summary_suggestion = parsedResult.detected_actions[0].action_specific_reply_suggestion;
+      }
+    }
+
+    return parsedResult;
+
+  } catch (error) {
+    const rawResponseForError = error.response?.data || (typeof error.message === 'string' && error.message.includes("{") ? error.message : null) || "Sem resposta bruta disponível";
+    logger.error(`[AI SERVICE] Erro ao chamar ou parsear API da OpenAI (${modelToUse}):`, {
+      errorMessage: error.message,
+      errorStack: error.stack,
+      rawApiResponse: rawResponseForError,
+      requestMessageCount: messagesToSendToAPI.length
+    });
+
+    const clientNameForError = conversationContext.clientName || "você";
+    const isJsonError = error.message.toLowerCase().includes("json");
+    const errorType = isJsonError ? "entender a resposta da minha inteligência" : "me comunicar com minha inteligência";
+    const errorMessageIntro = `Puxa vida, ${clientNameForError}! 😬 Tive um curto-circuito aqui e não consegui processar sua mensagem direito (${errorType}).`;
+    const errorDetails = `Minha equipe de engenheiros já foi notificada para dar uma olhadinha nisso! 👩‍💻👨‍💻`;
+    const platformLink = `📊 Enquanto isso, você pode tentar acessar a plataforma diretamente em https://www.map-nocontrole.com.br/`;
+    const tryAgain = `Por favor, tente de novo em um momentinho. Desculpe o transtorno! 🙏`;
+    const finalErrorMessage = `${errorMessageIntro}\n\n🎯 Detalhes do Ocorrido:\n${errorDetails}\n\n${tryAgain}\n\n${platformLink}`;
+
+    return {
+      overall_summary_suggestion: errorMessageIntro,
+      detected_actions: [],
+      clarifications_needed: [],
+      ununderstood_segments: [userMessage],
+      reply_to_user_suggestion: finalErrorMessage
+    };
+  }
+}
+
+async function generateMorningBriefingMessage(briefingData) {
+  if (!OPENAI_API_KEY) {
+    logger.error('[AI SERVICE - Briefing] OPENAI_API_KEY não configurada.');
+    return "Bom dia! Um erro técnico me impede de gerar seu resumo personalizado hoje. Por favor, contate o suporte.";
   }
 
-  async function generateMorningBriefingMessage(briefingData) {
-    if (!OPENAI_API_KEY) {
-      logger.error('[AI SERVICE - Briefing] OPENAI_API_KEY não configurada.');
-      return "Bom dia! Um erro técnico me impede de gerar seu resumo personalizado hoje. Por favor, contate o suporte.";
-    }
+  const { clientName, pendingTransactions, appointments, recurringItems } = briefingData;
 
-    const { clientName, pendingTransactions, appointments, recurringItems } = briefingData;
-
-    const systemPrompt = `
+  const systemPrompt = `
   Você é o "${ASSISTANT_NAME}", um assistente de bem-estar e finanças para WhatsApp. Sua personalidade é a de um coach financeiro: EXTREMAMENTE amigável, proativo, empático, motivador, sábio e um pouco brincalhão. Você é um especialista em finanças pessoais e produtividade.
 
   Sua tarefa é criar uma MENSAGEM DE BRIEFING MATINAL ÚNICA E PERSONALIZADA. A mensagem é diária, então a CRIATIVIDADE e a VARIEDADE são essenciais. Você não é um robô que lista fatos, você é um conselheiro que interpreta dados e oferece insights valiosos.
@@ -1097,48 +1119,48 @@
   `;
 
 
-    const simplifiedData = {
-        pendingTransactions: (pendingTransactions || []).map(t => ({ description: t.description, value: t.value, type: t.type, account: t.financialAccount?.accountName })),
-        appointments: (appointments || []).map(a => ({ time: new Date(a.eventDateTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), title: a.title, account: a.financialAccount?.accountName })),
-        recurringItems: (recurringItems || []).map(r => ({ description: r.description, value: r.value, type: r.type, account: r.financialAccount?.accountName })),
-    };
+  const simplifiedData = {
+    pendingTransactions: (pendingTransactions || []).map(t => ({ description: t.description, value: t.value, type: t.type, account: t.financialAccount?.accountName })),
+    appointments: (appointments || []).map(a => ({ time: new Date(a.eventDateTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), title: a.title, account: a.financialAccount?.accountName })),
+    recurringItems: (recurringItems || []).map(r => ({ description: r.description, value: r.value, type: r.type, account: r.financialAccount?.accountName })),
+  };
 
-    const userPrompt = `
+  const userPrompt = `
       Gere o briefing matinal para o cliente '${clientName}' com os seguintes dados para hoje:
       ${JSON.stringify(simplifiedData, null, 2)}
     `;
 
-    try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-        temperature: 0.85,
-        max_tokens: 600,
-      });
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0.85,
+      max_tokens: 600,
+    });
 
-      const generatedMessage = completion.choices[0].message.content;
-      logger.info(`[AI SERVICE - Briefing] Mensagem de briefing com conselhos gerada com sucesso para ${clientName}.`);
-      return generatedMessage;
+    const generatedMessage = completion.choices[0].message.content;
+    logger.info(`[AI SERVICE - Briefing] Mensagem de briefing com conselhos gerada com sucesso para ${clientName}.`);
+    return generatedMessage;
 
-    } catch (error) {
-      logger.error(`[AI SERVICE - Briefing] Erro ao gerar mensagem de briefing com conselhos para ${clientName}:`, error);
-      return `Bom dia, ${clientName}! Tive um pequeno problema para gerar seu resumo criativo hoje, mas não se preocupe! Lembre-se de verificar seus compromissos e contas do dia. Tenha um ótimo dia!`;
-    }
+  } catch (error) {
+    logger.error(`[AI SERVICE - Briefing] Erro ao gerar mensagem de briefing com conselhos para ${clientName}:`, error);
+    return `Bom dia, ${clientName}! Tive um pequeno problema para gerar seu resumo criativo hoje, mas não se preocupe! Lembre-se de verificar seus compromissos e contas do dia. Tenha um ótimo dia!`;
+  }
+}
+
+async function generateCreativeAgendaResponse(clientName, appointments, periodDescription) {
+  if (!OPENAI_API_KEY) {
+    logger.error('[AI SERVICE - Agenda] OPENAI_API_KEY não configurada.');
+    return {
+      overall_summary: `Aqui estão seus agendamentos para ${periodDescription}:`,
+      individual_phrases: appointments.map(() => "Fique de olho neste compromisso!")
+    };
   }
 
-  async function generateCreativeAgendaResponse(clientName, appointments, periodDescription) {
-    if (!OPENAI_API_KEY) {
-      logger.error('[AI SERVICE - Agenda] OPENAI_API_KEY não configurada.');
-      return {
-        overall_summary: `Aqui estão seus agendamentos para ${periodDescription}:`,
-        individual_phrases: appointments.map(() => "Fique de olho neste compromisso!")
-      };
-    }
-
-    const systemPrompt = `
+  const systemPrompt = `
   Você é o "${ASSISTANT_NAME}", um assistente de negócios e produtividade para WhatsApp. Sua personalidade é a de um coach: EXTREMAMENTE amigável, proativo, motivador e um pouco brincalhão.
 
   Sua tarefa é receber uma lista de agendamentos em JSON e gerar duas coisas:
@@ -1167,51 +1189,51 @@
   }
   `;
 
-    const simplifiedAppointments = appointments.map(appt => ({
-      client: appt.businessClients?.map(c => c.name).join(', ') || 'Pessoal',
-      service: appt.services?.map(s => s.name).join(' + ') || appt.title,
-      status: appt.status,
-      value: appt.services?.reduce((sum, s) => sum + parseFloat(s.price || 0), 0) || 0
-    }));
+  const simplifiedAppointments = appointments.map(appt => ({
+    client: appt.businessClients?.map(c => c.name).join(', ') || 'Pessoal',
+    service: appt.services?.map(s => s.name).join(' + ') || appt.title,
+    status: appt.status,
+    value: appt.services?.reduce((sum, s) => sum + parseFloat(s.price || 0), 0) || 0
+  }));
 
-    const userPrompt = `
+  const userPrompt = `
       Gere a análise da agenda e as frases individuais para o cliente '${clientName}' para o período '${periodDescription}'.
       Dados dos agendamentos:
       ${JSON.stringify(simplifiedAppointments, null, 2)}
     `;
 
-    try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-        temperature: 0.8,
-        response_format: { type: "json_object" },
-      });
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0.8,
+      response_format: { type: "json_object" },
+    });
 
-      const aiResultContent = completion.choices[0].message.content;
-      const parsedResult = JSON.parse(aiResultContent);
+    const aiResultContent = completion.choices[0].message.content;
+    const parsedResult = JSON.parse(aiResultContent);
 
-      if (parsedResult.individual_phrases && parsedResult.individual_phrases.length === appointments.length) {
-          return parsedResult;
-      } else {
-          throw new Error("A resposta da IA não continha o número correto de frases individuais.");
-      }
-
-    } catch (error) {
-      logger.error(`[AI SERVICE - Agenda] Erro ao gerar resposta criativa para agenda: ${error.message}`);
-      // Retorna um objeto de fallback em caso de erro
-      return {
-        overall_summary: `Aqui estão seus agendamentos para ${periodDescription}:`,
-        individual_phrases: appointments.map(() => "Fique de olho neste compromisso!")
-      };
+    if (parsedResult.individual_phrases && parsedResult.individual_phrases.length === appointments.length) {
+      return parsedResult;
+    } else {
+      throw new Error("A resposta da IA não continha o número correto de frases individuais.");
     }
-  }
 
-  async function generateNewBookingNotification(ownerName, appointmentDetails) {
-    const systemPrompt = `
+  } catch (error) {
+    logger.error(`[AI SERVICE - Agenda] Erro ao gerar resposta criativa para agenda: ${error.message}`);
+    // Retorna um objeto de fallback em caso de erro
+    return {
+      overall_summary: `Aqui estão seus agendamentos para ${periodDescription}:`,
+      individual_phrases: appointments.map(() => "Fique de olho neste compromisso!")
+    };
+  }
+}
+
+async function generateNewBookingNotification(ownerName, appointmentDetails) {
+  const systemPrompt = `
   Você é o "${ASSISTANT_NAME}", um assistente de negócios. Sua personalidade é a de um secretário particular: eficiente, proativo e ligeiramente formal, mas sempre amigável.
 
   Sua tarefa é criar uma frase de introdução para uma notificação de um NOVO AGENDAMENTO recebido pelo dono da conta. A frase deve ser curta, profissional e contextual ao serviço agendado.
@@ -1228,32 +1250,32 @@
   "Ótima notícia, ${ownerName}! Um novo agendamento para Corte de Cabelo foi solicitado pelo cliente João Silva. Seguem os detalhes para sua aprovação:"
   `;
 
-    const simplifiedAppointment = {
-      client: appointmentDetails.businessClients?.map(c => c.name).join(', ') || 'Cliente',
-      service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
-      value: appointmentDetails.services?.reduce((sum, s) => sum + parseFloat(s.price || 0), 0) || 0
-    };
+  const simplifiedAppointment = {
+    client: appointmentDetails.businessClients?.map(c => c.name).join(', ') || 'Cliente',
+    service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
+    value: appointmentDetails.services?.reduce((sum, s) => sum + parseFloat(s.price || 0), 0) || 0
+  };
 
-    const userPrompt = `Gere a frase de notificação para o dono da conta '${ownerName}'. Detalhes do agendamento: ${JSON.stringify(simplifiedAppointment)}`;
+  const userPrompt = `Gere a frase de notificação para o dono da conta '${ownerName}'. Detalhes do agendamento: ${JSON.stringify(simplifiedAppointment)}`;
 
-    try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-        temperature: 0.7,
-      });
-      return completion.choices[0].message.content;
-    } catch (error) {
-      logger.error(`[AI SERVICE - NewBooking] Erro ao gerar notificação: ${error.message}`);
-      return `🔔 *Novo Agendamento Recebido!*\n\nOlá, ${ownerName}! Um novo serviço foi agendado na sua conta.`;
-    }
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0.7,
+    });
+    return completion.choices[0].message.content;
+  } catch (error) {
+    logger.error(`[AI SERVICE - NewBooking] Erro ao gerar notificação: ${error.message}`);
+    return `🔔 *Novo Agendamento Recebido!*\n\nOlá, ${ownerName}! Um novo serviço foi agendado na sua conta.`;
   }
+}
 
-  async function generateBookingConfirmationResponse(ownerName, appointmentDetails) {
-    const systemPrompt = `
+async function generateBookingConfirmationResponse(ownerName, appointmentDetails) {
+  const systemPrompt = `
   Você é o "${ASSISTANT_NAME}", um assistente de negócios. Sua personalidade é a de um coach de sucesso: motivador, positivo e focado no crescimento do negócio do cliente.
 
   Sua tarefa é criar uma MENSAGEM DE CONFIRMAÇÃO para o dono da conta, que acabou de confirmar um agendamento. A mensagem deve ser inspiradora e dar uma dica ou fazer um comentário estratégico sobre o agendamento.
@@ -1270,32 +1292,32 @@
   "Excelente, ${ownerName}! Agendamento confirmado e mais um passo dado para o sucesso. Lembre-se que um serviço de consultoria bem executado não só resolve o problema do cliente, mas também abre portas para parcerias futuras. Prepare-se para brilhar! ✨"
   `;
 
-    const simplifiedAppointment = {
-      client: appointmentDetails.businessClients?.map(c => c.name).join(', ') || 'Cliente',
-      service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
-      value: appointmentDetails.services?.reduce((sum, s) => sum + parseFloat(s.price || 0), 0) || 0
-    };
+  const simplifiedAppointment = {
+    client: appointmentDetails.businessClients?.map(c => c.name).join(', ') || 'Cliente',
+    service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
+    value: appointmentDetails.services?.reduce((sum, s) => sum + parseFloat(s.price || 0), 0) || 0
+  };
 
-    const userPrompt = `Gere a mensagem de confirmação para o dono da conta '${ownerName}'. Detalhes do agendamento confirmado: ${JSON.stringify(simplifiedAppointment)}`;
+  const userPrompt = `Gere a mensagem de confirmação para o dono da conta '${ownerName}'. Detalhes do agendamento confirmado: ${JSON.stringify(simplifiedAppointment)}`;
 
-    try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-        temperature: 0.8,
-      });
-      return completion.choices[0].message.content;
-    } catch (error) {
-      logger.error(`[AI SERVICE - Confirmation] Erro ao gerar confirmação: ${error.message}`);
-      return `✅ Agendamento confirmado com sucesso, ${ownerName}!`;
-    }
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0.8,
+    });
+    return completion.choices[0].message.content;
+  } catch (error) {
+    logger.error(`[AI SERVICE - Confirmation] Erro ao gerar confirmação: ${error.message}`);
+    return `✅ Agendamento confirmado com sucesso, ${ownerName}!`;
   }
+}
 
-  async function generateClientConfirmationMessage(providerName, clientName, appointmentDetails) {
-    const systemPrompt = `
+async function generateClientConfirmationMessage(providerName, clientName, appointmentDetails) {
+  const systemPrompt = `
   Você é o "${ASSISTANT_NAME}", um assistente de agendamentos que trabalha para o(a) ${providerName}. Sua personalidade é profissional, clara e muito cordial.
 
   Sua tarefa é criar uma MENSAGEM DE CONFIRMAÇÃO para o cliente final (${clientName}) que acabou de ter seu agendamento confirmado por ${providerName}.
@@ -1312,23 +1334,23 @@
   "Olá, ${clientName}! Ótimas notícias! 🎉 Seu agendamento para Corte de Cabelo com ${providerName} foi confirmado. Já está tudo certo e anotado na agenda. Até lá!"
   `;
 
-    const simplifiedAppointment = {
-      service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
-    };
+  const simplifiedAppointment = {
+    service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
+  };
 
-    const userPrompt = `Gere a mensagem de confirmação para o cliente '${clientName}'. Detalhes: ${JSON.stringify(simplifiedAppointment)}`;
+  const userPrompt = `Gere a mensagem de confirmação para o cliente '${clientName}'. Detalhes: ${JSON.stringify(simplifiedAppointment)}`;
 
-    try {
-      const completion = await openai.chat.completions.create({ model: "gpt-4o", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.7 });
-      return completion.choices[0].message.content;
-    } catch (error) {
-      logger.error(`[AI SERVICE - ClientConfirm] Erro: ${error.message}`);
-      return `Olá, ${clientName}! Seu agendamento com ${providerName} foi confirmado.`;
-    }
+  try {
+    const completion = await openai.chat.completions.create({ model: "gpt-4o", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.7 });
+    return completion.choices[0].message.content;
+  } catch (error) {
+    logger.error(`[AI SERVICE - ClientConfirm] Erro: ${error.message}`);
+    return `Olá, ${clientName}! Seu agendamento com ${providerName} foi confirmado.`;
   }
+}
 
-  async function generateClientReminderMessage(providerName, clientName, appointmentDetails, timeFrame) {
-    const systemPrompt = `
+async function generateClientReminderMessage(providerName, clientName, appointmentDetails, timeFrame) {
+  const systemPrompt = `
   Você é o "${ASSISTANT_NAME}", um assistente de agendamentos que trabalha para o(a) ${providerName}. Sua personalidade é prestativa, amigável e eficiente.
 
   Sua tarefa é criar uma MENSAGEM DE LEMBRETE para o cliente final (${clientName}). A mensagem deve lembrá-lo de seu compromisso que acontecerá em ${timeFrame}.
@@ -1346,23 +1368,23 @@
   "Olá, ${clientName}! Passando para te lembrar do nosso encontro amanhã para a Consultoria Estratégica. ${providerName} está preparando tudo para uma sessão muito produtiva. Nos vemos em breve! 😉"
   `;
 
-    const simplifiedAppointment = {
-      service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
-    };
+  const simplifiedAppointment = {
+    service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
+  };
 
-    const userPrompt = `Gere a mensagem de lembrete de ${timeFrame} para o cliente '${clientName}'. Detalhes: ${JSON.stringify(simplifiedAppointment)}`;
+  const userPrompt = `Gere a mensagem de lembrete de ${timeFrame} para o cliente '${clientName}'. Detalhes: ${JSON.stringify(simplifiedAppointment)}`;
 
-    try {
-      const completion = await openai.chat.completions.create({ model: "gpt-4o", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.7 });
-      return completion.choices[0].message.content;
-    } catch (error) {
-      logger.error(`[AI SERVICE - ClientReminder] Erro: ${error.message}`);
-      return `Olá, ${clientName}! Lembrete: você tem um agendamento com ${providerName} em ${timeFrame}.`;
-    }
+  try {
+    const completion = await openai.chat.completions.create({ model: "gpt-4o", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.7 });
+    return completion.choices[0].message.content;
+  } catch (error) {
+    logger.error(`[AI SERVICE - ClientReminder] Erro: ${error.message}`);
+    return `Olá, ${clientName}! Lembrete: você tem um agendamento com ${providerName} em ${timeFrame}.`;
   }
+}
 
-  async function generateClientCancellationMessage(providerName, clientName, appointmentDetails) {
-      const systemPrompt = `
+async function generateClientCancellationMessage(providerName, clientName, appointmentDetails) {
+  const systemPrompt = `
   Você é o "${ASSISTANT_NAME}", um assistente de agendamentos que trabalha para o(a) ${providerName}. Sua personalidade é empática, profissional e prestativa.
 
   Sua tarefa é criar uma MENSAGEM DE CANCELAMENTO para o cliente final (${clientName}), informando que seu agendamento foi cancelado por ${providerName}.
@@ -1379,23 +1401,23 @@
   "Olá, ${clientName}. Temos uma atualização sobre seu agendamento. Infelizmente, seu horário para Manicure e Pedicure com ${providerName} precisou ser cancelado. Pedimos desculpas por qualquer inconveniente. Por favor, entre em contato para mais detalhes ou para encontrar um novo horário. Agradecemos a compreensão."
   `;
 
-      const simplifiedAppointment = {
-          service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
-      };
+  const simplifiedAppointment = {
+    service: appointmentDetails.services?.map(s => s.name).join(' + ') || appointmentDetails.title,
+  };
 
-      const userPrompt = `Gere a mensagem de cancelamento para o cliente '${clientName}'. Detalhes: ${JSON.stringify(simplifiedAppointment)}`;
+  const userPrompt = `Gere a mensagem de cancelamento para o cliente '${clientName}'. Detalhes: ${JSON.stringify(simplifiedAppointment)}`;
 
-      try {
-          const completion = await openai.chat.completions.create({ model: "gpt-4o", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.7 });
-          return completion.choices[0].message.content;
-      } catch (error) {
-          logger.error(`[AI SERVICE - ClientCancel] Erro: ${error.message}`);
-          return `Olá, ${clientName}. Informamos que seu agendamento com ${providerName} foi cancelado. Para mais detalhes, por favor, entre em contato.`;
-      }
+  try {
+    const completion = await openai.chat.completions.create({ model: "gpt-4o", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.7 });
+    return completion.choices[0].message.content;
+  } catch (error) {
+    logger.error(`[AI SERVICE - ClientCancel] Erro: ${error.message}`);
+    return `Olá, ${clientName}. Informamos que seu agendamento com ${providerName} foi cancelado. Para mais detalhes, por favor, entre em contato.`;
   }
+}
 
-  async function generateAlertsIntro(clientName, accountName, alertTypes) {
-    const systemPrompt = `
+async function generateAlertsIntro(clientName, accountName, alertTypes) {
+  const systemPrompt = `
   Você é o "${ASSISTANT_NAME}", um assistente de negócios proativo e vigilante. Sua personalidade é a de um "guardião" do negócio do cliente: atento, prestativo e direto ao ponto, mas sem ser alarmista.
 
   Sua tarefa é criar uma FRASE DE INTRODUÇÃO para uma mensagem de alerta. Você receberá os tipos de alertas encontrados (ex: ['due_dates', 'low_stock']). Sua frase deve resumir a situação de forma inteligente.
@@ -1411,27 +1433,27 @@
   - ['due_dates', 'low_stock'] -> "Atenção, ${clientName}! Encontrei alguns pontos importantes na sua conta *${accountName}* que merecem um olhar cuidadoso: contas próximas do vencimento e produtos com estoque baixo. Segue o resumo:"
   `;
 
-    const userPrompt = `Gere a introdução de alerta para o cliente '${clientName}', conta '${accountName}'. Tipos de alerta encontrados: ${JSON.stringify(alertTypes)}`;
+  const userPrompt = `Gere a introdução de alerta para o cliente '${clientName}', conta '${accountName}'. Tipos de alerta encontrados: ${JSON.stringify(alertTypes)}`;
 
-    try {
-      const completion = await openai.chat.completions.create({ model: "gpt-4o", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.7 });
-      return completion.choices[0].message.content;
-    } catch (error) {
-      logger.error(`[AI SERVICE - Alerts] Erro: ${error.message}`);
-      return `Epa, ${clientName}! 🕵️‍♂️ Dei uma olhadinha nos seus controles e encontrei alguns pontos de atenção para a conta *${accountName}*:`;
-    }
+  try {
+    const completion = await openai.chat.completions.create({ model: "gpt-4o", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature: 0.7 });
+    return completion.choices[0].message.content;
+  } catch (error) {
+    logger.error(`[AI SERVICE - Alerts] Erro: ${error.message}`);
+    return `Epa, ${clientName}! 🕵️‍♂️ Dei uma olhadinha nos seus controles e encontrei alguns pontos de atenção para a conta *${accountName}*:`;
+  }
+}
+
+async function generateChecklistCompletionMessage(clientName, completedTasks) {
+  if (!OPENAI_API_KEY) {
+    logger.error('[AI SERVICE - Checklist] OPENAI_API_KEY não configurada.');
+    return {
+      celebratory_intro: `Parabéns, ${clientName}! Você completou todas as suas tarefas de hoje!`,
+      task_comments: completedTasks.map(() => "Mandou muito bem!")
+    };
   }
 
-  async function generateChecklistCompletionMessage(clientName, completedTasks) {
-    if (!OPENAI_API_KEY) {
-      logger.error('[AI SERVICE - Checklist] OPENAI_API_KEY não configurada.');
-      return {
-        celebratory_intro: `Parabéns, ${clientName}! Você completou todas as suas tarefas de hoje!`,
-        task_comments: completedTasks.map(() => "Mandou muito bem!")
-      };
-    }
-
-    const systemPrompt = `
+  const systemPrompt = `
   Você é o "${ASSISTANT_NAME}", um assistente e coach de produtividade para WhatsApp. Sua personalidade é EXTREMAMENTE amigável, motivadora, comemorativa e um pouco brincalhona.
 
   Sua tarefa é receber o nome de um cliente e uma lista de tarefas que ele acabou de completar e gerar uma resposta JSON com duas partes:
@@ -1456,56 +1478,56 @@
   }
   `;
 
-    const userPrompt = `
+  const userPrompt = `
       Gere a mensagem de conclusão de checklist para o cliente '${clientName}' com a seguinte lista de tarefas concluídas:
       ${JSON.stringify(completedTasks, null, 2)}
     `;
 
-    try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-        temperature: 0.75, // Um pouco mais de criatividade
-        response_format: { type: "json_object" },
-      });
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0.75, // Um pouco mais de criatividade
+      response_format: { type: "json_object" },
+    });
 
-      const aiResultContent = completion.choices[0].message.content;
-      const parsedResult = JSON.parse(aiResultContent);
+    const aiResultContent = completion.choices[0].message.content;
+    const parsedResult = JSON.parse(aiResultContent);
 
-      // Validação para garantir que a resposta da IA está correta
-      if (parsedResult.task_comments && parsedResult.task_comments.length === completedTasks.length) {
-          return parsedResult;
-      } else {
-          throw new Error("A resposta da IA não continha o número correto de comentários de tarefas.");
-      }
-
-    } catch (error) {
-      logger.error(`[AI SERVICE - Checklist] Erro ao gerar mensagem de conclusão: ${error.message}`);
-      // Retorna um objeto de fallback em caso de erro
-      return {
-        celebratory_intro: `Parabéns, ${clientName}! Você completou todas as ${completedTasks.length} tarefas de hoje!`,
-        task_comments: completedTasks.map(() => "Mandou muito bem!")
-      };
+    // Validação para garantir que a resposta da IA está correta
+    if (parsedResult.task_comments && parsedResult.task_comments.length === completedTasks.length) {
+      return parsedResult;
+    } else {
+      throw new Error("A resposta da IA não continha o número correto de comentários de tarefas.");
     }
+
+  } catch (error) {
+    logger.error(`[AI SERVICE - Checklist] Erro ao gerar mensagem de conclusão: ${error.message}`);
+    // Retorna um objeto de fallback em caso de erro
+    return {
+      celebratory_intro: `Parabéns, ${clientName}! Você completou todas as ${completedTasks.length} tarefas de hoje!`,
+      task_comments: completedTasks.map(() => "Mandou muito bem!")
+    };
   }
+}
 
 
 
-  module.exports = {
-    openai,
-    interpretUserMessage,
-    ASSISTANT_NAME,
-    transcribeAudioStream, 
-    generateMorningBriefingMessage,
-    generateCreativeAgendaResponse,
-    generateNewBookingNotification,
-    generateBookingConfirmationResponse,
-    generateClientConfirmationMessage,
-    generateClientReminderMessage,
-    generateClientCancellationMessage,
-    generateAlertsIntro,
-    generateChecklistCompletionMessage
-  };
+module.exports = {
+  openai,
+  interpretUserMessage,
+  ASSISTANT_NAME,
+  transcribeAudioStream,
+  generateMorningBriefingMessage,
+  generateCreativeAgendaResponse,
+  generateNewBookingNotification,
+  generateBookingConfirmationResponse,
+  generateClientConfirmationMessage,
+  generateClientReminderMessage,
+  generateClientCancellationMessage,
+  generateAlertsIntro,
+  generateChecklistCompletionMessage
+};

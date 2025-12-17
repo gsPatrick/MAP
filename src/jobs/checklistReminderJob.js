@@ -7,6 +7,16 @@ const { sendWhatsappMessage } = require('../services/whatsappService');
 
 async function sendChecklistReminders() {
   logger.info('[JOB CHECKLIST REMINDER] Iniciando verificação de tarefas pendentes...');
+
+  // <<< CHECK GLOBAL SWITCH >>>
+  const systemService = require('../features/System/system.service');
+  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  if (!isEnabled) {
+    logger.warn('[JOB CHECKLIST REMINDER] Job abortado: Global switch OFF.');
+    return;
+  }
+  // ---------------------------
+
   try {
     const today = new Date().toISOString().split('T')[0];
 
@@ -29,13 +39,13 @@ async function sendChecklistReminders() {
           include: [{
             model: Client,
             as: 'ownerClient',
-            where: { 
-                status: 'Ativo', 
-                phone: { [Op.ne]: null },
-                [Op.or]: [
-                    { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
-                    { accessExpiresAt: { [Op.gte]: today } }
-                ]
+            where: {
+              status: 'Ativo',
+              phone: { [Op.ne]: null },
+              [Op.or]: [
+                { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+                { accessExpiresAt: { [Op.gte]: today } }
+              ]
             },
             required: true,
           }],
@@ -61,7 +71,7 @@ async function sendChecklistReminders() {
 
       let message = `Olá, ${clientFirstName}! Passando para dar um gás no seu dia! 🚀\n\n`;
       message += `Notei que você ainda tem *${pendingItems.length}* tarefa(s) pendente(s) no seu checklist de hoje. Que tal dar o próximo passo?\n\n`;
-      
+
       const highPriorityItem = pendingItems.find(p => p.priority === 'high');
       if (highPriorityItem) {
         message += `🎯 *Foco na prioridade:* Começar por *"${highPriorityItem.text}"* pode ser uma ótima ideia!\n`;
@@ -86,9 +96,9 @@ async function sendChecklistReminders() {
 
 function startChecklistReminderJob() {
   const schedule = '0 11,16 * * 1-6';
-  
+
   logger.info(`[JOB CHECKLIST REMINDER] Agendado para rodar às 11h e 16h, de Seg a Sáb (schedule: ${schedule})`);
-  
+
   cron.schedule(schedule, sendChecklistReminders, {
     timezone: process.env.TZ || "America/Sao_Paulo",
   });
