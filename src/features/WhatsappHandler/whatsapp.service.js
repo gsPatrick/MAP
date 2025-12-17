@@ -18,7 +18,6 @@ const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 const { sendWhatsappMessage, sendButtonListMessage, downloadZapiMedia } = require('../../services/whatsappService');
 const aiModelService = require('../../services/aiModelService'); // Importação do serviço de IA
 const { convertOggToWav } = require('../../utils/audioConverter'); // <<< IMPORT DA NOVA UTILS
-const { downloadMediaMessage } = require('@whiskeysockets/baileys'); // Remover se não usado, ou manter se houver legacy
 const logger = require('../../utils/logger');
 const path = require('path');
 const hydrationService = require('../Hydration/hydration.service');
