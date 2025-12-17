@@ -17,7 +17,6 @@ const formatter = require('./response.formatter');
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 const { sendWhatsappMessage, sendButtonListMessage, downloadZapiMedia } = require('../../services/whatsappService');
 const aiModelService = require('../../services/aiModelService'); // Importação do serviço de IA
-const { convertOggToWav } = require('../../utils/audioConverter'); // <<< IMPORT DA NOVA UTILS
 const logger = require('../../utils/logger');
 const path = require('path');
 const hydrationService = require('../Hydration/hydration.service');
@@ -249,43 +248,37 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
         logger.warn(`[WHATSAPP SERVICE] Não foi possível parsear a URL para extrair nome do arquivo da mídia: ${mediaUrl}. Usando nome inferido: ${filenameFromMime}`);
     }
 
-    // MUDANÇA: Skip transcrição (Whisper) e usar Multimodal
+    // REVERTIDO: Voltando a usar Transcrição (Whisper) pois FFmpeg falha no servidor
     try {
         const downloadedMedia = await downloadZapiMedia(mediaUrl);
         if (downloadedMedia && downloadedMedia.stream) {
 
-            // Converter stream OGG para WAV (Buffer) usando ffmpeg
-            // Isso evita o erro 400 do OpenAI (não suporta OGG no input_audio)
-            logger.info(`[WHATSAPP SERVICE] Áudio baixado, iniciando conversão OGG -> WAV...`);
-            let wavBuffer;
-            try {
-                wavBuffer = await convertOggToWav(downloadedMedia.stream);
-            } catch (convErr) {
-                logger.error(`[WHATSAPP SERVICE] Falha na conversão de áudio: ${convErr.message}`);
-                throw convErr; // Cai no catch externo e avisa user
+            logger.info(`[WHATSAPP SERVICE] Áudio baixado, enviando para transcrição (Whisper)...`);
+
+            // Transcrever usando Whisper (via aiModelService)
+            const transcriptionText = await aiModelService.transcribeAudioStream(downloadedMedia.stream);
+
+            if (!transcriptionText) {
+                logger.warn(`[WHATSAPP SERVICE] Transcrição retornou vazia para ${canonicalPhone}.`);
+                await sendWhatsappMessage(canonicalPhone, "Não consegui entender o que você disse no áudio. 😕 Poderia tentar escrever?");
+                return;
             }
 
-            const base64Audio = wavBuffer.toString('base64');
-            const formatForOpenAI = 'wav'; // Agora garantimos que é WAV
+            logger.info(`[WHATSAPP SERVICE] Transcrição concluída: "${transcriptionText}"`);
 
-            logger.info(`[WHATSAPP SERVICE] Áudio convertido para WAV (${wavBuffer.length} bytes), enviando para processamento MULTIMODAL.`);
+            // Adiciona um marcador de que foi áudio
+            const finalMessage = `[ÁUDIO TRANSCRITO]: ${transcriptionText}`;
 
-            // Passar o payload de áudio para processIncomingMessage
-            // O texto é vazio, mas enviamos um objeto extra de contexto
-            const audioPayload = {
-                data: base64Audio,
-                format: formatForOpenAI
-            };
-
-            return await processIncomingMessage(canonicalPhone, "", pushName, rawPayload, audioPayload);
+            // Processa como se fosse uma mensagem de texto normal
+            return await processIncomingMessage(canonicalPhone, finalMessage, pushName, rawPayload);
 
         } else {
-            logger.error(`[WHATSAPP SERVICE] Falha ao baixar áudio de ${canonicalPhone} da URL: ${mediaUrl}. Notificando usuário.`);
-            await sendWhatsappMessage(canonicalPhone, "Tive um problema ao acessar o áudio que você enviou. 🙁 Poderia tentar novamente?");
+            logger.error(`[WHATSAPP SERVICE] Falha ao baixar áudio de ${canonicalPhone} da URL: ${mediaUrl}.`);
+            await sendWhatsappMessage(canonicalPhone, "Tive um problema ao baixar seu áudio. 🙁");
         }
     } catch (error) {
-        logger.error(`[WHATSAPP SERVICE] Erro ao processar áudio multimodal de ${canonicalPhone}: ${error.message}`, { stack: error.stack });
-        await sendWhatsappMessage(canonicalPhone, "Puxa, tive um probleminha para ouvir seu áudio. 😵‍💫 Pode tentar de novo ou digitar sua mensagem?");
+        logger.error(`[WHATSAPP SERVICE] Erro ao processar áudio (Transcrição) de ${canonicalPhone}: ${error.message}`);
+        await sendWhatsappMessage(canonicalPhone, "Puxa, falhei ao processar seu áudio. 😵‍💫 Pode tentar digitar?");
     } finally {
         pushNameFromPayload = null;
     }
