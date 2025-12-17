@@ -32,7 +32,8 @@ function convertOggToWav(input) {
             'pipe:1'
         ];
 
-        const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+        const ffmpegPath = 'C:\\ffmpeg\\bin\\ffmpeg.exe'; // Caminho absoluto para evitar ENOENT no Windows
+        const ffmpeg = spawn(ffmpegPath, ffmpegArgs);
         const chunks = [];
 
         // Pipe input stream to ffmpeg stdin
