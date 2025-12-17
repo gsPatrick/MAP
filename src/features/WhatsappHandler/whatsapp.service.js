@@ -16,7 +16,9 @@ const actionHandler = require('./action.handler');
 const formatter = require('./response.formatter');
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 const { sendWhatsappMessage, sendButtonListMessage, downloadZapiMedia } = require('../../services/whatsappService');
-const aiModelService = require('../../services/aiModelService');
+const aiModelService = require('../../services/aiModelService'); // Importação do serviço de IA
+const { convertOggToWav } = require('../../utils/audioConverter'); // <<< IMPORT DA NOVA UTILS
+const { downloadMediaMessage } = require('@whiskeysockets/baileys'); // Remover se não usado, ou manter se houver legacy
 const logger = require('../../utils/logger');
 const path = require('path');
 const hydrationService = require('../Hydration/hydration.service');
@@ -253,20 +255,21 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
         const downloadedMedia = await downloadZapiMedia(mediaUrl);
         if (downloadedMedia && downloadedMedia.stream) {
 
-            // Converter stream para Buffer/Base64 para envio multimodal
-            const chunks = [];
-            for await (const chunk of downloadedMedia.stream) {
-                chunks.push(chunk);
+            // Converter stream OGG para WAV (Buffer) usando ffmpeg
+            // Isso evita o erro 400 do OpenAI (não suporta OGG no input_audio)
+            logger.info(`[WHATSAPP SERVICE] Áudio baixado, iniciando conversão OGG -> WAV...`);
+            let wavBuffer;
+            try {
+                wavBuffer = await convertOggToWav(downloadedMedia.stream);
+            } catch (convErr) {
+                logger.error(`[WHATSAPP SERVICE] Falha na conversão de áudio: ${convErr.message}`);
+                throw convErr; // Cai no catch externo e avisa user
             }
-            const buffer = Buffer.concat(chunks);
-            const base64Audio = buffer.toString('base64');
 
-            // Identificar formato correto
-            let formatForOpenAI = 'ogg'; // Default para WhatsApp
-            if (filenameFromMime.endsWith('.mp3')) formatForOpenAI = 'mp3';
-            if (filenameFromMime.endsWith('.wav')) formatForOpenAI = 'wav';
+            const base64Audio = wavBuffer.toString('base64');
+            const formatForOpenAI = 'wav'; // Agora garantimos que é WAV
 
-            logger.info(`[WHATSAPP SERVICE] Áudio baixado (${buffer.length} bytes), enviando para processamento MULTIMODAL.`);
+            logger.info(`[WHATSAPP SERVICE] Áudio convertido para WAV (${wavBuffer.length} bytes), enviando para processamento MULTIMODAL.`);
 
             // Passar o payload de áudio para processIncomingMessage
             // O texto é vazio, mas enviamos um objeto extra de contexto
