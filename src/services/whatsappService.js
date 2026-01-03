@@ -12,7 +12,7 @@ const { Op } = require('sequelize');
 // const { normalizePhoneNumberToCanonical } = require('../utils/phoneUtils');
 
 // <<< ESTA É A LINHA QUE CAUSA A DEPENDÊNCIA CIRCULAR E SERÁ REMOVIDA >>>
-const { handleIncomingMessageLogic } = require('../features/WhatsappHandler/whatsapp.service');
+// const { handleIncomingMessageLogic } = require('../features/WhatsappHandler/whatsapp.service');
 const messageQueue = require('../utils/messageQueue'); // <<< Import MessageQueue
 
 
