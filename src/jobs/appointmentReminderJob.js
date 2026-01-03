@@ -170,13 +170,13 @@ async function sendBusinessAccountReminders() {
 async function sendAllAppointmentReminders() {
   logger.info('[JOB LEMBRETE - MASTER] Iniciando ciclo de verificação de lembretes...');
 
-  // <<< CHECK GLOBAL SWITCH >>>
-  const systemService = require('../features/System/system.service');
-  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
-  if (!isEnabled) {
-    logger.warn('[JOB LEMBRETE - MASTER] Job abortado: Global switch OFF.');
-    return;
-  }
+  // <<< CHECK GLOBAL SWITCH REMOVED FOR CORE FUNCTIONALITY >>>
+  // const systemService = require('../features/System/system.service');
+  // const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  // if (!isEnabled) {
+  //   logger.warn('[JOB LEMBRETE - MASTER] Job abortado: Global switch OFF.');
+  //   return;
+  // }
   // ---------------------------
 
   await sendPersonalAccountReminders();

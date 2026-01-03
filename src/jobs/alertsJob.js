@@ -10,13 +10,13 @@ const { formatCurrency, formatDate } = require('../utils/formatters');
 async function checkAndSendAlerts() {
   logger.info('[JOB ALERTAS] Verificando alertas...');
 
-  // <<< CHECK GLOBAL SWITCH >>>
-  const systemService = require('../features/System/system.service');
-  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
-  if (!isEnabled) {
-    logger.warn('[JOB ALERTAS] Job abortado: Global switch OFF.');
-    return;
-  }
+  // <<< CHECK GLOBAL SWITCH REMOVED FOR CORE FUNCTIONALITY >>>
+  // const systemService = require('../features/System/system.service');
+  // const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  // if (!isEnabled) {
+  //   logger.warn('[JOB ALERTAS] Job abortado: Global switch OFF.');
+  //   return;
+  // }
   // ---------------------------
 
   try {

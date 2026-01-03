@@ -13,13 +13,13 @@ const aiModelService = require('../services/aiModelService');
 async function processAndSendBriefings() {
   logger.info('[JOB BRIEFING MATINAL] Iniciando verificação de resumos diários...');
 
-  // <<< CHECK GLOBAL SWITCH >>>
-  const systemService = require('../features/System/system.service');
-  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
-  if (!isEnabled) {
-    logger.warn('[JOB BRIEFING MATINAL] Job abortado: Processamento global de automações está DESLIGADO.');
-    return;
-  }
+  // <<< CHECK GLOBAL SWITCH REMOVED FOR CORE FUNCTIONALITY >>>
+  // const systemService = require('../features/System/system.service');
+  // const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  // if (!isEnabled) {
+  //   logger.warn('[JOB BRIEFING MATINAL] Job abortado: Processamento global de automações está DESLIGADO.');
+  //   return;
+  // }
   // ---------------------------
 
   try {

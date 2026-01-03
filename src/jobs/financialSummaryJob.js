@@ -11,13 +11,13 @@ const { Op } = require('sequelize');
 async function sendFinancialSummariesForPeriod(period) {
   logger.info(`[JOB RESUMO FINANCEIRO] Iniciando geração de resumos (${period})...`);
 
-  // <<< CHECK GLOBAL SWITCH >>>
-  const systemService = require('../features/System/system.service');
-  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
-  if (!isEnabled) {
-    logger.warn(`[JOB RESUMO FINANCEIRO] Job (${period}) abortado: Global switch OFF.`);
-    return;
-  }
+  // <<< CHECK GLOBAL SWITCH REMOVED FOR CORE FUNCTIONALITY >>>
+  // const systemService = require('../features/System/system.service');
+  // const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  // if (!isEnabled) {
+  //   logger.warn(`[JOB RESUMO FINANCEIRO] Job (${period}) abortado: Global switch OFF.`);
+  //   return;
+  // }
   // ---------------------------
 
   try {

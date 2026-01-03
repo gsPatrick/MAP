@@ -12,7 +12,8 @@ const { Op } = require('sequelize');
 // const { normalizePhoneNumberToCanonical } = require('../utils/phoneUtils');
 
 // <<< ESTA É A LINHA QUE CAUSA A DEPENDÊNCIA CIRCULAR E SERÁ REMOVIDA >>>
-// const { handleIncomingMessageLogic } = require('../features/WhatsappHandler/whatsapp.service');
+const { handleIncomingMessageLogic } = require('../features/WhatsappHandler/whatsapp.service');
+const messageQueue = require('../utils/messageQueue'); // <<< Import MessageQueue
 
 
 // SUAS CONFIGURAÇÕES EXISTENTES
@@ -106,10 +107,12 @@ async function sendWhatsappMessage(phone, message, options = {}) {
   };
 
   try {
-    logger.info(`[WhatsAppService] Enviando mensagem de TEXTO para ${payload.phone}: "${payload.message.substring(0, 70)}..."`);
-    const response = await axios.post(endpoint, payload, { headers });
-    logger.info(`[WhatsAppService] Mensagem de TEXTO enviada com sucesso para ${phone}. Z-API Response:`, response.data);
-    return response.data;
+    return messageQueue.enqueue(async () => {
+      logger.info(`[WhatsAppService] Enviando mensagem de TEXTO para ${payload.phone}: "${payload.message.substring(0, 70)}..."`);
+      const response = await axios.post(endpoint, payload, { headers });
+      logger.info(`[WhatsAppService] Mensagem de TEXTO enviada com sucesso para ${phone}. Z-API Response:`, response.data);
+      return response.data;
+    }, { phone, type: 'text' });
   } catch (error) {
     const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
     const errorStatus = error.response?.status;
@@ -157,11 +160,12 @@ async function sendButtonListMessage(phone, messageText, buttons, listTitle = "O
   };
 
   try {
-    logger.info(`[WhatsAppService] Enviando MENSAGEM COM LISTA DE BOTÕES para ${payload.phone}: "${payload.message.substring(0, 50)}..." com ${buttons.length} botões.`);
-    logger.debug('[WhatsAppService] Payload da Lista de Botões:', payload);
-    const response = await axios.post(endpoint, payload, { headers });
-    logger.info(`[WhatsAppService] Mensagem com LISTA DE BOTÕES enviada com sucesso para ${phone}. Z-API Response:`, response.data);
-    return response.data;
+    return messageQueue.enqueue(async () => {
+      logger.info(`[WhatsAppService] Enviando MENSAGEM COM LISTA DE BOTÕES para ${payload.phone}: "${payload.message.substring(0, 50)}..." com ${buttons.length} botões.`);
+      const response = await axios.post(endpoint, payload, { headers });
+      logger.info(`[WhatsAppService] Mensagem com LISTA DE BOTÕES enviada com sucesso para ${phone}. Z-API Response:`, response.data);
+      return response.data;
+    }, { phone, type: 'button_list' });
   } catch (error) {
     const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
     const errorStatus = error.response?.status;

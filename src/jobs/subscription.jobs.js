@@ -16,13 +16,13 @@ const CHECKOUT_URL = process.env.MERCADO_PAGO_CHECKOUT_URL || "https://map-nocon
 async function notifyExpiringSubscriptions() {
     logger.info('[JOB NOTIFICAÇÃO EXPIRAÇÃO] Iniciando verificação de planos prestes a expirar...');
 
-    // <<< CHECK GLOBAL SWITCH >>>
-    const systemService = require('../features/System/system.service');
-    const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
-    if (!isEnabled) {
-        logger.warn('[JOB NOTIFICAÇÃO EXPIRAÇÃO] Job abortado: Global switch OFF.');
-        return;
-    }
+    // <<< CHECK GLOBAL SWITCH REMOVED FOR CORE FUNCTIONALITY >>>
+    // const systemService = require('../features/System/system.service');
+    // const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+    // if (!isEnabled) {
+    //     logger.warn('[JOB NOTIFICAÇÃO EXPIRAÇÃO] Job abortado: Global switch OFF.');
+    //     return;
+    // }
     // ---------------------------
 
     const today = new Date();
@@ -78,13 +78,13 @@ async function notifyExpiringSubscriptions() {
 async function sendDailyRenewalRemindersToExpiredUsers() {
     logger.info('[JOB LEMBRETE EXPIRADOS] Iniciando verificação de usuários com planos expirados...');
 
-    // <<< CHECK GLOBAL SWITCH >>>
-    const systemService = require('../features/System/system.service');
-    const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
-    if (!isEnabled) {
-        logger.warn('[JOB LEMBRETE EXPIRADOS] Job abortado: Global switch OFF.');
-        return;
-    }
+    // <<< CHECK GLOBAL SWITCH REMOVED FOR CORE FUNCTIONALITY >>>
+    // const systemService = require('../features/System/system.service');
+    // const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+    // if (!isEnabled) {
+    //     logger.warn('[JOB LEMBRETE EXPIRADOS] Job abortado: Global switch OFF.');
+    //     return;
+    // }
     // ---------------------------
 
     const today = new Date().toISOString().split('T')[0];

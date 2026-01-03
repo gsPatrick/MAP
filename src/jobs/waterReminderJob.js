@@ -39,13 +39,13 @@ async function formatWaterReminderMessage(log, clientName) {
 }
 
 async function checkAndSendWaterReminder() {
-  // <<< CHECK GLOBAL SWITCH >>>
-  const systemService = require('../features/System/system.service'); // Requiring conditionally or at top if safe. Using inside to be safe against circles.
-  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
-  if (!isEnabled) {
-    // logger.debug('[JOB ÁGUA] Job abortado: Global switch OFF.'); // Descomente para debugar se quiser, mas pode floodar log
-    return;
-  }
+  // <<< CHECK GLOBAL SWITCH REMOVED FOR CORE FUNCTIONALITY >>>
+  // const systemService = require('../features/System/system.service'); // Requiring conditionally or at top if safe. Using inside to be safe against circles.
+  // const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  // if (!isEnabled) {
+  //   // logger.debug('[JOB ÁGUA] Job abortado: Global switch OFF.'); // Descomente para debugar se quiser, mas pode floodar log
+  //   return;
+  // }
   // ---------------------------
 
   try {

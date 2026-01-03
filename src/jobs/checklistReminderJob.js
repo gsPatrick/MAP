@@ -8,13 +8,13 @@ const { sendWhatsappMessage } = require('../services/whatsappService');
 async function sendChecklistReminders() {
   logger.info('[JOB CHECKLIST REMINDER] Iniciando verificação de tarefas pendentes...');
 
-  // <<< CHECK GLOBAL SWITCH >>>
-  const systemService = require('../features/System/system.service');
-  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
-  if (!isEnabled) {
-    logger.warn('[JOB CHECKLIST REMINDER] Job abortado: Global switch OFF.');
-    return;
-  }
+  // <<< CHECK GLOBAL SWITCH REMOVED FOR CORE FUNCTIONALITY >>>
+  // const systemService = require('../features/System/system.service');
+  // const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  // if (!isEnabled) {
+  //   logger.warn('[JOB CHECKLIST REMINDER] Job abortado: Global switch OFF.');
+  //   return;
+  // }
   // ---------------------------
 
   try {
