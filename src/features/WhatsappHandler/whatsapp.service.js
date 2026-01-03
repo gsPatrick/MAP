@@ -260,7 +260,7 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
 
             if (!transcriptionText) {
                 logger.warn(`[WHATSAPP SERVICE] Transcrição retornou vazia para ${canonicalPhone}.`);
-                await sendWhatsappMessage(canonicalPhone, "Não consegui entender o que você disse no áudio. 😕 Poderia tentar escrever?");
+                await sendWhatsappMessage(canonicalPhone, "Não consegui entender o que você disse no áudio. 😕 Poderia tentar escrever?", { immediate: true });
                 return;
             }
 
@@ -274,11 +274,11 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
 
         } else {
             logger.error(`[WHATSAPP SERVICE] Falha ao baixar áudio de ${canonicalPhone} da URL: ${mediaUrl}.`);
-            await sendWhatsappMessage(canonicalPhone, "Tive um problema ao baixar seu áudio. 🙁");
+            await sendWhatsappMessage(canonicalPhone, "Tive um problema ao baixar seu áudio. 🙁", { immediate: true });
         }
     } catch (error) {
         logger.error(`[WHATSAPP SERVICE] Erro ao processar áudio (Transcrição) de ${canonicalPhone}: ${error.message}`);
-        await sendWhatsappMessage(canonicalPhone, "Puxa, falhei ao processar seu áudio. 😵‍💫 Pode tentar digitar?");
+        await sendWhatsappMessage(canonicalPhone, "Puxa, falhei ao processar seu áudio. 😵‍💫 Pode tentar digitar?", { immediate: true });
     } finally {
         pushNameFromPayload = null;
     }
@@ -316,12 +316,12 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
             if (!actorClient.status || actorClient.status !== 'Ativo') {
                 logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas convidado (ator) ${actorClient.id} está inativo.`);
-                await sendWhatsappMessage(senderPhone, "Olá! Seu acesso a esta conta compartilhada não está ativo. Por favor, contate o proprietário.");
+                await sendWhatsappMessage(senderPhone, "Olá! Seu acesso a esta conta compartilhada não está ativo. Por favor, contate o proprietário.", { immediate: true });
                 return;
             }
             if (!sharedAccessRecord.ownerClient || sharedAccessRecord.ownerClient.status !== 'Ativo') {
                 logger.warn(`[WHATSAPP SERVICE] SharedAccess para ${senderPhone}, mas proprietário ${ownerClientIdForContext} está inativo.`);
-                await sendWhatsappMessage(senderPhone, "Olá! O proprietário da conta que compartilhou este acesso parece não estar ativo. Tente mais tarde ou contate-o.");
+                await sendWhatsappMessage(senderPhone, "Olá! O proprietário da conta que compartilhou este acesso parece não estar ativo. Tente mais tarde ou contate-o.", { immediate: true });
                 return;
             }
 
@@ -338,7 +338,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             if (ownerAccountsIfShared.length === 0) {
                 const ownerName = sharedAccessRecord.ownerClient?.name || 'o proprietário';
                 logger.warn(`[WHATSAPP SERVICE] Acesso compartilhado para ${actorClient.name} (${senderPhone}) para contas de ${ownerClientIdForContext}, mas nenhuma conta do dono acessível foi encontrada.`);
-                await sendWhatsappMessage(senderPhone, `Olá ${actorClient.name.split(" ")[0]}! Você tem um acesso compartilhado, mas parece que ${ownerName} não possui contas ativas do tipo que você pode acessar (Pessoal ou o Empresarial específico). Peça para ele verificar, por favor! 😉`);
+                await sendWhatsappMessage(senderPhone, `Olá ${actorClient.name.split(" ")[0]}! Você tem um acesso compartilhado, mas parece que ${ownerName} não possui contas ativas do tipo que você pode acessar (Pessoal ou o Empresarial específico). Peça para ele verificar, por favor! 😉`, { immediate: true });
                 return;
             }
         } else {
@@ -351,7 +351,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 logger.info(`[WHATSAPP SERVICE] Telefone ${senderPhone} não reconhecido. Criando novo cliente para onboarding...`);
                 actorClient = await clientService.createClientContact({ phone: senderPhone, name: 'Convidado' });
                 const welcomeMsg = onboardingHandler.getOnboardingWelcomeNoPlanMessage(actorClient.name ? actorClient.name.split(" ")[0] : (pushNameFromPayload || "você"));
-                await sendWhatsappMessage(senderPhone, welcomeMsg);
+                await sendWhatsappMessage(senderPhone, welcomeMsg, { immediate: true });
                 const tempStateForNewUser = await initializeOrUpdateState(actorClient, null, null, [], []);
                 tempStateForNewUser.data.onboardingStage = 'awaiting_plan_confirmation';
                 tempStateForNewUser.currentAction = 'awaiting_plan_interest_generic';
@@ -368,7 +368,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
         if (state.justReactivated) {
             const welcomeBackMessage = `🎉 Eba, que bom te ver de volta, ${state.clientName}! Sua assinatura foi reativada com sucesso e tudo está pronto para você continuar de onde parou. O que vamos organizar primeiro? 💪`;
-            await sendWhatsappMessage(senderPhone, welcomeBackMessage);
+            await sendWhatsappMessage(senderPhone, welcomeBackMessage, { immediate: true });
             state.justReactivated = false;
         }
 
@@ -387,7 +387,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 `- Anual (R$ 789,90): ${checkoutBaseUrl}/checkout/10\n\n` +
                 `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
 
-            await sendWhatsappMessage(senderPhone, expiredMessage);
+            await sendWhatsappMessage(senderPhone, expiredMessage, { immediate: true });
             conversationState.set(senderPhone, state);
             pushNameFromPayload = null;
             return;
@@ -426,7 +426,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 const logId = parseInt(parts[2], 10);
                 if (isNaN(logId)) {
                     logger.warn(`[WHATSAPP SERVICE] Botão de hidratação com ID de log inválido: ${buttonId}`);
-                    await sendWhatsappMessage(senderPhone, "Ops, tive um problema para identificar qual lembrete era esse. Tente novamente ou digite sua mensagem!");
+                    await sendWhatsappMessage(senderPhone, "Ops, tive um problema para identificar qual lembrete era esse. Tente novamente ou digite sua mensagem!", { immediate: true });
                     conversationState.set(senderPhone, state);
                     pushNameFromPayload = null;
                     return;
@@ -436,13 +436,13 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     const logs = await hydrationService.getTodaysLogsByClient(actorClient.id);
                     const prefs = await systemService.getSystemPreferences();
                     const hydrationSummary = formatter.formatHydrationLogDataStructure(logs, prefs, state.clientName);
-                    await sendWhatsappMessage(senderPhone, `🎉 Boa, ${state.clientName}! Seu copo de água foi registrado! ${hydrationSummary}`);
+                    await sendWhatsappMessage(senderPhone, `🎉 Boa, ${state.clientName}! Seu copo de água foi registrado! ${hydrationSummary}`, { immediate: true });
                     conversationState.set(senderPhone, state);
                     pushNameFromPayload = null;
                     return;
                 } else if (actionType === 'nao_bebi') {
                     await hydrationService.handleNegativeWaterResponse(actorClient.id, logId);
-                    await sendWhatsappMessage(senderPhone, `Entendido, ${state.clientName}! Sem problemas. Que tal tentar beber um pouco de água agora? Te lembro novamente em 5 minutinhos! 😉`);
+                    await sendWhatsappMessage(senderPhone, `Entendido, ${state.clientName}! Sem problemas. Que tal tentar beber um pouco de água agora? Te lembro novamente em 5 minutinhos! 😉`, { immediate: true });
                     conversationState.set(senderPhone, state);
                     pushNameFromPayload = null;
                     return;
@@ -516,7 +516,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     const selectMsg = `Tudo pronto, ${state.clientName}! 🎉\nA conta "${state.activeFinancialAccountName}" (${state.activeFinancialAccountType}) ${ownerNameText}já está selecionada. Como posso te ajudar a organizar suas finanças hoje? 🚀`;
                     state.messageHistory.push({ role: 'assistant', content: selectMsg });
                     state.currentAction = null;
-                    await sendWhatsappMessage(senderPhone, selectMsg);
+                    await sendWhatsappMessage(senderPhone, selectMsg, { immediate: true });
                 } else {
                     const chosenIdentifier = messageText.trim();
                     let accountToSelect = null;
@@ -536,18 +536,18 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                         const confirmSelectionMsg = `Maravilha, ${state.clientName}!\nSelecionei a conta "${state.activeFinancialAccountName}" para você. Como posso te ajudar agora? 🚀`;
                         state.messageHistory.push({ role: 'assistant', content: confirmSelectionMsg });
                         state.currentAction = null;
-                        await sendWhatsappMessage(senderPhone, confirmSelectionMsg);
+                        await sendWhatsappMessage(senderPhone, confirmSelectionMsg, { immediate: true });
                     } else {
                         state.currentAction = 'selecting_account_flow_active';
                         state.data.accountsToList = accountsForSelection.map(a => ({ id: a.id, name: a.accountName || a.name, type: a.accountType || a.type }));
                         const ownerNameForMsg = state.isSharedAccessContext ? state.ownerClientNameForContext : null;
                         const accountOptionsText = formatter.formatListClientAccountsDataStructure(state.data.accountsToList, null, ownerNameForMsg) + "\n\n🤔 Qual delas vamos usar hoje? Me diga o nome ou o número.";
                         state.messageHistory.push({ role: 'assistant', content: accountOptionsText });
-                        await sendWhatsappMessage(senderPhone, accountOptionsText);
+                        await sendWhatsappMessage(senderPhone, accountOptionsText, { immediate: true });
                     }
                 }
             } else {
-                await sendWhatsappMessage(senderPhone, `Olá ${state.clientName}! Parece que não há contas financeiras acessíveis para você no momento. ${state.isSharedAccessContext ? `Peça para ${state.ownerClientNameForContext} verificar.` : 'Diga "criar conta pessoal" para começar.'}`);
+                await sendWhatsappMessage(senderPhone, `Olá ${state.clientName}! Parece que não há contas financeiras acessíveis para você no momento. ${state.isSharedAccessContext ? `Peça para ${state.ownerClientNameForContext} verificar.` : 'Diga "criar conta pessoal" para começar.'}`, { immediate: true });
             }
             conversationState.set(senderPhone, state);
             if (!state.activeFinancialAccountId) return;
@@ -639,7 +639,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 // =================================================================
                 if (mainActionResult && mainActionResult.formattedData && mainActionResult.formattedData.trim().startsWith('❌')) {
                     logger.warn(`[WHATSAPP SERVICE] Erro retornado pelo Action Handler: "${mainActionResult.formattedData}". Interrompendo fluxo para ${senderPhone}.`);
-                    await sendWhatsappMessage(senderPhone, mainActionResult.formattedData);
+                    await sendWhatsappMessage(senderPhone, mainActionResult.formattedData, { immediate: true });
                     return; // Interrompe a execução aqui para não enviar mais nada.
                 }
                 // =================================================================
@@ -730,7 +730,7 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                         { id: `edit:multi_action_block:${blockId}`, label: '✏️ Editar este bloco' },
                         { id: `delete:multi_action_block:${blockId}`, label: '🗑️ Excluir algo' }
                     ];
-                    await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, "Opções:");
+                    await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, "Opções:", "Ver Opções", { immediate: true });
                 } else if (resourcesForButtons.length === 1) {
                     const singleResource = resourcesForButtons[0];
                     const buttons = [
@@ -740,9 +740,9 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                     if (singleResource.type === 'credit_card') {
                         buttons.push({ id: `details:${singleResource.type}:${singleResource.id}`, label: 'Ver Fatura/Detalhes' });
                     }
-                    await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, "Opções:");
+                    await sendButtonListMessage(senderPhone, finalMessageToSend, buttons, "Opções:", "Ver Opções", { immediate: true });
                 } else {
-                    await sendWhatsappMessage(senderPhone, finalMessageToSend);
+                    await sendWhatsappMessage(senderPhone, finalMessageToSend, { immediate: true });
                 }
             }
 
@@ -761,20 +761,20 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             state.currentAction = 'awaiting_clarification_response';
             finalMessageToSend = clarification.clarification_question;
             state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
-            await sendWhatsappMessage(senderPhone, finalMessageToSend);
+            await sendWhatsappMessage(senderPhone, finalMessageToSend, { immediate: true });
 
         } else {
             state.pendingConfirmation = null;
             state.currentAction = null;
             finalMessageToSend = aiResponse.reply_to_user_suggestion || `Olá, ${state.clientName}! Como posso te ajudar hoje?`;
             state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
-            await sendWhatsappMessage(senderPhone, finalMessageToSend);
+            await sendWhatsappMessage(senderPhone, finalMessageToSend, { immediate: true });
         }
 
     } catch (error) {
         logger.error(`[WHATSAPP HANDLER] Erro CRÍTICO processando msg de ${senderPhone}: ${error.message}`, { stack: error.stack?.substring(0, 1000) });
         const errorMsg = `Puxa vida, ${state?.clientName || 'você'}! 😬 Tive um curto-circuito aqui... Minha equipe já foi notificada. Tente novamente em um instante.`;
-        await sendWhatsappMessage(senderPhone, errorMsg);
+        await sendWhatsappMessage(senderPhone, errorMsg, { immediate: true });
     } finally {
         const endTime = Date.now();
         logger.info(`[WHATSAPP HANDLER] Processamento para ${senderPhone} (Ator: ${actorClient?.id || 'N/A'}) finalizado em ${endTime - startTime}ms.`);

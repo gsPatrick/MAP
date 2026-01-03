@@ -76,7 +76,9 @@ async function validateMessageRecipient(phone) {
 }
 
 async function sendWhatsappMessage(phone, message, options = {}) {
-  // Options: { force: boolean } - Se true, ignora verificação de plano (usar para boas-vindas/erros críticos)
+  // Options: { force: boolean, immediate: boolean }
+  // force: ignora verificação de plano (usar para boas-vindas/erros críticos)
+  // immediate: envia na hora sem usar a fila (para respostas de conversa)
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN) {
     logger.error('[WhatsAppService] Variáveis de ambiente da Z-API não configuradas.');
     return null;
@@ -106,9 +108,25 @@ async function sendWhatsappMessage(phone, message, options = {}) {
     'client-token': ZAPI_CLIENT_TOKEN,
   };
 
+  // <<< ENVIO IMEDIATO PARA RESPOSTAS DE CONVERSA >>>
+  if (options.immediate) {
+    try {
+      logger.info(`[WhatsAppService] Enviando mensagem de TEXTO (IMEDIATO) para ${payload.phone}: "${payload.message.substring(0, 70)}..."`);
+      const response = await axios.post(endpoint, payload, { headers });
+      logger.info(`[WhatsAppService] Mensagem de TEXTO enviada com sucesso para ${phone}. Z-API Response:`, response.data);
+      return response.data;
+    } catch (error) {
+      const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
+      const errorStatus = error.response?.status;
+      logger.error(`[WhatsAppService] Erro ao enviar mensagem de TEXTO para ${phone}: Status ${errorStatus}`, { errorMessage });
+      return null;
+    }
+  }
+
+  // <<< ENVIO VIA FILA PARA JOBS AUTOMÁTICOS >>>
   try {
     return messageQueue.enqueue(async () => {
-      logger.info(`[WhatsAppService] Enviando mensagem de TEXTO para ${payload.phone}: "${payload.message.substring(0, 70)}..."`);
+      logger.info(`[WhatsAppService] Enviando mensagem de TEXTO (FILA) para ${payload.phone}: "${payload.message.substring(0, 70)}..."`);
       const response = await axios.post(endpoint, payload, { headers });
       logger.info(`[WhatsAppService] Mensagem de TEXTO enviada com sucesso para ${phone}. Z-API Response:`, response.data);
       return response.data;
@@ -122,6 +140,7 @@ async function sendWhatsappMessage(phone, message, options = {}) {
 }
 
 async function sendButtonListMessage(phone, messageText, buttons, listTitle = "Opções Disponíveis", buttonListText = "Ver Opções", options = {}) {
+  // Options: { force: boolean, immediate: boolean }
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN) {
     logger.error('[WhatsAppService] Variáveis de ambiente da Z-API não configuradas.');
     return null;
@@ -159,9 +178,25 @@ async function sendButtonListMessage(phone, messageText, buttons, listTitle = "O
     'client-token': ZAPI_CLIENT_TOKEN,
   };
 
+  // <<< ENVIO IMEDIATO PARA RESPOSTAS DE CONVERSA >>>
+  if (options.immediate) {
+    try {
+      logger.info(`[WhatsAppService] Enviando LISTA DE BOTÕES (IMEDIATO) para ${payload.phone}: "${payload.message.substring(0, 50)}..." com ${buttons.length} botões.`);
+      const response = await axios.post(endpoint, payload, { headers });
+      logger.info(`[WhatsAppService] Mensagem com LISTA DE BOTÕES enviada com sucesso para ${phone}. Z-API Response:`, response.data);
+      return response.data;
+    } catch (error) {
+      const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
+      const errorStatus = error.response?.status;
+      logger.error(`[WhatsAppService] Erro ao enviar mensagem com LISTA DE BOTÕES para ${phone}: Status ${errorStatus}`, { errorMessage, payloadAttempted: payload });
+      return null;
+    }
+  }
+
+  // <<< ENVIO VIA FILA PARA JOBS AUTOMÁTICOS >>>
   try {
     return messageQueue.enqueue(async () => {
-      logger.info(`[WhatsAppService] Enviando MENSAGEM COM LISTA DE BOTÕES para ${payload.phone}: "${payload.message.substring(0, 50)}..." com ${buttons.length} botões.`);
+      logger.info(`[WhatsAppService] Enviando LISTA DE BOTÕES (FILA) para ${payload.phone}: "${payload.message.substring(0, 50)}..." com ${buttons.length} botões.`);
       const response = await axios.post(endpoint, payload, { headers });
       logger.info(`[WhatsAppService] Mensagem com LISTA DE BOTÕES enviada com sucesso para ${phone}. Z-API Response:`, response.data);
       return response.data;
