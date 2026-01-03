@@ -83,7 +83,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
     const params = detectedAction.parameters || detectedAction;
     const actionName = detectedAction.action || detectedAction.action_type;
     let formattedData = "";
-    
+
     let resourceForButtonsContext = {
         type: 'multi_action_block',
         resources: []
@@ -100,11 +100,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
         let autoSwitchMessage = "";
 
         const allOwnerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true });
-        
+
         // Prioridade 1: O usuário especificou a conta na mensagem.
         if (params.targetAccountNameOrType) {
             const targetLower = params.targetAccountNameOrType.toLowerCase();
-            const foundAccount = allOwnerAccounts.find(acc => 
+            const foundAccount = allOwnerAccounts.find(acc =>
                 (acc.accountName || acc.name).toLowerCase().includes(targetLower) ||
                 (acc.accountType || acc.type).toLowerCase() === targetLower ||
                 (targetLower.includes('pessoal') && acc.accountType === 'PF') ||
@@ -122,14 +122,29 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 formattedData = `❌ Ops, ${clientNameToUse}! Não encontrei a conta "${params.targetAccountNameOrType}" que você mencionou. Suas contas disponíveis são: ${allOwnerAccounts.map(a => a.accountName).join(', ')}.`;
                 return { formattedData, resourceForButtonsContext: null, wasAnEdit: false };
             }
-        } 
+        }
         // Prioridade 2: Auto-switch para conta de negócios se a ação for exclusiva de PJ/MEI.
         else {
             const isCurrentAccountPf = state.activeFinancialAccountType === 'PF';
+            const isCurrentAccountPjMei = ['PJ', 'MEI'].includes(state.activeFinancialAccountType);
             const hasAdvancedPlan = state.currentAccessLevel.includes('avancado') || state.currentAccessLevel.includes('vitalicio_avancado');
             const isPjAction = PJ_EXCLUSIVE_ACTIONS.includes(actionName) || (actionName === 'SCHEDULE_APPOINTMENT' && params.businessClientNames && params.businessClientNames.length > 0);
 
-            if (isCurrentAccountPf && hasAdvancedPlan && isPjAction) {
+            // NOVA LÓGICA: Agendamentos PESSOAIS (sem businessClientNames) devem ir para a conta PF
+            const isPersonalAppointment = actionName === 'SCHEDULE_APPOINTMENT' && (!params.businessClientNames || params.businessClientNames.length === 0);
+
+            if (isCurrentAccountPjMei && isPersonalAppointment) {
+                // Auto-switch para conta PF para agendamentos pessoais
+                const pfAccount = allOwnerAccounts.find(acc => acc.accountType === 'PF');
+                if (pfAccount) {
+                    effectiveAccountId = pfAccount.id;
+                    effectiveAccountName = pfAccount.accountName;
+                    effectiveAccountType = pfAccount.accountType;
+                    logger.info(`[AutoSwitch] Agendamento pessoal detectado. Mudando contexto da ação '${actionName}' da conta PJ/MEI para a conta PF ID ${pfAccount.id}.`);
+                }
+                // Se não houver conta PF, mantém na conta atual
+            }
+            else if (isCurrentAccountPf && hasAdvancedPlan && isPjAction) {
                 const pjAccount = allOwnerAccounts.find(acc => ['PJ', 'MEI'].includes(acc.accountType));
 
                 if (pjAccount) {
@@ -150,14 +165,14 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
 
         switch (actionName) {
-// =================================================================
+            // =================================================================
             // AÇÕES DE CRIAÇÃO (CREATE)
             // =================================================================
 
             case 'CREATE_FINANCIAL_TRANSACTION': {
                 try {
-                    const categoryObject = params.financialCategoryName 
-                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId) 
+                    const categoryObject = params.financialCategoryName
+                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId)
                         : null;
                     const categoryId = categoryObject ? categoryObject.id : null;
 
@@ -170,10 +185,10 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     const txData = {
-                        description: params.description, 
-                        type: params.type, 
-                        value: parseFloat(params.value), 
-                        transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0],
+                        description: params.description,
+                        type: params.type,
+                        value: parseFloat(params.value),
+                        transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0],
                         financialCategoryId: categoryId,
                         creditCardId: cardId,
                         notes: params.notes,
@@ -185,9 +200,9 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 400, message: "Dados obrigatórios (descrição, tipo, valor) ausentes ou inválidos para criar transação." };
                     }
 
-                    const newTx = await financialService.createTransaction(effectiveAccountId, txData, actorId); 
+                    const newTx = await financialService.createTransaction(effectiveAccountId, txData, actorId);
                     const reloadedTx = await financialService.getTransactionById(effectiveAccountId, newTx.id);
-                    
+
                     formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'transaction', id: newTx.id, description: newTx.description });
                 } catch (e) {
@@ -207,19 +222,19 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         intro = `Opa, ${clientNameToUse}!`;
                         body = e.message;
                     }
-                    
+
                     formattedData = `❌ ${intro}\n${body}`;
                 }
                 break;
             }
-            
+
             case 'RECORD_SALE': {
                 try {
                     const { productNameOrCode, quantitySold, saleDate, notes } = params;
                     if (!productNameOrCode || !quantitySold || isNaN(parseInt(quantitySold)) || parseInt(quantitySold) <= 0) {
                         throw { statusCode: 400, message: "Para registrar uma venda, preciso do nome do produto e da quantidade vendida." };
                     }
-                                        
+
                     // 1. Buscar o produto para obter o preço de venda e o ID
                     const product = await productService.findProductByNameOrCodeForSale(effectiveAccountId, productNameOrCode);
                     if (!product) {
@@ -238,7 +253,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     // 3. Criar a transação financeira de ENTRADA
                     const totalSaleValue = product.salePrice * qty;
                     const transactionDescription = `Venda de ${qty}x ${product.name}`;
-                    
+
                     const newTx = await financialService.createTransaction(effectiveAccountId, {
                         description: transactionDescription,
                         type: 'Entrada',
@@ -316,14 +331,14 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
-            
+
             case 'CREATE_CHECKLIST_ITEM': {
                 try {
                     const { text, priority } = detectedAction.parameters;
                     if (!text) {
                         throw { statusCode: 400, message: "Para adicionar uma tarefa, preciso que me diga o que fazer. Ex: 'adicionar tarefa Falar com fornecedor'." };
                     }
-                    
+
                     const today = new Date().toISOString().split('T')[0];
                     const newItem = await checklistService.addChecklistItem(effectiveAccountId, today, { text, priority });
 
@@ -338,25 +353,25 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui adicionar sua tarefa.\nDetalhe: ${e.message}`;
                 }
                 break;
-            
+
             }
-            
+
             case 'COMPLETE_CHECKLIST_ITEM': {
                 try {
                     const { text } = detectedAction.parameters;
                     if (!text) {
                         throw { statusCode: 400, message: "Qual tarefa você concluiu? Preciso da descrição para marcá-la." };
                     }
-                    
+
                     const today = new Date().toISOString().split('T')[0];
                     const currentChecklist = await checklistService.getChecklistByDate(effectiveAccountId, today);
-                    
+
                     const pendingItems = currentChecklist.items.filter(item => !item.completed);
                     if (pendingItems.length === 0) {
                         formattedData = `🎉 Uau, você já tinha concluído tudo por hoje! Se quiser, pode adicionar mais tarefas.`;
                         break;
                     }
-                    
+
                     let bestMatch = null;
                     let highestScore = 0;
                     const userWords = text.toLowerCase().split(' ');
@@ -382,17 +397,17 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const newPendingCount = updatedChecklist.items.filter(item => !item.completed).length;
 
                     if (newPendingCount === 0) {
-                         formattedData += `\n\n*PARABÉNS!* 🏆 Você finalizou todas as tarefas de hoje! Momento de celebrar e relaxar!`;
+                        formattedData += `\n\n*PARABÉNS!* 🏆 Você finalizou todas as tarefas de hoje! Momento de celebrar e relaxar!`;
                     } else {
-                         formattedData += `\n\nAgora faltam apenas *${newPendingCount}* tarefa(s). Continue assim! 💪`;
+                        formattedData += `\n\nAgora faltam apenas *${newPendingCount}* tarefa(s). Continue assim! 💪`;
                     }
-                    
+
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em COMPLETE_CHECKLIST_ITEM: ${e.message}`, { error: e, paramsUsed: detectedAction.parameters });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui marcar sua tarefa como concluída.\nDetalhe: ${e.message}`;
                 }
                 break;
-            } 
+            }
 
             case 'SETTLE_OPEN_CREDIT_CARD_INVOICE': {
                 try {
@@ -413,9 +428,9 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         null,
                         actorId
                     );
-                    
+
                     formattedData = `🎉 A fatura aberta do cartão "${cardNameToSettle}" foi liquidada com sucesso! ` +
-                                    `Um pagamento de *${formatter.formatCurrency(paymentTransaction.value)}* foi registrado.`;
+                        `Um pagamento de *${formatter.formatCurrency(paymentTransaction.value)}* foi registrado.`;
 
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em SETTLE_OPEN_CREDIT_CARD_INVOICE: ${e.message}`, { error: e, paramsUsed: params });
@@ -453,7 +468,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         reminderEnabled: params.reminderEnabled,
                         businessClientIds: [], // Apenas para associar clientes de negócio em contas PJ/MEI
                     };
-                    
+
                     // Lógica para associar um cliente de negócio (se a conta for PJ/MEI) a um compromisso geral (como uma reunião)
                     if (['PJ', 'MEI'].includes(state.activeFinancialAccountType) || effectiveAccountId !== state.activeFinancialAccountId) {
                         if (params.businessClientNames && Array.isArray(params.businessClientNames)) {
@@ -467,7 +482,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     const newAppt = await appointmentService.scheduleAppointment(effectiveAccountId, appointmentData, actorId);
-                    
+
                     // Passa o nome da conta efetiva para o formatador
                     formattedData = formatter.formatAppointmentDataStructure(newAppt, false, null, false, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'appointment', id: newAppt.id, description: newAppt.title });
@@ -480,7 +495,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
             case 'CREATE_PARCELLED_ACCOUNT': {
                 try {
-                    const categoryObject = params.financialCategoryName 
+                    const categoryObject = params.financialCategoryName
                         ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId)
                         : null;
                     const categoryId = categoryObject ? categoryObject.id : null;
@@ -497,14 +512,14 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const parcelData = {
                         description: params.description,
-                        type: params.type || "Saída", 
+                        type: params.type || "Saída",
                         totalValue: parseFloat(params.totalValue || params.value),
                         numberOfParcels: parseInt(params.numberOfParcels),
-                        initialDueDate: params.initialDueDate, 
+                        initialDueDate: params.initialDueDate,
                         financialCategoryId: categoryId,
                         creditCardId: cardId,
                         notes: params.notes,
-                        transactionDate: params.transactionDate || params.initialDueDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0]
+                        transactionDate: params.transactionDate || params.initialDueDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0]
                     };
 
                     if (!parcelData.description || !parcelData.type || isNaN(parcelData.totalValue) || parcelData.totalValue <= 0 || isNaN(parcelData.numberOfParcels) || parcelData.numberOfParcels < 1 || !parcelData.initialDueDate) {
@@ -515,7 +530,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     const parcelResult = await financialService.createParcelledAccount(effectiveAccountId, parcelData, actorId);
-                    
+
                     formattedData = formatter.formatParcelledAccountDataStructure(parcelData, parcelResult, effectiveAccountName);
                     if (parcelResult.parcels && parcelResult.parcels.length > 0) {
                         const originalTxId = parcelResult.parcels[0].originalAccountId || parcelResult.parcels[0].id;
@@ -535,7 +550,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                             body = `Parece que você ainda não tem nenhum cartão cadastrado.`;
                         }
                     }
-                    
+
                     formattedData = `❌ ${intro}\n${body}`;
                 }
                 break;
@@ -543,11 +558,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
             case 'CREATE_RECURRING_RULE': {
                 try {
-                    const categoryObjectRule = params.financialCategoryName 
+                    const categoryObjectRule = params.financialCategoryName
                         ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId)
                         : null;
                     const categoryIdRule = categoryObjectRule ? categoryObjectRule.id : null;
-                    
+
                     const ruleData = {
                         description: params.description,
                         type: params.type,
@@ -566,10 +581,10 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!ruleData.description || !ruleData.type || isNaN(ruleData.value) || ruleData.value <= 0 || !ruleData.frequency || !ruleData.startDate) {
                         throw { statusCode: 400, message: "Dados insuficientes para criar regra recorrente (desc, tipo, valor, frequência, data início)." };
                     }
-                    
+
                     const newRule = await recurringTransactionService.createRecurringRule(effectiveAccountId, ruleData);
                     const reloadedRule = await recurringTransactionService.getRecurringRuleById(effectiveAccountId, newRule.id);
-                    
+
                     formattedData = formatter.formatRecurringRuleDataStructure(reloadedRule, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'recurring_rule', id: newRule.id, description: newRule.description });
                 } catch (e) {
@@ -589,20 +604,20 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         wasAnEdit = true;
                         break;
                     }
-                    
+
                     const productData = {
                         name: params.name, salePrice: parseFloat(params.salePrice), code: params.code,
                         costPrice: params.costPrice ? parseFloat(params.costPrice) : null,
                         initialQuantity: params.initialQuantity ? parseInt(params.initialQuantity) : 0,
                         minimumStock: params.minimumStock ? parseInt(params.minimumStock) : 0,
-                        unit: params.unit || 'UN', description: params.description 
+                        unit: params.unit || 'UN', description: params.description
                     };
                     if (!productData.name || isNaN(productData.salePrice) || productData.salePrice <= 0) {
-                         throw { statusCode: 400, message: "Nome e preço de venda são obrigatórios para o produto." };
+                        throw { statusCode: 400, message: "Nome e preço de venda são obrigatórios para o produto." };
                     }
-                    
+
                     const newProduct = await productService.createProduct(effectiveAccountId, productData, actorId);
-                    
+
                     formattedData = formatter.formatProductDataStructure(newProduct, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'product', id: newProduct.id, description: newProduct.name });
                 } catch (e) {
@@ -626,12 +641,12 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         lastFourDigits: params.lastFourDigits, flag: params.flag,
                         isDefault: params.isDefault === undefined ? false : params.isDefault
                     };
-                    if (!cardData.name || isNaN(cardData.limit) || cardData.limit <= 0 || isNaN(cardData.closingDay) || isNaN(cardData.paymentDay) ) {
+                    if (!cardData.name || isNaN(cardData.limit) || cardData.limit <= 0 || isNaN(cardData.closingDay) || isNaN(cardData.paymentDay)) {
                         throw { statusCode: 400, message: "Dados insuficientes ou inválidos para criar cartão (nome, limite, dia fechamento/pagamento)." };
                     }
-                    
+
                     const newCard = await creditCardService.createCreditCard(effectiveAccountId, cardData, actorId);
-                    
+
                     formattedData = formatter.formatCreditCardDataStructure(newCard, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'credit_card', id: newCard.id, description: newCard.name });
                 } catch (e) {
@@ -670,11 +685,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if ((accountTypeToCreate === 'PJ' || accountTypeToCreate === 'MEI') && !state.currentAccessLevel.startsWith('avancado') && !state.currentAccessLevel.startsWith('vitalicio_avancado')) {
                         throw { statusCode: 403, message: `Para criar contas PJ ou MEI, você precisa de um Plano Avançado. Confira nossos planos!` };
                     }
-                    
+
                     const newFinancialAccount = await clientService.createFinancialAccount(actorId, { accountName: newAccountName, accountType: accountTypeToCreate, documentNumber });
-                    
+
                     formattedData = formatter.formatFinancialAccountDataStructure(newFinancialAccount) + "\n\nEsta conta foi criada, mas a sua conta ativa continua a mesma. Diga \"mudar para " + newFinancialAccount.accountName + "\" para começar a usá-la.";
-                } catch(e) {
+                } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_FINANCIAL_ACCOUNT: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui criar a conta.\nDetalhe: ${e.message}`;
                 }
@@ -688,7 +703,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
                     const bcData = { name: params.name, phone: params.phone, email: params.email, notes: params.notes };
                     const newBc = await businessClientService.createBusinessClient(effectiveAccountId, bcData, actorId);
-                    
+
                     formattedData = formatter.formatBusinessClientDataStructure(newBc, effectiveAccountName);
                     resourceForButtonsContext.resources.push({ type: 'business_client', id: newBc.id, description: newBc.name });
                 } catch (e) {
@@ -718,7 +733,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     let businessProfileIdToShare = null;
                     if (params.businessProfileToShareName) {
-                        const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, {isActive:true});
+                        const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true });
                         const bizAccount = ownerAccounts.find(acc => (acc.accountType === 'PJ' || acc.accountType === 'MEI') && acc.accountName.toLowerCase() === params.businessProfileToShareName.toLowerCase());
                         if (!bizAccount) {
                             throw { statusCode: 404, message: `Não encontrei um perfil empresarial chamado "${params.businessProfileToShareName}" na sua conta.` };
@@ -738,7 +753,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const newSharedAccess = await sharedAccessService.grantAccess(state.ownerClientIdForContext, grantDataForService);
                     const reloadedSA = await sharedAccessService.getSharedAccessById(newSharedAccess.id);
-                    
+
                     formattedData = formatter.formatSharedAccessDataStructure(reloadedSA, 'owner');
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GRANT_ACCESS: ${e.message}`, { error: e, paramsUsed: params });
@@ -749,11 +764,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
             case 'RECORD_STOCK_MOVEMENT': {
                 try {
-                    if(!params.productNameOrCode || !params.movementType || params.quantity === undefined || params.quantity === null) {
+                    if (!params.productNameOrCode || !params.movementType || params.quantity === undefined || params.quantity === null) {
                         throw { statusCode: 400, message: "Produto, tipo de movimento e quantidade são obrigatórios." };
                     }
                     const productId = await findProductIdByNameOrCode(params.productNameOrCode, effectiveAccountId);
-                    if(!productId) {
+                    if (!productId) {
                         throw { statusCode: 404, message: `Produto "${params.productNameOrCode}" não encontrado.` };
                     }
 
@@ -764,9 +779,9 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     });
 
                     const updatedStockInfo = await stockService.getProductStockBalance(productId);
-                    
+
                     formattedData = `✅ Movimento de ${params.movementType.toLowerCase()} (${params.quantity} ${updatedStockInfo.unit || 'UN'}) para "${updatedStockInfo.name}" registrado.\n` +
-                                    `📦 Estoque Atual: *${updatedStockInfo.quantity} ${updatedStockInfo.unit || 'UN'}*.`;
+                        `📦 Estoque Atual: *${updatedStockInfo.quantity} ${updatedStockInfo.unit || 'UN'}*.`;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em RECORD_STOCK_MOVEMENT: ${e.message}`, { error: e, paramsUsed: params });
                     let intro = `Ops, ${clientNameToUse}! 😬 Não consegui registrar a movimentação de estoque.`;
@@ -781,7 +796,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                             body = `Parece que você ainda não tem nenhum produto cadastrado. Quer adicionar um agora?`;
                         }
                     }
-                    
+
                     formattedData = `❌ ${intro}\n${body}`;
                 }
                 break;
@@ -797,10 +812,10 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const cardIdToPay = await findCreditCardIdByName(cardNameToPay, effectiveAccountId);
                     if (!cardIdToPay) {
-                        return; 
+                        return;
                     }
 
-                    const paymentDateCard = params.paymentDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0];
+                    const paymentDateCard = params.paymentDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0];
                     let categoryNameToUseForPayment = params.financialCategoryName || "Pagamento de Fatura";
                     let categoryObjectPay = await financialCategoryService.findFinancialCategoryByNameForAccount(categoryNameToUseForPayment, effectiveAccountId);
                     let categoryIdPay = categoryObjectPay ? categoryObjectPay.id : null;
@@ -813,11 +828,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const paymentTransaction = await creditCardService.payCreditCardInvoice(
                         effectiveAccountId, cardIdToPay, paymentAmount, paymentDateCard,
-                        params.originatingAccountDescription, 
+                        params.originatingAccountDescription,
                         categoryIdPay,
                         actorId
                     );
-                    
+
                     formattedData = `✅ Pagamento de ${formatter.formatCurrency(paymentAmount)} para o cartão "${cardNameToPay}" registrado em ${formatter.formatDate(paymentDateCard)}.`;
                     if (paymentTransaction.category) {
                         formattedData += `\nCategoria: ${paymentTransaction.category.name}.`;
@@ -836,16 +851,16 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                             body = `Parece que você ainda não tem nenhum cartão cadastrado.`;
                         }
                     }
-                    
+
                     formattedData = `❌ ${intro}\n${body}`;
                 }
                 break;
             }
 
-             case 'CREATE_FINANCIAL_CATEGORY': {
+            case 'CREATE_FINANCIAL_CATEGORY': {
                 try {
                     if (state.isSharedAccessContext && !isOwnerActingOnOwnBehalfGlobal) {
-                         throw { statusCode: 403, message: "Você não tem permissão para criar categorias nesta conta compartilhada." };
+                        throw { statusCode: 403, message: "Você não tem permissão para criar categorias nesta conta compartilhada." };
                     }
                     const { name, parentCategoryName } = params;
                     if (!name) {
@@ -883,12 +898,12 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
-             case 'CREATE_AVAILABILITY_RULE': {
-                 // --- INÍCIO DA MODIFICAÇÃO ---
+            case 'CREATE_AVAILABILITY_RULE': {
+                // --- INÍCIO DA MODIFICAÇÃO ---
                 // Delega a responsabilidade para um novo fluxo de máquina de estados.
                 // A resposta inicial será enviada pelo handler especializado.
                 formattedData = ""; // A resposta será tratada pelo novo fluxo.
-                
+
                 // Define um contexto para que o whatsapp.service saiba qual fluxo seguir.
                 resourceForButtonsContext = {
                     type: 'system_action',
@@ -958,10 +973,10 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const businessAccountId = businessAccount.id;
                     const publicInfo = await publicBookingService.getProviderPublicInfo(businessAccountId);
-                    
+
                     // Constrói a URL pública baseada no ID da conta de negócios
                     const publicBookingUrl = `https://www.map-nocontrole.com.br/agendar/${businessAccountId}`;
-                    
+
                     formattedData = formatter.formatProviderPublicInfoDataStructure(publicInfo, publicBookingUrl);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_PROVIDER_PUBLIC_INFO: ${e.message}`, { error: e, paramsUsed: params });
@@ -973,24 +988,24 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
             case 'GET_FINANCIAL_SUMMARY': {
                 try {
-                    const categoryObjectSummary = params.financialCategoryName 
+                    const categoryObjectSummary = params.financialCategoryName
                         ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId)
                         : null;
                     const categoryIdSummary = categoryObjectSummary ? categoryObjectSummary.id : null;
-                    
+
                     const filters = {
                         period: params.period || 'este_mes',
                         dateStart: params.dateStart,
                         dateEnd: params.dateEnd,
-                        financialCategoryId: categoryIdSummary, 
+                        financialCategoryId: categoryIdSummary,
                         type: params.type,
                     };
 
                     const summary = await financialService.getFinancialSummary(effectiveAccountId, filters);
-                    
+
                     let summaryIntro = `Aqui está o resumo financeiro para *${summary.periodDescription}*, ${clientNameToUse}! 📊`;
                     const summaryBody = formatter.formatFinancialSummaryDataStructure(summary, effectiveAccountName);
-                    
+
                     formattedData = `${summaryIntro}\n\n${summaryBody}`;
 
                 } catch (e) {
@@ -1000,11 +1015,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
-             case 'LIST_FINANCIAL_ACCOUNTS': {
+            case 'LIST_FINANCIAL_ACCOUNTS': {
                 try {
                     let accessibleAccounts = [];
                     const ownerNameForMsg = state.isSharedAccessContext ? state.ownerClientNameForContext : null;
-                    
+
                     if (state.isSharedAccessContext) {
                         const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true });
                         accessibleAccounts = ownerAccounts.filter(acc => {
@@ -1035,7 +1050,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         limit: params.limit || 5, page: params.page || 1,
                         period: params.period || 'proximos_7_dias'
                     };
-                    
+
                     const { appointments, totalItems: totalAppts, periodDescription } = await appointmentService.getAllAppointments(effectiveAccountId, filterParamsAppt);
 
                     if (totalAppts === 0) {
@@ -1055,7 +1070,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         if (totalAppts > appointments.length) {
                             finalResponse += `\n\nE mais ${totalAppts - appointments.length} compromisso(s). Peça para ver mais ou veja tudo na plataforma!`;
                         }
-                        
+
                         formattedData = finalResponse.trim();
                     }
                 } catch (e) {
@@ -1080,7 +1095,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
-            
+
             case 'LIST_RECURRING_RULES': {
                 try {
                     const filterParamsRules = {
@@ -1092,25 +1107,25 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         dateEnd: params.dateEnd,
                         period: params.period
                     };
-                    
+
                     const { rules: allRulesFound, totalItems } = await recurringTransactionService.getAllRecurringRules(
-                        effectiveAccountId, 
+                        effectiveAccountId,
                         filterParamsRules
                     );
 
                     if (totalItems === 0) {
                         let responseMsg = "Você ainda não tem nenhuma regra de recorrência ativa.";
-                        if(filterParamsRules.descriptionSearch) {
+                        if (filterParamsRules.descriptionSearch) {
                             responseMsg = `Não encontrei nenhuma recorrência ativa com a descrição "${filterParamsRules.descriptionSearch}".`;
                         }
                         formattedData = responseMsg;
                         break;
                     }
 
-                    const enrichedRules = await Promise.all(allRulesFound.map(async (rule) => { 
+                    const enrichedRules = await Promise.all(allRulesFound.map(async (rule) => {
                         const history = await recurringTransactionService.getRecurringRuleHistory(effectiveAccountId, rule.id, { limit: 5 });
                         const pendingTransactions = history.transactions.filter(tx => !tx.isPaidOrReceived);
-                        
+
                         return {
                             ...rule,
                             pendingCount: pendingTransactions.length,
@@ -1118,7 +1133,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                             hasPaidHistory: history.transactions.some(tx => tx.isPaidOrReceived)
                         };
                     }));
-                    
+
                     formattedData = formatter.formatRichRecurringRuleList(enrichedRules, totalItems, clientNameToUse, effectiveAccountName);
 
                 } catch (e) {
@@ -1130,12 +1145,12 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
             case 'GET_STOCK_INFO': {
                 try {
-                    if(!params.productNameOrCode) {
+                    if (!params.productNameOrCode) {
                         throw { statusCode: 400, message: "Nome ou código do produto é obrigatório para ver o estoque." };
                     }
-                    const stockInfo = await stockService.getProductStockInfoByNameOrCode(effectiveAccountId, params.productNameOrCode); 
-                    
-                    formattedData = formatter.formatStockInfoDataStructure(stockInfo, effectiveAccountName); 
+                    const stockInfo = await stockService.getProductStockInfoByNameOrCode(effectiveAccountId, params.productNameOrCode);
+
+                    formattedData = formatter.formatStockInfoDataStructure(stockInfo, effectiveAccountName);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_STOCK_INFO: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui consultar o estoque.\nDetalhe: ${e.message}`;
@@ -1153,13 +1168,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!cardIdForInvoice) {
                         throw { statusCode: 404, message: `Não encontrei um cartão chamado "${cardNameForInvoice}". Verifique o nome ou cadastre o cartão.` };
                     }
-                    
+
                     const periodOpts = { type: params.invoicePeriodType || 'aberta', month: params.invoiceMonth, year: params.invoiceYear };
-                    const cardForDetails = await creditCardService.getCreditCardById(effectiveAccountId, cardIdForInvoice); 
+                    const cardForDetails = await creditCardService.getCreditCardById(effectiveAccountId, cardIdForInvoice);
                     const invoiceDetails = await creditCardService.getCreditCardInvoiceDetails(effectiveAccountId, cardIdForInvoice, periodOpts);
-                    
-                    if(cardForDetails) {
-                        invoiceDetails.cardName = cardForDetails.name; 
+
+                    if (cardForDetails) {
+                        invoiceDetails.cardName = cardForDetails.name;
                         invoiceDetails.cardTotalLimit = cardForDetails.limit;
                     }
 
@@ -1181,9 +1196,9 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!cardIdForLimit) {
                         throw { statusCode: 404, message: `Não encontrei o cartão "${cardNameForLimit}". Verifique o nome ou cadastre o cartão.` };
                     }
-                    
+
                     const limitInfo = await creditCardService.getCreditCardAvailableLimit(effectiveAccountId, cardIdForLimit);
-                    
+
                     formattedData = formatter.formatAvailableLimitDataStructure(limitInfo, effectiveAccountName);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_CREDIT_CARD_AVAILABLE_LIMIT: ${e.message}`, { error: e, paramsUsed: params });
@@ -1209,7 +1224,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
-            case 'LIST_GRANTED_ACCESS': { 
+            case 'LIST_GRANTED_ACCESS': {
                 try {
                     if (!isOwnerActingOnOwnBehalfGlobal) {
                         throw { statusCode: 403, message: "Use 'listar meus convites' para ver os que você recebeu." };
@@ -1229,11 +1244,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
-            case 'LIST_RECEIVED_ACCESS': { 
+            case 'LIST_RECEIVED_ACCESS': {
                 try {
-                    const result = await sharedAccessService.getSharedAccessesForUser(actorId, { status: params.status || 'Pendente' }); 
+                    const result = await sharedAccessService.getSharedAccessesForUser(actorId, { status: params.status || 'Pendente' });
                     const receivedList = result.sharedAccesses;
-                    
+
                     if (receivedList.length === 0) {
                         formattedData = `Você não tem convites de acesso ${params.status || 'pendentes'}, ${clientNameToUse}. 👍`;
                     } else {
@@ -1301,8 +1316,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         formattedData = "Você ainda não tem produtos cadastrados nesta conta. Que tal cadastrar o primeiro?";
                     } else {
                         formattedData = formatter.formatListProductsDataStructure(products);
-                         if (totalItems > products.length) {
-                             formattedData += `\n\nE mais ${totalItems - products.length} produto(s). Peça para ver mais ou veja tudo na plataforma!`;
+                        if (totalItems > products.length) {
+                            formattedData += `\n\nE mais ${totalItems - products.length} produto(s). Peça para ver mais ou veja tudo na plataforma!`;
                         }
                     }
                 } catch (e) {
@@ -1329,7 +1344,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     logger.error(`[ACTION HANDLER] Erro em GET_PRODUCT_DETAILS: ${e.message}`, { error: e, paramsUsed: params });
                     let intro = `❌ Ops, ${clientNameToUse}! Não consegui buscar os detalhes do produto.`;
                     let body = `\nDetalhe: ${e.message}`;
-                     if (e.statusCode === 404) {
+                    if (e.statusCode === 404) {
                         intro = `Hum, não encontrei o produto "${params.productNameOrCode}", ${clientNameToUse}.`;
                         const { products } = await productService.getAllProducts(effectiveAccountId, { limit: 5, isActive: true });
                         if (products && products.length > 0) {
@@ -1342,11 +1357,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
-            
+
             case 'GET_HYDRATION_LOG': {
                 try {
                     const logs = await hydrationService.getTodaysLogsByClient(actorId);
-                    const prefs = await systemService.getSystemPreferences(); 
+                    const prefs = await systemService.getSystemPreferences();
                     formattedData = formatter.formatHydrationLogDataStructure(logs, prefs, clientNameToUse);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_HYDRATION_LOG: ${e.message}`, { error: e, paramsUsed: params });
@@ -1357,7 +1372,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
             case 'GET_AFFILIATE_DASHBOARD': {
                 try {
-                     if (state.isSharedAccessContext) {
+                    if (state.isSharedAccessContext) {
                         throw { statusCode: 403, message: "O painel de afiliados só pode ser acessado pelo próprio dono da conta." };
                     }
                     const dashboardData = await affiliateService.getAffiliateDashboard(actorId);
@@ -1397,7 +1412,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!clientName) {
                         throw { statusCode: 400, message: "Preciso do nome do cliente para buscar os detalhes." };
                     }
-                    
+
                     const clientsResult = await businessClientService.getAllBusinessClients(effectiveAccountId, { search: clientName, limit: 1, isActive: null });
                     if (!clientsResult.businessClients || clientsResult.businessClients.length === 0) {
                         throw { statusCode: 404, message: `Não encontrei um cliente chamado "${clientName}".` };
@@ -1431,7 +1446,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!clientName) {
                         throw { statusCode: 400, message: "Preciso do nome do cliente para buscar o histórico." };
                     }
-                    
+
                     const clientsResult = await businessClientService.getAllBusinessClients(effectiveAccountId, { search: clientName, limit: 1, isActive: null });
                     if (!clientsResult.businessClients || clientsResult.businessClients.length === 0) {
                         throw { statusCode: 404, message: `Não encontrei um cliente chamado "${clientName}".` };
@@ -1450,7 +1465,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
 
 
-           // =================================================================
+            // =================================================================
             // AÇÕES DE ATUALIZAÇÃO (UPDATE)
             // =================================================================
 
@@ -1470,7 +1485,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (params.hasOwnProperty('notes')) updateDataTx.notes = params.notes;
                     if (params.hasOwnProperty('dueDate')) updateDataTx.dueDate = params.dueDate; else if (params.hasOwnProperty('dueDate') && params.dueDate === null) updateDataTx.dueDate = null;
                     if (params.hasOwnProperty('isPaidOrReceived')) updateDataTx.isPaidOrReceived = params.isPaidOrReceived;
-                    
+
                     if (params.financialCategoryName) {
                         const categoryObject = await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId);
                         updateDataTx.financialCategoryId = categoryObject ? categoryObject.id : null;
@@ -1489,7 +1504,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const updatedTx = await financialService.updateTransaction(effectiveAccountId, transactionIdToUpdate, updateDataTx, actorId);
                     const reloadedUpdatedTx = await financialService.getTransactionById(effectiveAccountId, updatedTx.id);
-                    
+
                     formattedData = formatter.formatFinancialTransactionDataStructure(reloadedUpdatedTx, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
@@ -1507,7 +1522,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!appointmentIdToUpdate) {
                         throw { statusCode: 400, message: "ID do compromisso para atualizar não foi fornecido." };
                     }
-                    
+
                     const updateDataAppt = {};
                     if (params.hasOwnProperty('title')) updateDataAppt.title = params.title;
                     if (params.hasOwnProperty('eventDateTime')) updateDataAppt.eventDateTime = params.eventDateTime;
@@ -1518,9 +1533,9 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (params.hasOwnProperty('notes')) updateDataAppt.notes = params.notes;
                     if (params.hasOwnProperty('associatedValue') && params.associatedValue !== null && !isNaN(parseFloat(params.associatedValue))) updateDataAppt.associatedValue = parseFloat(params.associatedValue);
                     if (params.hasOwnProperty('associatedTransactionType')) updateDataAppt.associatedTransactionType = params.associatedTransactionType;
-                    
+
                     if (params.hasOwnProperty('businessClientNames') && (['PJ', 'MEI'].includes(effectiveAccountType))) {
-                        let businessClientIdsToUpdate = []; 
+                        let businessClientIdsToUpdate = [];
                         if (Array.isArray(params.businessClientNames) && params.businessClientNames.length > 0) {
                             for (const name of params.businessClientNames) {
                                 const bcId = await findBusinessClientIdByName(name, effectiveAccountId);
@@ -1536,7 +1551,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const updatedAppt = await appointmentService.updateAppointment(effectiveAccountId, appointmentIdToUpdate, updateDataAppt, actorId);
                     const reloadedUpdatedAppt = await appointmentService.getAppointmentById(effectiveAccountId, updatedAppt.id);
-                    
+
                     formattedData = formatter.formatAppointmentDataStructure(reloadedUpdatedAppt, false, false, false, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
@@ -1551,13 +1566,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!params.transactionDescription) {
                         throw { statusCode: 400, message: "Descrição da transação é obrigatória para marcar como paga/recebida." };
                     }
-                    
-                    const paymentDate = params.paymentDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0];
-                    const categoryObjectForMark = params.financialCategoryName 
+
+                    const paymentDate = params.paymentDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0];
+                    const categoryObjectForMark = params.financialCategoryName
                         ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId)
                         : null;
                     const categoryIdForMark = categoryObjectForMark ? categoryObjectForMark.id : null;
-                    
+
                     const result = await financialService.markTransactionAsPaidOrReceived(
                         effectiveAccountId,
                         params.transactionDescription,
@@ -1566,7 +1581,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         categoryIdForMark,
                         actorId
                     );
-                    
+
                     formattedData = `Transação "${result.description}" (${formatter.formatCurrency(result.value)}) foi marcada como ${result.type === 'Entrada' ? 'recebida' : 'paga'} em ${formatter.formatDate(result.paymentDate)}.`;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em MARK_TRANSACTION_AS_PAID_RECEIVED: ${e.message}`, { error: e, paramsUsed: params });
@@ -1610,7 +1625,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (params.hasOwnProperty('autoCreateTransaction')) updateDataRule.autoCreateTransaction = params.autoCreateTransaction;
                     if (params.hasOwnProperty('isActive')) updateDataRule.isActive = params.isActive;
                     if (params.hasOwnProperty('notes')) updateDataRule.notes = params.notes;
-                    
+
                     if (params.financialCategoryName) {
                         const categoryObjectForRule = await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId);
                         updateDataRule.financialCategoryId = categoryObjectForRule ? categoryObjectForRule.id : null;
@@ -1624,7 +1639,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const updatedRule = await recurringTransactionService.updateRecurringRule(effectiveAccountId, ruleIdToUpdate, updateDataRule, actorId);
                     const reloadedUpdatedRule = await recurringTransactionService.getRecurringRuleById(effectiveAccountId, updatedRule.id);
-                    
+
                     formattedData = formatter.formatRecurringRuleDataStructure(reloadedUpdatedRule, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
@@ -1652,13 +1667,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (params.hasOwnProperty('unit')) updateDataProd.unit = params.unit;
                     if (params.hasOwnProperty('description')) updateDataProd.description = params.description;
                     if (params.hasOwnProperty('isActive')) updateDataProd.isActive = params.isActive;
-                    
+
                     if (Object.keys(updateDataProd).length === 0) {
                         throw { statusCode: 400, message: "Nenhum dado válido para atualizar o produto." };
                     }
 
                     const updatedProduct = await productService.updateProduct(effectiveAccountId, productIdToUpdate, updateDataProd, actorId);
-                    
+
                     formattedData = formatter.formatProductDataStructure(updatedProduct, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
@@ -1678,7 +1693,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     await financialService.updateParcelledAccountDescription(effectiveAccountId, accountIdToUpdateDesc, params.newDescription, actorId);
-                    
+
                     formattedData = `📝 Descrição da compra parcelada atualizada para: *${params.newDescription}*`;
                     wasAnEdit = true;
                 } catch (e) {
@@ -1697,11 +1712,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 400, message: "ID da compra parcelada original é obrigatório para recriar." };
                     }
 
-                    const newCatObject = params.newFinancialCategoryName 
+                    const newCatObject = params.newFinancialCategoryName
                         ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.newFinancialCategoryName, effectiveAccountId)
                         : null;
                     const newCatIdParcel = newCatObject ? newCatObject.id : null;
-                    
+
                     const newCardIdParcel = params.newCreditCardName ? await findCreditCardIdByName(params.newCreditCardName, effectiveAccountId) : null;
                     if (params.newCreditCardName && !newCardIdParcel) {
                         throw { statusCode: 404, message: `Cartão "${params.newCreditCardName}" não encontrado para a nova compra parcelada.` };
@@ -1711,17 +1726,17 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         description: params.newDescription, type: params.newType || 'Saída', totalValue: parseFloat(params.newTotalValue),
                         numberOfParcels: parseInt(params.newNumberOfParcels), initialDueDate: params.newInitialDueDate,
                         financialCategoryId: newCatIdParcel, creditCardId: newCardIdParcel, notes: params.newNotes,
-                        transactionDate: params.newTransactionDate || params.newInitialDueDate || new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"})).toISOString().split('T')[0]
+                        transactionDate: params.newTransactionDate || params.newInitialDueDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0]
                     };
                     if (!newParcelData.description || isNaN(newParcelData.totalValue) || newParcelData.totalValue <= 0 || isNaN(newParcelData.numberOfParcels) || newParcelData.numberOfParcels < 1 || !newParcelData.initialDueDate) {
-                         throw { statusCode: 400, message: "Para recriar a compra parcelada, preciso de: nova descrição, novo valor total, novo nº de parcelas e nova data da 1ª parcela." };
+                        throw { statusCode: 400, message: "Para recriar a compra parcelada, preciso de: nova descrição, novo valor total, novo nº de parcelas e nova data da 1ª parcela." };
                     }
                     if (!params.newTransactionDate && params.newInitialDueDate) {
-                         newParcelData.transactionDate = params.newInitialDueDate;
+                        newParcelData.transactionDate = params.newInitialDueDate;
                     }
 
                     const recreatedResult = await financialService.recreateParcelledAccount(effectiveAccountId, originalAccountIdToUpdate, newParcelData, actorId);
-                    
+
                     formattedData = formatter.formatParcelledAccountDataStructure(newParcelData, recreatedResult, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
@@ -1749,13 +1764,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (params.hasOwnProperty('flag')) updateDataCard.flag = params.flag;
                     if (params.hasOwnProperty('isDefault')) updateDataCard.isDefault = params.isDefault;
                     if (params.hasOwnProperty('isActive')) updateDataCard.isActive = params.isActive;
-                    
+
                     if (Object.keys(updateDataCard).length === 0) {
                         throw { statusCode: 400, message: "Nenhum dado válido fornecido para atualizar o cartão." };
                     }
 
                     const updatedCard = await creditCardService.updateCreditCard(effectiveAccountId, cardIdToUpdate, updateDataCard, actorId);
-                    
+
                     formattedData = formatter.formatCreditCardDataStructure(updatedCard, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
@@ -1769,30 +1784,30 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 try {
                     const clientIdToUpdate = state.editingResource?.type === 'business_client' && state.editingResource?.id
                         ? parseInt(state.editingResource.id, 10)
-                        : (params.clientIdToUpdate ? parseInt(params.clientIdToUpdate) : null); 
-                    
+                        : (params.clientIdToUpdate ? parseInt(params.clientIdToUpdate) : null);
+
                     let effectiveClientIdToUpdate = clientIdToUpdate;
-                    if (!effectiveClientIdToUpdate && params.name) { 
-                         const foundClient = await businessClientService.getAllBusinessClients(effectiveAccountId, { search: params.name, limit: 1 }).then(r => r.businessClients?.[0]);
-                         if (foundClient) effectiveClientIdToUpdate = foundClient.id;
+                    if (!effectiveClientIdToUpdate && params.name) {
+                        const foundClient = await businessClientService.getAllBusinessClients(effectiveAccountId, { search: params.name, limit: 1 }).then(r => r.businessClients?.[0]);
+                        if (foundClient) effectiveClientIdToUpdate = foundClient.id;
                     }
                     if (!effectiveClientIdToUpdate) {
                         throw { statusCode: 400, message: "ID ou nome do cliente do negócio para atualizar não fornecido ou não encontrado." };
                     }
 
                     const updateDataBC = {};
-                    if (params.hasOwnProperty('name')) updateDataBC.name = params.name; 
+                    if (params.hasOwnProperty('name')) updateDataBC.name = params.name;
                     if (params.hasOwnProperty('phone')) updateDataBC.phone = params.phone;
                     if (params.hasOwnProperty('email')) updateDataBC.email = params.email;
                     if (params.hasOwnProperty('notes')) updateDataBC.notes = params.notes;
                     if (params.hasOwnProperty('isActive')) updateDataBC.isActive = params.isActive;
-                    
+
                     if (Object.keys(updateDataBC).length === 0 && !params.name) {
                         throw { statusCode: 400, message: "Nenhum dado válido para atualizar o cliente." };
                     }
 
                     const updatedBC = await businessClientService.updateBusinessClient(effectiveAccountId, effectiveClientIdToUpdate, updateDataBC, actorId);
-                    
+
                     formattedData = formatter.formatBusinessClientDataStructure(updatedBC, effectiveAccountName);
                     wasAnEdit = true;
                 } catch (e) {
@@ -1811,7 +1826,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 400, message: "Qual conta você quer atualizar?" };
                     }
 
-                    const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, {isActive:null});
+                    const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: null });
                     const accountToUpdate = ownerAccounts.find(acc => acc.accountName.toLowerCase() === params.accountNameToUpdate.toLowerCase());
                     if (!accountToUpdate) {
                         throw { statusCode: 404, message: `Não encontrei uma conta sua chamada "${params.accountNameToUpdate}".` };
@@ -1822,13 +1837,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (params.hasOwnProperty('documentNumber')) updateDataFA.documentNumber = params.documentNumber;
                     if (params.hasOwnProperty('isActive')) updateDataFA.isActive = params.isActive;
                     if (params.hasOwnProperty('isDefault')) updateDataFA.isDefault = params.isDefault;
-                    
+
                     if (Object.keys(updateDataFA).length === 0) {
                         throw { statusCode: 400, message: "Nenhum dado válido fornecido para atualizar a conta." };
                     }
 
-                    const updatedFA = await clientService.updateFinancialAccount(accountToUpdate.id, updateDataFA); 
-                    
+                    const updatedFA = await clientService.updateFinancialAccount(accountToUpdate.id, updateDataFA);
+
                     formattedData = formatter.formatFinancialAccountDataStructure(updatedFA);
                     wasAnEdit = true;
                 } catch (e) {
@@ -1846,7 +1861,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!params.sharedAccessIdOrUserIdentifier) {
                         throw { statusCode: 400, message: "Preciso do ID do compartilhamento ou do email/telefone do convidado para saber qual acesso atualizar." };
                     }
-                    
+
                     let sharedAccessIdToUpdate;
                     if (!isNaN(parseInt(params.sharedAccessIdOrUserIdentifier))) {
                         sharedAccessIdToUpdate = parseInt(params.sharedAccessIdOrUserIdentifier);
@@ -1864,14 +1879,14 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const updateDataSA = {};
                     if (params.hasOwnProperty('newAccessPersonalProfile')) updateDataSA.canAccessPersonalProfile = params.newAccessPersonalProfile;
                     if (params.hasOwnProperty('newBusinessProfileToShareName')) {
-                         if (params.newBusinessProfileToShareName === null || params.newBusinessProfileToShareName === "") {
-                             updateDataSA.canAccessBusinessProfileId = null;
-                         } else {
-                             const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, {isActive:true});
-                             const bizAccount = ownerAccounts.find(acc => (acc.accountType === 'PJ' || acc.accountType === 'MEI') && acc.accountName.toLowerCase() === params.newBusinessProfileToShareName.toLowerCase());
-                             if (!bizAccount) throw { statusCode: 404, message: `Perfil empresarial "${params.newBusinessProfileToShareName}" não encontrado.` };
-                             updateDataSA.canAccessBusinessProfileId = bizAccount.id;
-                         }
+                        if (params.newBusinessProfileToShareName === null || params.newBusinessProfileToShareName === "") {
+                            updateDataSA.canAccessBusinessProfileId = null;
+                        } else {
+                            const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true });
+                            const bizAccount = ownerAccounts.find(acc => (acc.accountType === 'PJ' || acc.accountType === 'MEI') && acc.accountName.toLowerCase() === params.newBusinessProfileToShareName.toLowerCase());
+                            if (!bizAccount) throw { statusCode: 404, message: `Perfil empresarial "${params.newBusinessProfileToShareName}" não encontrado.` };
+                            updateDataSA.canAccessBusinessProfileId = bizAccount.id;
+                        }
                     }
 
                     if (Object.keys(updateDataSA).length === 0) {
@@ -1879,7 +1894,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     const updatedSharedAccess = await sharedAccessService.updateSharedAccess(state.ownerClientIdForContext, sharedAccessIdToUpdate, updateDataSA);
-                    
+
                     formattedData = formatter.formatSharedAccessDataStructure(updatedSharedAccess, 'owner');
                     wasAnEdit = true;
                 } catch (e) {
@@ -1892,11 +1907,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
             case 'UPDATE_FINANCIAL_CATEGORY': {
                 try {
                     if (state.isSharedAccessContext) {
-                         throw { statusCode: 403, message: "Você não tem permissão para editar categorias nesta conta compartilhada." };
+                        throw { statusCode: 403, message: "Você não tem permissão para editar categorias nesta conta compartilhada." };
                     }
                     const { categoryNameToUpdate, newName, newParentCategoryName } = params;
                     if (!categoryNameToUpdate) {
-                         throw { statusCode: 400, message: "Qual categoria você gostaria de atualizar?" };
+                        throw { statusCode: 400, message: "Qual categoria você gostaria de atualizar?" };
                     }
                     const categoryToUpdate = await financialCategoryService.findFinancialCategoryByNameForAccount(categoryNameToUpdate, effectiveAccountId);
                     if (!categoryToUpdate) {
@@ -1907,13 +1922,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (newName) updateData.name = newName;
                     if (newParentCategoryName) {
                         const newParentCat = await financialCategoryService.findFinancialCategoryByNameForAccount(newParentCategoryName, effectiveAccountId);
-                        if (!newParentCat) throw { statusCode: 404, message: `A nova categoria pai "${newParentCategoryName}" não foi encontrada.`};
+                        if (!newParentCat) throw { statusCode: 404, message: `A nova categoria pai "${newParentCategoryName}" não foi encontrada.` };
                         updateData.parentId = newParentCat.id;
                     } else if (params.hasOwnProperty('newParentCategoryName') && newParentCategoryName === null) {
-                        updateData.parentId = null; 
+                        updateData.parentId = null;
                     }
 
-                    if(Object.keys(updateData).length === 0) {
+                    if (Object.keys(updateData).length === 0) {
                         throw { statusCode: 400, message: "Nenhum dado novo foi fornecido para a atualização." };
                     }
 
@@ -1926,19 +1941,19 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 }
                 break;
             }
-            
+
             case 'UPDATE_MOTIVATIONAL_PHRASE': {
                 try {
                     const { phraseIdToUpdate, newText, newAuthor, isActive } = params;
                     if (!phraseIdToUpdate) {
                         throw { statusCode: 400, message: "Qual frase você gostaria de atualizar? (Preciso do ID)" };
                     }
-                    
+
                     const updateData = {};
                     if (newText) updateData.text = newText;
                     if (newAuthor) updateData.author = newAuthor;
                     if (isActive !== undefined) updateData.isActive = isActive;
-                    
+
                     const updatedPhrase = await systemService.updateMotivationalPhrase(phraseIdToUpdate, updateData);
                     formattedData = `✅ Frase atualizada!\n\n_"${updatedPhrase.text}"_\n- ${updatedPhrase.author || 'Autor Desconhecido'} (Status: ${updatedPhrase.isActive ? 'Ativa' : 'Inativa'})`;
                     wasAnEdit = true;
@@ -1952,7 +1967,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
             case 'LOG_WATER_INTAKE': {
                 try {
                     const amount = params.amountInMl ? parseInt(params.amountInMl) : null;
-                    
+
                     await hydrationService.logWaterIntake(actorId, amount);
 
                     const logs = await hydrationService.getTodaysLogsByClient(actorId);
@@ -1965,12 +1980,12 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
-             case 'UPDATE_AVAILABILITY_RULE': {
-               // --- INÍCIO DA MODIFICAÇÃO ---
+            case 'UPDATE_AVAILABILITY_RULE': {
+                // --- INÍCIO DA MODIFICAÇÃO ---
                 // Delega a responsabilidade para um novo fluxo de máquina de estados.
                 // A resposta inicial será enviada pelo handler especializado.
                 formattedData = ""; // A resposta será tratada pelo novo fluxo.
-                
+
                 // Define um contexto para que o whatsapp.service saiba qual fluxo seguir.
                 resourceForButtonsContext = {
                     type: 'system_action',
@@ -1998,16 +2013,16 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: null });
                     const accountToDelete = ownerAccounts.find(acc => acc.accountName.toLowerCase() === params.accountNameToDelete.toLowerCase());
-                    
+
                     if (!accountToDelete) {
                         throw { statusCode: 404, message: `Não encontrei uma conta sua chamada "${params.accountNameToDelete}".` };
                     }
                     if (ownerAccounts.length <= 1) {
                         throw { statusCode: 400, message: "Você não pode excluir sua única conta financeira. Crie outra primeiro, se desejar." };
                     }
-                    
-                    resourceForButtonsContext = { 
-                        type: 'system_action', 
+
+                    resourceForButtonsContext = {
+                        type: 'system_action',
                         id: 'pending_confirmation',
                         description: 'Aguardando confirmação para exclusão de conta',
                         data: {
@@ -2034,7 +2049,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 400, message: "Preciso do telefone ou e-mail do usuário para revogar o acesso." };
                     }
 
-                    const { sharedAccesses } = await sharedAccessService.getSharedAccessesByOwner(state.ownerClientIdForContext, { guestIdentifier: params.sharedWithUserIdentifier, status: 'Ativo' }); 
+                    const { sharedAccesses } = await sharedAccessService.getSharedAccessesByOwner(state.ownerClientIdForContext, { guestIdentifier: params.sharedWithUserIdentifier, status: 'Ativo' });
                     if (sharedAccesses.length === 0) {
                         throw { statusCode: 404, message: `Não encontrei acessos ativos concedidos para "${params.sharedWithUserIdentifier}".` };
                     }
@@ -2042,12 +2057,12 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     let sharedAccessIdToRevoke = null;
                     let guestNameForMsg = params.sharedWithUserIdentifier;
 
-                    if (params.profileNameShared) { 
+                    if (params.profileNameShared) {
                         const targetProfileNameLower = params.profileNameShared.toLowerCase();
                         const saToRevoke = sharedAccesses.find(sa => {
-                            if (sa.canAccessPersonalProfile && (targetProfileNameLower.includes("pessoal") || sa.ownerClient?.financialAccounts.find(fa=>fa.accountType==='PF')?.accountName.toLowerCase().includes(targetProfileNameLower)) ) return true;
+                            if (sa.canAccessPersonalProfile && (targetProfileNameLower.includes("pessoal") || sa.ownerClient?.financialAccounts.find(fa => fa.accountType === 'PF')?.accountName.toLowerCase().includes(targetProfileNameLower))) return true;
                             if (sa.canAccessBusinessProfileId) {
-                                const bizAcc = sa.ownerClient?.financialAccounts.find(fa=> fa.id === sa.canAccessBusinessProfileId);
+                                const bizAcc = sa.ownerClient?.financialAccounts.find(fa => fa.id === sa.canAccessBusinessProfileId);
                                 if (bizAcc && bizAcc.accountName.toLowerCase().includes(targetProfileNameLower)) return true;
                             }
                             return false;
@@ -2058,25 +2073,25 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         sharedAccessIdToRevoke = saToRevoke.id;
                         guestNameForMsg = saToRevoke.sharedWithClient?.name || params.sharedWithUserIdentifier;
                     } else if (sharedAccesses.length > 1) {
-                        resourceForButtonsContext = { 
+                        resourceForButtonsContext = {
                             type: 'system_action',
                             id: 'pending_confirmation',
                             description: 'Aguardando confirmação para revogar múltiplos acessos',
                             data: {
                                 action: 'CONFIRM_REVOKE_MULTIPLE_ACCESS',
-                                parameters: { sharedAccessIdsToRevoke: sharedAccesses.map(sa => sa.id), guestName: sharedAccesses[0].sharedWithClient?.name || params.sharedWithUserIdentifier }, 
+                                parameters: { sharedAccessIdsToRevoke: sharedAccesses.map(sa => sa.id), guestName: sharedAccesses[0].sharedWithClient?.name || params.sharedWithUserIdentifier },
                                 message: `Encontrei ${sharedAccesses.length} acessos para *${sharedAccesses[0].sharedWithClient?.name || params.sharedWithUserIdentifier}*. Você quer revogar TODOS eles? (Sim/Não)`
                             }
                         };
                         formattedData = resourceForButtonsContext.data.message;
-                        break; 
-                    } else { 
+                        break;
+                    } else {
                         sharedAccessIdToRevoke = sharedAccesses[0].id;
                         guestNameForMsg = sharedAccesses[0].sharedWithClient?.name || params.sharedWithUserIdentifier;
                     }
 
                     if (sharedAccessIdToRevoke) {
-                        await sharedAccessService.revokeAccess(state.ownerClientIdForContext, sharedAccessIdToRevoke); 
+                        await sharedAccessService.revokeAccess(state.ownerClientIdForContext, sharedAccessIdToRevoke);
                         formattedData = `Acesso de *${guestNameForMsg}* revogado com sucesso! ✅\n\nEsta pessoa não poderá mais acessar as informações através deste convite.`;
                     }
                 } catch (e) {
@@ -2090,13 +2105,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 try {
                     let transactionIdToDelete = params.transactionId;
                     if (!transactionIdToDelete && params.description) {
-                         const { transactions } = await financialService.getAllTransactions(effectiveAccountId, { search: params.description, limit: 1 });
-                         if(transactions && transactions.length > 0) transactionIdToDelete = transactions[0].id;
+                        const { transactions } = await financialService.getAllTransactions(effectiveAccountId, { search: params.description, limit: 1 });
+                        if (transactions && transactions.length > 0) transactionIdToDelete = transactions[0].id;
                     }
                     if (!transactionIdToDelete) {
                         throw { statusCode: 404, message: "Não encontrei a transação que você pediu para excluir." };
                     }
-                    
+
                     await financialService.deleteTransaction(effectiveAccountId, transactionIdToDelete);
                     formattedData = '✅ Transação excluída com sucesso!';
                 } catch (e) {
@@ -2120,9 +2135,9 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     formattedData = `✅ Produto "${productNameOrCode}" excluído com sucesso!`;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em DELETE_PRODUCT: ${e.message}`, { error: e, paramsUsed: params });
-                     let intro = `❌ Ops, ${clientNameToUse}! Não consegui excluir o produto.`;
+                    let intro = `❌ Ops, ${clientNameToUse}! Não consegui excluir o produto.`;
                     let body = `\nDetalhe: ${e.message}`;
-                    if(e.statusCode === 409) { 
+                    if (e.statusCode === 409) {
                         intro = `Opa, ${clientNameToUse}!`;
                         body = `\nNão posso excluir o produto "${params.productNameOrCode}" porque ele já tem movimentações de estoque registradas. Se você não vai mais usá-lo, você pode marcá-lo como inativo. Quer fazer isso?`;
                     }
@@ -2141,8 +2156,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!rules || rules.length === 0) {
                         throw { statusCode: 404, message: `Não encontrei uma regra com descrição parecida com "${ruleDescription}".` };
                     }
-                     if (rules.length > 1) {
-                         throw { statusCode: 409, message: `Encontrei múltiplas regras com essa descrição. Por favor, seja mais específico.` };
+                    if (rules.length > 1) {
+                        throw { statusCode: 409, message: `Encontrei múltiplas regras com essa descrição. Por favor, seja mais específico.` };
                     }
                     const ruleIdToDelete = rules[0].id;
                     await recurringTransactionService.deleteRecurringRule(effectiveAccountId, ruleIdToDelete);
@@ -2155,13 +2170,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
             }
 
             case 'DELETE_BUSINESS_CLIENT': {
-                 try {
+                try {
                     const clientNameToDelete = params.clientNameToDelete;
                     if (!clientNameToDelete) {
                         throw { statusCode: 400, message: "Qual cliente do negócio você quer excluir?" };
                     }
                     const clientIdToDelete = await findBusinessClientIdByName(clientNameToDelete, effectiveAccountId);
-                     if (!clientIdToDelete) {
+                    if (!clientIdToDelete) {
                         throw { statusCode: 404, message: `Não encontrei um cliente chamado "${clientNameToDelete}".` };
                     }
                     await businessClientService.deleteBusinessClient(effectiveAccountId, clientIdToDelete);
@@ -2186,19 +2201,19 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!categoryToDelete) {
                         throw { statusCode: 404, message: `Não encontrei uma categoria chamada "${categoryNameToDelete}".` };
                     }
-                    
-                    const actionForTransactions = params.actionForTransactions || 'set_null'; 
-                    const actionForSubcategories = params.actionForSubcategories || 'restrict'; 
-                    
+
+                    const actionForTransactions = params.actionForTransactions || 'set_null';
+                    const actionForSubcategories = params.actionForSubcategories || 'restrict';
+
                     const options = { actionForTransactions, actionForSubcategories };
-                    
+
                     await financialCategoryService.deleteFinancialCategory(effectiveAccountId, categoryToDelete.id, options);
                     formattedData = `✅ Categoria "${categoryNameToDelete}" excluída com sucesso.`;
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em DELETE_FINANCIAL_CATEGORY: ${e.message}`, { error: e, paramsUsed: params });
                     let intro = `❌ Ops, ${clientNameToUse}! Não consegui excluir a categoria.`;
                     let body = `\nDetalhe: ${e.message}`;
-                    if(e.statusCode === 409) {
+                    if (e.statusCode === 409) {
                         intro = `Opa, ${clientNameToUse}!`;
                         body = `\nNão pude excluir a categoria "${params.categoryNameToDelete}" porque ela tem transações ou subcategorias associadas. Se quiser, posso mover as transações para "Sem Categoria" e promover as subcategorias para o nível principal. Deseja prosseguir com essa opção?`;
                     }
@@ -2207,7 +2222,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
-             case 'DELETE_MOTIVATIONAL_PHRASE': {
+            case 'DELETE_MOTIVATIONAL_PHRASE': {
                 try {
                     const { phraseIdToDelete } = params;
                     if (!phraseIdToDelete) {
@@ -2233,7 +2248,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!ruleIdToDelete) {
                         throw { statusCode: 404, message: `Não encontrei a regra de disponibilidade "${params.ruleTitleToDelete || 'especificada'}" para excluir.` };
                     }
-                    
+
                     await availabilityService.deleteAvailabilityRule(effectiveAccountId, ruleIdToDelete);
                     formattedData = '✅ Regra de disponibilidade excluída com sucesso!';
                 } catch (e) {
@@ -2297,7 +2312,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const serviceIdToUpdate = state.editingResource?.type === 'service' && state.editingResource?.id
                         ? parseInt(state.editingResource.id, 10)
                         : null;
-                    
+
                     if (!serviceIdToUpdate) {
                         throw { statusCode: 400, message: "Por favor, primeiro selecione o serviço que deseja editar." };
                     }
@@ -2328,7 +2343,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     let serviceIdToDelete = params.serviceId;
                     if (!serviceIdToDelete && params.serviceName) {
                         const { services } = await serviceService.getAllServices(effectiveAccountId, { search: params.serviceName, limit: 1 });
-                        if(services && services.length > 0) serviceIdToDelete = services[0].id;
+                        if (services && services.length > 0) serviceIdToDelete = services[0].id;
                     }
                     if (!serviceIdToDelete) {
                         throw { statusCode: 404, message: `Não encontrei o serviço "${params.serviceName}" para excluir.` };
@@ -2340,7 +2355,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     logger.error(`[ACTION HANDLER] Erro em DELETE_SERVICE: ${e.message}`, { error: e, paramsUsed: params });
                     let intro = `❌ Ops, ${clientNameToUse}! Não consegui excluir o serviço.`;
                     let body = `\nDetalhe: ${e.message}`;
-                    if(e.statusCode === 409) {
+                    if (e.statusCode === 409) {
                         intro = `Opa, ${clientNameToUse}!`;
                         body = `\nNão posso excluir o serviço "${params.serviceName}" porque ele já está sendo usado em agendamentos. Se você não o oferece mais, pode *desativá-lo*. Quer fazer isso?`;
                     }
@@ -2356,9 +2371,9 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!appointmentId) {
                         throw { statusCode: 400, message: "Preciso do ID do agendamento para confirmá-lo." };
                     }
-                    
+
                     const confirmedAppointment = await appointmentService.confirmAppointment(effectiveAccountId, appointmentId);
-                    
+
                     const creativeResponse = await aiModelService.generateBookingConfirmationResponse(clientNameToUse, confirmedAppointment);
                     const formattedDetails = formatter.formatAppointmentDataStructure(confirmedAppointment, false, false, false, effectiveAccountName);
 
@@ -2380,12 +2395,12 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     const completedAppointment = await appointmentService.completeAppointment(effectiveAccountId, appointmentId);
-                    
+
                     const totalValue = completedAppointment.services.reduce((sum, service) => sum + parseFloat(service.price), 0);
-                    
+
                     formattedData = `🎉 Serviço concluído com sucesso!\n\n` +
-                                    `O agendamento ID ${completedAppointment.id} ("${completedAppointment.title}") foi marcado como finalizado. ` +
-                                    `Uma transação de entrada no valor de *${formatter.formatCurrency(totalValue)}* foi registrada automaticamente no seu financeiro.`;
+                        `O agendamento ID ${completedAppointment.id} ("${completedAppointment.title}") foi marcado como finalizado. ` +
+                        `Uma transação de entrada no valor de *${formatter.formatCurrency(totalValue)}* foi registrada automaticamente no seu financeiro.`;
 
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em COMPLETE_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
@@ -2400,27 +2415,27 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (!appointmentId) {
                         throw { statusCode: 400, message: "Preciso do ID do agendamento para cancelar." };
                     }
-                    
+
                     await appointmentService.deleteOrCancelAppointment(effectiveAccountId, appointmentId, false);
                     formattedData = `✅ Agendamento ID ${appointmentId} cancelado com sucesso. A outra parte será notificada.`;
 
-                } catch(e) {
+                } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CANCEL_APPOINTMENT: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui cancelar o agendamento.\nDetalhe: ${e.message}`;
                 }
                 break;
             }
 
-          // AÇÕES DE SISTEMA, ESTADO E PREFERÊNCIAS
+            // AÇÕES DE SISTEMA, ESTADO E PREFERÊNCIAS
             case 'SWITCH_FINANCIAL_ACCOUNT': {
                 try {
                     const targetAccountIdentifier = params.targetAccountNameOrType;
                     if (!targetAccountIdentifier) {
                         throw { statusCode: 400, message: "Para qual conta você gostaria de mudar? Me diga o nome ou o tipo (PF, PJ, MEI)." };
                     }
-                    
+
                     const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true });
-                    
+
                     let accessibleAccounts = ownerAccounts;
                     if (state.isSharedAccessContext) {
                         accessibleAccounts = ownerAccounts.filter(acc => {
@@ -2433,15 +2448,15 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (accessibleAccounts.length === 0) {
                         throw { statusCode: 404, message: `Você não tem nenhuma conta ${state.isSharedAccessContext ? `de ${state.ownerClientNameForContext} ` : ''}acessível no momento.` };
                     }
-                    
+
                     const targetLower = targetAccountIdentifier.toLowerCase();
                     const potentialMatches = accessibleAccounts.filter(acc => {
                         const nameLower = (acc.accountName || acc.name).toLowerCase();
                         const typeLower = (acc.accountType || acc.type).toLowerCase();
                         return nameLower.includes(targetLower) ||
-                               typeLower.includes(targetLower) ||
-                               (targetLower.includes('pessoal') && typeLower === 'pf') ||
-                               ((targetLower.includes('empresa') || targetLower.includes('negócio') || targetLower.includes('pj') || targetLower.includes('mei')) && (typeLower === 'pj' || typeLower === 'mei'));
+                            typeLower.includes(targetLower) ||
+                            (targetLower.includes('pessoal') && typeLower === 'pf') ||
+                            ((targetLower.includes('empresa') || targetLower.includes('negócio') || targetLower.includes('pj') || targetLower.includes('mei')) && (typeLower === 'pj' || typeLower === 'mei'));
                     });
 
                     let foundAccount = null;
@@ -2462,13 +2477,13 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         if (potentialMatches.length > 1) {
                             introMessage = "Encontrei algumas opções! ";
                         }
-                        
+
                         formattedData = `${introMessage}Para qual das seguintes contas você gostaria de mudar?\n\n${accountOptionsText}`;
-                        
-                        resourceForButtonsContext = { 
-                            type: 'system_action', 
-                            id: 'awaiting_account_selection', 
-                            description: 'Aguardando seleção de conta pelo usuário' 
+
+                        resourceForButtonsContext = {
+                            type: 'system_action',
+                            id: 'awaiting_account_selection',
+                            description: 'Aguardando seleção de conta pelo usuário'
                         };
                     }
                 } catch (e) {
@@ -2483,7 +2498,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (params.enable === undefined || (params.enable && !params.time)) {
                         throw { statusCode: 400, message: "Preciso saber se quer ativar/desativar e, se ativar, o horário (ex: 8h, 19:30)." };
                     }
-                    
+
                     const updatedClientPrefs = await clientService.updateClientMotivationPrefs(actorId, {
                         enable: params.enable,
                         time: params.enable ? params.time : null
@@ -2518,7 +2533,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         dailyGoalMl: params.enable && params.dailyGoalMl ? parseInt(params.dailyGoalMl) : null
                     });
                     const updatedPrefsWater = await systemService.getSystemPreferences();
-                    
+
                     formattedData = formatter.formatWaterReminderPreferenceDataStructure(updatedPrefsWater);
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em SET_WATER_REMINDER_PREFERENCE: ${e.message}`, { error: e, paramsUsed: params });
@@ -2527,15 +2542,15 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                 break;
             }
 
-            case 'RESPOND_TO_INVITE': { 
+            case 'RESPOND_TO_INVITE': {
                 try {
                     if (!params.responseType || !['aceitar', 'recusar'].includes(params.responseType.toLowerCase())) {
                         throw { statusCode: 400, message: "Preciso saber se você quer 'aceitar' ou 'recusar' o convite." };
                     }
-                    
+
                     let sharedAccessIdToRespond = params.sharedAccessId;
-                    if (!sharedAccessIdToRespond) { 
-                        const {sharedAccesses: pendingInvites} = await sharedAccessService.getSharedAccessesForUser(actorId, { status: 'Pendente' });
+                    if (!sharedAccessIdToRespond) {
+                        const { sharedAccesses: pendingInvites } = await sharedAccessService.getSharedAccessesForUser(actorId, { status: 'Pendente' });
                         if (pendingInvites.length === 0) {
                             throw { statusCode: 404, message: "Você não tem convites pendentes para responder." };
                         }
@@ -2551,11 +2566,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                             throw { statusCode: 409, message: "Você tem múltiplos convites pendentes. Por favor, especifique de quem é o convite (ex: 'aceitar convite do Fulano')." };
                         }
                     }
-                    
+
                     const response = params.responseType.toLowerCase();
-                    const updatedSharedAccess = await sharedAccessService.respondToInvite(actorId, sharedAccessIdToRespond, response); 
+                    const updatedSharedAccess = await sharedAccessService.respondToInvite(actorId, sharedAccessIdToRespond, response);
                     const reloadedSAForRespond = await sharedAccessService.getSharedAccessById(updatedSharedAccess.id);
-                    
+
                     formattedData = formatter.formatSharedAccessDataStructure(reloadedSAForRespond, 'guest');
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em RESPOND_TO_INVITE: ${e.message}`, { error: e, paramsUsed: params });
@@ -2570,9 +2585,9 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
             case 'ACTION_CONFIRMATION_NO':
                 formattedData = detectedAction.action_specific_reply_suggestion || "";
                 break;
-            
+
             default:
-                formattedData = `Ainda estou aprendendo a processar a ação de "${actionName.toLowerCase().replace(/_/g," ")}" completamente. 😅 Minha equipe está trabalhando nisso!`;
+                formattedData = `Ainda estou aprendendo a processar a ação de "${actionName.toLowerCase().replace(/_/g, " ")}" completamente. 😅 Minha equipe está trabalhando nisso!`;
                 logger.warn(`[ACTION HANDLER] Ação da IA não implementada ou sem formatação específica no switch: ${actionName}`);
                 break;
         }
@@ -2599,14 +2614,14 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
 
         if (resourceType === 'multi_action_block') {
             const resources = JSON.parse(Buffer.from(idStr, 'base64').toString('utf8'));
-            
+
             if (action === 'edit') {
                 state.editingResource = { type: 'multi_action_block', resources: resources };
                 let editPrompt = "Ok! Estou em modo de edição para este bloco de ações. O que você gostaria de mudar? 😉\n\nPode dizer, por exemplo: ";
-                
+
                 const firstItem = resources[0];
                 editPrompt += `'mudar o ${firstItem.description} para 60 reais'.`;
-                
+
                 await sendWhatsappMessage(senderPhone, editPrompt);
                 return { stateUpdated: true, newState: state, flowCompleted: false };
             }
@@ -2615,13 +2630,13 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
                 let deletePrompt = "Entendido. Qual dos itens você gostaria de excluir?\n\n";
                 const itemDescriptions = resources.map(r => `*${r.description}*`).join(' ou ');
                 deletePrompt += `Você pode me dizer: ${itemDescriptions}.\n\nSe quiser apagar tudo de uma vez, é só dizer *"todos"*!`;
-                
+
                 state.pendingConfirmation = {
                     action: 'AWAITING_DELETION_CHOICE',
                     resources: resources
                 };
                 state.currentAction = 'awaiting_confirmation';
-                
+
                 await sendWhatsappMessage(senderPhone, deletePrompt);
                 return { stateUpdated: true, newState: state, flowCompleted: false };
             }
@@ -2645,8 +2660,8 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
         if (action === 'delete') {
             let successMessage;
             try {
-                let resourceDescription = `O item`; 
-                
+                let resourceDescription = `O item`;
+
                 switch (resourceType) {
                     case 'transaction': {
                         const tx = await financialService.getTransactionById(state.activeFinancialAccountId, resourceId);
@@ -2699,14 +2714,14 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
                     default:
                         throw new Error(`Tipo de recurso "${resourceType}" não suportado para exclusão via botão.`);
                 }
-                
+
                 successMessage = `✅ ${resourceDescription} foi excluído com sucesso!`;
 
             } catch (deleteError) {
                 logger.error(`[BUTTON HANDLER] Erro ao excluir ${resourceType} ID ${resourceId}: ${deleteError.message}`);
                 successMessage = `❌ Ops! Tive um problema ao tentar excluir o item. Detalhe: ${deleteError.message}`;
             }
-            
+
             await sendWhatsappMessage(senderPhone, successMessage);
             return { flowCompleted: true };
         }
@@ -2727,7 +2742,7 @@ async function handleButtonInteraction(state, buttonId, senderPhone) {
                 return { flowCompleted: true };
             }
         }
-        
+
         logger.warn(`[BUTTON HANDLER] Ação de botão desconhecida ou não tratada: '${action}' para o tipo '${resourceType}'`);
         await sendWhatsappMessage(senderPhone, "Essa opção ainda está em desenvolvimento. Tente a ação por texto!");
         return { flowCompleted: true };
@@ -2745,9 +2760,9 @@ async function recordSale(state, params, clientNameToUse, actorId) {
         if (!productNameOrCode || !quantitySold || isNaN(parseInt(quantitySold)) || parseInt(quantitySold) <= 0) {
             throw { statusCode: 400, message: "Para registrar uma venda, preciso do nome do produto e da quantidade vendida." };
         }
-        
+
         const financialAccountId = state.activeFinancialAccountId;
-        
+
         const product = await productService.findProductByNameOrCodeForSale(financialAccountId, productNameOrCode);
         if (!product) {
             throw { statusCode: 404, message: `Não encontrei um produto ativo chamado "${productNameOrCode}".` };
@@ -2763,7 +2778,7 @@ async function recordSale(state, params, clientNameToUse, actorId) {
 
         const totalSaleValue = product.salePrice * qty;
         const transactionDescription = `Venda de ${qty}x ${product.name}`;
-        
+
         await financialService.createTransaction(financialAccountId, {
             description: transactionDescription,
             type: 'Entrada',
@@ -2775,9 +2790,9 @@ async function recordSale(state, params, clientNameToUse, actorId) {
 
         return {
             formattedData: `✅ Venda registrada com sucesso!\n\n` +
-                           `📦 *Produto:* ${product.name} (-${qty} un.)\n` +
-                           `💰 *Entrada:* ${formatter.formatCurrency(totalSaleValue)}\n` +
-                           `📈 *Novo Estoque:* ${product.quantity - qty} un.`
+                `📦 *Produto:* ${product.name} (-${qty} un.)\n` +
+                `💰 *Entrada:* ${formatter.formatCurrency(totalSaleValue)}\n` +
+                `📈 *Novo Estoque:* ${product.quantity - qty} un.`
         };
 
     } catch (e) {
