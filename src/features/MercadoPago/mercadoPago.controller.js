@@ -58,7 +58,7 @@ const mercadoPagoController = {
       // Processa a notificação em segundo plano
       // Passamos o body e o query combinados ou separadamente para lidar com IPN e Webhook
       const notificationData = { ...req.query, ...req.body };
-      await mercadoPagoService.processarWebhook(notificationData);
+      await mercadoPagoService.processarWebhook(notificationData, req.headers);
 
     } catch (error) {
       // Apenas logamos o erro, pois a resposta já foi enviada

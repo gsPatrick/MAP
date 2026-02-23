@@ -118,7 +118,7 @@ async function getClientSubscriptions(clientId) {
 }
 
 async function updateSubscriptionStatusByExternalId(externalId, newStatus, options = {}) {
-    const t = await sequelize.transaction();
+    const t = options.transaction || await sequelize.transaction();
     try {
         const subscription = await Subscription.findOne({
             where: { externalSubscriptionId: externalId },
@@ -144,7 +144,6 @@ async function updateSubscriptionStatusByExternalId(externalId, newStatus, optio
             let calculatedEndDate = subscription.endDate;
             const durationDays = Number(plan.durationDays);
 
-            // Se estava expirada ou cancelada, ou se é uma renovação, recalculamos a data de fim
             if (oldSubscriptionStatus !== 'Ativa' || new Date(subscription.endDate) < new Date()) {
                 const effectiveStartDate = new Date();
                 const endDate = new Date(effectiveStartDate);
@@ -155,22 +154,16 @@ async function updateSubscriptionStatusByExternalId(externalId, newStatus, optio
             updateSubData.endDate = calculatedEndDate;
 
             const planTier = plan.tier || 'basico';
-            logger.info(`[SubscriptionService] Atualizando nível de acesso. PlanTier: ${planTier}, DurationDays: ${durationDays}`);
-
             if (durationDays > 7000) {
                 clientAccessLevel = planTier === 'avancado' ? 'vitalicio_avancado' : 'vitalicio_basico';
-                clientAccessExpiresAt = null; // Vitalício
+                clientAccessExpiresAt = null;
             } else {
-                // Para planos anuais e mensais
                 clientAccessLevel = planTier === 'avancado'
                     ? (durationDays > 60 ? 'avancado_anual' : 'avancado_mensal')
                     : (durationDays > 60 ? 'basico_anual' : 'basico_mensal');
                 clientAccessExpiresAt = calculatedEndDate;
             }
             clientStatus = 'Ativo';
-
-            logger.info(`[SubscriptionService] Novo AccessLevel: ${clientAccessLevel}, ExpiresAt: ${clientAccessExpiresAt}`);
-
         } else if (['Cancelada', 'Expirada', 'Pagamento Falhou'].includes(newStatus)) {
             const otherActiveSubscriptions = await Subscription.count({
                 where: { clientId: subscription.clientId, status: 'Ativa', id: { [Op.ne]: subscription.id } }, transaction: t
@@ -190,13 +183,13 @@ async function updateSubscriptionStatusByExternalId(externalId, newStatus, optio
 
         await subscription.update(updateSubData, { transaction: t });
 
-        await t.commit();
+        if (!options.transaction) await t.commit();
         logger.info(`[SUBSCRIPTION SERVICE] Status da assinatura ID ${subscription.id} atualizado para ${newStatus}.`);
 
-        if (newStatus === 'Ativa' && oldSubscriptionStatus !== 'Ativa' && clientInstance.phone) {
+        // Mensagens Automáticas (podem ser puladas por gateways que tratam isso manualmente, como Mercado Pago)
+        if (!options.skipMessages && newStatus === 'Ativa' && oldSubscriptionStatus !== 'Ativa' && clientInstance.phone) {
             const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Olá';
             const isRenewal = oldClientStatus === 'Inativo' || oldClientStatus === 'Pagamento Falhou';
-
             let welcomeMessage = isRenewal
                 ? `Uhuul, que bom te ter de volta, ${clientName}! 🎉\n\nSua assinatura do plano *${plan.name}* foi renovada com sucesso e seu acesso total já está liberado.\n\nContinue no controle! 💪`
                 : `Ebaaa, ${clientName}! 🥳\n\nSua assinatura do plano *${plan.name}* foi ativada com sucesso.\n\nSeu acesso está garantido. Para começar, que tal me dizer "oi"?`;
@@ -209,9 +202,98 @@ async function updateSubscriptionStatusByExternalId(externalId, newStatus, optio
         }
 
         return subscription.reload({ include: ['client', 'plan'] });
-
     } catch (error) {
-        if (t && !t.finished) await t.rollback();
+        if (!options.transaction && t && !t.finished) await t.rollback();
+        logger.error(`[SUBSCRIPTION SERVICE] Erro ao atualizar status da assinatura: ${error.message}`, { error });
+        throw error;
+    }
+}
+
+async function updateSubscriptionStatusById(id, newStatus, options = {}) {
+    const t = options.transaction || await sequelize.transaction();
+    try {
+        const subscription = await Subscription.findByPk(id, {
+            include: [{ model: Plan, as: 'plan' }],
+            transaction: t
+        });
+
+        if (!subscription) {
+            throw new Error(`Assinatura com ID ${id} não encontrada.`);
+        }
+
+        const oldSubscriptionStatus = subscription.status;
+        const clientInstance = await Client.findByPk(subscription.clientId, { transaction: t });
+        const oldClientStatus = clientInstance.status;
+        const plan = subscription.plan;
+
+        const updateSubData = { status: newStatus };
+        let clientAccessLevel = clientInstance.accessLevel;
+        let clientAccessExpiresAt = clientInstance.accessExpiresAt;
+        let clientStatus = clientInstance.status;
+
+        if (newStatus === 'Ativa') {
+            let calculatedEndDate = subscription.endDate;
+            const durationDays = Number(plan.durationDays);
+
+            if (oldSubscriptionStatus !== 'Ativa' || new Date(subscription.endDate) < new Date()) {
+                const effectiveStartDate = new Date();
+                const endDate = new Date(effectiveStartDate);
+                endDate.setDate(endDate.getDate() + durationDays);
+                calculatedEndDate = endDate.toISOString().split('T')[0];
+            }
+
+            updateSubData.endDate = calculatedEndDate;
+
+            const planTier = plan.tier || 'basico';
+            if (durationDays > 7000) {
+                clientAccessLevel = planTier === 'avancado' ? 'vitalicio_avancado' : 'vitalicio_basico';
+                clientAccessExpiresAt = null;
+            } else {
+                clientAccessLevel = planTier === 'avancado'
+                    ? (durationDays > 60 ? 'avancado_anual' : 'avancado_mensal')
+                    : (durationDays > 60 ? 'basico_anual' : 'basico_mensal');
+                clientAccessExpiresAt = calculatedEndDate;
+            }
+            clientStatus = 'Ativo';
+        } else if (['Cancelada', 'Expirada', 'Pagamento Falhou'].includes(newStatus)) {
+            const otherActiveSubscriptions = await Subscription.count({
+                where: { clientId: subscription.clientId, status: 'Ativa', id: { [Op.ne]: subscription.id } }, transaction: t
+            });
+            if (otherActiveSubscriptions === 0) {
+                clientAccessLevel = 'gratuito';
+                clientAccessExpiresAt = null;
+                clientStatus = (newStatus === 'Pagamento Falhou') ? 'Pagamento Falhou' : 'Inativo';
+            }
+        }
+
+        await clientInstance.update({
+            accessLevel: clientAccessLevel,
+            accessExpiresAt: clientAccessExpiresAt,
+            status: clientStatus
+        }, { transaction: t });
+
+        await subscription.update(updateSubData, { transaction: t });
+
+        if (!options.transaction) await t.commit();
+        logger.info(`[SUBSCRIPTION SERVICE] Status da assinatura ID ${subscription.id} atualizado para ${newStatus}.`);
+
+        if (!options.skipMessages && newStatus === 'Ativa' && oldSubscriptionStatus !== 'Ativa' && clientInstance.phone) {
+            const clientName = clientInstance.name ? clientInstance.name.split(' ')[0] : 'Olá';
+            const isRenewal = oldClientStatus === 'Inativo' || oldClientStatus === 'Pagamento Falhou';
+            let welcomeMessage = isRenewal
+                ? `Uhuul, que bom te ter de volta, ${clientName}! 🎉`
+                : `Ebaaa, ${clientName}! 🥳`;
+
+            try {
+                await sendWhatsappMessage(clientInstance.phone, welcomeMessage);
+            } catch (whatsappError) {
+                logger.error(`[SUBSCRIPTION SERVICE] FALHA AO ENVIAR MENSAGEM: ${whatsappError.message}`);
+            }
+        }
+
+        return subscription.reload({ include: ['client', 'plan'] });
+    } catch (error) {
+        if (!options.transaction && t && !t.finished) await t.rollback();
         logger.error(`[SUBSCRIPTION SERVICE] Erro ao atualizar status da assinatura: ${error.message}`, { error });
         throw error;
     }
@@ -222,4 +304,5 @@ module.exports = {
     getActiveSubscription,
     getClientSubscriptions,
     updateSubscriptionStatusByExternalId,
+    updateSubscriptionStatusById,
 };

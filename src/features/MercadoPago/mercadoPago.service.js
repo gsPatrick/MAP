@@ -3,8 +3,10 @@ const mercadopago = require('../../config/mercadoPago'); // Importa a SDK config
 const { Subscription, Plan, Client } = require('../../database');
 const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
+const crypto = require('crypto');
 const { sendWhatsappMessage, pinWhatsappMessage } = require('../../services/whatsappService');
 const affiliateService = require('../Affiliate/affiliate.service'); // Importe o serviço de afiliados
+const onboardingHandler = require('../WhatsappHandler/onboarding.handler');
 
 /**
  * Formata uma data para o padrão ISO 8601 com fuso horário,
@@ -116,6 +118,144 @@ const mercadoPagoService = {
   },
 
   /**
+   * Valida a assinatura x-signature do Mercado Pago.
+   * @param {string} dataId - O ID do recurso (data.id ou id).
+   * @param {string} xSignature - O header x-signature.
+   * @param {string} xRequestId - O header x-request-id.
+   * @returns {boolean}
+   */
+  validateSignature(dataId, xSignature, xRequestId) {
+    const secret = process.env.MERCADO_PAGO_WEBHOOK_SECRET;
+    if (!secret) {
+      logger.warn('[Webhook MP] Validação de assinatura pulada: MERCADO_PAGO_WEBHOOK_SECRET não definido.');
+      return true; // Se não tiver secret, permitimos para não quebrar a integração antes da config
+    }
+
+    try {
+      const parts = xSignature.split(',');
+      let ts, v1;
+      parts.forEach(part => {
+        const [key, value] = part.split('=');
+        if (key.trim() === 'ts') ts = value.trim();
+        if (key.trim() === 'v1') v1 = value.trim();
+      });
+
+      if (!ts || !v1) return false;
+
+      const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
+      const hmac = crypto.createHmac('sha256', secret);
+      hmac.update(manifest);
+      const computedSignature = hmac.digest('hex');
+
+      return crypto.timingSafeEqual(Buffer.from(computedSignature), Buffer.from(v1));
+    } catch (error) {
+      logger.error('[Webhook MP] Erro ao validar assinatura:', error);
+      return false;
+    }
+  },
+
+  /**
+   * Busca os detalhes de um pagamento ou merchant_order e processa a atualização.
+   */
+  async processarNotificacao(tipo, id) {
+    try {
+      let paymentId = id;
+      let externalReference = null;
+      let status = null;
+
+      if (tipo === 'merchant_order') {
+        logger.info(`[Webhook MP] Buscando Merchant Order: ${id}`);
+        const orderResponse = await mercadopago.merchant_order.findById(id);
+        const orderData = orderResponse.body;
+
+        // No Checkout Pro, o pagamento aprovado fecha a merchant_order
+        // Pegamos o último pagamento vinculado
+        if (orderData.payments && orderData.payments.length > 0) {
+          const lastPayment = orderData.payments[orderData.payments.length - 1];
+          paymentId = lastPayment.id;
+          status = lastPayment.status;
+        }
+        externalReference = orderData.external_reference;
+      } else if (tipo === 'payment') {
+        logger.info(`[Webhook MP] Buscando Payment: ${id}`);
+        const paymentResponse = await mercadopago.payment.findById(id);
+        const paymentData = paymentResponse.body;
+        status = paymentData.status;
+        externalReference = paymentData.external_reference;
+      }
+
+      if (!externalReference) {
+        logger.warn(`[Webhook MP] Notificação ${id} (${tipo}) sem external_reference. Ignorando.`);
+        return;
+      }
+
+      const subscriptionId = parseInt(externalReference, 10);
+      const subscription = await Subscription.findByPk(subscriptionId, { include: ['plan', 'client'] });
+
+      if (!subscription || !subscription.client) {
+        logger.warn(`[Webhook MP] Assinatura ${subscriptionId} não encontrada para o pagamento ${paymentId}.`);
+        return;
+      }
+
+      const successStatuses = ['approved', 'accredited'];
+      const failureStatuses = ['rejected', 'cancelled', 'refunded', 'charged_back'];
+
+      if (successStatuses.includes(status) && subscription.status !== 'Ativa') {
+        const client = subscription.client;
+        const plan = subscription.plan;
+
+        // Verifica se já era ativo para definir se é renovação ou nova assinatura
+        const wasActiveBefore = client.status === 'Ativo' && client.accessExpiresAt && new Date(client.accessExpiresAt) >= new Date();
+
+        await subscriptionService.updateSubscriptionStatusById(subscription.id, 'Ativa', { skipMessages: true });
+        logger.info(`[Webhook MP] ✅ SUCESSO - Assinatura ${subscription.id} ativada.`);
+
+        // --- Lógica de Negócio Pós-Ativação (Copiada do original corrigida) ---
+        if (client.phone) {
+          const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
+          const dashboardUrl = "https://www.map-nocontrole.com.br/login";
+          let mainMessage, loginMessage;
+
+          if (wasActiveBefore) {
+            mainMessage = `Olá, ${clientName}! ✨\n\nSua assinatura do plano *${plan.name}* foi renovada com sucesso! Agradecemos por continuar conosco.\n\nContinue no controle! 😉`;
+          } else {
+            mainMessage = `🎉 Pagamento confirmado, ${clientName}! Sua assinatura do plano *${plan.name}* está ativa. Seja muito bem-vindo(a) ao MAP no Controle!`;
+          }
+
+          loginMessage = `Para acessar o painel web com todos os relatórios e gráficos, utilize:\n` +
+            `🔗 *Link:* ${dashboardUrl}\n` +
+            `📧 *E-mail:* ${client.email}\n` +
+            `🔑 *Senha:* (a que você cadastrou)`;
+
+          // Envio de mensagens
+          await sendWhatsappMessage(client.phone, mainMessage);
+          const loginMessageResponse = await sendWhatsappMessage(client.phone, loginMessage);
+          if (loginMessageResponse && loginMessageResponse.messageId) {
+            await pinWhatsappMessage(client.phone, loginMessageResponse.messageId, '30_days');
+          }
+
+          // Afiliados e Onboarding
+          await affiliateService.processNewSubscriptionForAffiliate(client.id);
+          await affiliateService.sendAffiliateLinkNotification(client);
+
+          const isAdvancedPlan = plan.tier && (plan.tier.includes('avancado') || plan.tier.includes('vitalicio'));
+          if (isAdvancedPlan && !wasActiveBefore) {
+            await onboardingHandler.triggerOnboarding(client.phone, "Agora, vamos configurar sua conta empresarial rapidamente!");
+          }
+        }
+
+      } else if (failureStatuses.includes(status) && subscription.status === 'Pendente') {
+        await subscriptionService.updateSubscriptionStatusById(subscription.id, 'Pagamento Falhou', { skipMessages: true });
+        logger.info(`[Webhook MP] ❌ FALHA - Assinatura ${subscription.id} marcada como falha.`);
+      } else {
+        logger.info(`[Webhook MP] Status '${status}' para assinatura ${subscription.id}. Nenhuma ação.`);
+      }
+    } catch (error) {
+      logger.error(`[Webhook MP] Erro ao buscar dados da notificação ${id}:`, error);
+    }
+  },
+
+  /**
    * Processa as notificações de webhook enviadas pelo Mercado Pago.
    * @param {object} dados - O corpo da notificação (req.body).
    */
@@ -126,115 +266,41 @@ const mercadoPagoService = {
    * lidando com ativação, renovação, onboarding, afiliados e notificações.
    * @param {object} dados - O corpo da notificação (req.body).
    */
-  processarWebhook: async (dados) => {
+  processarWebhook: async (dados, headers = {}) => {
     try {
-      logger.info('[Webhook MP] Dados recebidos:', JSON.stringify(dados, null, 2));
+      logger.info('[Webhook MP] Notificação recebida:', JSON.stringify(dados, null, 2));
 
-      // 1. Validação inicial inteligente (Webhook vs IPN)
-      // Webhook V2: type = 'payment', data.id = <id>
-      // IPN / Legacy: topic = 'payment', id = <id>
-
+      // 1. Identificação do Tipo e ID (Suporte a V2 e IPN)
       const notificationType = dados.type || dados.topic;
-      const paymentId = dados.data?.id || dados.id;
+      const resourceId = dados.data?.id || dados.id;
 
-      if (notificationType !== 'payment') {
-        logger.info(`[Webhook MP] Ignorando notificação de tipo/tópico: '${notificationType}'. Esperado: 'payment'.`);
+      if (!['payment', 'merchant_order'].includes(notificationType)) {
+        logger.info(`[Webhook MP] Tipo '${notificationType}' ignorado.`);
         return;
       }
 
-      if (!paymentId) {
-        logger.warn(`[Webhook MP] ID do pagamento não encontrado no payload.`, { dados });
+      if (!resourceId) {
+        logger.warn('[Webhook MP] ID do recurso não encontrado.');
         return;
       }
 
-      logger.info(`[Webhook MP] Processando pagamento: ${paymentId} (Tipo: ${notificationType})`);
-
-      const paymentResponse = await mercadopago.payment.findById(paymentId);
-      const paymentData = paymentResponse.body;
-
-      logger.info(`[Webhook MP] Dados do pagamento: status ${paymentData.status}, ref ${paymentData.external_reference}`);
-
-      if (!paymentData.external_reference) {
-        logger.warn(`[Webhook MP] Pagamento ${paymentId} sem external_reference. Ignorando.`);
-        return;
-      }
-
-      const subscriptionId = parseInt(paymentData.external_reference, 10);
-      const subscription = await Subscription.findByPk(subscriptionId, { include: ['plan', 'client'] });
-
-      if (!subscription || !subscription.client) {
-        logger.warn(`[Webhook MP] Assinatura ${subscriptionId} ou cliente associado não encontrado. Ignorando.`);
-        return;
-      }
-
-      // 2. Extração de Variáveis para Clareza
-      const client = subscription.client;
-      const plan = subscription.plan;
-      const successStatuses = ['approved', 'accredited'];
-      const failureStatuses = ['rejected', 'cancelled', 'refunded', 'charged_back'];
-
-      // 3. Lógica Principal: Pagamento Aprovado
-      if (successStatuses.includes(paymentData.status) && subscription.status !== 'Ativa') {
-        const wasActiveBefore = client.status === 'Ativo' && client.accessExpiresAt && new Date(client.accessExpiresAt) >= new Date();
-
-        await subscriptionService.updateSubscriptionStatusByExternalId(null, 'Ativa', null, subscription.id);
-        logger.info(`[Webhook MP] ✅ PAGAMENTO APROVADO - Assinatura ${subscription.id} ativada para o cliente ${client.id}.`);
-
-        // Se o cliente tem WhatsApp, inicia o fluxo de comunicação
-        if (client.phone) {
-          const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
-          const dashboardUrl = "https://www.map-nocontrole.com.br/login";
-          let mainMessage, loginMessage;
-
-          // Define se é uma mensagem de boas-vindas ou de renovação
-          if (wasActiveBefore) {
-            mainMessage = `Olá, ${clientName}! ✨\n\nSua assinatura do plano *${plan.name}* foi renovada com sucesso! Agradecemos por continuar conosco.\n\nContinue no controle! 😉`;
-          } else {
-            mainMessage = `🎉 Pagamento confirmado, ${clientName}! Sua assinatura do plano *${plan.name}* está ativa. Seja muito bem-vindo(a) ao MAP no Controle!`;
-          }
-
-          // Define a mensagem de login que será fixada
-          loginMessage = `Para acessar o painel web com todos os relatórios e gráficos, utilize:\n` +
-            `🔗 *Link:* ${dashboardUrl}\n` +
-            `📧 *E-mail:* ${client.email}\n` +
-            `🔑 *Senha:* (a que você cadastrou)`;
-
-          // --- Orquestração do Envio de Mensagens ---
-
-          // Passo A: Envia a mensagem principal (Boas-vindas ou Renovação)
-          await sendWhatsappMessage(client.phone, mainMessage);
-
-          // Passo B: Envia a mensagem de login e tenta fixá-la
-          const loginMessageResponse = await sendWhatsappMessage(client.phone, loginMessage);
-          if (loginMessageResponse && loginMessageResponse.messageId) {
-            await pinWhatsappMessage(client.phone, loginMessageResponse.messageId, '30_days');
-          }
-
-          // Passo C: Processa a comissão para quem o indicou
-          await affiliateService.processNewSubscriptionForAffiliate(client.id);
-
-          // Passo D: Envia para o NOVO cliente o SEU PRÓPRIO link de afiliado
-          await affiliateService.sendAffiliateLinkNotification(client);
-
-          // Passo E: Inicia o onboarding, se for a primeira ativação de um plano avançado
-          const isAdvancedPlan = plan.tier.includes('avancado') || plan.tier.includes('vitalicio');
-          if (isAdvancedPlan && !wasActiveBefore) {
-            await onboardingHandler.triggerOnboarding(client.phone, "Agora, vamos configurar sua conta empresarial rapidamente!");
-          }
+      // 2. Validação de Assinatura (Opcional se secret não configurado)
+      const xSignature = headers['x-signature'];
+      const xRequestId = headers['x-request-id'];
+      if (xSignature && xRequestId) {
+        const isValid = mercadoPagoService.validateSignature(resourceId, xSignature, xRequestId);
+        if (!isValid) {
+          logger.error(`[Webhook MP] Assinatura INVÁLIDA para recurso ${resourceId}.`);
+          return;
         }
-
-        // 4. Lógica de Falha no Pagamento
-      } else if (failureStatuses.includes(paymentData.status) && subscription.status === 'Pendente') {
-        await subscriptionService.updateSubscriptionStatusByExternalId(
-          null, 'Pagamento Falhou', subscription.endDate, subscription.id
-        );
-        logger.info(`[Webhook MP] ❌ PAGAMENTO FALHOU - Assinatura ${subscription.id}.`);
-      } else {
-        logger.info(`[Webhook MP] Status '${paymentData.status}' recebido para assinatura ${subscription.id}. Nenhuma ação necessária.`);
+        logger.info(`[Webhook MP] Assinatura validada com sucesso para ${resourceId}.`);
       }
+
+      // 3. Processamento
+      await mercadoPagoService.processarNotificacao(notificationType, resourceId);
 
     } catch (error) {
-      console.error("[Webhook MP] Erro ao processar webhook:", error);
+      logger.error("[Webhook MP] Erro crítico no processarWebhook:", error);
     }
   },
 };
