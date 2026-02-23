@@ -141,6 +141,7 @@ const getZapiQrCode = (req, res, next) => {
         next(error);
     }
 };
+
 const getAdminStats = (req, res, next) => {
     adminService.getAdminStats()
         .then(stats => res.status(200).json({ status: 'success', data: stats }))
@@ -166,4 +167,5 @@ module.exports = {
     createClientAsAdmin, // Exportar novo controller
     getZapiStatus,       // Exportar novo controller
     getZapiQrCode,       // Exportar novo controller
+    getAdminStats,       // Exportar estatísticas do admin
 };
