@@ -2,6 +2,7 @@
 require('dotenv').config(); // Garante que as variáveis de ambiente sejam carregadas primeiro
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const punycode = require('punycode/');
 
 // Caminhos para os módulos
