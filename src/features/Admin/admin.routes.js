@@ -11,13 +11,14 @@ router.use('/admin', authenticateToken, authorizeRole(['admin']));
 // --- Rotas de Métricas e Dashboards ---
 router.get('/admin/dashboard/metrics', adminController.getDashboardMetrics);
 router.get('/admin/dashboard/affiliates', adminController.getAffiliatesDashboard);
+router.get('/admin/dashboard/stats', adminController.getAdminStats); // <<< NOVA ROTA
 
 // --- Rotas de Gerenciamento de Clientes ---
 // <<< NOVA ROTA PARA O PAINEL DE ADMIN >>>
 router.get('/admin/clients/list', adminController.getAdminClientList);
 
 // Manter a rota antiga se ainda for usada em outro lugar, ou remover
-router.get('/admin/clients', adminController.getAllClients); 
+router.get('/admin/clients', adminController.getAllClients);
 
 router.post('/admin/clients', adminController.createClient);
 router.put('/admin/clients/:clientId', adminController.updateClient);

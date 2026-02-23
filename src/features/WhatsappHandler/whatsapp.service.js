@@ -363,6 +363,10 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
         const existingState = conversationState.get(senderPhone);
         state = await initializeOrUpdateState(actorClient, sharedAccessRecord, existingState, clientAccountsForOnboarding, ownerAccountsIfShared);
+
+        // --- ATUALIZAÇÃO DE ATIVIDADE WHATSAPP ---
+        await actorClient.update({ lastActiveAt: new Date() }).catch(err => logger.error(`Erro ao atualizar lastActiveAt para ${senderPhone}: ${err.message}`));
+
         state.isNewUserForSessionLogic = !existingState;
         state.pushNameFromPayload = pushNameFromPayload;
 

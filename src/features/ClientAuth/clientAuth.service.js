@@ -241,6 +241,10 @@ async function loginClient(identifier, password) {
       order: [['isDefault', 'DESC'], ['accountName', 'ASC']]
     });
 
+    // --- ATUALIZAÇÃO DE ATIVIDADE ---
+    const now = new Date();
+    await client.update({ lastLoginAt: now, lastActiveAt: now });
+
     logger.info(`Login bem-sucedido para Cliente: ${client.phone || client.email} (Status Assinatura: ${subscriptionStatus})`);
 
     const responsePayload = {

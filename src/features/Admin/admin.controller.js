@@ -29,29 +29,29 @@ const changeClientPhone = (req, res, next) => {
 
 // --- CRUD de Clientes (reutilizando clientService - mantido para compatibilidade) ---
 const getAllClients = (req, res, next) => clientService.getAllClientContacts(req.query)
-  .then(result => res.status(200).json({ status: 'success', ...result }))
-  .catch(next);
+    .then(result => res.status(200).json({ status: 'success', ...result }))
+    .catch(next);
 
 const createClient = (req, res, next) => clientService.createClientContact(req.body)
-  .then(newClient => res.status(201).json({ status: 'success', data: newClient }))
-  .catch(next);
+    .then(newClient => res.status(201).json({ status: 'success', data: newClient }))
+    .catch(next);
 
 const updateClient = (req, res, next) => clientService.updateClientContact(req.params.clientId, req.body)
-  .then(updatedClient => updatedClient ? res.status(200).json({ status: 'success', data: updatedClient }) : res.status(404).json({ status: 'fail', message: 'Cliente não encontrado.' }))
-  .catch(next);
+    .then(updatedClient => updatedClient ? res.status(200).json({ status: 'success', data: updatedClient }) : res.status(404).json({ status: 'fail', message: 'Cliente não encontrado.' }))
+    .catch(next);
 
 const deleteClient = (req, res, next) => clientService.deleteClientContact(req.params.clientId)
-  .then(success => success ? res.status(204).send() : res.status(404).json({ status: 'fail', message: 'Cliente não encontrado.' }))
-  .catch(next);
+    .then(success => success ? res.status(204).send() : res.status(404).json({ status: 'fail', message: 'Cliente não encontrado.' }))
+    .catch(next);
 
 // --- Funções do Admin Service ---
 const getDashboardMetrics = (req, res, next) => adminService.getDashboardMetrics()
-  .then(metrics => res.status(200).json({ status: 'success', data: metrics }))
-  .catch(next);
+    .then(metrics => res.status(200).json({ status: 'success', data: metrics }))
+    .catch(next);
 
 const createCustomPlan = (req, res, next) => adminService.createCustomPlan(req.body)
-  .then(newPlan => res.status(201).json({ status: 'success', data: newPlan }))
-  .catch(next);
+    .then(newPlan => res.status(201).json({ status: 'success', data: newPlan }))
+    .catch(next);
 
 // <<< CONTROLLER ALTERADO >>>
 const changeUserPlan = (req, res, next) => {
@@ -105,7 +105,7 @@ const deleteClientAsAdmin = (req, res, next) => {
     if (isNaN(clientId)) {
         return res.status(400).json({ status: 'fail', message: 'ID do cliente inválido.' });
     }
-    
+
     adminService.deleteClientByUser(clientId)
         .then(() => {
             res.status(204).send();
@@ -141,26 +141,29 @@ const getZapiQrCode = (req, res, next) => {
         next(error);
     }
 };
-
-
+const getAdminStats = (req, res, next) => {
+    adminService.getAdminStats()
+        .then(stats => res.status(200).json({ status: 'success', data: stats }))
+        .catch(next);
+};
 
 module.exports = {
-  getAdminClientList,
-  getAllClients,
-  createClient,
-  updateClient,
-  deleteClient,
-  getDashboardMetrics,
-  createCustomPlan,
-  changeUserPlan,
-  sendBroadcastMessage,
-  getAffiliatesDashboard,
-  getAllPlans,
-  changeClientPhone,
-  updatePlan,
-  deleteClientAsAdmin,
-  clearClientBalance,
-  createClientAsAdmin, // Exportar novo controller
-  getZapiStatus,       // Exportar novo controller
-  getZapiQrCode,       // Exportar novo controller
+    getAdminClientList,
+    getAllClients,
+    createClient,
+    updateClient,
+    deleteClient,
+    getDashboardMetrics,
+    createCustomPlan,
+    changeUserPlan,
+    sendBroadcastMessage,
+    getAffiliatesDashboard,
+    getAllPlans,
+    changeClientPhone,
+    updatePlan,
+    deleteClientAsAdmin,
+    clearClientBalance,
+    createClientAsAdmin, // Exportar novo controller
+    getZapiStatus,       // Exportar novo controller
+    getZapiQrCode,       // Exportar novo controller
 };

@@ -79,6 +79,29 @@ async function sendFinancialSummariesForPeriod(period) {
           const accountHeader = `*Resumo da Conta: ${account.accountName}*`;
           const body = formatter.formatFinancialSummaryDataStructure(summary);
           summarySections.push(`${accountHeader}\n${body}`);
+
+          // <<< NOVO: Se for mensal, gera e envia o PDF >>>
+          if (period === 'monthly') {
+            try {
+              const now = new Date();
+              // Se o job rodar no dia 1, gera o relatório do mês anterior. 
+              // Se rodar em outro dia, gera o do mês atual.
+              let reportMonth = now.getMonth() + 1;
+              let reportYear = now.getFullYear();
+
+              if (now.getDate() <= 5) { // Provavelmente querendo o do mês que fechou
+                const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                reportMonth = lastMonth.getMonth() + 1;
+                reportYear = lastMonth.getFullYear();
+              }
+
+              const { publicUrl, fileName } = await financialService.generateMonthlyReportPdf(account.id, reportMonth, reportYear);
+              await require('../services/whatsappService').sendWhatsappDocument(targetPhone, publicUrl, fileName);
+              logger.info(`[JOB RESUMO FINANCEIRO] PDF Mensal enviado para ${targetPhone} (Conta: ${account.accountName})`);
+            } catch (pdfError) {
+              logger.error(`[JOB RESUMO FINANCEIRO] Erro ao gerar/enviar PDF mensal para conta ${account.id}:`, pdfError);
+            }
+          }
         }
 
         // Adiciona o checklist apenas uma vez por cliente

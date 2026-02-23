@@ -66,12 +66,12 @@ function createApp() {
   // ==========================================================================
   // CONFIGURAÇÃO SEGURA DE CORS
   // ==========================================================================
-const allowedOrigins = [
-  'https://www.map-nocontrole.com.br',
-  'https://map-nocontrole.com.br',
-  'http://localhost:3000',
-  'https://api.z-api.io' // ✅ adicionado para permitir webhooks da Z-API
-];
+  const allowedOrigins = [
+    'https://www.map-nocontrole.com.br',
+    'https://map-nocontrole.com.br',
+    'http://localhost:3000',
+    'https://api.z-api.io' // ✅ adicionado para permitir webhooks da Z-API
+  ];
 
   app.use(cors({
     origin: function (origin, callback) {
@@ -92,6 +92,8 @@ const allowedOrigins = [
   // ==========================================================================
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+  app.use('/reports', express.static(path.join(process.cwd(), 'temp_reports')));
+
 
   // ==========================================================================
   // ROTAS PRINCIPAIS

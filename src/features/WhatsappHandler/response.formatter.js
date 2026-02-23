@@ -66,6 +66,7 @@ function formatFinancialTransactionDataStructure(transaction, accountName = null
     let data = `🎯 Resumo da Transação:\n\n`;
     data += `📝 Descrição: ${transaction.description || 'N/A'}\n`;
     data += `💰 Valor: ${formatCurrency(transaction.value)}\n`;
+    data += `💳 Pagamento: ${transaction.paymentMethod || 'Não informado'}\n`;
     if (transaction.category && transaction.category.name) {
         data += `${transaction.type === 'Entrada' ? '💸' : (transaction.creditCardId ? '💳' : '🏷️')} Categoria: ${transaction.category.name}\n`;
     } else {
@@ -84,7 +85,7 @@ function formatFinancialTransactionDataStructure(transaction, accountName = null
     } else if (!transaction.creditCardId) {
         data += `🚦 Status: ${translateStatus(transaction.type === 'Entrada' ? 'Received' : 'Paid')}\n`;
     } else {
-         data += `🚦 Status: Lançada no cartão ✅\n`;
+        data += `🚦 Status: Lançada no cartão ✅\n`;
     }
     if (transaction.isParcel && transaction.parcelNumber && transaction.totalParcels && transaction.originalAccount) {
         data += `📦 Parcela: ${transaction.parcelNumber} de ${transaction.totalParcels}\n`;
@@ -145,7 +146,7 @@ function formatAppointmentDataStructure(appointment, forReminder = false, client
         const endTime = new Date(new Date(appointment.eventDateTime).getTime() + appointment.durationMinutes * 60000);
         data += `⏳ *Duração:* ${appointment.durationMinutes} minutos (até aprox. ${formatTime(endTime)})\n`;
     }
-    
+
     // Status
     if (appointment.status) {
         data += `🚦 *Status:* ${translateStatus(appointment.status)}\n`;
@@ -228,7 +229,7 @@ function formatRecurringRuleHistoryDataStructure(history, rule) {
             data += `\n${index + 1}️⃣ *${formatCurrency(tx.value)}* com vencimento em *${formatDate(tx.dueDate)}* 🗓️`;
         });
         data += `\n\nPara confirmar o pagamento, diga "paguei a ${ruleName}".`;
-    } 
+    }
     // Cenário 3: Existem transações pagas (e talvez algumas pendentes também).
     else {
         if (paidTransactions.length > 0) {
@@ -296,8 +297,8 @@ function formatCreditCardDataStructure(card, accountName = null) {
     }
     data += `🗓️ Dia de Fechamento: ${card.closingDay}\n`;
     data += `💵 Dia de Pagamento: ${card.paymentDay}\n`;
-    if(card.lastFourDigits) data += `🔢 Final do Cartão: ${card.lastFourDigits}\n`;
-    if(card.flag) data += `🏳️ Bandeira: ${card.flag}\n`;
+    if (card.lastFourDigits) data += `🔢 Final do Cartão: ${card.lastFourDigits}\n`;
+    if (card.flag) data += `🏳️ Bandeira: ${card.flag}\n`;
     data += `⭐ Cartão Padrão: ${card.isDefault ? 'Sim ✅' : 'Não ❌'}\n`;
     data += `🚦 Status: ${translateStatus(card.isActive ? 'Active' : 'Inactive')}\n`;
     if (accountName) {
@@ -329,7 +330,7 @@ function formatCreditCardInvoiceDataStructure(invoiceDetails, listTransactions =
     let data = `🎯 Resumo da Fatura - Cartão *${invoiceDetails.cardName || 'N/A'}*\n\n`;
     data += `📅 Mês de Referência: ${invoiceDetails.invoiceReferenceMonthYear || 'N/A'}\n`;
     data += `💰 Total da fatura: ${formatCurrency(invoiceDetails.totalAmount)}\n`;
-    if(invoiceDetails.availableLimitAfterInvoice !== undefined) {
+    if (invoiceDetails.availableLimitAfterInvoice !== undefined) {
         data += `💳 Limite disponível (após esta fatura): ${formatCurrency(invoiceDetails.availableLimitAfterInvoice)}\n`;
     } else if (invoiceDetails.cardTotalLimit !== undefined) {
         const available = parseFloat(invoiceDetails.cardTotalLimit) - parseFloat(invoiceDetails.totalAmount);
@@ -404,12 +405,12 @@ function formatProductDataStructure(product, accountName = null) {
     if (!product) return "📦 Resumo do Produto:\n\nDados do produto não disponíveis.";
     let data = `📦 Resumo do Produto:\n\n`;
     data += `🏷️ Nome: *${product.name}*\n`;
-    if(product.code) data += `🔢 Código: ${product.code}\n`;
+    if (product.code) data += `🔢 Código: ${product.code}\n`;
     data += `💰 Preço de Venda: ${formatCurrency(product.salePrice)}\n`;
-    if(product.costPrice !== null && product.costPrice !== undefined) data += `💲 Preço de Custo: ${formatCurrency(product.costPrice)}\n`;
+    if (product.costPrice !== null && product.costPrice !== undefined) data += `💲 Preço de Custo: ${formatCurrency(product.costPrice)}\n`;
     data += `🛍️ Estoque Atual: ${product.quantity !== undefined ? product.quantity : (product.initialQuantity || 0)} ${product.unit || 'UN'}\n`;
-    if(product.minimumStock !== null && product.minimumStock !== undefined) data += `📉 Estoque Mínimo: ${product.minimumStock} ${product.unit || 'UN'}\n`;
-    if(product.description && product.description.trim() !== "") data += `📄 Descrição Detalhada: ${product.description}\n`;
+    if (product.minimumStock !== null && product.minimumStock !== undefined) data += `📉 Estoque Mínimo: ${product.minimumStock} ${product.unit || 'UN'}\n`;
+    if (product.description && product.description.trim() !== "") data += `📄 Descrição Detalhada: ${product.description}\n`;
     data += `🚦 Status: ${translateStatus(product.isActive === false ? 'Inactive' : 'Active')}\n`;
     if (accountName) {
         data += `\n\n*(Executado na conta: ${accountName})*`;
@@ -483,7 +484,7 @@ function formatSharedAccessDataStructure(sharedAccess, perspective = 'owner') {
     } else {
         data += `🔑 Nenhum perfil específico acessível no momento (verifique as permissões).\n`;
     }
-    data += `🚦 Status do Convite/Acesso: *${translateStatus(sharedAccess.status, sharedAccess.status)}*\n`; 
+    data += `🚦 Status do Convite/Acesso: *${translateStatus(sharedAccess.status, sharedAccess.status)}*\n`;
     if (sharedAccess.expiresAt) data += `⏳ Expira em: ${formatDate(sharedAccess.expiresAt)}\n`;
     return data.trim();
 }
@@ -503,8 +504,8 @@ function formatListSharedAccessDataStructure(accessList, perspective = 'owner') 
         let profiles = [];
         if (sa.canAccessPersonalProfile && sa.ownerClient?.financialAccounts?.find(fa => fa.accountType === 'PF')) profiles.push("Perfil Pessoal");
         if (sa.canAccessBusinessProfileId && sa.ownerClient?.financialAccounts?.find(fa => fa.id === sa.canAccessBusinessProfileId)) {
-             const bizAccName = sa.ownerClient.financialAccounts.find(fa => fa.id === sa.canAccessBusinessProfileId)?.accountName;
-             profiles.push(`Empresarial "${bizAccName}"`);
+            const bizAccName = sa.ownerClient.financialAccounts.find(fa => fa.id === sa.canAccessBusinessProfileId)?.accountName;
+            profiles.push(`Empresarial "${bizAccName}"`);
         }
         if (profiles.length > 0) data += ` (Acesso a: ${profiles.join(', ')})`;
         data += ` - Status: *${translateStatus(sa.status, sa.status)}*\n`;
@@ -516,7 +517,7 @@ function formatMotivationalMessagePreferenceDataStructure(prefs) {
     let data = `💬 Preferências de Mensagem Motivacional:\n\n`;
     data += `🚦 Status: ${prefs.enableMotivationMessage ? 'Ativada ✅' : 'Desativada ❌'}\n`;
     if (prefs.enableMotivationMessage && prefs.motivationMessageTime) {
-        data += `🕒 Horário Programado: ${prefs.motivationMessageTime.substring(0,5)}\n`;
+        data += `🕒 Horário Programado: ${prefs.motivationMessageTime.substring(0, 5)}\n`;
     }
     return data.trim();
 }
@@ -532,8 +533,8 @@ function formatWaterReminderPreferenceDataStructure(prefs) {
             freqText = `Personalizado: a cada ${prefs.waterReminderCustomIntervalMinutes} minutos`;
         }
         data += `🔄 Frequência: ${freqText}\n`;
-        data += `🌅 Início: ${prefs.waterReminderStartTime ? prefs.waterReminderStartTime.substring(0,5) : 'N/A'}\n`;
-        data += `🌃 Fim: ${prefs.waterReminderEndTime ? prefs.waterReminderEndTime.substring(0,5) : 'N/A'}\n`;
+        data += `🌅 Início: ${prefs.waterReminderStartTime ? prefs.waterReminderStartTime.substring(0, 5) : 'N/A'}\n`;
+        data += `🌃 Fim: ${prefs.waterReminderEndTime ? prefs.waterReminderEndTime.substring(0, 5) : 'N/A'}\n`;
         if (prefs.dailyGoalMl) {
             data += `🎯 Meta Diária: ${prefs.dailyGoalMl}ml\n`;
         }
@@ -633,7 +634,7 @@ function formatRecurringRuleHistoryDataStructure(history) {
         const status = tx.isPaidOrReceived ? `(Paga em ${formatDate(tx.paymentDate)})` : `(Pendente, vence ${formatDate(tx.dueDate)})`;
         data += `\n${index + 1}️⃣ ${formatCurrency(tx.value)} em ${formatDate(tx.transactionDate)} ${status}`;
     });
-     if (history.totalItems > history.transactions.length) {
+    if (history.totalItems > history.transactions.length) {
         data += `\n\n... e mais ${history.totalItems - history.transactions.length} transação(ões).`;
     }
     return data.trim();
@@ -643,7 +644,7 @@ function formatHydrationLogDataStructure(logs, prefs, clientName) {
     const totalCompleted = logs.filter(log => log.status === 'completed').reduce((sum, log) => sum + log.amount, 0);
     const goal = prefs.dailyGoalMl || 2000;
     const percentage = goal > 0 ? Math.round((totalCompleted / goal) * 100) : 0;
-    
+
     let data = `💧 *Seu progresso de hidratação hoje, ${clientName}!* 💧\n\n`;
     data += `🎯 Meta: *${goal}ml*\n`;
     data += `✅ Bebido: *${totalCompleted}ml*\n`;
@@ -660,7 +661,7 @@ function formatHydrationLogDataStructure(logs, prefs, clientName) {
 
 function formatAffiliateDashboardDataStructure(dashboardData, clientName) {
     if (!dashboardData) return "Não foi possível carregar seus dados de afiliado.";
-    
+
     // --- INÍCIO DA MODIFICAÇÃO ---
     const affiliateLink = `https://www.map-nocontrole.com.br/assinar/7?ref=${dashboardData.summary.affiliateCode}`;
 
@@ -671,7 +672,7 @@ function formatAffiliateDashboardDataStructure(dashboardData, clientName) {
     data += `💵 Saldo disponível para saque: *${formatCurrency(dashboardData.summary.balance)}*\n\n`;
     data += "Copie seu link, compartilhe com amigos e ganhe comissões a cada nova assinatura que eles fizerem! 🚀";
     // --- FIM DA MODIFICAÇÃO ---
-    
+
     return data.trim();
 }
 
@@ -683,9 +684,9 @@ function formatSubscriptionDataStructure(subscription, clientName) {
     data += `🚀 Plano: *${subscription.plan.name}*\n`;
     data += `⭐ Nível: *${formatPlanName(subscription.plan.tier || 'basico')}*\n`;
     if (subscription.endDate && new Date(subscription.endDate).getFullYear() > 2090) {
-         data += `🗓️ Validade: *Acesso Vitalício!* 🎉\n`;
+        data += `🗓️ Validade: *Acesso Vitalício!* 🎉\n`;
     } else {
-         data += `🗓️ Válido até: *${formatDate(subscription.endDate)}*\n`;
+        data += `🗓️ Válido até: *${formatDate(subscription.endDate)}*\n`;
     }
     data += `🚦 Status: *${translateStatus(subscription.status)}*\n`;
     return data.trim();
@@ -754,94 +755,94 @@ function formatRichRecurringRuleList(enrichedRules, totalItems, clientName) {
 
 function formatFinancialSummaryDataStructure(summary) {
     if (!summary) return "📊 Resumo Financeiro:\n\nDados não disponíveis.";
-    
-const emojiMap = {
-  // Categorias Pessoais
-  'Alimentação': '🍽️',
-  'Supermercado': '🛒',
-  'Restaurantes': '🍴',
-  'Ifood': '📲',
-  'Delivery': '📦',
-  'Moradia': '🏠',
-  'Aluguel': '💵',
-  'Condomínio': '🏢',
-  'Contas': '🧾',
-  'Conta de Água': '🚰',
-  'Conta de Luz': '💡',
-  'Conta de Gás': '🔥',
-  'Internet': '🌐',
-  'Transporte': '🚗',
-  'Abastecimento': '⛽',
-  'Estacionamento': '🅿️',
-  'Uber': '🚕',
-  '99': '🚖',
-  'Transporte Público': '🚌',
-  'Manutenção Veicular': '🔧',
-  'Saúde': '💊',
-  'Farmácia': '🏥',
-  'Plano de Saúde': '🩺',
-  'Consultas': '👩‍⚕️',
-  'Exames': '🧪',
-  'Academia': '🏋️',
-  'Lazer': '🎉',
-  'Entretenimento': '🎭',
-  'Viagens': '✈️',
-  'Cinema': '🎬',
-  'Shows': '🎤',
-  'Assinaturas': '📃',
-  'Streamings': '📺',
-  'Cuidados Pessoais': '🛀',
-  'Beleza': '💄',
-  'Compras': '🛍️',
-  'Vestuário': '👗',
-  'Eletrônicos': '📱',
-  'Casa': '🏡',
-  'Presentes': '🎁',
-  'Educação': '📚',
-  'Dívidas': '📉',
-  'Empréstimos': '💸',
-  'Pagamento de Fatura': '💳',
-  'Receitas': '✅',
-  'Salário': '💰',
-  'Renda Extra': '🤑',
-  'Investimentos': '📈',
 
-  // Categorias de Negócio (PJ/MEI)
-  'Receitas Operacionais': '📊',
-  'Venda de Produtos': '📦',
-  'Prestação de Serviços': '🛠️',
-  'Outras Receitas': '💵',
-  'Custos dos Produtos/Serviços (CPV/CSV)': '💰',
-  'Matéria-prima e Insumos': '🧱',
-  'Mercadorias para Revenda': '📦',
-  'Fretes sobre Vendas': '🚚',
-  'Despesas Administrativas': '📋',
-  'Salários e Pró-labore': '👔',
-  'Aluguel (Escritório/Loja)': '🏢',
-  'Contas (Luz, Água, Internet)': '🧾',
-  'Telefonia': '📞',
-  'Honorários (Contador, Advogado)': '⚖️',
-  'Material de Escritório': '📎',
-  'Despesas de Marketing': '📢',
-  'Marketing e Publicidade': '📣',
-  'Comissões de Vendas': '💼',
-  'Despesas Financeiras': '💳',
-  'Taxas Bancárias': '🏦',
-  'Juros de Empréstimos': '📈',
-  'Taxas de Cartão': '💳',
-  'Impostos e Tributos': '🧾',
-  'Simples Nacional / DAS': '📝',
-  'Outros Impostos': '📄',
-  'Investimentos e Ativos': '📊',
-  'Compra de Equipamentos': '🛠️',
-  'Manutenção de Ativos': '🔧',
-  'Despesas com Pessoal': '👥',
-  'Benefícios (VT, VR)': '🎟️',
-  'Treinamentos': '🎓',
-  'Outras Despesas Operacionais': '📉',
-  'Viagens e Representação': '✈️',
-  'Manutenção de Software/Licenças': '💻'
-};
+    const emojiMap = {
+        // Categorias Pessoais
+        'Alimentação': '🍽️',
+        'Supermercado': '🛒',
+        'Restaurantes': '🍴',
+        'Ifood': '📲',
+        'Delivery': '📦',
+        'Moradia': '🏠',
+        'Aluguel': '💵',
+        'Condomínio': '🏢',
+        'Contas': '🧾',
+        'Conta de Água': '🚰',
+        'Conta de Luz': '💡',
+        'Conta de Gás': '🔥',
+        'Internet': '🌐',
+        'Transporte': '🚗',
+        'Abastecimento': '⛽',
+        'Estacionamento': '🅿️',
+        'Uber': '🚕',
+        '99': '🚖',
+        'Transporte Público': '🚌',
+        'Manutenção Veicular': '🔧',
+        'Saúde': '💊',
+        'Farmácia': '🏥',
+        'Plano de Saúde': '🩺',
+        'Consultas': '👩‍⚕️',
+        'Exames': '🧪',
+        'Academia': '🏋️',
+        'Lazer': '🎉',
+        'Entretenimento': '🎭',
+        'Viagens': '✈️',
+        'Cinema': '🎬',
+        'Shows': '🎤',
+        'Assinaturas': '📃',
+        'Streamings': '📺',
+        'Cuidados Pessoais': '🛀',
+        'Beleza': '💄',
+        'Compras': '🛍️',
+        'Vestuário': '👗',
+        'Eletrônicos': '📱',
+        'Casa': '🏡',
+        'Presentes': '🎁',
+        'Educação': '📚',
+        'Dívidas': '📉',
+        'Empréstimos': '💸',
+        'Pagamento de Fatura': '💳',
+        'Receitas': '✅',
+        'Salário': '💰',
+        'Renda Extra': '🤑',
+        'Investimentos': '📈',
+
+        // Categorias de Negócio (PJ/MEI)
+        'Receitas Operacionais': '📊',
+        'Venda de Produtos': '📦',
+        'Prestação de Serviços': '🛠️',
+        'Outras Receitas': '💵',
+        'Custos dos Produtos/Serviços (CPV/CSV)': '💰',
+        'Matéria-prima e Insumos': '🧱',
+        'Mercadorias para Revenda': '📦',
+        'Fretes sobre Vendas': '🚚',
+        'Despesas Administrativas': '📋',
+        'Salários e Pró-labore': '👔',
+        'Aluguel (Escritório/Loja)': '🏢',
+        'Contas (Luz, Água, Internet)': '🧾',
+        'Telefonia': '📞',
+        'Honorários (Contador, Advogado)': '⚖️',
+        'Material de Escritório': '📎',
+        'Despesas de Marketing': '📢',
+        'Marketing e Publicidade': '📣',
+        'Comissões de Vendas': '💼',
+        'Despesas Financeiras': '💳',
+        'Taxas Bancárias': '🏦',
+        'Juros de Empréstimos': '📈',
+        'Taxas de Cartão': '💳',
+        'Impostos e Tributos': '🧾',
+        'Simples Nacional / DAS': '📝',
+        'Outros Impostos': '📄',
+        'Investimentos e Ativos': '📊',
+        'Compra de Equipamentos': '🛠️',
+        'Manutenção de Ativos': '🔧',
+        'Despesas com Pessoal': '👥',
+        'Benefícios (VT, VR)': '🎟️',
+        'Treinamentos': '🎓',
+        'Outras Despesas Operacionais': '📉',
+        'Viagens e Representação': '✈️',
+        'Manutenção de Software/Licenças': '💻'
+    };
 
     const getCategoryEmoji = (categoryName) => {
         if (!categoryName) return '📂';
@@ -853,8 +854,12 @@ const emojiMap = {
     };
 
     let data = `💸 *Entradas:* ${formatCurrency(summary.totalIncome)}\n` +
-               `💔 *Saídas:* ${formatCurrency(summary.totalExpenses)}\n` +
-               `⚖️ *Balanço Final:* ${formatCurrency(summary.netBalance)}\n`;
+        `💔 *Saídas:* ${formatCurrency(summary.totalExpenses)}\n` +
+        `⚖️ *Balanço Final:* ${formatCurrency(summary.netBalance)}\n\n` +
+        `✨ *Por Forma de Pagamento:*\n` +
+        `💎 Pix: ${formatCurrency(summary.totalPix || 0)}\n` +
+        `💵 Dinheiro: ${formatCurrency(summary.totalCash || 0)}\n` +
+        `💳 Cartão: ${formatCurrency(summary.totalCreditCard || 0)}\n`;
 
     if (summary.expenseBreakdown && summary.expenseBreakdown.length > 0) {
         data += `\n📂 *Despesas por Categoria:*\n`;
@@ -870,6 +875,18 @@ const emojiMap = {
         data += `📤 A Pagar: ${formatCurrency(summary.totalToPayPending)}\n`;
     }
 
+    if (summary.futureForecast && summary.futureForecast.totalFutureDebt > 0) {
+        data += `\n🔮 *Previsão de Parcelas Futuras:*\n`;
+        data += `📉 Total Pendente no Cartão: *${formatCurrency(summary.futureForecast.totalFutureDebt)}*\n`;
+
+        summary.futureForecast.forecast.slice(0, 3).forEach(item => {
+            const [year, month] = item.month.split('-');
+            const dateObj = new Date(Date.UTC(year, month - 1));
+            const monthName = dateObj.toLocaleString('pt-BR', { month: 'short', timeZone: 'UTC' });
+            data += `🗓️ ${monthName.charAt(0).toUpperCase() + monthName.slice(1)}/${year.slice(2)}: *${formatCurrency(item.total)}*\n`;
+        });
+    }
+
     if (summary.recentTransactions && summary.recentTransactions.length > 0) {
         data += `\n─────────────────────\n`;
         data += `🧾 *Movimentações do Período:*\n`;
@@ -877,7 +894,7 @@ const emojiMap = {
             const emojiType = tx.type === 'Entrada' ? '⬆️' : '⬇️';
             const categoryName = tx.category?.name || 'Geral';
             const categoryEmoji = getCategoryEmoji(categoryName);
-            
+
             data += `\n📅 ${formatDate(tx.transactionDate)} — ${emojiType} *${tx.type}*\n`;
             data += `📌 ${categoryEmoji} ${categoryName} – ${tx.description}\n`;
             data += `💰 Valor: ${formatCurrency(tx.value)}\n`;
@@ -918,7 +935,7 @@ function formatMorningBriefing(clientName, accountName, pendingTransactions, app
 
 function formatAvailabilityRuleDataStructure(rule, accountName = null) {
     if (!rule) return "📅 Resumo da Regra de Disponibilidade:\n\nDados não disponíveis.";
-    
+
     const typeMap = {
         work: 'Horário de Trabalho 働く',
         break: 'Pausa / Bloqueio ⏸️',
@@ -933,12 +950,12 @@ function formatAvailabilityRuleDataStructure(rule, accountName = null) {
         // <<< INÍCIO DA MUDANÇA >>>
         const rruleParts = rule.rrule.split(';');
         const byDayPart = rruleParts.find(p => p.startsWith('BYDAY='))?.split('=')[1];
-        
+
         let recurrenceText = "Recorrente"; // Fallback
         if (byDayPart) {
             const dayMap = { MO: 'Seg', TU: 'Ter', WE: 'Qua', TH: 'Qui', FR: 'Sex', SA: 'Sáb', SU: 'Dom' };
             const days = byDayPart.split(',').map(day => dayMap[day] || day);
-            
+
             if (days.length === 7) {
                 recurrenceText = "Todos os dias";
             } else if (days.length === 5 && days.includes('Seg') && days.includes('Sex')) {
@@ -958,11 +975,11 @@ function formatAvailabilityRuleDataStructure(rule, accountName = null) {
     if (rule.startTime && rule.endTime) {
         data += `⏰ Horário: Das ${rule.startTime.substring(0, 5)} às ${rule.endTime.substring(0, 5)}\n`;
     }
-    
+
     if (rule.type === 'work' && rule.slotIntervalMinutes) {
         data += `⏱️ Intervalo de Agendamento: A cada ${rule.slotIntervalMinutes} minutos\n`;
     }
-    
+
     if (accountName) {
         data += `\n\n*(Executado na conta: ${accountName})*`;
     }
@@ -972,9 +989,9 @@ function formatAvailabilityRuleDataStructure(rule, accountName = null) {
 
 function formatListAvailabilityRulesDataStructure(rules) {
     if (!rules || rules.length === 0) return "📅 Suas Regras de Disponibilidade:\n\nNenhuma regra cadastrada. Diga 'criar regra de trabalho' para começar.";
-    
+
     let data = "📅 Suas Regras de Disponibilidade:\n";
-    
+
     const workRules = rules.filter(r => r.type === 'work');
     const breakRules = rules.filter(r => r.type === 'break');
     const dayOffRules = rules.filter(r => r.type === 'day_off');
@@ -983,16 +1000,16 @@ function formatListAvailabilityRulesDataStructure(rules) {
         data += "\n--- Horários de Trabalho ---\n";
         workRules.forEach(rule => {
             data += `\n働く *${rule.title}* (ID: ${rule.id})\n`;
-            data += `   - Das ${rule.startTime.substring(0,5)} às ${rule.endTime.substring(0,5)}\n`;
-            if (rule.rrule) data += `   - Recorrência: ${rule.rrule.split(';').find(p=>p.startsWith('BYDAY='))?.split('=')[1] || 'Definida'}\n`;
+            data += `   - Das ${rule.startTime.substring(0, 5)} às ${rule.endTime.substring(0, 5)}\n`;
+            if (rule.rrule) data += `   - Recorrência: ${rule.rrule.split(';').find(p => p.startsWith('BYDAY='))?.split('=')[1] || 'Definida'}\n`;
         });
     }
     if (breakRules.length > 0) {
         data += "\n--- Pausas / Bloqueios ---\n";
         breakRules.forEach(rule => {
             data += `\n⏸️ *${rule.title}* (ID: ${rule.id})\n`;
-            data += `   - Das ${rule.startTime.substring(0,5)} às ${rule.endTime.substring(0,5)}\n`;
-            if (rule.rrule) data += `   - Recorrência: ${rule.rrule.split(';').find(p=>p.startsWith('BYDAY='))?.split('=')[1] || 'Definida'}\n`;
+            data += `   - Das ${rule.startTime.substring(0, 5)} às ${rule.endTime.substring(0, 5)}\n`;
+            if (rule.rrule) data += `   - Recorrência: ${rule.rrule.split(';').find(p => p.startsWith('BYDAY='))?.split('=')[1] || 'Definida'}\n`;
         });
     }
     if (dayOffRules.length > 0) {
@@ -1003,7 +1020,7 @@ function formatListAvailabilityRulesDataStructure(rules) {
             if (rule.rrule) data += `   - Recorrência: Anual\n`;
         });
     }
-    
+
     return data.trim();
 }
 
@@ -1027,7 +1044,7 @@ function formatAgendaViewDataStructure(events, startDate, endDate) {
 
     for (const day of sortedDays) {
         data += `\n\n*--- ${formatDate(day)} ---*`;
-        
+
         // Ordena eventos do dia por horário de início
         const sortedEvents = eventsByDay[day].sort((a, b) => new Date(a.start) - new Date(b.start));
 
@@ -1041,7 +1058,7 @@ function formatAgendaViewDataStructure(events, startDate, endDate) {
             }
         });
     }
-    
+
     return data.trim();
 }
 
@@ -1051,7 +1068,7 @@ function formatAvailableTimeSlotsDataStructure(slots, date, duration) {
     }
 
     let data = `✅ Horários disponíveis para *${formatDate(date)}* (duração de ${duration} min):\n\n`;
-    
+
     // Formata em colunas para melhor visualização
     const columns = [[], [], []];
     slots.forEach((slot, index) => {
@@ -1072,13 +1089,13 @@ function formatAvailableTimeSlotsDataStructure(slots, date, duration) {
 
 function formatBusinessClientDetailsDataStructure(details) {
     if (!details) return "👥 Detalhes do Cliente:\n\nDados não disponíveis.";
-    
+
     let data = `👥 Detalhes de *${details.name}*:\n\n`;
     if (details.phone) data += `📞 Telefone: ${details.phone}\n`;
     if (details.email) data += `📧 E-mail: ${details.email}\n`;
     data += `💰 Faturamento Total (Concluído): *${formatCurrency(details.totalFaturado)}*\n`;
     data += `🚦 Status: ${translateStatus(details.isActive ? 'Active' : 'Inactive')}\n`;
-    
+
     if (details.appointmentHistory && details.appointmentHistory.length > 0) {
         data += `\n--- Histórico Recente ---\n`;
         details.appointmentHistory.slice(0, 3).forEach(appt => {
@@ -1112,12 +1129,12 @@ function formatAppointmentHistoryForClientDataStructure(history, clientName) {
 
 function formatProviderPublicInfoDataStructure(publicInfo, publicUrl) {
     if (!publicInfo) return "🌐 Página Pública de Agendamento:\n\nInformações não disponíveis.";
-    
+
     let data = `🌐 Sua Página Pública de Agendamento está no ar!\n\n`;
     data += `✨ Nome do Prestador: *${publicInfo.providerName}*\n`;
     data += `🔗 Seu link para compartilhar: *${publicUrl}*\n\n`;
     data += `Seus clientes podem usar este link para ver seus serviços e agendar um horário diretamente com você. Simples assim! 😉`;
-    
+
     return data.trim();
 }
 
@@ -1146,7 +1163,7 @@ module.exports = {
     formatListSharedAccessDataStructure,
     formatMotivationalMessagePreferenceDataStructure,
     formatWaterReminderPreferenceDataStructure,
-    formatFinancialAccountDataStructure, 
+    formatFinancialAccountDataStructure,
     formatMonthlyTrendDataStructure,
     formatCategorySummaryDataStructure,
     formatListFinancialCategoriesDataStructure,
@@ -1168,5 +1185,5 @@ module.exports = {
     formatAvailableTimeSlotsDataStructure,
     formatBusinessClientDetailsDataStructure,
     formatAppointmentHistoryForClientDataStructure,
-formatProviderPublicInfoDataStructure
+    formatProviderPublicInfoDataStructure
 };

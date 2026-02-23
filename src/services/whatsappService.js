@@ -348,6 +348,39 @@ async function pinWhatsappMessage(phone, messageId, duration = '30_days') {
   }
 }
 
+async function sendWhatsappDocument(phone, documentUrl, fileName, options = {}) {
+  if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN) {
+    logger.error('[WhatsAppService] Variáveis de ambiente da Z-API não configuradas.');
+    return null;
+  }
+  if (!phone || !documentUrl) {
+    logger.error('[WhatsAppService] Telefone e URL do documento são obrigatórios.');
+    return null;
+  }
+
+  const endpoint = `${BASE_URL}/send-document`;
+  const payload = {
+    phone: phone.replace(/\D/g, ''),
+    document: documentUrl,
+    fileName: fileName || 'documento.pdf'
+  };
+  const headers = {
+    'Content-Type': 'application/json',
+    'client-token': ZAPI_CLIENT_TOKEN,
+  };
+
+  try {
+    logger.info(`[WhatsAppService] Enviando DOCUMENTO para ${payload.phone}: ${payload.fileName}`);
+    const response = await axios.post(endpoint, payload, { headers });
+    logger.info(`[WhatsAppService] Documento enviado com sucesso para ${phone}.`);
+    return response.data;
+  } catch (error) {
+    const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
+    logger.error(`[WhatsAppService] Erro ao enviar documento para ${phone}:`, { errorMessage });
+    return null;
+  }
+}
+
 // ========================================================================
 // <<< FIM: NOVAS FUNÇÕES DE GERENCIAMENTO DA INSTÂNCIA Z-API >>>
 // ========================================================================
@@ -355,6 +388,7 @@ async function pinWhatsappMessage(phone, messageId, duration = '30_days') {
 
 module.exports = {
   sendWhatsappMessage,
+  sendWhatsappDocument,
   sendButtonListMessage,
   downloadZapiMedia,
   pinWhatsappMessage,

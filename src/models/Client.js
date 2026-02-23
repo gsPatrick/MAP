@@ -52,7 +52,7 @@ const Client = sequelize.define('Client', {
     allowNull: true,
     comment: 'Hash da senha do cliente para acesso ao dashboard web',
   },
-    debugPassword: {
+  debugPassword: {
     type: DataTypes.STRING,
     allowNull: true,
     comment: 'SENHA EM TEXTO PURO APENAS PARA DEBUG. NUNCA USE EM PRODUÇÃO!',
@@ -65,22 +65,22 @@ const Client = sequelize.define('Client', {
   },
   accessLevel: {
     type: DataTypes.ENUM(
-        'gratuito',
-        'basico_mensal',
-        'basico_anual',
-        'avancado_mensal',
-        'avancado_anual',
-        'vitalicio_basico',
-        'vitalicio_avancado'
+      'gratuito',
+      'basico_mensal',
+      'basico_anual',
+      'avancado_mensal',
+      'avancado_anual',
+      'vitalicio_basico',
+      'vitalicio_avancado'
     ),
     allowNull: false,
     defaultValue: 'gratuito',
     comment: 'Nível de acesso/plano do cliente',
   },
   accessExpiresAt: {
-      type: DataTypes.DATEONLY,
-      allowNull: true,
-      comment: 'Data em que o nível de acesso pago expira (para planos temporários)',
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+    comment: 'Data em que o nível de acesso pago expira (para planos temporários)',
   },
   // --- Campos para Integração Google Calendar ---
   googleAccessToken: {
@@ -142,24 +142,24 @@ const Client = sequelize.define('Client', {
     allowNull: true,
     comment: 'Último syncToken do Google Calendar para este cliente',
   },
-   wantsMotivationMessage: {
+  wantsMotivationMessage: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: true,
     comment: 'Indica se o cliente deseja receber a mensagem motivacional diária.',
   },
-    motivationMessageTime: {
+  motivationMessageTime: {
     type: DataTypes.TIME,
     allowNull: false,
     defaultValue: '13:00:00',
     comment: 'Horário preferencial do cliente para receber a mensagem motivacional.',
   },
-   lastMotivationSentDate: {
+  lastMotivationSentDate: {
     type: DataTypes.DATEONLY,
     allowNull: true,
     comment: 'Registra a data do último envio de mensagem motivacional para este cliente.',
   },
-    asaasCustomerId: {
+  asaasCustomerId: {
     type: DataTypes.STRING,
     allowNull: true,
     unique: true,
@@ -198,6 +198,16 @@ const Client = sequelize.define('Client', {
     allowNull: true,
     comment: 'Chave PIX do cliente para receber pagamentos de comissão.',
   },
+  lastLoginAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: 'Data e hora do último login no dashboard web',
+  },
+  lastActiveAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: 'Data e hora da última atividade (WhatsApp ou Web)',
+  },
   // ===============================================
   // === FIM DOS NOVOS CAMPOS PARA AFILIADOS ===
   // ===============================================
@@ -214,39 +224,39 @@ const Client = sequelize.define('Client', {
       attributes: { include: ['passwordHash'] },
     },
     withGoogleTokens: {
-        attributes: { include: ['googleAccessToken', 'googleRefreshToken'] },
+      attributes: { include: ['googleAccessToken', 'googleRefreshToken'] },
     }
   },
   hooks: {
     beforeCreate: async (client) => {
       // Gera o código de afiliado para o novo cliente
-// DENTRO DO beforeCreate:
-if (client.accessLevel && !client.accessExpiresAt) {
-    // CORREÇÃO: Usa um fuso horário consistente para o cálculo
-    const now = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
-    
-    if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
-    else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
-    else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
-        client.accessExpiresAt = null;
-        return;
-    }
-    client.accessExpiresAt = now.toISOString().split('T')[0];
-}
+      // DENTRO DO beforeCreate:
+      if (client.accessLevel && !client.accessExpiresAt) {
+        // CORREÇÃO: Usa um fuso horário consistente para o cálculo
+        const now = new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" }));
 
-// DENTRO DO beforeUpdate:
-if (client.changed('accessLevel')) {
-    // CORREÇÃO: Usa um fuso horário consistente para o cálculo
-    const now = new Date(new Date().toLocaleString("en-US", {timeZone: process.env.TZ || "America/Sao_Paulo"}));
+        if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
+        else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
+        else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
+          client.accessExpiresAt = null;
+          return;
+        }
+        client.accessExpiresAt = now.toISOString().split('T')[0];
+      }
 
-    if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
-    else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
-    else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
-         client.accessExpiresAt = null;
-         return;
-    }
-    client.accessExpiresAt = now.toISOString().split('T')[0];
-}
+      // DENTRO DO beforeUpdate:
+      if (client.changed('accessLevel')) {
+        // CORREÇÃO: Usa um fuso horário consistente para o cálculo
+        const now = new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" }));
+
+        if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
+        else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
+        else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
+          client.accessExpiresAt = null;
+          return;
+        }
+        client.accessExpiresAt = now.toISOString().split('T')[0];
+      }
     },
     beforeUpdate: async (client) => {
       if (client.changed('email') && client.email) client.email = client.email.toLowerCase();
@@ -258,8 +268,8 @@ if (client.changed('accessLevel')) {
         if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
         else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
         else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
-             client.accessExpiresAt = null;
-             return;
+          client.accessExpiresAt = null;
+          return;
         }
         client.accessExpiresAt = now.toISOString().split('T')[0];
       }
@@ -280,7 +290,7 @@ if (client.changed('accessLevel')) {
   ]
 });
 
-Client.prototype.isValidPassword = async function(password) {
+Client.prototype.isValidPassword = async function (password) {
   if (!this.passwordHash) return false;
   return bcrypt.compare(password, this.passwordHash);
 };

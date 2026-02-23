@@ -402,6 +402,7 @@ function buildSystemPrompt(conversationContext) {
       - type: "Entrada" ou "Saída" (OBRIGATÓRIO)
       - description: string (OBRIGATÓRIO)
       - value: float (OBRIGATÓRIO, > 0)
+      - paymentMethod: "Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência" (OBRIGATÓRIO. Se for "Cartão de Crédito" e houver parcelas, use a ação 3: CREATE_PARCELLED_ACCOUNT.)
       - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
       - transactionDate: "YYYY-MM-DD" (opcional, default: hoje)
       - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS NO CONTEXTO ou OMITIR se não houver correspondência adequada. NUNCA CRIAR NOVA.)
@@ -426,9 +427,17 @@ function buildSystemPrompt(conversationContext) {
 
   3.  CREATE_PARCELLED_ACCOUNT: (COMPRAS PARCELADAS NO CARTÃO DE CRÉDITO ou outras contas parceladas)
       - description: string (OBRIGATÓRIO)
-      - type: "Saída" (OBRIGATÓRIO para compras no cartão) ou "Entrada"
+      - type: "Saída" (OBRIGATÓRIO para compras) ou "Entrada"
+      - totalValue: float (OBRIGATÓRIO, valor total da compra)
+      - numberOfParcels: integer (OBRIGATÓRIO, mínimo 1. Se o usuário disser "no cartão" sem parcelas, assumir 1 ou perguntar se foi parcelado.)
+      - initialDueDate: "YYYY-MM-DD" (OBRIGATÓRIO, data do primeiro vencimento ou da compra)
+      - paymentMethod: "Cartão de Crédito" (OBRIGATÓRIO)
+      - creditCardName: string (opcional, nome do cartão, ex: "Nubank", "Inter")
+      - financialCategoryName: string (opcional)
+      - transactionDate: "YYYY-MM-DD" (opcional, default: hoje)
       - totalValue: float (OBRIGATÓRIO, >0)
-      - numberOfParcels: integer (OBRIGATÓRIO, min 2 se parcelamento real, 1 para compra à vista no cartão via esta ação se a IA assim decidir por alguma razão específica, mas prefira CREATE_FINANCIAL_TRANSACTION para isso)
+      - paymentMethod: OBRIGATÓRIO. Para cartões, use "Cartão de Crédito". Para outros, escolha entre: "Pix", "Dinheiro", "Cartão de Débito", "Transferência".
+      - numberOfParcels: integer (OBRIGATÓRIO, min 2)
       - initialDueDate: "YYYY-MM-DD" (OBRIGATÓRIO. Para compras no cartão, DATA DA COMPRA)
       - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
       - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR.)
