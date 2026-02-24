@@ -33,9 +33,9 @@ async function createRecurringRule(financialAccountId, ruleData) {
   try {
     await validateOwningFinancialAccount(financialAccountId, t);
 
-    const requiredFields = ['description', 'type', 'value', 'frequency', 'startDate'];
+    const requiredFields = ['description', 'type', 'value', 'frequency', 'startDate', 'paymentMethod'];
     for (const field of requiredFields) {
-      if (ruleData[field] === undefined || ruleData[field] === null || ruleData[field] === '') {
+      if (ruleData[field] === undefined || ruleData[field] === null || String(ruleData[field]).trim() === '') {
         const error = new Error(`Campo obrigatório "${field}" não fornecido para a regra de recorrência.`);
         error.statusCode = 400; error.status = 'fail'; throw error;
       }
@@ -49,19 +49,19 @@ async function createRecurringRule(financialAccountId, ruleData) {
     // Calcular o primeiro nextDueDate
     const nextDueDate = calculateNextDueDate(ruleData.startDate, ruleData.frequency, ruleData.interval || 1, ruleData.dayOfMonth, ruleData.dayOfWeek);
     if (!nextDueDate) {
-        const error = new Error('Não foi possível calcular a próxima data de vencimento para a recorrência.');
-        error.statusCode = 400; error.status = 'fail'; throw error;
+      const error = new Error('Não foi possível calcular a próxima data de vencimento para a recorrência.');
+      error.statusCode = 400; error.status = 'fail'; throw error;
     }
-    
+
     // Validar se endDate é após startDate, se fornecido
     if (ruleData.endDate && new Date(ruleData.endDate) < new Date(ruleData.startDate)) {
-        const error = new Error('A data final da recorrência não pode ser anterior à data inicial.');
-        error.statusCode = 400; error.status = 'fail'; throw error;
+      const error = new Error('A data final da recorrência não pode ser anterior à data inicial.');
+      error.statusCode = 400; error.status = 'fail'; throw error;
     }
     // Validar se nextDueDate não é após endDate, se endDate existir
     if (ruleData.endDate && new Date(nextDueDate) > new Date(ruleData.endDate)) {
-        const error = new Error('A primeira ocorrência calculada está após a data final da recorrência.');
-        error.statusCode = 400; error.status = 'fail'; throw error;
+      const error = new Error('A primeira ocorrência calculada está após a data final da recorrência.');
+      error.statusCode = 400; error.status = 'fail'; throw error;
     }
 
 
@@ -90,11 +90,11 @@ async function createRecurringRule(financialAccountId, ruleData) {
 async function getAllRecurringRules(financialAccountId, queryParams = {}) {
   try {
     await validateOwningFinancialAccount(financialAccountId);
-    
-    const { 
-        isActive, frequency, type, descriptionSearch, 
-        dateStart, dateEnd, period,
-        sortBy = 'nextDueDate', sortOrder = 'ASC' 
+
+    const {
+      isActive, frequency, type, descriptionSearch,
+      dateStart, dateEnd, period,
+      sortBy = 'nextDueDate', sortOrder = 'ASC'
     } = queryParams;
 
     const whereConditions = { financialAccountId };
@@ -105,34 +105,34 @@ async function getAllRecurringRules(financialAccountId, queryParams = {}) {
 
     if (frequency) whereConditions.frequency = frequency;
     if (type) whereConditions.type = type;
-    
+
     // Filtro por descrição (case-insensitive e parcial)
     if (descriptionSearch) {
-        whereConditions.description = { [Op.iLike]: `%${descriptionSearch}%` };
+      whereConditions.description = { [Op.iLike]: `%${descriptionSearch}%` };
     }
 
     if (period || dateStart || dateEnd) {
-        let finalDateStart = dateStart;
-        let finalDateEnd = dateEnd;
+      let finalDateStart = dateStart;
+      let finalDateEnd = dateEnd;
 
-        if (period) {
-            const now = new Date();
-            const year = now.getFullYear();
-            const month = now.getMonth();
+      if (period) {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth();
 
-            if (period === "este_mes") {
-                finalDateStart = new Date(year, month, 1).toISOString().split('T')[0];
-                finalDateEnd = new Date(year, month + 1, 0).toISOString().split('T')[0];
-            }
+        if (period === "este_mes") {
+          finalDateStart = new Date(year, month, 1).toISOString().split('T')[0];
+          finalDateEnd = new Date(year, month + 1, 0).toISOString().split('T')[0];
         }
+      }
 
-        if (finalDateStart && finalDateEnd) {
-            whereConditions.nextDueDate = { [Op.between]: [finalDateStart, finalDateEnd] };
-        } else if (finalDateStart) {
-            whereConditions.nextDueDate = { [Op.gte]: finalDateStart };
-        } else if (finalDateEnd) {
-            whereConditions.nextDueDate = { [Op.lte]: finalDateEnd };
-        }
+      if (finalDateStart && finalDateEnd) {
+        whereConditions.nextDueDate = { [Op.between]: [finalDateStart, finalDateEnd] };
+      } else if (finalDateStart) {
+        whereConditions.nextDueDate = { [Op.gte]: finalDateStart };
+      } else if (finalDateEnd) {
+        whereConditions.nextDueDate = { [Op.lte]: finalDateEnd };
+      }
     }
 
     const validSortOrders = ['ASC', 'DESC'];
@@ -145,10 +145,10 @@ async function getAllRecurringRules(financialAccountId, queryParams = {}) {
     });
 
     logger.info(`Listadas ${rows.length} de um total de ${count} regras de recorrência para FA ID ${financialAccountId}. Filtros: ${JSON.stringify(whereConditions)}`);
-    
+
     return {
-        rules: rows.map(r => r.toJSON()),
-        totalItems: count
+      rules: rows.map(r => r.toJSON()),
+      totalItems: count
     };
 
   } catch (error) {
@@ -168,23 +168,23 @@ async function getAllRecurringRules(financialAccountId, queryParams = {}) {
 async function getRecurringRuleById(financialAccountId, ruleId, includeGeneratedTransactions = false) { // Adicionado includeGeneratedTransactions
   try {
     await validateOwningFinancialAccount(financialAccountId);
-    
+
     const includeOptions = [
-        { model: FinancialCategory, as: 'category' },
-        { model: FinancialAccount, as: 'financialAccount', attributes: ['id', 'accountName']}
+      { model: FinancialCategory, as: 'category' },
+      { model: FinancialAccount, as: 'financialAccount', attributes: ['id', 'accountName'] }
     ];
 
     if (includeGeneratedTransactions) {
-        includeOptions.push({
-            model: FinancialTransaction,
-            as: 'generatedTransactions',
-            attributes: ['id', 'description', 'value', 'type', 'transactionDate', 'dueDate', 'isPaidOrReceived', 'paymentDate'], // Campos relevantes
-            order: [['dueDate', 'DESC']], // Mais recentes primeiro
-            limit: 50, // Limitar para não sobrecarregar, se necessário
-            separate: true // Opcional: para queries mais eficientes com hasMany e limit
-        });
+      includeOptions.push({
+        model: FinancialTransaction,
+        as: 'generatedTransactions',
+        attributes: ['id', 'description', 'value', 'type', 'transactionDate', 'dueDate', 'isPaidOrReceived', 'paymentDate'], // Campos relevantes
+        order: [['dueDate', 'DESC']], // Mais recentes primeiro
+        limit: 50, // Limitar para não sobrecarregar, se necessário
+        separate: true // Opcional: para queries mais eficientes com hasMany e limit
+      });
     }
-    
+
     const rule = await RecurringTransactionRule.findOne({
       where: { id: ruleId, financialAccountId },
       include: includeOptions
@@ -226,14 +226,14 @@ async function updateRecurringRule(financialAccountId, ruleId, updateData) {
     // Se campos que afetam nextDueDate forem alterados (startDate, frequency, interval, dayOfMonth, dayOfWeek), recalcular.
     // É mais simples recalcular sempre que houver uma alteração nesses campos.
     const dateFieldsChanged = ['startDate', 'frequency', 'interval', 'dayOfMonth', 'dayOfWeek'].some(field => updateData.hasOwnProperty(field));
-    
+
     // Construir os dados para o cálculo do nextDueDate, usando valores atualizados ou os existentes na regra
     const nextDueDateCalcData = {
-        startDate: updateData.startDate || rule.startDate,
-        frequency: updateData.frequency || rule.frequency,
-        interval: updateData.interval !== undefined ? updateData.interval : rule.interval,
-        dayOfMonth: updateData.dayOfMonth !== undefined ? updateData.dayOfMonth : rule.dayOfMonth,
-        dayOfWeek: updateData.dayOfWeek !== undefined ? updateData.dayOfWeek : rule.dayOfWeek,
+      startDate: updateData.startDate || rule.startDate,
+      frequency: updateData.frequency || rule.frequency,
+      interval: updateData.interval !== undefined ? updateData.interval : rule.interval,
+      dayOfMonth: updateData.dayOfMonth !== undefined ? updateData.dayOfMonth : rule.dayOfMonth,
+      dayOfWeek: updateData.dayOfWeek !== undefined ? updateData.dayOfWeek : rule.dayOfWeek,
     };
     const endDateForCalc = updateData.endDate !== undefined ? updateData.endDate : rule.endDate;
 
@@ -253,23 +253,23 @@ async function updateRecurringRule(financialAccountId, ruleId, updateData) {
       }
       // Validar se newNextDueDate não é após endDate, se endDate existir
       if (endDateForCalc && new Date(newNextDueDate) > new Date(endDateForCalc)) {
-          if (rule.isActive || (updateData.hasOwnProperty('isActive') && updateData.isActive === true) ) {
-            const error = new Error('A próxima ocorrência calculada com os novos dados está após a data final da recorrência. Considere desativar a regra ou ajustar as datas.');
-            error.statusCode = 400; error.status = 'fail'; throw error;
-          } else {
-            // Se a regra está sendo desativada, podemos permitir que nextDueDate ultrapasse endDate
-            logger.warn(`Próxima data de vencimento ${newNextDueDate} ultrapassa data final ${endDateForCalc}, mas a regra está inativa ou sendo desativada.`);
-          }
+        if (rule.isActive || (updateData.hasOwnProperty('isActive') && updateData.isActive === true)) {
+          const error = new Error('A próxima ocorrência calculada com os novos dados está após a data final da recorrência. Considere desativar a regra ou ajustar as datas.');
+          error.statusCode = 400; error.status = 'fail'; throw error;
+        } else {
+          // Se a regra está sendo desativada, podemos permitir que nextDueDate ultrapasse endDate
+          logger.warn(`Próxima data de vencimento ${newNextDueDate} ultrapassa data final ${endDateForCalc}, mas a regra está inativa ou sendo desativada.`);
+        }
       }
       updateData.nextDueDate = newNextDueDate;
     }
-    
+
     // Validar endDate vs startDate
     const finalStartDate = updateData.startDate || rule.startDate;
     const finalEndDate = updateData.endDate !== undefined ? updateData.endDate : rule.endDate;
-    if(finalEndDate && new Date(finalEndDate) < new Date(finalStartDate)){
-        const error = new Error('A data final da recorrência não pode ser anterior à data inicial.');
-        error.statusCode = 400; error.status = 'fail'; throw error;
+    if (finalEndDate && new Date(finalEndDate) < new Date(finalStartDate)) {
+      const error = new Error('A data final da recorrência não pode ser anterior à data inicial.');
+      error.statusCode = 400; error.status = 'fail'; throw error;
     }
 
 
@@ -280,10 +280,10 @@ async function updateRecurringRule(financialAccountId, ruleId, updateData) {
     await t.commit();
     logger.info(`Regra de recorrência ID ${ruleId} ("${rule.description}") atualizada para FinancialAccount ID ${financialAccountId}.`);
     return rule.reload({
-        include: [
-            { model: FinancialCategory, as: 'category' },
-            { model: FinancialAccount, as: 'financialAccount', attributes: ['id', 'accountName']}
-        ]
+      include: [
+        { model: FinancialCategory, as: 'category' },
+        { model: FinancialAccount, as: 'financialAccount', attributes: ['id', 'accountName'] }
+      ]
     }).then(r => r.toJSON());
   } catch (error) {
     await t.rollback();
@@ -342,40 +342,40 @@ async function getRecurringRuleHistory(financialAccountId, ruleId, queryParams =
     await validateOwningFinancialAccount(financialAccountId);
     const rule = await RecurringTransactionRule.findOne({ where: { id: ruleId, financialAccountId } });
     if (!rule) {
-        const error = new Error('Regra de recorrência não encontrada ou não pertence à conta financeira.');
-        error.statusCode = 404; error.status = 'fail'; throw error;
+      const error = new Error('Regra de recorrência não encontrada ou não pertence à conta financeira.');
+      error.statusCode = 404; error.status = 'fail'; throw error;
     }
 
     const { page = 1, limit = 10, sortBy = 'dueDate', sortOrder = 'DESC' } = queryParams;
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
 
     const whereConditions = {
-        financialAccountId,
-        recurringTransactionRuleId: ruleId
+      financialAccountId,
+      recurringTransactionRuleId: ruleId
     };
-    
+
     const validSortOrders = ['ASC', 'DESC'];
     const order = [[sortBy, validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC']];
 
     const { count, rows } = await FinancialTransaction.findAndCountAll({
-        where: whereConditions,
-        include: [
-            { model: FinancialCategory, as: 'category', attributes: ['id', 'name'] },
-            // Não precisa incluir a regra de novo, pois já temos o ruleId
-        ],
-        limit: parseInt(limit, 10),
-        offset: offset,
-        order: order,
-        distinct: true,
+      where: whereConditions,
+      include: [
+        { model: FinancialCategory, as: 'category', attributes: ['id', 'name'] },
+        // Não precisa incluir a regra de novo, pois já temos o ruleId
+      ],
+      limit: parseInt(limit, 10),
+      offset: offset,
+      order: order,
+      distinct: true,
     });
 
     logger.info(`Listado histórico de ${rows.length} transações para Regra de Recorrência ID ${ruleId} (Total: ${count}).`);
     return {
-        ruleDescription: rule.description, // Adiciona a descrição da regra para contexto
-        totalItems: count,
-        totalPages: Math.ceil(count / parseInt(limit, 10)),
-        currentPage: parseInt(page, 10),
-        transactions: rows.map(t => t.toJSON()),
+      ruleDescription: rule.description, // Adiciona a descrição da regra para contexto
+      totalItems: count,
+      totalPages: Math.ceil(count / parseInt(limit, 10)),
+      currentPage: parseInt(page, 10),
+      transactions: rows.map(t => t.toJSON()),
     };
 
   } catch (error) {

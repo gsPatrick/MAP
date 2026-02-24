@@ -99,7 +99,7 @@ async function processRecurringTransactions() {
             isPayableOrReceivable: currentRule.isPayableOrReceivable,
             dueDate: currentRule.nextDueDate,
             isPaidOrReceived: false,
-            paymentMethod: currentRule.paymentMethod,
+            paymentMethod: currentRule.paymentMethod || 'Pix',
             notes: `Gerado automaticamente: ${currentRule.notes || ''} (Regra ID ${currentRule.id})`,
             recurringTransactionRuleId: currentRule.id,
           }, { transaction: ruleProcessingTransaction });

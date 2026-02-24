@@ -345,6 +345,18 @@ function buildSystemPrompt(conversationContext) {
           🗓️ *Data:* Para qual dia você agendou? (ex: "amanhã", "25/12")
           ⏰ *Horário:* E qual o horário? (ex: "às 15h", "16:30")
           \`\`\`
+      *   **ESTRUTURA OBRIGATÓRIA PARA FORMA DE PAGAMENTO (LAYOUT MASSA):**
+          Quando faltar apenas a forma de pagamento, use este layout exato na \`clarification_question\`:
+          "Opa, [NOME]! 🚀 Quase lá! Só preciso saber como foi feito o pagamento:
+
+          💸 *Formas aceitas:*
+          • 💎 Pix
+          • 💵 Dinheiro
+          • 💳 Cartão de Crédito
+          • 💳 Cartão de Débito
+          • 🏦 Transferência
+
+          Qual dessas opções você utilizou? 😉"
 
   **3. CHAMADA PARA AÇÃO AMIGÁVEL:** Termine com uma frase que incentiva o usuário a fornecer as informações de forma natural.
       *   *Exemplo:* "Pode me passar essas informações? Assim, eu já deixo tudo certinho aqui! 😉"
@@ -431,19 +443,12 @@ function buildSystemPrompt(conversationContext) {
       - totalValue: float (OBRIGATÓRIO, valor total da compra)
       - numberOfParcels: integer (OBRIGATÓRIO, mínimo 1. Se o usuário disser "no cartão" sem parcelas, assumir 1 ou perguntar se foi parcelado.)
       - initialDueDate: "YYYY-MM-DD" (OBRIGATÓRIO, data do primeiro vencimento ou da compra)
-      - paymentMethod: "Cartão de Crédito" (OBRIGATÓRIO)
-      - creditCardName: string (opcional, nome do cartão, ex: "Nubank", "Inter")
-      - financialCategoryName: string (opcional)
-      - transactionDate: "YYYY-MM-DD" (opcional, default: hoje)
-      - totalValue: float (OBRIGATÓRIO, >0)
-      - paymentMethod: OBRIGATÓRIO. Para cartões, use "Cartão de Crédito". Para outros, escolha entre: "Pix", "Dinheiro", "Cartão de Débito", "Transferência".
-      - numberOfParcels: integer (OBRIGATÓRIO, min 2)
-      - initialDueDate: "YYYY-MM-DD" (OBRIGATÓRIO. Para compras no cartão, DATA DA COMPRA)
-      - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
-      - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR.)
+      - paymentMethod: "Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência" (OBRIGATÓRIO. Para cartões, use "Cartão de Crédito".)
       - creditCardName: string (OBRIGATÓRIO se COMPRA PARCELADA NO CARTÃO. Se faltar, perguntar: "Entendi a compra parcelada de '[DESCRIÇÃO DA COMPRA]', ${clientNameForPrompt}! Só preciso saber em qual cartão você parcelou. Por exemplo, 'parcelei no Nubank'.")
-      - notes: string (opcional)
+      - financialCategoryName: string (opcional)
       - transactionDate: "YYYY-MM-DD" (opcional, default: hoje. DATA DA COMPRA ORIGINAL)
+      - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
+      - notes: string (opcional)
 
   4.  UPDATE_FINANCIAL_TRANSACTION: (Editar transação existente)
       - transactionIdToUpdate: integer (OBRIGATÓRIO, inferido do contexto de edição)
@@ -490,6 +495,7 @@ function buildSystemPrompt(conversationContext) {
       - description: string (OBRIGATÓRIO)
       - type: "Saída" ou "Entrada" (OBRIGATÓRIO)
       - value: float (OBRIGATÓRIO, >0)
+      - paymentMethod: "Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência" (OBRIGATÓRIO)
       - frequency: "daily", "weekly", "bi-weekly", "monthly", "quarterly", "semi-annually", "annually" (OBRIGATÓRIO)
       - startDate: "YYYY-MM-DD" (OBRIGATÓRIO. Data da primeira ocorrência ou de início da regra)
       - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
@@ -887,6 +893,7 @@ function buildSystemPrompt(conversationContext) {
     80. RECORD_SALE (SÓ PARA CONTAS PJ/MEI): (Ação principal para vendas de produtos)
       - productNameOrCode: string (OBRIGATÓRIO)
       - quantitySold: integer (OBRIGATÓRIO, >0)
+      - paymentMethod: "Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência" (OBRIGATÓRIO)
       - saleDate: "YYYY-MM-DD" (opcional, default: hoje)
       - notes: string (opcional)
 
@@ -896,9 +903,10 @@ function buildSystemPrompt(conversationContext) {
   Siga esta ordem de prioridade para decidir o que fazer. Esta é a regra mais importante para sua lógica de decisão.
 
   **1. REGRA MÁXIMA - MODO COPILOTO:**
-    - Se a intenção do usuário é clara para uma ação que exige parâmetros (como \`CREATE_FINANCIAL_TRANSACTION\`, \`SCHEDULE_APPOINTMENT\`, etc.), mas faltam dados **OBRIGATÓRIOS** (como valor, descrição, data/hora), sua **PRIMEIRA E ÚNICA** ação deve ser usar o **MODO COPILOTO**.
+    - Se a intenção do usuário é clara para uma ação que exige parâmetros (como \`CREATE_FINANCIAL_TRANSACTION\`, \`CREATE_PARCELLED_ACCOUNT\`, \`RECORD_SALE\`, etc.), mas faltam dados **OBRIGATÓRIOS** (como valor, descrição, data/hora ou **forma de pagamento**), sua **PRIMEIRA E ÚNICA** ação deve ser usar o **MODO COPILOTO**.
+    - **NUNCA TENTE ADIVINHAR** a forma de pagamento. Se o usuário não disse explicitamente "no pix", "em dinheiro", "no cartão", etc., você **DEVE** perguntar usando o Modo Copiloto.
     - Retorne um objeto JSON com o array \`detected_actions\` **VAZIO** e preencha \`clarifications_needed\` seguindo o padrão visual definido na seção "ESTRATÉGIA DE COLETA DE DADOS".
-    - **NÃO PROSSIGA PARA OS PRÓXIMOS PASSOS SE ESTA CONDIÇÃO FOR VERDADEIRA.**
+    - **NÃO PROSSIGA PARA OS PRÓXIMOS PASSOS SE ESTA CONDIÇÃO FOR VERDADEIRA.** (Exceto se for uma pergunta do Modo Instrutor).
 
   **2. MODO INSTRUTOR:**
     - Se a condição 1 não se aplica e o usuário pergunta explicitamente **COMO** usar o sistema (ex: "como lanço uma despesa?"), ative o Modo Instrutor e responda com a ação \`GENERAL_QUESTION_OR_HELP\`.

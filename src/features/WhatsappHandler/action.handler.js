@@ -188,6 +188,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         description: params.description,
                         type: params.type,
                         value: parseFloat(params.value),
+                        paymentMethod: params.paymentMethod || 'Pix', // Fallback defensivo
                         transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0],
                         financialCategoryId: categoryId,
                         creditCardId: cardId,
@@ -196,8 +197,11 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         dueDate: cardId ? null : params.dueDate,
                         isPaidOrReceived: params.isPaidOrReceived !== undefined ? params.isPaidOrReceived : (cardId ? true : (!params.dueDate))
                     };
-                    if (!txData.description || !txData.type || isNaN(txData.value) || txData.value <= 0) {
-                        throw { statusCode: 400, message: "Dados obrigatórios (descrição, tipo, valor) ausentes ou inválidos para criar transação." };
+
+                    logger.info(`[ACTION HANDLER] Preparando criação de transação: ${txData.description}, Valor: ${txData.value}, Método: ${txData.paymentMethod}, Conta: ${effectiveAccountId}`);
+
+                    if (!txData.description || !txData.type || isNaN(txData.value) || txData.value <= 0 || !txData.paymentMethod) {
+                        throw { statusCode: 400, message: "Dados obrigatórios (descrição, tipo, valor, forma de pagamento) ausentes ou inválidos para criar transação." };
                     }
 
                     const newTx = await financialService.createTransaction(effectiveAccountId, txData, actorId);
@@ -258,6 +262,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         description: transactionDescription,
                         type: 'Entrada',
                         value: totalSaleValue,
+                        paymentMethod: params.paymentMethod || 'Pix', // Vendas via WhatsApp costumam ser Pix/Dinheiro
                         transactionDate: saleDate || new Date().toISOString().split('T')[0],
                         isPaidOrReceived: true, // Vendas diretas são consideradas recebidas
                         notes: notes,
@@ -312,6 +317,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         description: saleDescription,
                         type: 'Entrada',
                         value: totalValue,
+                        paymentMethod: params.paymentMethod || 'Pix',
                         transactionDate: transactionDate || new Date().toISOString().split('T')[0],
                         isPayableOrReceivable: false,
                         isPaidOrReceived: true,
@@ -426,7 +432,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0],
                         null,
                         null,
-                        actorId
+                        actorId,
+                        params.paymentMethod || 'Pix'
                     );
 
                     formattedData = `🎉 A fatura aberta do cartão "${cardNameToSettle}" foi liquidada com sucesso! ` +
@@ -515,12 +522,15 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         type: params.type || "Saída",
                         totalValue: parseFloat(params.totalValue || params.value),
                         numberOfParcels: parseInt(params.numberOfParcels),
+                        paymentMethod: params.paymentMethod || (cardId ? "Cartão de Crédito" : "Pix"), // Fallback defensivo
                         initialDueDate: params.initialDueDate,
                         financialCategoryId: categoryId,
                         creditCardId: cardId,
                         notes: params.notes,
                         transactionDate: params.transactionDate || params.initialDueDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0]
                     };
+
+                    logger.info(`[ACTION HANDLER] Preparando criação de conta parcelada: ${parcelData.description}, Valor Total: ${parcelData.totalValue}, Método: ${parcelData.paymentMethod}, Parcelas: ${parcelData.numberOfParcels}`);
 
                     if (!parcelData.description || !parcelData.type || isNaN(parcelData.totalValue) || parcelData.totalValue <= 0 || isNaN(parcelData.numberOfParcels) || parcelData.numberOfParcels < 1 || !parcelData.initialDueDate) {
                         throw { statusCode: 400, message: "Dados insuficientes ou inválidos para compra parcelada (descrição, tipo, valor total, nº parcelas, data 1ª parcela)." };
@@ -567,6 +577,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         description: params.description,
                         type: params.type,
                         value: parseFloat(params.value),
+                        paymentMethod: params.paymentMethod, // <<< ADICIONADO
                         frequency: params.frequency,
                         startDate: params.startDate,
                         interval: params.interval ? parseInt(params.interval) : 1,
@@ -1485,6 +1496,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (params.hasOwnProperty('notes')) updateDataTx.notes = params.notes;
                     if (params.hasOwnProperty('dueDate')) updateDataTx.dueDate = params.dueDate; else if (params.hasOwnProperty('dueDate') && params.dueDate === null) updateDataTx.dueDate = null;
                     if (params.hasOwnProperty('isPaidOrReceived')) updateDataTx.isPaidOrReceived = params.isPaidOrReceived;
+                    if (params.hasOwnProperty('paymentMethod')) updateDataTx.paymentMethod = params.paymentMethod;
 
                     if (params.financialCategoryName) {
                         const categoryObject = await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId);
@@ -1625,6 +1637,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (params.hasOwnProperty('autoCreateTransaction')) updateDataRule.autoCreateTransaction = params.autoCreateTransaction;
                     if (params.hasOwnProperty('isActive')) updateDataRule.isActive = params.isActive;
                     if (params.hasOwnProperty('notes')) updateDataRule.notes = params.notes;
+                    if (params.hasOwnProperty('paymentMethod')) updateDataRule.paymentMethod = params.paymentMethod;
 
                     if (params.financialCategoryName) {
                         const categoryObjectForRule = await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId);
@@ -1725,6 +1738,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const newParcelData = {
                         description: params.newDescription, type: params.newType || 'Saída', totalValue: parseFloat(params.newTotalValue),
                         numberOfParcels: parseInt(params.newNumberOfParcels), initialDueDate: params.newInitialDueDate,
+                        paymentMethod: params.newPaymentMethod || (newCardIdParcel ? "Cartão de Crédito" : "Pix"),
                         financialCategoryId: newCatIdParcel, creditCardId: newCardIdParcel, notes: params.newNotes,
                         transactionDate: params.newTransactionDate || params.newInitialDueDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0]
                     };
