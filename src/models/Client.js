@@ -198,6 +198,18 @@ const Client = sequelize.define('Client', {
     allowNull: true,
     comment: 'Chave PIX do cliente para receber pagamentos de comissão.',
   },
+  affiliateLinkClicks: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    comment: 'Número de cliques no link de afiliado.',
+  },
+  affiliateSlug: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+    unique: true,
+    comment: 'Slug personalizado para o link de afiliado.',
+  },
   lastLoginAt: {
     type: DataTypes.DATE,
     allowNull: true,
@@ -286,6 +298,7 @@ const Client = sequelize.define('Client', {
     { fields: ['wantsMotivationMessage'] },
     { fields: ['asaasCustomerId'], unique: true, where: { asaasCustomerId: { [Op.ne]: null } } },
     { fields: ['affiliateCode'], unique: true, where: { affiliateCode: { [Op.ne]: null } } },
+    { fields: ['affiliateSlug'], unique: true, where: { affiliateSlug: { [Op.ne]: null } } },
     { fields: ['referredByClientId'] },
   ]
 });

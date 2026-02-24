@@ -7,7 +7,16 @@ const router = Router();
 // Rota para o cliente logado buscar seu próprio dashboard de afiliado
 router.get('/dashboard', affiliateController.getAffiliateDashboard);
 
-// <<< NOVA ROTA PARA O HISTÓRICO DE INDICAÇÕES >>>
+// Rota para o histórico de indicações
 router.get('/referrals', affiliateController.getAffiliateReferrals);
+
+// Rota para o ranking de afiliados
+router.get('/ranking', affiliateController.getRanking);
+
+// Rota para atualizar o slug personalizado
+router.put('/update-slug', affiliateController.updateSlug);
+
+// Rota PÚBLICA para registrar cliques (pode ser chamada sem auth)
+router.post('/click/:identifier', affiliateController.trackClick);
 
 module.exports = router;

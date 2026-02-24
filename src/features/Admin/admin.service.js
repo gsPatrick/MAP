@@ -353,7 +353,7 @@ async function getAffiliatesDashboard() {
           { id: { [Op.in]: sequelize.literal(`(SELECT DISTINCT "referredByClientId" FROM "clients" WHERE "referredByClientId" IS NOT NULL)`) } }
         ]
       },
-      attributes: ['id', 'name', 'email', 'phone', 'balance', 'affiliateCode'],
+      attributes: ['id', 'name', 'email', 'phone', 'balance', 'affiliateCode', 'affiliateSlug', 'affiliateLinkClicks'],
       order: [['name', 'ASC']],
     });
 
@@ -411,11 +411,21 @@ async function getAffiliatesDashboard() {
         });
       });
 
+      const activeReferralsCount = myReferrals.filter(ref =>
+        ref.subscriptions.some(sub => sub.status === 'Ativa')
+      ).length;
+
+      const totalClicks = affiliate.affiliateLinkClicks || 0;
+      const conversionRate = totalClicks > 0 ? ((myReferrals.length / totalClicks) * 100).toFixed(2) : 0;
+
       return {
         ...affiliate.toJSON(),
         totalReferrals: myReferrals.length,
-        totalEarned: totalEarnedHistorically, // <<< CÁLCULO CORRIGIDO
-        referrals: detailedReferrals.sort((a, b) => b.commissionAmount - a.commissionAmount), // Ordena por quem deu mais comissão
+        activeReferrals: activeReferralsCount,
+        totalEarned: totalEarnedHistorically,
+        totalClicks,
+        conversionRate: parseFloat(conversionRate),
+        referrals: detailedReferrals.sort((a, b) => b.commissionAmount - a.commissionAmount),
       };
     });
 

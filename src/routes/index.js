@@ -33,7 +33,7 @@ const availabilityRoutes = require('../features/Availability/availability.routes
 const publicBookingRoutes = require('../features/PublicBooking/publicBooking.routes');
 const financialController = require('../features/Financial/financial.controller');
 const affiliateRoutes = require('../features/Affiliate/affiliate.routes');
-const systemSupportBotRoutes = require ('../features/SystemSupportBot/systemSupportBot.routes')
+const systemSupportBotRoutes = require('../features/SystemSupportBot/systemSupportBot.routes')
 const checklistRoutes = require('../features/Checklist/checklist.routes');
 const { publicMercadoPagoRouter, privateMercadoPagoRouter } = require('../features/MercadoPago/mercadoPago.routes');
 const subscriptionRouter = require('../features/Subscription/subscription.routes'); // <<< IMPORTE A NOVA ROTA
@@ -58,6 +58,7 @@ mainApiRouter.use('/public/booking', publicBookingRoutes);
 mainApiRouter.use('/system-support-bot', systemSupportBotRoutes);
 mainApiRouter.use('/mercado-pago', publicMercadoPagoRouter); // APENAS o Webhook
 mainApiRouter.use('/subscriptions', subscriptionRouter); // <<< USE A NOVA ROTA AQUI
+mainApiRouter.use('/affiliates', affiliateRoutes); // Rota base para afiliados (a rota POST /click/ é pública internamente)
 // --- ROTAS DE ADMINISTRAÇÃO DO SISTEMA ---
 mainApiRouter.use('/users', userRoutes);
 mainApiRouter.use('/clients', clientRoutes);
@@ -70,6 +71,7 @@ mainApiRouter.use('/availability', availabilityRoutes);
 // --- ROTAS PRIVADAS PARA CLIENTES LOGADOS (requerem token, mas não um financialAccountId na URL) ---
 mainApiRouter.use('/shared-access', authenticateClientToken, sharedAccessRoutes);
 mainApiRouter.use('/hydration', authenticateClientToken, hydrationRoutes);
+// A rota /affiliate para o dashboard do cliente logado continua protegida
 mainApiRouter.use('/affiliate', authenticateClientToken, affiliateRoutes);
 mainApiRouter.use('/mercado-pago', privateMercadoPagoRouter); // CRIAR PAGAMENTO
 mainApiRouter.use('/services', authenticateClientToken, serviceRoutes);
@@ -101,7 +103,7 @@ async function authorizeFinancialAccountOwnership(req, res, next) {
             logger.warn(`[AUTH OWNERSHIP] Cliente ${clientForAuth.id} tentou acessar FA ${financialAccountIdFromParams} INATIVA.`);
             return res.status(403).json({ status: 'fail', message: 'Esta conta financeira está inativa.' });
         }
-        
+
         if (req.sharedAccessContext) {
             const { canAccessPersonalProfile, canAccessBusinessProfileId } = req.sharedAccessContext;
             let isAllowedForShared = false;
@@ -115,7 +117,7 @@ async function authorizeFinancialAccountOwnership(req, res, next) {
                 return res.status(403).json({ status: 'fail', message: 'Acesso compartilhado negado para este perfil financeiro específico.' });
             }
         }
-        
+
         req.financialAccount = financialAccount.toJSON();
         next();
     } catch (error) {

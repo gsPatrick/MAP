@@ -11,7 +11,6 @@ async function getAffiliateDashboard(req, res, next) {
     }
 }
 
-// <<< NOVO CONTROLLER PARA O HISTÓRICO DE INDICAÇÕES >>>
 async function getAffiliateReferrals(req, res, next) {
     try {
         const affiliateClientId = req.client.id;
@@ -22,7 +21,40 @@ async function getAffiliateReferrals(req, res, next) {
     }
 }
 
+async function trackClick(req, res, next) {
+    try {
+        const { identifier } = req.params;
+        await affiliateService.trackClick(identifier);
+        res.status(200).json({ status: 'success', message: 'Clique registrado.' });
+    } catch (error) {
+        next(error);
+    }
+}
+
+async function getRanking(req, res, next) {
+    try {
+        const ranking = await affiliateService.getAffiliateRanking();
+        res.status(200).json({ status: 'success', data: ranking });
+    } catch (error) {
+        next(error);
+    }
+}
+
+async function updateSlug(req, res, next) {
+    try {
+        const clientId = req.client.id;
+        const { slug } = req.body;
+        await affiliateService.updateAffiliateSlug(clientId, slug);
+        res.status(200).json({ status: 'success', message: 'Link personalizado atualizado com sucesso.' });
+    } catch (error) {
+        next(error);
+    }
+}
+
 module.exports = {
     getAffiliateDashboard,
-    getAffiliateReferrals, // <<< EXPORTAR NOVO CONTROLLER
+    getAffiliateReferrals,
+    trackClick,
+    getRanking,
+    updateSlug
 };
