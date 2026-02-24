@@ -37,6 +37,7 @@ const systemSupportBotRoutes = require('../features/SystemSupportBot/systemSuppo
 const checklistRoutes = require('../features/Checklist/checklist.routes');
 const { publicMercadoPagoRouter, privateMercadoPagoRouter } = require('../features/MercadoPago/mercadoPago.routes');
 const subscriptionRouter = require('../features/Subscription/subscription.routes'); // <<< IMPORTE A NOVA ROTA
+const supportRoutes = require('../features/Support/support.routes');
 
 const mainApiRouter = Router();
 
@@ -59,6 +60,7 @@ mainApiRouter.use('/system-support-bot', systemSupportBotRoutes);
 mainApiRouter.use('/mercado-pago', publicMercadoPagoRouter); // APENAS o Webhook
 mainApiRouter.use('/subscriptions', subscriptionRouter); // <<< USE A NOVA ROTA AQUI
 mainApiRouter.use('/affiliates', affiliateRoutes); // Rota base para afiliados (a rota POST /click/ é pública internamente)
+mainApiRouter.use('/support', supportRoutes);
 // --- ROTAS DE ADMINISTRAÇÃO DO SISTEMA ---
 mainApiRouter.use('/users', userRoutes);
 mainApiRouter.use('/clients', clientRoutes);

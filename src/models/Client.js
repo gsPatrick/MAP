@@ -314,6 +314,7 @@ Client.associate = (models) => {
   Client.hasMany(models.Subscription, { foreignKey: 'clientId', as: 'subscriptions', onDelete: 'CASCADE' });
   Client.hasMany(models.SharedAccess, { foreignKey: 'ownerClientId', as: 'ownedSharedAccesses', onDelete: 'CASCADE' });
   Client.hasMany(models.SharedAccess, { foreignKey: 'sharedWithClientId', as: 'receivedSharedAccesses', onDelete: 'CASCADE' });
+  Client.hasMany(models.SupportTicket, { foreignKey: 'clientId', as: 'supportTickets', onDelete: 'CASCADE' });
   Client.belongsTo(models.Client, { as: 'referrer', foreignKey: 'referredByClientId' });
   Client.hasMany(models.Client, { as: 'referrals', foreignKey: 'referredByClientId' });
 
