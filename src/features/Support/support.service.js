@@ -1,5 +1,5 @@
 // d:/daniatualagrvai/MAP/src/features/Support/support.service.js
-const { SupportTicket, Client } = require('../../models');
+const { SupportTicket, Client } = require('../../database');
 const { Op } = require('sequelize');
 
 class SupportService {
