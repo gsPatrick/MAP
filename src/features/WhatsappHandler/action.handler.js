@@ -205,8 +205,9 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     if (!txData.paymentMethod) {
+                        const { cards } = await creditCardService.getAllCreditCards(effectiveAccountId, { isActive: true });
                         return {
-                            formattedData: formatter.getPaymentMethodClarificationMessage(clientNameToUse)
+                            formattedData: formatter.getPaymentMethodClarificationMessage(clientNameToUse, cards)
                         };
                     }
 
@@ -543,8 +544,9 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     if (!parcelData.paymentMethod) {
+                        const { cards } = await creditCardService.getAllCreditCards(effectiveAccountId, { isActive: true });
                         return {
-                            formattedData: formatter.getPaymentMethodClarificationMessage(clientName)
+                            formattedData: formatter.getPaymentMethodClarificationMessage(clientNameToUse, cards)
                         };
                     }
                     if (!params.transactionDate && params.initialDueDate) {
@@ -600,6 +602,12 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         financialCategoryId: categoryIdRule,
                         notes: params.notes
                     };
+                    if (!ruleData.paymentMethod) {
+                        const { cards } = await creditCardService.getAllCreditCards(effectiveAccountId, { isActive: true });
+                        return {
+                            formattedData: formatter.getPaymentMethodClarificationMessage(clientNameToUse, cards)
+                        };
+                    }
 
                     if (!ruleData.description || !ruleData.type || isNaN(ruleData.value) || ruleData.value <= 0 || !ruleData.frequency || !ruleData.startDate) {
                         throw { statusCode: 400, message: "Dados insuficientes para criar regra recorrente (desc, tipo, valor, frequência, data início)." };

@@ -7,7 +7,7 @@ class SupportController {
      */
     async createTicket(req, res) {
         try {
-            const clientId = req.user.id;
+            const clientId = req.client.id;
             const ticket = await supportService.createTicket(clientId, req.body);
             return res.status(201).json({
                 status: 'success',
@@ -27,7 +27,7 @@ class SupportController {
      */
     async listMyTickets(req, res) {
         try {
-            const clientId = req.user.id;
+            const clientId = req.client.id;
             const tickets = await supportService.listClientTickets(clientId);
             return res.status(200).json({
                 status: 'success',

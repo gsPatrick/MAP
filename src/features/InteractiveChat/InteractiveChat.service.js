@@ -38,17 +38,21 @@ function formatCurrency(value) {
     return `R$${parseFloat(value).toFixed(2).replace('.', ',')}`;
 }
 
-function getPaymentMethodClarificationMessage(clientName) {
-    return `Opa, ${clientName}! 🚀 Quase lá! Só preciso saber como foi feito o pagamento:
+function getPaymentMethodClarificationMessage(clientName, cards = []) {
+    let message = `Opa, ${clientName}! 🚀 Quase lá! Só preciso saber como foi feito o pagamento:\n\n`;
+    message += `💸 *Formas aceitas:*\n`;
+    message += `• 💎 Pix\n`;
+    message += `• 💵 Dinheiro\n`;
 
-💸 *Formas aceitas:*
-• 💎 Pix
-• 💵 Dinheiro
-• 💳 Cartão de Crédito
-• 💳 Cartão de Débito
-• 🏦 Transferência
+    if (cards && cards.length > 0) {
+        message += `• 💳 Cartão de Crédito:\n`;
+        cards.forEach((card, index) => {
+            message += `  ${index + 1} - ${card.name}\n`;
+        });
+    }
 
-Qual dessas opções você utilizou? 😉`;
+    message += `\nQual dessas opções você utilizou? 😉`;
+    return message;
 }
 function formatPlatformLink(customText = "") {
     const platformUrl = process.env.REACT_APP_BASE_URL || 'map-nocontrole.com.br';
@@ -414,7 +418,8 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
                         };
 
                         if (!txData.paymentMethod) {
-                            aiMessageIntro = getPaymentMethodClarificationMessage(state.clientName);
+                            const { cards } = await creditCardService.getAllCreditCards(state.activeFinancialAccountId, { isActive: true });
+                            aiMessageIntro = getPaymentMethodClarificationMessage(state.clientName, cards);
                             currentActionFormattedData = "";
                             break;
                         }
@@ -532,7 +537,8 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
                         };
 
                         if (!parcelData.paymentMethod) {
-                            aiMessageIntro = getPaymentMethodClarificationMessage(state.clientName);
+                            const { cards } = await creditCardService.getAllCreditCards(state.activeFinancialAccountId, { isActive: true });
+                            aiMessageIntro = getPaymentMethodClarificationMessage(state.clientName, cards);
                             currentActionFormattedData = "";
                             break;
                         }
@@ -594,7 +600,8 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
                         };
 
                         if (!newParcelData.paymentMethod) {
-                            aiMessageIntro = getPaymentMethodClarificationMessage(state.clientName);
+                            const { cards } = await creditCardService.getAllCreditCards(state.activeFinancialAccountId, { isActive: true });
+                            aiMessageIntro = getPaymentMethodClarificationMessage(state.clientName, cards);
                             currentActionFormattedData = "";
                             break;
                         }
@@ -643,7 +650,8 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
                         };
 
                         if (!ruleData.paymentMethod) {
-                            aiMessageIntro = getPaymentMethodClarificationMessage(state.clientName);
+                            const { cards } = await creditCardService.getAllCreditCards(state.activeFinancialAccountId, { isActive: true });
+                            aiMessageIntro = getPaymentMethodClarificationMessage(state.clientName, cards);
                             currentActionFormattedData = "";
                             break;
                         }

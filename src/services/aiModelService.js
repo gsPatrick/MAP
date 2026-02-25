@@ -383,6 +383,11 @@ function buildSystemPrompt(conversationContext) {
 
   *   **REGRA 3: Criar Pausa ou Bloqueio (break):** Se o usuário disser "quero bloquear as tardes de sexta", você **DEVE** usar \`clarifications_needed\` para perguntar o título e o horário exato (ex: 'das 13h às 18h').
 
+  **REGRA DE SELEÇÃO POR NÚMERO (IMPORTANTE):**
+  *   Sempre que você apresentar uma lista numerada (como cartões de crédito ou formas de pagamento) em uma pergunta de esclarecimento, o usuário poderá responder apenas com o **NÚMERO** da opção (ex: "1", "2").
+  *   Ao analisar a resposta do usuário, se ele digitar um número, você deve associá-lo ao item correspondente da lista que você enviou na mensagem anterior do histórico.
+  *   Por exemplo, se você enviou "1 - Nubank, 2 - Itaú" e o usuário respondeu "1", você deve preencher o parâmetro (ex: creditCardName) como "Nubank".
+
   **AÇÕES E PARÂMETROS:** 
 
   1.  CREATE_FINANCIAL_TRANSACTION: (Registros financeiros IMEDIATOS/PASSADOS, NÃO PARCELADOS NO CARTÃO)

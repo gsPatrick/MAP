@@ -614,21 +614,26 @@ function formatListFinancialCategoriesDataStructure(categories) {
 }
 
 /**
- * Retorna a mensagem visual "Layout Massa" para solicitar a forma de pagamento.
+ * Retorna a mensagem visual para solicitar a forma de pagamento, com lista de cartões numerada se disponível.
  * @param {string} clientName Nome do cliente para personalizar a saudação.
+ * @param {Array} cards Lista de cartões de crédito do cliente (objeto com .name).
  * @returns {string} Mensagem formatada.
  */
-function getPaymentMethodClarificationMessage(clientName) {
-    return `Opa, ${clientName}! 🚀 Quase lá! Só preciso saber como foi feito o pagamento:
+function getPaymentMethodClarificationMessage(clientName, cards = []) {
+    let message = `Opa, ${clientName}! 🚀 Quase lá! Só preciso saber como foi feito o pagamento:\n\n`;
+    message += `💸 *Formas aceitas:*\n`;
+    message += `• 💎 Pix\n`;
+    message += `• 💵 Dinheiro\n`;
 
-💸 *Formas aceitas:*
-• 💎 Pix
-• 💵 Dinheiro
-• 💳 Cartão de Crédito
-• 💳 Cartão de Débito
-• 🏦 Transferência
+    if (cards && cards.length > 0) {
+        message += `• 💳 Cartão de Crédito:\n`;
+        cards.forEach((card, index) => {
+            message += `  ${index + 1} - ${card.name}\n`;
+        });
+    }
 
-Qual dessas opções você utilizou? 😉`;
+    message += `\nQual dessas opções você utilizou? 😉`;
+    return message;
 }
 
 function formatListProductsDataStructure(products) {
