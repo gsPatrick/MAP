@@ -950,27 +950,8 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
 
   finalSystemPromptContent = finalSystemPromptContent.replace("MENSAGEM DO USUÁRIO:\n\"{{USER_MESSAGE}}\"", "").trim();
 
-  // Modificando para suportar Multimodal (Texto ou Áudio)
-  let userMessageContent = [];
-
-  if (conversationContext.audioPayload) {
-    // Se houver áudio, construímos o payload multimodal
-    logger.info('[AI SERVICE] Preparando payload MULTIMODAL (audio) para OpenAI.');
-    userMessageContent.push({
-      type: "input_audio",
-      input_audio: {
-        data: conversationContext.audioPayload.data, // Base64
-        format: conversationContext.audioPayload.format || "wav" // OpenAI multimodal prefere wav/mp3/opus. Ogg container contains opus.
-      }
-    });
-    // Opcional: Adicionar texto se houver (neste caso, messageText é vazio ou placeholder)
-    if (userMessage && userMessage.trim() !== "") {
-      userMessageContent.push({ type: "text", text: userMessage });
-    }
-  } else {
-    // Payload de texto padrão
-    userMessageContent = userMessage;
-  }
+  // Payload de texto padrão
+  const userMessageContent = userMessage;
 
   const messagesToSendToAPI = [
     { role: "system", content: finalSystemPromptContent },
@@ -978,8 +959,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     { role: "user", content: userMessageContent }
   ];
 
-  // Se houver áudio, usamos o modelo de preview de áudio que é mais rápido e multimodal
-  const modelToUse = conversationContext.audioPayload ? "gpt-4o-mini-audio-preview" : "gpt-4o";
+  const modelToUse = "gpt-4o";
 
   logger.debug('[AI SERVICE] Enviando para OpenAI:', {
     model: modelToUse,
