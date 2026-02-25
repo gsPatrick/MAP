@@ -206,7 +206,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     if (!txData.paymentMethod) {
                         return {
-                            formattedData: formatter.getPaymentMethodClarificationMessage(clientName)
+                            formattedData: formatter.getPaymentMethodClarificationMessage(clientNameToUse)
                         };
                     }
 

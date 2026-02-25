@@ -959,7 +959,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     { role: "user", content: userMessageContent }
   ];
 
-  const modelToUse = "gpt-4o";
+  const modelToUse = "gpt-4o-mini"; // Usando o mini para Turbo Speed (< 1s de resposta)
 
   logger.debug('[AI SERVICE] Enviando para OpenAI:', {
     model: modelToUse,
