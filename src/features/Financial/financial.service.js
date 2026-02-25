@@ -644,13 +644,26 @@ async function getFinancialSummary(financialAccountId, filters = {}) {
 
     // --- NOVA LÓGICA: Média Mensal de Gastos (para Alertas no Front) ---
     const threeMonthsAgo = dayjs().subtract(3, 'month').startOf('month').format('YYYY-MM-DD');
+
+    // Dialect-aware month grouping
+    const dialect = sequelize.getDialect();
+    let monthExpression;
+    if (dialect === 'postgres') {
+      monthExpression = sequelize.fn('TO_CHAR', sequelize.col('transactionDate'), 'YYYY-MM');
+    } else if (dialect === 'mysql') {
+      monthExpression = sequelize.fn('DATE_FORMAT', sequelize.col('transactionDate'), '%Y-%m');
+    } else {
+      // SQLite
+      monthExpression = sequelize.fn('strftime', '%Y-%m', sequelize.col('transactionDate'));
+    }
+
     const avgExpensesRes = await FinancialTransaction.findAll({
       where: { ...baseWhere, type: 'Saída', transactionDate: { [Op.gte]: threeMonthsAgo } },
       attributes: [
         [sequelize.fn('SUM', sequelize.col('value')), 'total'],
-        [sequelize.fn('strftime', '%Y-%m', sequelize.col('transactionDate')), 'month']
+        [monthExpression, 'month']
       ],
-      group: [sequelize.literal("strftime('%Y-%m', transactionDate)")],
+      group: [sequelize.literal(dialect === 'postgres' ? "TO_CHAR(\"transactionDate\", 'YYYY-MM')" : dialect === 'mysql' ? "DATE_FORMAT(transactionDate, '%Y-%m')" : "strftime('%Y-%m', transactionDate)")],
       raw: true
     });
 
