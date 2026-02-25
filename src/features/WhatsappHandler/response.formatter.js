@@ -613,6 +613,24 @@ function formatListFinancialCategoriesDataStructure(categories) {
     return data.trim();
 }
 
+/**
+ * Retorna a mensagem visual "Layout Massa" para solicitar a forma de pagamento.
+ * @param {string} clientName Nome do cliente para personalizar a saudação.
+ * @returns {string} Mensagem formatada.
+ */
+function getPaymentMethodClarificationMessage(clientName) {
+    return `Opa, ${clientName}! 🚀 Quase lá! Só preciso saber como foi feito o pagamento:
+
+💸 *Formas aceitas:*
+• 💎 Pix
+• 💵 Dinheiro
+• 💳 Cartão de Crédito
+• 💳 Cartão de Débito
+• 🏦 Transferência
+
+Qual dessas opções você utilizou? 😉`;
+}
+
 function formatListProductsDataStructure(products) {
     if (!products || products.length === 0) return "📦 Seus Produtos:\n\nNenhum produto cadastrado.";
 
@@ -1176,6 +1194,7 @@ module.exports = {
     formatRecurringRuleDataStructure,
     formatFinancialSummaryDataStructure,
     formatRichRecurringRuleList,
+    getPaymentMethodClarificationMessage,
     formatServiceDataStructure, // <-- NOVA FUNÇÃO
     formatListServicesDataStructure, // <-- NOVA FUNÇÃO
     formatMorningBriefing,

@@ -37,6 +37,19 @@ function formatCurrency(value) {
     if (value === null || value === undefined || isNaN(parseFloat(value))) return 'R$ --,--';
     return `R$${parseFloat(value).toFixed(2).replace('.', ',')}`;
 }
+
+function getPaymentMethodClarificationMessage(clientName) {
+    return `Opa, ${clientName}! 🚀 Quase lá! Só preciso saber como foi feito o pagamento:
+
+💸 *Formas aceitas:*
+• 💎 Pix
+• 💵 Dinheiro
+• 💳 Cartão de Crédito
+• 💳 Cartão de Débito
+• 🏦 Transferência
+
+Qual dessas opções você utilizou? 😉`;
+}
 function formatPlatformLink(customText = "") {
     const platformUrl = process.env.REACT_APP_BASE_URL || 'map-nocontrole.com.br';
     const defaultText = `📊 Para visualizar mais detalhes e relatórios, acesse outras áreas da plataforma. Qualquer coisa, estou por aqui! 😉`;
@@ -399,6 +412,13 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
                             dueDate: cardId ? null : params.dueDate,
                             isPaidOrReceived: params.isPaidOrReceived !== undefined ? params.isPaidOrReceived : (cardId ? true : (!params.dueDate))
                         };
+
+                        if (!txData.paymentMethod) {
+                            aiMessageIntro = getPaymentMethodClarificationMessage(state.clientName);
+                            currentActionFormattedData = "";
+                            break;
+                        }
+
                         if (!txData.description || !txData.type || isNaN(txData.value) || txData.value <= 0) {
                             throw new Error("Dados insuficientes ou inválidos para criar transação (descrição, tipo, valor).");
                         }
@@ -510,6 +530,13 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
                             financialCategoryId: catIdParcel, creditCardId: cardIdParcel, notes: params.notes,
                             transactionDate: params.transactionDate || params.initialDueDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0]
                         };
+
+                        if (!parcelData.paymentMethod) {
+                            aiMessageIntro = getPaymentMethodClarificationMessage(state.clientName);
+                            currentActionFormattedData = "";
+                            break;
+                        }
+
                         if (!parcelData.description || !parcelData.type || isNaN(parcelData.totalValue) || parcelData.totalValue <= 0 || isNaN(parcelData.numberOfParcels) || parcelData.numberOfParcels < 1 || !parcelData.initialDueDate) {
                             throw new Error("Dados insuficientes ou inválidos para compra parcelada (descrição, tipo, valor total, nº parcelas, data 1ª parcela).");
                         }
@@ -565,6 +592,12 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
                             financialCategoryId: newCatIdParcel, creditCardId: newCardIdParcel, notes: params.newNotes,
                             transactionDate: params.newTransactionDate || params.newInitialDueDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0]
                         };
+
+                        if (!newParcelData.paymentMethod) {
+                            aiMessageIntro = getPaymentMethodClarificationMessage(state.clientName);
+                            currentActionFormattedData = "";
+                            break;
+                        }
                         if (!newParcelData.description || isNaN(newParcelData.totalValue) || newParcelData.totalValue <= 0 || isNaN(newParcelData.numberOfParcels) || newParcelData.numberOfParcels < 1 || !newParcelData.initialDueDate) {
                             throw new Error("Para recriar a compra parcelada, preciso de: nova descrição, novo valor total, novo nº de parcelas e nova data da 1ª parcela.");
                         }
@@ -608,6 +641,12 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
                             isPayableOrReceivable: params.isPayableOrReceivable !== undefined ? params.isPayableOrReceivable : true,
                             isActive: params.isActive !== undefined ? params.isActive : true,
                         };
+
+                        if (!ruleData.paymentMethod) {
+                            aiMessageIntro = getPaymentMethodClarificationMessage(state.clientName);
+                            currentActionFormattedData = "";
+                            break;
+                        }
                         if (!ruleData.description || !ruleData.type || isNaN(ruleData.value) || ruleData.value <= 0 || !ruleData.frequency || !ruleData.startDate) {
                             throw new Error("Dados insuficientes para criar regra recorrente (desc, tipo, valor, frequência, data início).");
                         }

@@ -200,8 +200,14 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     logger.info(`[ACTION HANDLER] Preparando criação de transação: ${txData.description}, Valor: ${txData.value}, Método: ${txData.paymentMethod}, Conta: ${effectiveAccountId}`);
 
-                    if (!txData.description || !txData.type || isNaN(txData.value) || txData.value <= 0 || !txData.paymentMethod) {
-                        throw { statusCode: 400, message: "Dados obrigatórios (descrição, tipo, valor, forma de pagamento) ausentes ou inválidos para criar transação." };
+                    if (!txData.description || !txData.type || isNaN(txData.value) || txData.value <= 0) {
+                        throw { statusCode: 400, message: "Dados insuficientes ou inválidos (descrição, tipo, valor) para criar transação." };
+                    }
+
+                    if (!txData.paymentMethod) {
+                        return {
+                            formattedData: formatter.getPaymentMethodClarificationMessage(clientName)
+                        };
                     }
 
                     const newTx = await financialService.createTransaction(effectiveAccountId, txData, actorId);
@@ -534,6 +540,12 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     if (!parcelData.description || !parcelData.type || isNaN(parcelData.totalValue) || parcelData.totalValue <= 0 || isNaN(parcelData.numberOfParcels) || parcelData.numberOfParcels < 1 || !parcelData.initialDueDate) {
                         throw { statusCode: 400, message: "Dados insuficientes ou inválidos para compra parcelada (descrição, tipo, valor total, nº parcelas, data 1ª parcela)." };
+                    }
+
+                    if (!parcelData.paymentMethod) {
+                        return {
+                            formattedData: formatter.getPaymentMethodClarificationMessage(clientName)
+                        };
                     }
                     if (!params.transactionDate && params.initialDueDate) {
                         parcelData.transactionDate = params.initialDueDate;

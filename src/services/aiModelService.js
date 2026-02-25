@@ -17,9 +17,9 @@ const openai = new OpenAI({
 
 const ASSISTANT_NAME = "MAP no Controle";
 
-// CÓDIGO MODIFICADO E OTIMIZADO da função transcribeAudioStream
+// CÓDIGO OTIMIZADO: Transcrição via Buffer (sem tocar no disco)
 async function transcribeAudioStream(audioStream, inputFilename) {
-  if (!process.env.OPENAI_API_KEY) {
+  if (!OPENAI_API_KEY) {
     logger.error('[AI SERVICE - WHISPER] OPENAI_API_KEY não configurada.');
     throw new Error('Configuração da API da OpenAI ausente para transcrição.');
   }
@@ -28,33 +28,22 @@ async function transcribeAudioStream(audioStream, inputFilename) {
     throw new Error('Stream de áudio é necessário para transcrição.');
   }
 
-  // Garante um nome de arquivo válido para o Whisper
   const filename = inputFilename || 'audio.ogg';
-  const tempFilePath = path.join(os.tmpdir(), `whisper-${Date.now()}-${filename}`);
 
   try {
-    logger.info(`[AI SERVICE - WHISPER] Iniciando salvamento do áudio em arquivo temporário: ${tempFilePath}`);
+    logger.info(`[AI SERVICE - WHISPER] Iniciando coleta de áudio em Buffer: ${filename}`);
 
-    // Cria um stream de escrita para o arquivo temporário
-    const writer = fs.createWriteStream(tempFilePath);
+    const chunks = [];
+    for await (const chunk of audioStream) {
+      chunks.push(chunk);
+    }
+    const audioBuffer = Buffer.concat(chunks);
 
-    // Conecta o stream de download (audioStream) ao stream de escrita (writer)
-    audioStream.pipe(writer);
+    logger.info(`[AI SERVICE - WHISPER] Buffer de áudio pronto (${audioBuffer.length} bytes). Enviando para transcrição...`);
 
-    // Aguarda o download e o salvamento do arquivo serem concluídos
-    await new Promise((resolve, reject) => {
-      writer.on('finish', resolve);
-      writer.on('error', (err) => {
-        logger.error(`[AI SERVICE - WHISPER] Erro ao salvar o arquivo de áudio temporário: ${err.message}`);
-        reject(err);
-      });
-    });
-
-    logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário salvo com sucesso. Enviando para transcrição...`);
-
-    // Envia o arquivo salvo no disco para a API da OpenAI
+    // Envia o Buffer diretamente para a OpenAI
     const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(tempFilePath), // << A chave é criar um ReadStream a partir do arquivo salvo
+      file: await toFile(audioBuffer, filename), // Usamos a helper toFile para converter buffer em arquivo virtual
       model: "whisper-1",
       language: "pt",
       response_format: "text"
@@ -63,35 +52,21 @@ async function transcribeAudioStream(audioStream, inputFilename) {
     const transcribedText = String(transcription);
 
     if (transcribedText.trim() === "") {
-      logger.warn(`[AI SERVICE - WHISPER] Transcrição do arquivo ${filename} resultou em texto vazio.`);
+      logger.warn(`[AI SERVICE - WHISPER] Transcrição resultou em texto vazio.`);
       return "";
     }
 
-    logger.info(`[AI SERVICE - WHISPER] Texto transcrito de ${filename}: "${transcribedText.substring(0, 100)}..."`);
+    logger.info(`[AI SERVICE - WHISPER] Transcrição concluída: "${transcribedText.substring(0, 100)}..."`);
     return transcribedText;
 
   } catch (error) {
-    let errorMessage = `Falha ao transcrever áudio (${filename})`;
-    if (error.response && error.response.data) {
-      logger.error('[AI SERVICE - WHISPER] Erro da API OpenAI:', error.response.data);
-      errorMessage += `: ${JSON.stringify(error.response.data.error?.message || error.response.data)}`;
-    } else {
-      logger.error('[AI SERVICE - WHISPER] Erro durante a transcrição do áudio:', { message: error.message, stack: error.stack });
-      errorMessage += `: ${error.message}`;
-    }
-    throw new Error(errorMessage);
-  } finally {
-    // --- LIMPEZA ESSENCIAL ---
-    // Garante que o arquivo temporário seja sempre excluído, mesmo se ocorrer um erro.
-    fs.unlink(tempFilePath, (err) => {
-      if (err) {
-        logger.warn(`[AI SERVICE - WHISPER] Não foi possível excluir o arquivo de áudio temporário ${tempFilePath}: ${err.message}`);
-      } else {
-        logger.info(`[AI SERVICE - WHISPER] Arquivo de áudio temporário ${tempFilePath} excluído com sucesso.`);
-      }
-    });
+    logger.error('[AI SERVICE - WHISPER] Erro durante a transcrição:', { message: error.message, stack: error.stack });
+    throw new Error(`Falha ao transcrever áudio: ${error.message}`);
   }
 }
+
+// Helper para converter Buffer em algo que a OpenAI aceite como arquivo (File/ReadStream)
+const { toFile } = require('openai');
 
 function buildSystemPrompt(conversationContext) {
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" }));
@@ -985,7 +960,7 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
       type: "input_audio",
       input_audio: {
         data: conversationContext.audioPayload.data, // Base64
-        format: conversationContext.audioPayload.format || "ogg"
+        format: conversationContext.audioPayload.format || "wav" // OpenAI multimodal prefere wav/mp3/opus. Ogg container contains opus.
       }
     });
     // Opcional: Adicionar texto se houver (neste caso, messageText é vazio ou placeholder)
@@ -1003,7 +978,8 @@ async function interpretUserMessage(userMessage, conversationContext = {}) {
     { role: "user", content: userMessageContent }
   ];
 
-  const modelToUse = "gpt-4o";
+  // Se houver áudio, usamos o modelo de preview de áudio que é mais rápido e multimodal
+  const modelToUse = conversationContext.audioPayload ? "gpt-4o-mini-audio-preview" : "gpt-4o";
 
   logger.debug('[AI SERVICE] Enviando para OpenAI:', {
     model: modelToUse,

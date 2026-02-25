@@ -231,53 +231,37 @@ async function processIncomingAudioMessage(senderPhoneRaw, mediaUrl, mimeType, p
     }
     logger.info(`[WHATSAPP SERVICE] Processando mensagem de áudio de ${canonicalPhone}. URL: ${mediaUrl}`);
     pushNameFromPayload = pushName;
-    let filenameFromMime = 'audio.ogg';
-    if (mimeType) {
-        if (mimeType.includes('opus')) filenameFromMime = 'audio.opus';
-        else if (mimeType.includes('aac')) filenameFromMime = 'audio.aac';
-        else if (mimeType.includes('mpeg')) filenameFromMime = 'audio.mp3';
-        else if (mimeType.includes('amr')) filenameFromMime = 'audio.amr';
-    }
-    try {
-        const urlPath = new URL(mediaUrl).pathname;
-        const baseName = path.basename(urlPath);
-        if (baseName && baseName.includes('.')) {
-            filenameFromMime = baseName;
-        }
-    } catch (e) {
-        logger.warn(`[WHATSAPP SERVICE] Não foi possível parsear a URL para extrair nome do arquivo da mídia: ${mediaUrl}. Usando nome inferido: ${filenameFromMime}`);
-    }
 
-    // REVERTIDO: Voltando a usar Transcrição (Whisper) pois FFmpeg falha no servidor
     try {
         const downloadedMedia = await downloadZapiMedia(mediaUrl);
         if (downloadedMedia && downloadedMedia.stream) {
+            logger.info(`[WHATSAPP SERVICE] Áudio baixado, coletando em Buffer para Entendimento Direto...`);
 
-            logger.info(`[WHATSAPP SERVICE] Áudio baixado, enviando para transcrição (Whisper)...`);
-
-            // Transcrever usando Whisper (via aiModelService)
-            const transcriptionText = await aiModelService.transcribeAudioStream(downloadedMedia.stream);
-
-            if (!transcriptionText) {
-                logger.warn(`[WHATSAPP SERVICE] Transcrição retornou vazia para ${canonicalPhone}.`);
-                await sendWhatsappMessage(canonicalPhone, "Não consegui entender o que você disse no áudio. 😕 Poderia tentar escrever?", { immediate: true });
-                return;
+            // Coletar stream em Buffer
+            const chunks = [];
+            for await (const chunk of downloadedMedia.stream) {
+                chunks.push(chunk);
             }
+            const audioBuffer = Buffer.concat(chunks);
+            const audioBase64 = audioBuffer.toString('base64');
 
-            logger.info(`[WHATSAPP SERVICE] Transcrição concluída: "${transcriptionText}"`);
+            logger.info(`[WHATSAPP SERVICE] Áudio coletado (${audioBuffer.length} bytes). Enviando para processamento direto...`);
 
-            // Adiciona um marcador de que foi áudio
-            const finalMessage = `[ÁUDIO TRANSCRITO]: ${transcriptionText}`;
+            // Enviamos para o processador de mensagens com o payload de áudio
+            const audioPayload = {
+                data: audioBase64,
+                format: mimeType?.includes('opus') || mimeType?.includes('ogg') ? 'opus' : 'wav'
+            };
 
-            // Processa como se fosse uma mensagem de texto normal
-            return await processIncomingMessage(canonicalPhone, finalMessage, pushName, rawPayload);
+            // Processa usando Entendimento Direto (Multimodal)
+            return await processIncomingMessage(canonicalPhone, "[Mensagem de Áudio]", pushName, rawPayload, audioPayload);
 
         } else {
             logger.error(`[WHATSAPP SERVICE] Falha ao baixar áudio de ${canonicalPhone} da URL: ${mediaUrl}.`);
             await sendWhatsappMessage(canonicalPhone, "Tive um problema ao baixar seu áudio. 🙁", { immediate: true });
         }
     } catch (error) {
-        logger.error(`[WHATSAPP SERVICE] Erro ao processar áudio (Transcrição) de ${canonicalPhone}: ${error.message}`);
+        logger.error(`[WHATSAPP SERVICE] Erro ao processar áudio (Entendimento Direto) de ${canonicalPhone}: ${error.message}`);
         await sendWhatsappMessage(canonicalPhone, "Puxa, falhei ao processar seu áudio. 😵‍💫 Pode tentar digitar?", { immediate: true });
     } finally {
         pushNameFromPayload = null;

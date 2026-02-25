@@ -14,8 +14,8 @@ class MessageQueue {
         this.queue = [];
         this.isProcessing = false;
         this.options = {
-            minDelayMs: options.minDelayMs || 10000, // Minimum 10 seconds
-            maxDelayMs: options.maxDelayMs || 25000, // Maximum 25 seconds
+            minDelayMs: options.minDelayMs || 500,  // Reduced to 0.5s for responsiveness
+            maxDelayMs: options.maxDelayMs || 2500, // Reduced to 2.5s
             maxRetries: options.maxRetries || 3,
             ...options
         };
