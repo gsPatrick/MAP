@@ -414,7 +414,7 @@ function buildSystemPrompt(conversationContext) {
       - type: "Entrada" ou "Saída" (OBRIGATÓRIO)
       - description: string (OBRIGATÓRIO)
       - value: float (OBRIGATÓRIO, > 0)
-      - paymentMethod: "Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência" (OBRIGATÓRIO. Se for "Cartão de Crédito" e houver parcelas, use a ação 3: CREATE_PARCELLED_ACCOUNT.)
+      - paymentMethod: "Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência" (OBRIGATÓRIO. SE O USUÁRIO NÃO DISSE A FORMA DE PAGAMENTO, NÃO ADIVINHE "PIX". USE O MODO COPILOTO IMEDIATAMENTE. Se for "Cartão de Crédito" e houver parcelas, use a ação 3: CREATE_PARCELLED_ACCOUNT.)
       - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
       - transactionDate: "YYYY-MM-DD" (opcional, default: hoje)
       - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS NO CONTEXTO ou OMITIR se não houver correspondência adequada. NUNCA CRIAR NOVA.)
@@ -443,7 +443,7 @@ function buildSystemPrompt(conversationContext) {
       - totalValue: float (OBRIGATÓRIO, valor total da compra)
       - numberOfParcels: integer (OBRIGATÓRIO, mínimo 1. Se o usuário disser "no cartão" sem parcelas, assumir 1 ou perguntar se foi parcelado.)
       - initialDueDate: "YYYY-MM-DD" (OBRIGATÓRIO, data do primeiro vencimento ou da compra)
-      - paymentMethod: "Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência" (OBRIGATÓRIO. Para cartões, use "Cartão de Crédito".)
+      - paymentMethod: "Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência" (OBRIGATÓRIO. SE O USUÁRIO NÃO DISSE A FORMA DE PAGAMENTO, NÃO ADIVINHE "PIX". USE O MODO COPILOTO IMEDIATAMENTE. Para cartões, use "Cartão de Crédito".)
       - creditCardName: string (OBRIGATÓRIO se COMPRA PARCELADA NO CARTÃO. Se faltar, perguntar: "Entendi a compra parcelada de '[DESCRIÇÃO DA COMPRA]', ${clientNameForPrompt}! Só preciso saber em qual cartão você parcelou. Por exemplo, 'parcelei no Nubank'.")
       - financialCategoryName: string (opcional)
       - transactionDate: "YYYY-MM-DD" (opcional, default: hoje. DATA DA COMPRA ORIGINAL)
@@ -495,7 +495,7 @@ function buildSystemPrompt(conversationContext) {
       - description: string (OBRIGATÓRIO)
       - type: "Saída" ou "Entrada" (OBRIGATÓRIO)
       - value: float (OBRIGATÓRIO, >0)
-      - paymentMethod: "Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência" (OBRIGATÓRIO)
+      - paymentMethod: "Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência" (OBRIGATÓRIO. SE O USUÁRIO NÃO DISSE A FORMA DE PAGAMENTO, NÃO ADIVINHE "PIX". USE O MODO COPILOTO IMEDIATAMENTE.)
       - frequency: "daily", "weekly", "bi-weekly", "monthly", "quarterly", "semi-annually", "annually" (OBRIGATÓRIO)
       - startDate: "YYYY-MM-DD" (OBRIGATÓRIO. Data da primeira ocorrência ou de início da regra)
       - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
@@ -893,7 +893,7 @@ function buildSystemPrompt(conversationContext) {
     80. RECORD_SALE (SÓ PARA CONTAS PJ/MEI): (Ação principal para vendas de produtos)
       - productNameOrCode: string (OBRIGATÓRIO)
       - quantitySold: integer (OBRIGATÓRIO, >0)
-      - paymentMethod: "Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência" (OBRIGATÓRIO)
+      - paymentMethod: "Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência" (OBRIGATÓRIO. SE O USUÁRIO NÃO DISSE A FORMA DE PAGAMENTO, NÃO ADIVINHE "PIX". USE O MODO COPILOTO IMEDIATAMENTE.)
       - saleDate: "YYYY-MM-DD" (opcional, default: hoje)
       - notes: string (opcional)
 
@@ -904,7 +904,7 @@ function buildSystemPrompt(conversationContext) {
 
   **1. REGRA MÁXIMA - MODO COPILOTO:**
     - Se a intenção do usuário é clara para uma ação que exige parâmetros (como \`CREATE_FINANCIAL_TRANSACTION\`, \`CREATE_PARCELLED_ACCOUNT\`, \`RECORD_SALE\`, etc.), mas faltam dados **OBRIGATÓRIOS** (como valor, descrição, data/hora ou **forma de pagamento**), sua **PRIMEIRA E ÚNICA** ação deve ser usar o **MODO COPILOTO**.
-    - **NUNCA TENTE ADIVINHAR** a forma de pagamento. Se o usuário não disse explicitamente "no pix", "em dinheiro", "no cartão", etc., você **DEVE** perguntar usando o Modo Copiloto.
+    - **NUNCA TENTE ADIVINHAR** a forma de pagamento. Se o usuário não disse explicitamente "no pix", "em dinheiro", "no cartão", etc., você **DEVE** perguntar usando o Modo Copiloto. **ADIVINHAR "PIX" POR PADRÃO É UM ERRO CRÍTICO.**
     - Retorne um objeto JSON com o array \`detected_actions\` **VAZIO** e preencha \`clarifications_needed\` seguindo o padrão visual definido na seção "ESTRATÉGIA DE COLETA DE DADOS".
     - **NÃO PROSSIGA PARA OS PRÓXIMOS PASSOS SE ESTA CONDIÇÃO FOR VERDADEIRA.** (Exceto se for uma pergunta do Modo Instrutor).
 

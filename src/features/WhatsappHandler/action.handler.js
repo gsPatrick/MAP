@@ -188,7 +188,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         description: params.description,
                         type: params.type,
                         value: parseFloat(params.value),
-                        paymentMethod: params.paymentMethod || 'Pix', // Fallback defensivo
+                        paymentMethod: params.paymentMethod, // Removido fallback para forçar Copilot Mode via prompt em caso de ausência
                         transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0],
                         financialCategoryId: categoryId,
                         creditCardId: cardId,
@@ -522,7 +522,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         type: params.type || "Saída",
                         totalValue: parseFloat(params.totalValue || params.value),
                         numberOfParcels: parseInt(params.numberOfParcels),
-                        paymentMethod: params.paymentMethod || (cardId ? "Cartão de Crédito" : "Pix"), // Fallback defensivo
+                        paymentMethod: params.paymentMethod, // Removido fallback para forçar Copilot Mode via prompt em caso de ausência
                         initialDueDate: params.initialDueDate,
                         financialCategoryId: categoryId,
                         creditCardId: cardId,

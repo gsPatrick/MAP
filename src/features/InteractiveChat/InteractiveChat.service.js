@@ -392,7 +392,7 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
                         const cardId = params.creditCardName ? await findCreditCardIdByNameForChat(params.creditCardName, state.activeFinancialAccountId) : null;
                         const txData = {
                             description: params.description, type: params.type, value: parseFloat(params.value),
-                            paymentMethod: params.paymentMethod || 'Pix',
+                            paymentMethod: params.paymentMethod,
                             transactionDate: params.transactionDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0],
                             financialCategoryId: categoryId, creditCardId: cardId, notes: params.notes,
                             isPayableOrReceivable: params.isPayableOrReceivable !== undefined ? params.isPayableOrReceivable : (params.dueDate ? true : (cardId ? false : false)),
@@ -505,7 +505,7 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
                             description: params.description, type: params.type,
                             totalValue: parseFloat(params.totalValue || params.value),
                             numberOfParcels: parseInt(params.numberOfParcels),
-                            paymentMethod: params.paymentMethod || (cardIdParcel ? "Cartão de Crédito" : "Pix"),
+                            paymentMethod: params.paymentMethod,
                             initialDueDate: params.initialDueDate,
                             financialCategoryId: catIdParcel, creditCardId: cardIdParcel, notes: params.notes,
                             transactionDate: params.transactionDate || params.initialDueDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0]
@@ -560,7 +560,7 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
                         const newParcelData = {
                             description: params.newDescription, type: params.newType || 'Saída', totalValue: parseFloat(params.newTotalValue),
                             numberOfParcels: parseInt(params.newNumberOfParcels),
-                            paymentMethod: params.newPaymentMethod || (newCardIdParcel ? "Cartão de Crédito" : "Pix"),
+                            paymentMethod: params.newPaymentMethod,
                             initialDueDate: params.newInitialDueDate,
                             financialCategoryId: newCatIdParcel, creditCardId: newCardIdParcel, notes: params.newNotes,
                             transactionDate: params.newTransactionDate || params.newInitialDueDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0]
@@ -598,7 +598,7 @@ async function processSiteChatMessage(userSessionId, messageText, currentProfile
                         const categoryIdRule = await findFinancialCategoryIdByNameForChat(params.financialCategoryName, state.activeFinancialAccountId, params.type);
                         const ruleData = {
                             description: params.description, type: params.type, value: parseFloat(params.value),
-                            paymentMethod: params.paymentMethod || 'Pix',
+                            paymentMethod: params.paymentMethod,
                             frequency: params.frequency, startDate: params.startDate,
                             interval: params.interval ? parseInt(params.interval) : 1,
                             dayOfMonth: params.dayOfMonth ? parseInt(params.dayOfMonth) : null,
