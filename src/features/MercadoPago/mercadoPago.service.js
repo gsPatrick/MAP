@@ -235,7 +235,7 @@ const mercadoPagoService = {
           }
 
           // Afiliados e Onboarding
-          await affiliateService.processNewSubscriptionForAffiliate(client.id);
+          await affiliateService.processNewSubscriptionForAffiliate(subscription);
           await affiliateService.sendAffiliateLinkNotification(client);
 
           const isAdvancedPlan = plan.tier && (plan.tier.includes('avancado') || plan.tier.includes('vitalicio'));

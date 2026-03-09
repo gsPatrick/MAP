@@ -76,6 +76,21 @@ async function processNewSubscriptionForAffiliate(subscription, transaction) {
 
     logger.info(`[AffiliateService] Comissão de R$${commissionValue} creditada ao afiliado ID ${referrer.id} pela assinatura do cliente ID ${client.id}.`);
 
+    // Notificar o indicador via WhatsApp
+    try {
+      const { sendWhatsappMessage } = require('../../services/whatsappService');
+      const subscriberName = client.name ? client.name.split(' ')[0] : 'Um novo cliente';
+      const notificationMessage = `💰 *Comissão Recebida!* 💰\n\n` +
+        `Parabéns! Você acabou de ganhar uma comissão de *R$ ${commissionValue.toFixed(2)}* porque *${subscriberName}* assinou o MAP através da sua indicação.\n\n` +
+        `Seu novo saldo é: *R$ ${newBalance.toFixed(2)}*.\n\n` +
+        `Continue indicando e aumentando seus ganhos! 🚀`;
+
+      await sendWhatsappMessage(referrer.phone, notificationMessage);
+      logger.info(`[AffiliateService] Notificação de comissão enviada para o indicador ID ${referrer.id} (${referrer.phone}).`);
+    } catch (notifyError) {
+      logger.error(`[AffiliateService] Erro ao notificar indicador ID ${referrer.id} sobre comissão: ${notifyError.message}`);
+    }
+
   } catch (error) {
     logger.error(`[AffiliateService] Erro ao processar comissão para afiliado: ${error.message}`);
     throw error;
@@ -163,6 +178,15 @@ async function getAffiliateDashboard(affiliateClientId) {
 
     if (!affiliate) {
       throw { statusCode: 404, message: 'Afiliado não encontrado.' };
+    }
+
+    // Se o afiliado não tiver código, vamos gerar um agora para evitar 'undefined' no front
+    if (!affiliate.affiliateCode) {
+      const { generateUniqueAffiliateCode } = require('../ClientAuth/authUtils');
+      const newCode = await generateUniqueAffiliateCode();
+      await Client.update({ affiliateCode: newCode }, { where: { id: affiliate.id } });
+      affiliate.affiliateCode = newCode;
+      logger.info(`[AffiliateService] Código de afiliado gerado retroativamente para ID ${affiliate.id}: ${newCode}`);
     }
 
     const totalReferrals = await Client.count({
