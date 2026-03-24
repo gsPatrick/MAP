@@ -60,7 +60,7 @@ async function updateSystemPreferences(updateData) {
         'defaultAppointmentReminderLeadTimeMinutes', 'recurringJobSchedule',
         'appointmentReminderJobSchedule', 'alertsJobSchedule', 'motivationalMessageJobSchedule',
         'waterReminderJobSchedule', 'dueAlertLeadDays', 'fiscalAlertLeadDaysMEI',
-        'waterReminderJobSchedule', 'dueAlertLeadDays', 'fiscalAlertLeadDaysMEI',
+        'cardClosingAlertLeadDays', 'cardPaymentAlertLeadDays',
         'googleWatchRenewalJobSchedule', 'areAutomatedJobsEnabled' // Adicionado switch global
       ];
       const filteredData = {};

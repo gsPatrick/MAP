@@ -13,13 +13,13 @@ const { formatCurrency, formatDate } = require('../utils/formatters');
 async function processRecurringTransactions() {
   logger.info('[JOB RECORRÊNCIA] Iniciando verificação de transações recorrentes...');
 
-  // <<< CHECK GLOBAL SWITCH REMOVED FOR CORE FUNCTIONALITY >>>
-  // const systemService = require('../features/System/system.service');
-  // const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
-  // if (!isEnabled) {
-  //   logger.warn('[JOB RECORRÊNCIA] Job abortado: Global switch OFF.');
-  //   return;
-  // }
+  // --- CHECK GLOBAL SWITCH ---
+  const systemService = require('../features/System/system.service');
+  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  if (!isEnabled) {
+    logger.warn('[JOB RECORRÊNCIA] Job abortado: Global switch OFF.');
+    return;
+  }
   // ---------------------------
 
   const today = new Date().toISOString().split('T')[0];

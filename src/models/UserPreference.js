@@ -159,11 +159,25 @@ const UserPreference = sequelize.define('UserPreference', {
     validate: { min: 0 },
     comment: 'Dias de antecedência para alerta fiscal MEI (ex: DAS).',
   },
+  cardClosingAlertLeadDays: {
+    type: DataTypes.INTEGER,
+    defaultValue: 2, // 2 dias de antecedência
+    allowNull: false,
+    validate: { min: 0 },
+    comment: 'Dias de antecedência para alerta de fechamento de fatura de cartão.',
+  },
+  cardPaymentAlertLeadDays: {
+    type: DataTypes.INTEGER,
+    defaultValue: 3, // 3 dias de antecedência
+    allowNull: false,
+    validate: { min: 0 },
+    comment: 'Dias de antecedência para alerta de vencimento de fatura de cartão.',
+  },
 
   // --- NOVA CONFIGURAÇÃO GLOBAL ---
   areAutomatedJobsEnabled: {
     type: DataTypes.BOOLEAN,
-    defaultValue: false, // Padrão: DESLIGADO conforme solicitado
+    defaultValue: true, // Padrão: ATIVADO para novos registros
     allowNull: false,
     comment: 'Switch global para ativar/desativar todos os disparos automáticos de mensagens.',
   },

@@ -10,13 +10,13 @@ const { formatCurrency, formatDate } = require('../utils/formatters');
 async function checkAndSendAlerts() {
   logger.info('[JOB ALERTAS] Verificando alertas...');
 
-  // <<< CHECK GLOBAL SWITCH REMOVED FOR CORE FUNCTIONALITY >>>
-  // const systemService = require('../features/System/system.service');
-  // const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
-  // if (!isEnabled) {
-  //   logger.warn('[JOB ALERTAS] Job abortado: Global switch OFF.');
-  //   return;
-  // }
+  // --- CHECK GLOBAL SWITCH ---
+  const systemService = require('../features/System/system.service');
+  const isEnabled = await systemService.isAutomatedJobProcessingEnabled();
+  if (!isEnabled) {
+    logger.warn('[JOB ALERTAS] Job abortado: Global switch OFF.');
+    return;
+  }
   // ---------------------------
 
   try {
@@ -39,10 +39,15 @@ async function checkAndSendAlerts() {
       const clientFirstName = client?.name ? client.name.split(' ')[0] : 'você';
 
       let alertSections = []; // Array para acumular seções de alerta formatadas
-      let lowStockProducts; // Declare here to access it later
+      let lowStockProducts; 
+      
+      const today = new Date();
+      const todayDay = today.getDate();
+      const todayMonth = today.getMonth();
+      const todayYear = today.getFullYear();
 
       // --- 1. Alerta de Contas a Vencer/Vencidas ---
-      const today = new Date();
+      // A variável 'today' já foi declarada acima
       const leadDays = preferences?.dueAlertLeadDays || 3;
       const NdaysFromNow = new Date(today);
       NdaysFromNow.setDate(today.getDate() + leadDays);
@@ -110,6 +115,32 @@ async function checkAndSendAlerts() {
             meiAlertSection += `>  💡 _Dica: Você pode criar uma recorrência para este pagamento para não esquecer._\n`;
           }
           alertSections.push(meiAlertSection.trim());
+        }
+      }
+
+      // --- 4. Alerta de Cartão de Crédito (Fechamento e Vencimento) ---
+      const creditCards = await account.getCreditCards({ where: { isActive: true } });
+      if (creditCards.length > 0) {
+        for (const card of creditCards) {
+          // Check Closing Day
+          const closingLead = preferences?.cardClosingAlertLeadDays || 2;
+          const closingDate = new Date(todayYear, todayMonth, card.closingDay);
+          if (closingDate < today) closingDate.setMonth(closingDate.getMonth() + 1);
+          
+          const diffClosing = Math.ceil((closingDate - today) / (1000 * 60 * 60 * 24));
+          if (diffClosing === closingLead) {
+            alertSections.push(`💳 *Fechamento de Fatura (${card.name}):*\n> Falta pouco! Sua fatura fecha em *${closingLead} dias* (dia ${card.closingDay}).`);
+          }
+
+          // Check Payment Day
+          const paymentLead = preferences?.cardPaymentAlertLeadDays || 3;
+          const paymentDate = new Date(todayYear, todayMonth, card.paymentDay);
+          if (paymentDate < today) paymentDate.setMonth(paymentDate.getMonth() + 1);
+          
+          const diffPayment = Math.ceil((paymentDate - today) / (1000 * 60 * 60 * 24));
+          if (diffPayment === paymentLead) {
+            alertSections.push(`💰 *Vencimento de Fatura (${card.name}):*\n> Lembrete: Sua fatura vence em *${paymentLead} dias* (dia ${card.paymentDay}).`);
+          }
         }
       }
 
