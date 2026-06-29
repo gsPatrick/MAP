@@ -71,18 +71,18 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
             } else {
                 logger.error(`[InitializeState] CRITICAL: Dono da conta ${ownerClientIdForContext} não encontrado para acesso compartilhado.`);
                 ownerClientNameForContext = "Dono(a) da Conta";
-                ownerClientForContext = { accessLevel: 'gratuito', accessExpiresAt: null, id: ownerClientIdForContext, name: "Dono Desconhecido" };
+                ownerClientForContext = { accessLevel: 'inadimplente', accessExpiresAt: null, id: ownerClientIdForContext, name: "Dono Desconhecido" };
             }
         }
         logger.info(`[WHATSAPP SERVICE - Initialize/UpdateState] Contexto de Acesso Compartilhado ATIVO. Ator: ${client.id} (${client.name}), Dono: ${ownerClientIdForContext} (${ownerClientNameForContext})`);
     }
 
     let hasPaidAccess = false;
-    let clientAccessLevel = ownerClientForContext.accessLevel || 'gratuito';
+    let clientAccessLevel = ownerClientForContext.accessLevel || 'inadimplente';
     let clientAccessExpiresAt = ownerClientForContext.accessExpiresAt;
     let accessLevelTextForUser = "Nenhum plano ativo";
 
-    if (ownerClientForContext.accessLevel && ownerClientForContext.accessLevel !== 'gratuito') {
+    if (ownerClientForContext.accessLevel && !['gratuito','inadimplente'].includes(ownerClientForContext.accessLevel)) {
         if (ownerClientForContext.accessLevel.startsWith('vitalicio_')) {
             hasPaidAccess = true;
             accessLevelTextForUser = formatter.formatPlanName(ownerClientForContext.accessLevel);
@@ -96,11 +96,11 @@ async function initializeOrUpdateState(client, sharedAccessRecord = null, existi
             } else {
                 const planNamePart = formatter.formatPlanName(ownerClientForContext.accessLevel);
                 accessLevelTextForUser = `Plano ${planNamePart} expirado`;
-                clientAccessLevel = 'gratuito';
+                clientAccessLevel = 'inadimplente';
             }
         } else {
             logger.warn(`[WHATSAPP SERVICE - Initialize/UpdateState] Cliente DONO ${ownerClientForContext.id} com accessLevel ${ownerClientForContext.accessLevel} sem accessExpiresAt. Considerando como sem plano pago.`);
-            clientAccessLevel = 'gratuito';
+            clientAccessLevel = 'inadimplente';
         }
     }
 

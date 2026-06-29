@@ -65,7 +65,8 @@ const Client = sequelize.define('Client', {
   },
   accessLevel: {
     type: DataTypes.ENUM(
-      'gratuito',
+      'gratuito',        // legado (mantido p/ compatibilidade; tratado como sem acesso)
+      'inadimplente',    // sem plano pago ativo (expirado ou nunca pagou)
       'basico_mensal',
       'basico_anual',
       'avancado_mensal',
@@ -74,8 +75,8 @@ const Client = sequelize.define('Client', {
       'vitalicio_avancado'
     ),
     allowNull: false,
-    defaultValue: 'gratuito',
-    comment: 'Nível de acesso/plano do cliente',
+    defaultValue: 'inadimplente',
+    comment: 'Nível de acesso/plano do cliente. inadimplente = sem plano pago ativo.',
   },
   accessExpiresAt: {
     type: DataTypes.DATEONLY,
@@ -249,7 +250,7 @@ const Client = sequelize.define('Client', {
 
         if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
         else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
-        else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
+        else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito' || client.accessLevel === 'inadimplente') {
           client.accessExpiresAt = null;
           return;
         }
@@ -263,7 +264,7 @@ const Client = sequelize.define('Client', {
 
         if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
         else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
-        else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
+        else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito' || client.accessLevel === 'inadimplente') {
           client.accessExpiresAt = null;
           return;
         }
@@ -279,7 +280,7 @@ const Client = sequelize.define('Client', {
         const now = new Date();
         if (client.accessLevel.includes('_mensal')) now.setMonth(now.getMonth() + 1);
         else if (client.accessLevel.includes('_anual')) now.setFullYear(now.getFullYear() + 1);
-        else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito') {
+        else if (client.accessLevel.startsWith('vitalicio_') || client.accessLevel === 'gratuito' || client.accessLevel === 'inadimplente') {
           client.accessExpiresAt = null;
           return;
         }

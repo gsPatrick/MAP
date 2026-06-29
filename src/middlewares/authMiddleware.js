@@ -126,8 +126,20 @@ async function requireActiveSubscription(req, res, next) {
         clientToCheck = req.client;
     }
 
+    // Contas inativas/bloqueadas não acessam o sistema, independentemente do plano.
+    if (['Inativo', 'Bloqueado'].includes(clientToCheck.status)) {
+        logger.warn(`[AUTH SUB] Cliente ID ${clientToCheck.id} com status "${clientToCheck.status}" tentou acessar ${req.originalUrl}.`);
+        return res.status(403).json({
+            status: 'fail_subscription',
+            message: 'Conta inativa ou bloqueada. Acesso negado.'
+        });
+    }
+
+    // Níveis sem plano pago ativo (gratuito é legado; inadimplente = expirado/não pagou).
+    const NON_PAID_LEVELS = ['gratuito', 'inadimplente'];
+
     let hasActivePaidAccess = false;
-    if (clientToCheck.accessLevel && clientToCheck.accessLevel !== 'gratuito') {
+    if (clientToCheck.accessLevel && !NON_PAID_LEVELS.includes(clientToCheck.accessLevel)) {
         if (clientToCheck.accessLevel.startsWith('vitalicio_')) {
             hasActivePaidAccess = true;
         } else if (clientToCheck.accessExpiresAt) {
@@ -137,7 +149,7 @@ async function requireActiveSubscription(req, res, next) {
             }
         }
     }
-    
+
     if (clientToCheck.status === 'Aguardando Pagamento') {
          hasActivePaidAccess = true; // Permite acesso durante o primeiro fluxo de pagamento
     }

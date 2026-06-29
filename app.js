@@ -66,6 +66,31 @@ async function ensureCriticalSchema() {
   } catch (err) {
     console.error('[SCHEMA] Falha ao garantir linha de user_preferences (não crítico):', err.message);
   }
+
+  // Garante o valor 'inadimplente' no ENUM de accessLevel (default do model) e
+  // migra os 'gratuito' legados — não há mais plano gratuito.
+  try {
+    const [typeRows] = await sequelize.query(`
+      SELECT t.typname
+      FROM pg_type t
+      JOIN pg_attribute a ON a.atttypid = t.oid
+      JOIN pg_class c ON c.oid = a.attrelid
+      WHERE c.relname = 'clients' AND a.attname = 'accessLevel'
+      LIMIT 1`);
+    const typname = typeRows && typeRows[0] && typeRows[0].typname;
+    if (typname) {
+      // ADD VALUE roda em autocommit (fora de transação) — necessário no Postgres.
+      await sequelize.query(`ALTER TYPE "${typname}" ADD VALUE IF NOT EXISTS 'inadimplente'`);
+      console.log(`[SCHEMA] Valor 'inadimplente' garantido no ENUM ${typname}.`);
+      // Migra os legados só depois que o valor existe no tipo.
+      await sequelize.query(`UPDATE clients SET "accessLevel" = 'inadimplente' WHERE "accessLevel" = 'gratuito'`);
+      console.log('[SCHEMA] Clientes legados "gratuito" migrados para "inadimplente".');
+    } else {
+      console.warn('[SCHEMA] Tipo ENUM de accessLevel não localizado; pulando migração inadimplente.');
+    }
+  } catch (err) {
+    console.error('[SCHEMA] Falha ao garantir ENUM/migrar inadimplente (não crítico):', err.message);
+  }
 }
 
 /**

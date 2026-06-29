@@ -188,7 +188,7 @@ async function processWebhookEvent(eventData, hottokFromHeader) {
              logger.info(`[HOTMART SVC] Assinatura existente (Externo: ${externalIdForSubscription}) já está ATIVA. Mantendo status para evento de boleto gerado.`);
           }
         }
-        if (clientInstance.status === 'Ativo' && clientInstance.accessLevel === 'gratuito') {
+        if (clientInstance.status === 'Ativo' && ['gratuito','inadimplente'].includes(clientInstance.accessLevel)) {
             await clientInstance.update({ status: 'Aguardando Pagamento' });
             logger.info(`[HOTMART SVC] Status do Cliente ID ${clientInstance.id} atualizado para 'Aguardando Pagamento'.`);
         }

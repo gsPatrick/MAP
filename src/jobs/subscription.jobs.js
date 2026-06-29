@@ -38,7 +38,7 @@ async function notifyExpiringSubscriptions() {
         const clientsToNotify = await Client.findAll({
             where: {
                 status: 'Ativo',
-                accessLevel: { [Op.notIn]: ['gratuito', 'vitalicio_basico', 'vitalicio_avancado'] },
+                accessLevel: { [Op.notIn]: ['gratuito', 'inadimplente', 'vitalicio_basico', 'vitalicio_avancado'] },
                 accessExpiresAt: {
                     [Op.in]: [tomorrowStr, threeDaysStr]
                 }
@@ -93,7 +93,7 @@ async function sendDailyRenewalRemindersToExpiredUsers() {
         const expiredClients = await Client.findAll({
             where: {
                 status: 'Ativo', // Apenas para não incomodar quem foi inativado/bloqueado
-                accessLevel: { [Op.notIn]: ['gratuito', 'vitalicio_basico', 'vitalicio_avancado'] },
+                accessLevel: { [Op.notIn]: ['gratuito', 'inadimplente', 'vitalicio_basico', 'vitalicio_avancado'] },
                 accessExpiresAt: {
                     [Op.lt]: today // A data de expiração é anterior a hoje
                 }

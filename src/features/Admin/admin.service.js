@@ -46,10 +46,12 @@ async function getAdminClientList(queryParams = {}) {
         break;
       case 'expired':
         // Pega clientes cujo status não é 'Ativo' E a data de expiração já passou.
-        whereConditions.status = { [Op.notIn]: ['Ativo', 'Aguardando Pagamento'] };
+        // 'Inativo' (excluídos via soft-delete) ficam de fora.
+        whereConditions.status = { [Op.notIn]: ['Ativo', 'Aguardando Pagamento', 'Inativo'] };
         whereConditions.accessExpiresAt = { [Op.lt]: today };
         break;
-      default: // 'all'
+      default: // 'all' — não mostra clientes inativados (soft-delete)
+        whereConditions.status = { [Op.ne]: 'Inativo' };
         break;
     }
 
@@ -168,7 +170,7 @@ async function getDashboardMetrics() {
     const expiredClients = await Client.count({
       where: {
         status: 'Ativo',
-        accessLevel: { [Op.not]: ['gratuito', 'vitalicio_basico', 'vitalicio_avancado'] },
+        accessLevel: { [Op.not]: ['gratuito', 'inadimplente', 'vitalicio_basico', 'vitalicio_avancado'] },
         accessExpiresAt: { [Op.lt]: today }
       }
     });
@@ -176,7 +178,7 @@ async function getDashboardMetrics() {
     planCounts.forEach(item => {
       metrics.plans[item.accessLevel] = parseInt(item.count, 10);
     });
-    const allPlanLevels = ['gratuito', 'basico_mensal', 'basico_anual', 'avancado_mensal', 'avancado_anual', 'vitalicio_basico', 'vitalicio_avancado'];
+    const allPlanLevels = ['gratuito', 'inadimplente', 'basico_mensal', 'basico_anual', 'avancado_mensal', 'avancado_anual', 'vitalicio_basico', 'vitalicio_avancado'];
     allPlanLevels.forEach(level => {
       if (!metrics.plans[level]) {
         metrics.plans[level] = 0;
@@ -310,7 +312,7 @@ async function sendBroadcastMessage(message, targetGroup = 'all_active') {
         whereConditions.accessExpiresAt = {
           [Op.between]: [today, sevenDaysFromNow.toISOString().split('T')[0]]
         };
-        whereConditions.accessLevel = { [Op.notIn]: ['gratuito', 'vitalicio_basico', 'vitalicio_avancado'] };
+        whereConditions.accessLevel = { [Op.notIn]: ['gratuito', 'inadimplente', 'vitalicio_basico', 'vitalicio_avancado'] };
         break;
       case 'expired':
         whereConditions.status = { [Op.notIn]: ['Ativo', 'Aguardando Pagamento'] };
@@ -393,7 +395,7 @@ async function getAffiliatesDashboard() {
           .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0]; // Ordena e pega a mais antiga
 
         let commissionAmount = 0;
-        let planName = 'gratuito'; // Padrão
+        let planName = 'inadimplente'; // Padrão
 
         if (firstPaidSubscription) {
           commissionAmount = parseFloat(firstPaidSubscription.plan.affiliateCommissionValue);
@@ -513,7 +515,7 @@ async function clearClientBalance(clientId) {
 
 
 async function deleteClientByUser(clientId) {
-  logger.warn(`[ADMIN SERVICE] Início da solicitação de EXCLUSÃO PERMANENTE para o Cliente ID: ${clientId}.`);
+  logger.warn(`[ADMIN SERVICE] Início da solicitação de EXCLUSÃO (soft-delete) para o Cliente ID: ${clientId}.`);
   const t = await sequelize.transaction();
   try {
     const client = await Client.findByPk(clientId, { transaction: t });
@@ -522,14 +524,18 @@ async function deleteClientByUser(clientId) {
       throw { statusCode: 404, message: 'Cliente não encontrado para exclusão.' };
     }
 
-    await client.destroy({ transaction: t });
+    // Soft-delete: em vez de apagar permanentemente, inativamos o cliente.
+    // Efeitos: deixa de aparecer na busca do admin, não recebe mais mensagens
+    // do sistema (jobs filtram status 'Ativo') e perde acesso ao painel
+    // (requireActiveSubscription bloqueia status 'Inativo'). Os dados ficam preservados.
+    await client.update({ status: 'Inativo' }, { transaction: t });
 
     await t.commit();
-    logger.info(`[ADMIN SERVICE] Cliente ID ${clientId} (${client.name || client.phone}) e todos os dados associados foram excluídos com sucesso por um administrador.`);
+    logger.info(`[ADMIN SERVICE] Cliente ID ${clientId} (${client.name || client.phone}) inativado (soft-delete) por um administrador.`);
     return true;
   } catch (error) {
     await t.rollback();
-    logger.error(`[ADMIN SERVICE] Erro CRÍTICO ao excluir cliente ID ${clientId}: ${error.message}`, { error });
+    logger.error(`[ADMIN SERVICE] Erro ao inativar cliente ID ${clientId}: ${error.message}`, { error });
     throw error;
   }
 }

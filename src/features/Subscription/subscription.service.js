@@ -40,7 +40,7 @@ async function createSubscription(clientId, planId, startDate = null, status = '
         const endDate = new Date(effectiveStartDate);
         endDate.setDate(endDate.getDate() + plan.durationDays);
 
-        let clientAccessLevel = 'gratuito';
+        let clientAccessLevel = 'inadimplente';
         let clientAccessExpiresAt = null;
         const planTier = plan.tier || 'basico';
 
@@ -61,7 +61,7 @@ async function createSubscription(clientId, planId, startDate = null, status = '
                 accessExpiresAt: clientAccessExpiresAt,
                 status: 'Ativo'
             }, { transaction: t });
-        } else if (status === 'Pendente' && clientInstance.status === 'Ativo' && clientInstance.accessLevel === 'gratuito') {
+        } else if (status === 'Pendente' && clientInstance.status === 'Ativo' && ['gratuito','inadimplente'].includes(clientInstance.accessLevel)) {
             await clientInstance.update({ status: 'Aguardando Pagamento' }, { transaction: t });
         }
 
@@ -169,7 +169,7 @@ async function updateSubscriptionStatusByExternalId(externalId, newStatus, optio
                 where: { clientId: subscription.clientId, status: 'Ativa', id: { [Op.ne]: subscription.id } }, transaction: t
             });
             if (otherActiveSubscriptions === 0) {
-                clientAccessLevel = 'gratuito';
+                clientAccessLevel = 'inadimplente';
                 clientAccessExpiresAt = null;
                 clientStatus = (newStatus === 'Pagamento Falhou') ? 'Pagamento Falhou' : 'Inativo';
             }
@@ -260,7 +260,7 @@ async function updateSubscriptionStatusById(id, newStatus, options = {}) {
                 where: { clientId: subscription.clientId, status: 'Ativa', id: { [Op.ne]: subscription.id } }, transaction: t
             });
             if (otherActiveSubscriptions === 0) {
-                clientAccessLevel = 'gratuito';
+                clientAccessLevel = 'inadimplente';
                 clientAccessExpiresAt = null;
                 clientStatus = (newStatus === 'Pagamento Falhou') ? 'Pagamento Falhou' : 'Inativo';
             }
