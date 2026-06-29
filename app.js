@@ -186,6 +186,15 @@ async function initializeDatabaseAndJobs() {
     await ensureBootstrapAdmin();
     await debugRecorrencias(); // TEMPORÁRIO: remover após diagnóstico
 
+    // Realinha recorrências atrasadas (datas no passado por causa do switch que
+    // ficou off): ajusta para a próxima ocorrência futura, sem gerar backlog.
+    try {
+      const recurringJob = require('./src/jobs/recurringTransactionJob');
+      await recurringJob.realignOverdueRecurringRules();
+    } catch (e) {
+      console.error('[BOOT] Falha ao realinhar recorrências (não crítico):', e.message);
+    }
+
     await initializeBasePlans();
 
     // Inicia os jobs agendados após a confirmação da conexão com o banco.

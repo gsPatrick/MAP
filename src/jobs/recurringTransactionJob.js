@@ -170,6 +170,52 @@ async function processRecurringTransactions() {
   }
 }
 
+/**
+ * Realinha (silenciosamente) regras de recorrência ATRASADAS: avança o
+ * nextDueDate para a próxima ocorrência a partir de hoje, SEM gerar as
+ * transações dos períodos perdidos. Usado para corrigir o acúmulo causado
+ * pelo período em que o job não rodou (switch global estava off).
+ */
+async function realignOverdueRecurringRules() {
+  const today = new Date().toISOString().split('T')[0];
+  logger.info('[REALINHAR RECORRÊNCIA] Iniciando realinhamento de regras atrasadas...');
+  let realigned = 0, deactivated = 0, errors = 0;
+  try {
+    const overdue = await RecurringTransactionRule.findAll({
+      where: { isActive: true, nextDueDate: { [Op.lt]: today } },
+    });
+    if (overdue.length === 0) {
+      logger.info('[REALINHAR RECORRÊNCIA] Nenhuma regra atrasada para realinhar.');
+      return { realigned, deactivated, errors };
+    }
+    for (const rule of overdue) {
+      try {
+        let nd = rule.nextDueDate;
+        let guard = 0;
+        while (nd && new Date(nd) < new Date(today) && guard < 1200) {
+          nd = calculateNextDueDate(rule.startDate, rule.frequency, rule.interval, rule.dayOfMonth, rule.dayOfWeek, nd);
+          guard++;
+        }
+        if (!nd) { errors++; continue; }
+        if (rule.endDate && new Date(nd) > new Date(rule.endDate)) {
+          await rule.update({ isActive: false, nextDueDate: null });
+          deactivated++;
+        } else {
+          await rule.update({ nextDueDate: nd });
+          realigned++;
+        }
+      } catch (e) {
+        errors++;
+        logger.error(`[REALINHAR RECORRÊNCIA] Erro na regra ID ${rule.id}: ${e.message}`);
+      }
+    }
+    logger.info(`[REALINHAR RECORRÊNCIA] Concluído. Realinhadas: ${realigned}, desativadas (após endDate): ${deactivated}, erros: ${errors}.`);
+  } catch (error) {
+    logger.error(`[REALINHAR RECORRÊNCIA] Erro geral: ${error.message}`, { stack: error.stack });
+  }
+  return { realigned, deactivated, errors };
+}
+
 function startRecurringTransactionJob(preferences, models) { // Mudança aqui para receber prefs e models
   const schedule = preferences?.recurringJobSchedule || '0 4 * * *';
   if (cron.validate(schedule)) {
@@ -185,4 +231,6 @@ function startRecurringTransactionJob(preferences, models) { // Mudança aqui pa
 
 // Removida a lógica de busca de preferências daqui, pois ela é passada como argumento.
 // A função agora recebe as preferências para configurar o job.
+startRecurringTransactionJob.realignOverdueRecurringRules = realignOverdueRecurringRules;
+startRecurringTransactionJob.processRecurringTransactions = processRecurringTransactions;
 module.exports = startRecurringTransactionJob;
