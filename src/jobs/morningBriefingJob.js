@@ -93,6 +93,33 @@ async function processAndSendBriefings() {
           order: [['value', 'DESC']],
         });
 
+        // --- VISÃO DO MÊS: itens que vencem ainda neste mês (depois de hoje) ---
+        const pad = (n) => String(n).padStart(2, '0');
+        const y = startOfDay.getFullYear();
+        const mo = startOfDay.getMonth();
+        const endOfMonthStr = `${y}-${pad(mo + 1)}-${pad(new Date(y, mo + 1, 0).getDate())}`;
+
+        const monthlyRecurringItems = await RecurringTransactionRule.findAll({
+          where: {
+            financialAccountId: { [Op.in]: accountIds },
+            isActive: true,
+            nextDueDate: { [Op.gt]: todayDateString, [Op.lte]: endOfMonthStr },
+          },
+          include: [{ model: FinancialAccount, as: 'financialAccount', attributes: ['accountName'] }],
+          order: [['nextDueDate', 'ASC']],
+        });
+
+        const monthlyPendingTransactions = await FinancialTransaction.findAll({
+          where: {
+            financialAccountId: { [Op.in]: accountIds },
+            isPayableOrReceivable: true,
+            isPaidOrReceived: false,
+            dueDate: { [Op.gt]: todayDateString, [Op.lte]: endOfMonthStr },
+          },
+          include: [{ model: FinancialAccount, as: 'financialAccount', attributes: ['accountName'] }],
+          order: [['dueDate', 'ASC']],
+        });
+
         // --- LÓGICA DE CHECKLIST MODIFICADA ---
         let checklistData = null;
         if (mainAccountForChecklist) {
@@ -116,6 +143,8 @@ async function processAndSendBriefings() {
           pendingTransactions,
           appointments,
           recurringItems,
+          monthlyRecurringItems,
+          monthlyPendingTransactions,
           checklistData,
         };
 

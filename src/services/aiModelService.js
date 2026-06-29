@@ -1036,7 +1036,7 @@ async function generateMorningBriefingMessage(briefingData) {
     return "Bom dia! Um erro técnico me impede de gerar seu resumo personalizado hoje. Por favor, contate o suporte.";
   }
 
-  const { clientName, pendingTransactions, appointments, recurringItems } = briefingData;
+  const { clientName, pendingTransactions, appointments, recurringItems, monthlyRecurringItems, monthlyPendingTransactions } = briefingData;
 
   const systemPrompt = `
   Você é o "${ASSISTANT_NAME}", um assistente de bem-estar e finanças para WhatsApp. Sua personalidade é a de um coach financeiro: EXTREMAMENTE amigável, proativo, empático, motivador, sábio e um pouco brincalhão. Você é um especialista em finanças pessoais e produtividade.
@@ -1080,6 +1080,12 @@ async function generateMorningBriefingMessage(briefingData) {
       *Agenda vazia:*  
       "Sua agenda está como uma tela em branco hoje! Uma oportunidade de ouro para focar naquele projeto importante ou até mesmo adiantar tarefas da semana. Aproveite essa clareza! 🎯"
 
+    c2. **VISÃO DO MÊS (📅):**
+    * Depois de falar do dia, traga uma seção curta com o que ainda vai vencer NESTE MÊS (dados em \`doMes\`: \`recorrencias\` e \`contas\`, cada item com o campo \`vence\` no formato dd/mm).
+    * **Deixe CLARO que são itens do mês** (ex.: comece com "📅 *De olho no mês:*").
+    * Liste de forma resumida os principais (não precisa listar todos se forem muitos — destaque os mais relevantes e/ou o total) e cite a data de vencimento de cada um.
+    * **SE NÃO HOUVER NADA no mês**, faça um comentário leve e positivo (ex.: "E o restante do mês está tranquilo de contas, ótimo para se organizar! 🙌") — NÃO invente itens.
+
         d. **SEÇÃO CHECKLIST (SE APLICÁVEL):**
     *   Você receberá dados do checklist do dia. Esta seção **SÓ DEVE APARECER** se o usuário tiver uma conta de negócio.
     *   **Se a lista de tarefas estiver VAZIA:** Incentive o usuário a começar o dia planejando.  
@@ -1096,15 +1102,22 @@ async function generateMorningBriefingMessage(briefingData) {
     "Com base no seu dia, meu conselho é focar na reunião das 10h, ela parece ser a mais importante. No mais, continue com os ótimos registros, eles são a bússola para suas metas! Qualquer coisa, é só chamar!"  
     "Tenha um dia fantástico, \${clientName}! Lembre-se de anotar aquele cafezinho ou o almoço. São os pequenos gastos que, somados, fazem a diferença. Estou aqui para te ajudar a enxergá-los!"
 
-  **DADOS FORNECIDOS (em JSON):**  
-  Você receberá um objeto com \`clientName\`, e arrays para \`pendingTransactions\`, \`appointments\`, e \`recurringItems\`. Use esses dados para alimentar sua análise e a mensagem.
+  **DADOS FORNECIDOS (em JSON):**
+  Você receberá \`hoje\` (com \`pendingTransactions\`, \`appointments\`, \`recurringItems\` do dia) e \`doMes\` (com \`recorrencias\` e \`contas\` que ainda vencem neste mês, cada uma com o campo \`vence\` em dd/mm). Use \`hoje\` para o panorama do dia e \`doMes\` para a seção "De olho no mês".
   `;
 
 
+  const fmtDate = (d) => d ? new Date(d + 'T00:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' }) : null;
   const simplifiedData = {
-    pendingTransactions: (pendingTransactions || []).map(t => ({ description: t.description, value: t.value, type: t.type, account: t.financialAccount?.accountName })),
-    appointments: (appointments || []).map(a => ({ time: new Date(a.eventDateTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), title: a.title, account: a.financialAccount?.accountName })),
-    recurringItems: (recurringItems || []).map(r => ({ description: r.description, value: r.value, type: r.type, account: r.financialAccount?.accountName })),
+    hoje: {
+      pendingTransactions: (pendingTransactions || []).map(t => ({ description: t.description, value: t.value, type: t.type, account: t.financialAccount?.accountName })),
+      appointments: (appointments || []).map(a => ({ time: new Date(a.eventDateTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), title: a.title, account: a.financialAccount?.accountName })),
+      recurringItems: (recurringItems || []).map(r => ({ description: r.description, value: r.value, type: r.type, account: r.financialAccount?.accountName })),
+    },
+    doMes: {
+      recorrencias: (monthlyRecurringItems || []).map(r => ({ description: r.description, value: r.value, type: r.type, vence: fmtDate(r.nextDueDate), account: r.financialAccount?.accountName })),
+      contas: (monthlyPendingTransactions || []).map(t => ({ description: t.description, value: t.value, type: t.type, vence: fmtDate(t.dueDate), account: t.financialAccount?.accountName })),
+    },
   };
 
   const userPrompt = `
