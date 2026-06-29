@@ -25,7 +25,7 @@ router.post('/simulate-asaas-payment', devToolsController.simulateAsaasPayment);
 
 /**
  * Endpoint de teste para enviar um resumo financeiro para um número específico.
- * Uso: GET /api/dev-tools/send-summary?phone=557182862912&accountId=1
+ * Uso: GET /api/dev-tools/send-summary?phone=552199998888&accountId=1
  */
 router.get('/send-summary', async (req, res) => {
     const { phone, accountId } = req.query;

@@ -16,7 +16,7 @@ function normalizePhoneNumberToCanonical(phoneNumber) {
     let cleanNumber = phoneNumber.replace(/\D/g, '');
 
     // 2. Padroniza para o formato DDI+DDD+Numero se vier sem DDI.
-    // Ex: '71982862912' (11 dígitos) -> '5571982862912'
+    // Ex: '21999998888' (11 dígitos) -> '5521999998888'
     if (cleanNumber.length === 10 || cleanNumber.length === 11) {
         cleanNumber = '55' + cleanNumber;
     }
@@ -29,7 +29,7 @@ function normalizePhoneNumberToCanonical(phoneNumber) {
     }
     
     // 4. Se não for um celular com 9º dígito (pode ser fixo ou já estar no formato correto), retorna como está.
-    // Ex: '557182862912' (12 dígitos) já está no formato canônico.
+    // Ex: '552199998888' (12 dígitos) já está no formato canônico.
     if (cleanNumber.length === 12 && cleanNumber.startsWith('55')) {
         logger.info(`[PHONE UTILS] Número '${phoneNumber}' já está no formato canônico '${cleanNumber}'.`);
         return cleanNumber;
