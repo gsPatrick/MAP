@@ -105,6 +105,22 @@ async function processRecurringTransactions() {
           }, { transaction: ruleProcessingTransaction });
 
           logger.info(`[JOB RECORRÊNCIA] Transação criada para regra ID ${currentRule.id} ("${currentRule.description}") na FinancialAccount "${financialAccount.accountName}" em ${currentRule.nextDueDate}.`);
+
+          // Mesmo com lançamento automático, avisamos o cliente — antes este ramo
+          // não enviava nada, então recorrências com "Cria Transação" ligada ficavam
+          // totalmente silenciosas ("não vem lembrete de nada").
+          if (client && client.phone) {
+            const intro = `Oi, ${clientFirstName}! Sua conta recorrente foi lançada automaticamente hoje. 🤖`;
+            const body = `📜 *Descrição:* ${currentRule.description}\n` +
+              `💰 *Valor:* ${formatCurrency(currentRule.value)} (${currentRule.type})\n` +
+              `🗓️ *Vencimento:* ${formatDate(currentRule.nextDueDate)}\n` +
+              `🏦 *Conta:* ${financialAccount.accountName}`;
+            const footer = "Já registrei pra você. Quando pagar, é só marcar como pago no painel, ok? 😉";
+            await sendWhatsappMessage(client.phone, `${intro}\n\n${body}\n\n${footer}`);
+            logger.info(`[JOB RECORRÊNCIA] Aviso de lançamento automático enviado para regra ID ${currentRule.id} (Cliente ${client.name}).`);
+          } else {
+            logger.warn(`[JOB RECORRÊNCIA] Cliente ou telefone não encontrado para aviso da regra ID ${currentRule.id}.`);
+          }
         } else {
           if (client && client.phone) {
             const intro = `Oi, ${clientFirstName}! Passando pra te lembrar da sua conta recorrente que vence hoje! 🤓`;

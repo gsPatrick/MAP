@@ -312,10 +312,17 @@ async function deleteRecurringRule(financialAccountId, ruleId) {
       logger.warn(`Regra de recorrência ID ${ruleId} não encontrada para exclusão na FinancialAccount ID ${financialAccountId}.`);
       return false;
     }
-    // IMPORTANTE: Decidir o que fazer com as FinancialTransactions geradas por esta regra.
-    // A FK em FinancialTransaction tem onDelete: 'SET NULL'.
-    // Se quisesse deletar as transações junto, teria que ser 'CASCADE' ou deletá-las manualmente aqui.
-    // Por ora, elas apenas perderão a referência à regra.
+    // IMPORTANTE: as FinancialTransactions já geradas por esta regra apenas perdem a
+    // referência (não são apagadas, para preservar o histórico financeiro).
+    // O modelo define onDelete: 'SET NULL', mas em produção o schema foi criado via sync
+    // e a regra real da FK pode estar como NO ACTION/RESTRICT — o que faria a exclusão
+    // falhar com erro de FK quando a regra já tem transações geradas (caso comum em regras
+    // com "Cria Transação" ligada). Zeramos a referência aqui explicitamente para garantir
+    // que a exclusão funcione independentemente da constraint do banco.
+    await FinancialTransaction.update(
+      { recurringTransactionRuleId: null },
+      { where: { recurringTransactionRuleId: ruleId }, transaction: t }
+    );
 
     await rule.destroy({ transaction: t });
     await t.commit();

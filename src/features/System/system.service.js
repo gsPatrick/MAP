@@ -29,13 +29,13 @@ async function getSystemPreferences() {
  * @returns {Promise<boolean>} True se habilitado, False se desabilitado.
  */
 async function isAutomatedJobProcessingEnabled() {
-  try {
-    const prefs = await getSystemPreferences();
-    return prefs.areAutomatedJobsEnabled === true;
-  } catch (error) {
-    logger.error(`Erro ao verificar status global dos jobs: ${error.message}`);
-    return false; // Default seguro: desligado em caso de erro
-  }
+  // DECISÃO DE PRODUÇÃO: o disparo automático de notificações deve SEMPRE ocorrer.
+  // O antigo switch global `areAutomatedJobsEnabled` deixava todas as automações
+  // (recorrência, alertas, briefing, hidratação, checklist) silenciosamente
+  // desligadas quando estava OFF no banco — o que fazia "não chegar lembrete nenhum".
+  // Por isso o bloqueio foi neutralizado: este gate nunca mais barra os envios,
+  // independentemente do valor armazenado em UserPreference.areAutomatedJobsEnabled.
+  return true;
 }
 
 /**

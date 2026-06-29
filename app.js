@@ -7,10 +7,42 @@ const punycode = require('punycode/');
 
 // Caminhos para os módulos
 const { sequelize } = require('./src/database');
+const { DataTypes } = require('sequelize');
 const errorHandler = require('./src/middlewares/errorHandler');
 const { startJobs } = require('./src/jobs');
 const mainApiRouter = require('./src/routes');
 const { initializeBasePlans } = require('./src/scripts/initializePlans'); // <<< ADICIONE ESTA LINHA
+
+/**
+ * Garante, de forma idempotente, que colunas críticas existam no banco mesmo que a
+ * migration correspondente não tenha sido aplicada em produção. Roda após a conexão.
+ * É seguro: só adiciona o que está faltando e nunca derruba o boot (try/catch).
+ */
+async function ensureCriticalSchema() {
+  const qi = sequelize.getQueryInterface();
+  try {
+    const cols = await qi.describeTable('user_preferences');
+    const ensures = [
+      ['areAutomatedJobsEnabled', { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true }],
+      ['cardClosingAlertLeadDays', { type: DataTypes.INTEGER, allowNull: false, defaultValue: 2 }],
+      ['cardPaymentAlertLeadDays', { type: DataTypes.INTEGER, allowNull: false, defaultValue: 3 }],
+    ];
+    for (const [name, def] of ensures) {
+      if (!cols[name]) {
+        await qi.addColumn('user_preferences', name, def);
+        console.log(`[SCHEMA] Coluna user_preferences.${name} criada (estava faltando).`);
+      }
+    }
+    // Garante que exista pelo menos uma linha de preferências com automações ligadas.
+    const [rows] = await sequelize.query('SELECT COUNT(*)::int AS c FROM user_preferences');
+    if (rows && rows[0] && rows[0].c === 0) {
+      await qi.bulkInsert('user_preferences', [{ areAutomatedJobsEnabled: true, createdAt: new Date(), updatedAt: new Date() }]);
+      console.log('[SCHEMA] Linha inicial de user_preferences criada.');
+    }
+  } catch (err) {
+    console.error('[SCHEMA] ensureCriticalSchema falhou (não crítico, app continua):', err.message);
+  }
+}
 
 
 async function initializeDatabaseAndJobs() {
@@ -45,6 +77,10 @@ async function initializeDatabaseAndJobs() {
         console.log('Modelos sincronizados com o banco de dados (alter: true).');
       }
     }
+
+    // Garante colunas críticas (ex.: areAutomatedJobsEnabled) antes de qualquer
+    // query a user_preferences, evitando quebra caso a migration não tenha rodado.
+    await ensureCriticalSchema();
 
     await initializeBasePlans();
 

@@ -5,6 +5,7 @@ const {
   FinancialAccount,
   CreditCard,
   RecurringTransactionRule,
+  StockMovement,
   Client,
   sequelize
 } = require('../../database');
@@ -550,6 +551,19 @@ async function deleteTransaction(financialAccountId, transactionId) {
         error.statusCode = 409; error.status = 'fail'; throw error;
       }
     }
+
+    // Limpeza defensiva de referências antes de excluir. O modelo define onDelete: 'SET NULL'
+    // para estes vínculos, mas em produção o schema foi criado via sync e a regra real da FK
+    // pode estar como NO ACTION/RESTRICT — o que faria a exclusão falhar com erro de FK.
+    // Zeramos as referências aqui para que a exclusão funcione independente da constraint do banco.
+    await StockMovement.update(
+      { relatedTransactionId: null },
+      { where: { relatedTransactionId: transactionId }, transaction: t }
+    );
+    await FinancialTransaction.update(
+      { originalAccountId: null },
+      { where: { originalAccountId: transactionId, id: { [Op.ne]: transactionId } }, transaction: t }
+    );
 
     await transaction.destroy({ transaction: t });
     await t.commit();
