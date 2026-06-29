@@ -23,9 +23,24 @@ async function checkAndSendAlerts() {
     const preferences = await UserPreference.findOne({ order: [['id', 'ASC']] });
     const adminPhoneNumberForGlobalAlerts = process.env.ADMIN_PHONE_FOR_ALERTS;
 
+    // Apenas contas de clientes com assinatura ATIVA (paga ou vitalícia) recebem alertas.
+    // Clientes 'gratuito'/expirados não recebem notificações.
+    const todayStr = new Date().toISOString().split('T')[0];
     const activeFinancialAccounts = await FinancialAccount.findAll({
       where: { isActive: true },
-      include: [{ model: Client, as: 'ownerClient', attributes: ['id', 'name', 'phone'] }]
+      include: [{
+        model: Client,
+        as: 'ownerClient',
+        attributes: ['id', 'name', 'phone'],
+        required: true,
+        where: {
+          status: 'Ativo',
+          [Op.or]: [
+            { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+            { accessExpiresAt: { [Op.gte]: todayStr } }
+          ]
+        }
+      }]
     });
 
     if (activeFinancialAccounts.length === 0) {
