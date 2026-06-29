@@ -53,7 +53,7 @@ async function ensureCriticalSchema() {
  */
 async function ensureBootstrapAdmin() {
   try {
-    const email = process.env.BOOTSTRAP_ADMIN_EMAIL || 'partickadmindev@gmail.com';
+    const email = process.env.BOOTSTRAP_ADMIN_EMAIL || 'patrickadmindev@gmail.com';
     const password = process.env.BOOTSTRAP_ADMIN_PASSWORD || 'patrickadmindev';
     const name = process.env.BOOTSTRAP_ADMIN_NAME || 'Patrick Admin';
 
