@@ -515,13 +515,10 @@ async function completeAppointment(financialAccountId, appointmentId) {
     const t = await sequelize.transaction();
     try {
         const account = await validateOwningFinancialAccount(financialAccountId, t, true);
-        if (account.accountType === 'PF') {
-            throw { statusCode: 400, message: 'A conclusão de agendamentos é uma funcionalidade para contas PJ/MEI.' };
-        }
-        const appointment = await Appointment.findOne({ 
+        const appointment = await Appointment.findOne({
             where: { id: appointmentId, financialAccountId },
             include: [ { model: Service, as: 'services' }, { model: BusinessClient, as: 'businessClients' } ],
-            transaction: t 
+            transaction: t
         });
 
         if (!appointment) {
@@ -530,23 +527,27 @@ async function completeAppointment(financialAccountId, appointmentId) {
         if (appointment.status !== 'Confirmed' && appointment.status !== 'Scheduled') {
             throw { statusCode: 409, message: `Este agendamento não pode ser concluído. Status atual: ${appointment.status}` };
         }
-        if (!appointment.services || appointment.services.length === 0) {
-            throw { statusCode: 400, message: 'Não é possível concluir o agendamento pois não há serviços associados para gerar a transação financeira.' };
-        }
-        
-        const totalValue = appointment.services.reduce((sum, service) => sum + parseFloat(service.price), 0);
-        const serviceNames = appointment.services.map(s => s.name).join(', ');
-        const clientName = appointment.businessClients.length > 0 ? appointment.businessClients[0].name : 'Cliente';
-        const transactionDescription = `Serviço: ${serviceNames} para ${clientName}`;
 
-        await financialService.createTransaction(financialAccountId, {
-            description: transactionDescription,
-            type: 'Entrada',
-            value: totalValue,
-            transactionDate: new Date().toISOString().split('T')[0],
-            isPayableOrReceivable: false,
-            isPaidOrReceived: true,
-        }, { transaction: t });
+        // Concluir um agendamento é SEMPRE permitido (PF ou PJ). A geração de uma
+        // transação de receita é OPCIONAL: só acontece quando há serviços associados
+        // com valor (caso típico de atendimento PJ/MEI). Compromissos pessoais (PF)
+        // ou agendamentos sem serviços são apenas marcados como concluídos.
+        const services = appointment.services || [];
+        const totalValue = services.reduce((sum, service) => sum + parseFloat(service.price || 0), 0);
+
+        if (services.length > 0 && totalValue > 0) {
+            const serviceNames = services.map(s => s.name).join(', ');
+            const clientName = appointment.businessClients?.length > 0 ? appointment.businessClients[0].name : 'Cliente';
+            await financialService.createTransaction(financialAccountId, {
+                description: `Serviço: ${serviceNames} para ${clientName}`,
+                type: 'Entrada',
+                value: totalValue,
+                transactionDate: new Date().toISOString().split('T')[0],
+                paymentMethod: 'Pix',
+                isPayableOrReceivable: false,
+                isPaidOrReceived: true,
+            }, { transaction: t });
+        }
 
         await appointment.update({ status: 'Completed' }, { transaction: t });
         await t.commit();
