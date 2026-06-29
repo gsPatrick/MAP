@@ -10,6 +10,7 @@ const {
   sequelize
 } = require('../../database');
 const { Op, fn, col, literal } = require('sequelize');
+const dayjs = require('dayjs');
 const logger = require('../../utils/logger');
 const { calculateNextDueDate } = require('../../utils/dateUtils');
 const creditCardService = require('../CreditCardManagement/creditCard.service');
