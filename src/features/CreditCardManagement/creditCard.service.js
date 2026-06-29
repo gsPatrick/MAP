@@ -91,14 +91,14 @@ async function findCreditCardByName(financialAccountId, cardName, transaction = 
         transaction
     });
     if (!card) {
-        card = await CreditCard.findOne({
-            where: { name: { [Op.iLike]: `${cardName}%` }, financialAccountId, isActive: true },
-            transaction
-        });
-    }
-    if (!card) {
-        const cards = await CreditCard.findAll({ where: { financialAccountId, isActive: true }, transaction });
-        card = cards.find(c => c.name.toLowerCase().includes(cardName.toLowerCase()));
+        // Match parcial determinístico: prefere o nome que COMEÇA com o termo e,
+        // entre vários, o mais curto (mais próximo do que foi digitado). Evita
+        // escolher silenciosamente um cartão arbitrário quando há nomes parecidos.
+        const allCards = await CreditCard.findAll({ where: { financialAccountId, isActive: true }, order: [['name', 'ASC']], transaction });
+        const term = cardName.toLowerCase().trim();
+        const byPrefix = allCards.filter(c => c.name.toLowerCase().startsWith(term)).sort((a, b) => a.name.length - b.name.length);
+        const byIncludes = allCards.filter(c => c.name.toLowerCase().includes(term)).sort((a, b) => a.name.length - b.name.length);
+        card = byPrefix[0] || byIncludes[0] || null;
     }
     if (card) {
         logger.info(`[SERVICE] Cartão encontrado para "${cardName}" na conta ${financialAccountId}: "${card.name}" (ID: ${card.id})`);
@@ -496,8 +496,11 @@ async function getAvailableCreditLimit(financialAccountId, creditCardId) {
         }) || 0;
         totalSpendsImpactingLimit -= parseFloat(directCreditsOnCard);
 
+        // IMPORTANTE: casar o nome do cartão seguido de " (" para não confundir
+        // cartões cujo nome é prefixo de outro (ex.: "Nubank" x "Nubank Empresarial").
+        // O pagamento é gravado como "Pagamento Fatura {nome} ({mês})...".
         const invoicePayments = await FinancialTransaction.sum('value', {
-            where: { financialAccountId, type: 'Saída', creditCardId: null, description: { [Op.iLike]: `Pagamento Fatura ${card.name}%` } },
+            where: { financialAccountId, type: 'Saída', creditCardId: null, description: { [Op.iLike]: `Pagamento Fatura ${card.name} (%` } },
             transaction: t
         }) || 0;
 

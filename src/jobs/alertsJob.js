@@ -6,6 +6,7 @@ const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
 // Importando formatadores para consistência
 const { formatCurrency, formatDate } = require('../utils/formatters');
+const creditCardService = require('../features/CreditCardManagement/creditCard.service');
 
 async function checkAndSendAlerts() {
   logger.info('[JOB ALERTAS] Verificando alertas...');
@@ -156,6 +157,26 @@ async function checkAndSendAlerts() {
           const diffPayment = Math.ceil((paymentDate - today) / (1000 * 60 * 60 * 24));
           if (diffPayment === paymentLead) {
             alertSections.push(`💰 *Vencimento de Fatura (${card.name}):*\n> Lembrete: Sua fatura vence em *${paymentLead} dias* (dia ${card.paymentDay}).`);
+          }
+
+          // --- Aviso: MELHOR DIA para compras (dia seguinte ao fechamento) ---
+          // Comprar logo após o fechamento joga a compra para a fatura do próximo
+          // ciclo -> máximo de prazo para pagar.
+          if (todayDay === card.closingDay + 1) {
+            alertSections.push(`🛍️ *Melhor dia para comprar (${card.name}):*\n> Hoje é o melhor dia! Compras de agora só entram na fatura que fecha no próximo ciclo (dia ${card.closingDay}) — ou seja, o máximo de prazo pra pagar. 😉`);
+          }
+
+          // --- Aviso: PAGAR a fatura no DIA do vencimento (se houver saldo) ---
+          if (todayDay === card.paymentDay) {
+            try {
+              const dueInvoice = await creditCardService.getCreditCardInvoiceDetails(account.id, card.id, { type: 'ultima_fechada' });
+              const due = parseFloat(dueInvoice?.totalAmount || 0);
+              if (due > 0.009) {
+                alertSections.push(`🚨 *Sua fatura vence HOJE (${card.name}):*\n> Falta pagar *${formatCurrency(due)}*. Pague hoje para evitar juros! 💳`);
+              }
+            } catch (invErr) {
+              logger.warn(`[JOB ALERTAS] Falha ao checar fatura vencendo hoje (cartão ${card.id}): ${invErr.message}`);
+            }
           }
         }
       }

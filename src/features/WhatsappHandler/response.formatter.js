@@ -360,7 +360,10 @@ function formatAvailableLimitDataStructure(limitInfo) {
     if (!limitInfo) return "💳 Limite Disponível:\n\nDados de limite não disponíveis.";
     let data = `💳 Limite Disponível - Cartão *${limitInfo.cardName || 'N/A'}*:\n\n`;
     data += `💰 Limite Total: ${formatCurrency(limitInfo.totalLimit)}\n`;
-    data += `💸 Valor Utilizado (Fatura Aberta): ${formatCurrency(limitInfo.netUsedAmount)}\n`;
+    data += `💸 Valor Utilizado: ${formatCurrency(limitInfo.usedLimit != null ? limitInfo.usedLimit : limitInfo.totalDebtOnCard)}\n`;
+    if (limitInfo.blockedLimit && parseFloat(limitInfo.blockedLimit) > 0) {
+        data += `🔒 Limite Bloqueado (reserva): ${formatCurrency(limitInfo.blockedLimit)}\n`;
+    }
     data += `✅ Limite Disponível Agora: ${formatCurrency(limitInfo.availableLimit)}\n`;
     data += `🗓️ Próximo Fechamento: Dia ${limitInfo.closingDay}\n`;
     data += `🗓️ Dia de Pagamento: Dia ${limitInfo.paymentDay}\n`;

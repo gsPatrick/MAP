@@ -843,7 +843,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const cardIdToPay = await findCreditCardIdByName(cardNameToPay, effectiveAccountId);
                     if (!cardIdToPay) {
-                        return;
+                        throw { statusCode: 404, message: `Cartão de crédito "${cardNameToPay}" não encontrado.` };
                     }
 
                     const paymentDateCard = params.paymentDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0];
@@ -1228,7 +1228,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         throw { statusCode: 404, message: `Não encontrei o cartão "${cardNameForLimit}". Verifique o nome ou cadastre o cartão.` };
                     }
 
-                    const limitInfo = await creditCardService.getCreditCardAvailableLimit(effectiveAccountId, cardIdForLimit);
+                    const limitInfo = await creditCardService.getAvailableCreditLimit(effectiveAccountId, cardIdForLimit);
 
                     formattedData = formatter.formatAvailableLimitDataStructure(limitInfo, effectiveAccountName);
                 } catch (e) {
