@@ -78,4 +78,67 @@ router.get('/send-summary', async (req, res) => {
     }
 });
 
+/**
+ * [TEMPORÁRIO] Dispara o BRIEFING MATINAL real (com IA, recorrências do dia e
+ * seção "De olho no mês") usando os dados de uma conta e envia a um número.
+ * Uso: GET /api/dev-tools/send-briefing?ownerPhone=552198597002&to=5571982862912
+ */
+router.get('/send-briefing', async (req, res) => {
+    const { ownerPhone, to } = req.query;
+    if (!ownerPhone) {
+        return res.status(400).json({ error: "Parâmetro 'ownerPhone' é obrigatório.", usage: "/api/dev-tools/send-briefing?ownerPhone=55XXXXXXXXXXX&to=55XXXXXXXXXXX" });
+    }
+    try {
+        const { Op } = require('sequelize');
+        const { Client, FinancialTransaction, RecurringTransactionRule, Appointment, DailyChecklist, ChecklistItem } = require('../../database');
+        const aiModelService = require('../../services/aiModelService');
+
+        const client = await Client.findOne({ where: { phone: ownerPhone } });
+        if (!client) return res.status(404).json({ error: `Cliente com telefone ${ownerPhone} não encontrado.` });
+
+        const startOfDay = new Date(new Date().setHours(0, 0, 0, 0));
+        const endOfDay = new Date(new Date().setHours(23, 59, 59, 999));
+        const todayDateString = startOfDay.toISOString().split('T')[0];
+        const pad = (n) => String(n).padStart(2, '0');
+        const endOfMonthStr = `${startOfDay.getFullYear()}-${pad(startOfDay.getMonth() + 1)}-${pad(new Date(startOfDay.getFullYear(), startOfDay.getMonth() + 1, 0).getDate())}`;
+
+        const clientAccounts = await client.getFinancialAccounts({ where: { isActive: true } });
+        if (clientAccounts.length === 0) return res.status(404).json({ error: 'Cliente sem contas ativas.' });
+        const accountIds = clientAccounts.map(a => a.id);
+        const mainAccountForChecklist = clientAccounts.find(a => a.isDefault) || clientAccounts[0];
+        const incFa = [{ model: FinancialAccount, as: 'financialAccount', attributes: ['accountName'] }];
+
+        const pendingTransactions = await FinancialTransaction.findAll({ where: { financialAccountId: { [Op.in]: accountIds }, isPayableOrReceivable: true, isPaidOrReceived: false, dueDate: todayDateString }, include: incFa, order: [['value', 'DESC']] });
+        const appointments = await Appointment.findAll({ where: { financialAccountId: { [Op.in]: accountIds }, status: { [Op.in]: ['Scheduled', 'Confirmed'] }, eventDateTime: { [Op.between]: [startOfDay, endOfDay] } }, include: incFa, order: [['eventDateTime', 'ASC']] });
+        const recurringItems = await RecurringTransactionRule.findAll({ where: { financialAccountId: { [Op.in]: accountIds }, isActive: true, nextDueDate: { [Op.lte]: todayDateString } }, include: incFa, order: [['nextDueDate', 'ASC']] });
+        const monthlyRecurringItems = await RecurringTransactionRule.findAll({ where: { financialAccountId: { [Op.in]: accountIds }, isActive: true, nextDueDate: { [Op.gt]: todayDateString, [Op.lte]: endOfMonthStr } }, include: incFa, order: [['nextDueDate', 'ASC']] });
+        const monthlyPendingTransactions = await FinancialTransaction.findAll({ where: { financialAccountId: { [Op.in]: accountIds }, isPayableOrReceivable: true, isPaidOrReceived: false, dueDate: { [Op.gt]: todayDateString, [Op.lte]: endOfMonthStr } }, include: incFa, order: [['dueDate', 'ASC']] });
+
+        let checklistData = null;
+        if (mainAccountForChecklist) {
+            const checklist = await DailyChecklist.findOne({ where: { financialAccountId: mainAccountForChecklist.id, date: todayDateString }, include: [{ model: ChecklistItem, as: 'items' }] });
+            checklistData = { accountName: mainAccountForChecklist.accountName, items: checklist ? checklist.items.map(i => i.toJSON()) : [] };
+        }
+
+        const briefingData = {
+            clientName: client.name ? client.name.split(' ')[0] : 'você',
+            pendingTransactions, appointments, recurringItems,
+            monthlyRecurringItems, monthlyPendingTransactions, checklistData,
+        };
+
+        const message = await aiModelService.generateMorningBriefingMessage(briefingData);
+        const target = to || client.phone;
+        await sendWhatsappMessage(target, message, { force: true });
+
+        res.status(200).json({
+            status: 'success', to: target,
+            counts: { recorrenciasHoje: recurringItems.length, recorrenciasMes: monthlyRecurringItems.length, contasHoje: pendingTransactions.length, contasMes: monthlyPendingTransactions.length },
+            message
+        });
+    } catch (error) {
+        logger.error(`[DEVTOOLS send-briefing] Erro: ${error.message}`, { stack: error.stack });
+        res.status(500).json({ error: error.message });
+    }
+});
+
 module.exports = router;
