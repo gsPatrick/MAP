@@ -39,6 +39,7 @@ async function ensureCriticalSchema() {
     credit_cards: {
       dominantColor: { type: DataTypes.STRING(20), allowNull: true },
       flagIconUrl: { type: DataTypes.STRING(2048), allowNull: true },
+      blockedLimit: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
     },
   };
 

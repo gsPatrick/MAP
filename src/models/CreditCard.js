@@ -29,11 +29,18 @@ const CreditCard = sequelize.define('CreditCard', {
   limit: {
     type: DataTypes.DECIMAL(12, 2),
     allowNull: false,
-    validate: { 
+    validate: {
       min: { args: [0], msg: "O limite do cartão deve ser zero ou positivo." }
     }
   },
-  closingDay: { 
+  blockedLimit: {
+    type: DataTypes.DECIMAL(12, 2),
+    allowNull: false,
+    defaultValue: 0,
+    comment: 'Parte do limite que o usuário reservou/bloqueou para não gastar.',
+    validate: { min: { args: [0], msg: "O limite bloqueado deve ser zero ou positivo." } }
+  },
+  closingDay: {
     type: DataTypes.INTEGER,
     allowNull: false,
     validate: { 

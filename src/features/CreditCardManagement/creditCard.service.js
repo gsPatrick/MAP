@@ -163,6 +163,7 @@ async function createCreditCard(financialAccountId, cardData) {
             ...cardData,
             financialAccountId,
             limit: parseFloat(cardData.limit),
+            blockedLimit: cardData.blockedLimit !== undefined && cardData.blockedLimit !== null && cardData.blockedLimit !== '' ? parseFloat(cardData.blockedLimit) : 0,
             closingDay: parseInt(cardData.closingDay),
             paymentDay: parseInt(cardData.paymentDay),
             lastFourDigits: cardData.lastFourDigits ? String(cardData.lastFourDigits) : null,
@@ -252,7 +253,12 @@ async function getAllCreditCards(financialAccountId, queryParams = {}) {
                 }
                 try {
                     const limitDetails = await getAvailableCreditLimit(financialAccountId, cardJson.id);
-                    return { ...cardJson, availableLimit: limitDetails.availableLimit };
+                    return {
+                        ...cardJson,
+                        availableLimit: limitDetails.availableLimit,
+                        usedLimit: limitDetails.usedLimit,
+                        blockedLimit: limitDetails.blockedLimit,
+                    };
                 } catch (summaryError) {
                     logger.warn(`[SERVICE] Falha ao obter resumo de limite para cartão ID ${cardJson.id} durante listagem: ${summaryError.message}`);
                     return { ...cardJson, availableLimit: null };
@@ -496,7 +502,9 @@ async function getAvailableCreditLimit(financialAccountId, creditCardId) {
         }) || 0;
 
         const currentDebtOnCard = Math.max(0, totalSpendsImpactingLimit - parseFloat(invoicePayments));
-        const availableLimitFinal = totalLimit - currentDebtOnCard;
+        // Limite bloqueado: reserva manual do usuário (não pode ser gasto).
+        const blockedLimit = parseFloat(card.blockedLimit || 0);
+        const availableLimitFinal = totalLimit - currentDebtOnCard - blockedLimit;
 
         const today = new Date();
         let currentInvoiceYear = today.getUTCFullYear();
@@ -528,6 +536,8 @@ async function getAvailableCreditLimit(financialAccountId, creditCardId) {
             cardId: card.id,
             cardName: card.name,
             totalLimit: totalLimit,
+            blockedLimit: parseFloat(blockedLimit.toFixed(2)),
+            usedLimit: parseFloat(currentDebtOnCard.toFixed(2)),
             netUsedInOpenInvoice: parseFloat(parseFloat(openInvoiceSpends).toFixed(2)),
             totalDebtOnCard: parseFloat(currentDebtOnCard.toFixed(2)),
             availableLimit: parseFloat(availableLimitFinal.toFixed(2)),
