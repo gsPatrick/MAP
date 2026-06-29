@@ -10,6 +10,18 @@ const onboardingHandler = require('../WhatsappHandler/onboarding.handler'); // I
 const affiliateService = require('../Affiliate/affiliate.service'); // Importe o serviço de afiliados
 const clientAuthService = require('../ClientAuth/clientAuth.service');
 const bcrypt = require('bcryptjs');
+const crypto = require('node:crypto');
+
+/**
+ * Gera uma senha aleatória legível (sem caracteres ambíguos).
+ */
+function generateRandomPassword(length = 10) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  let out = '';
+  const bytes = crypto.randomBytes(length);
+  for (let i = 0; i < length; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
 
 /**
  * Lista clientes com filtros avançados para o painel de admin.
@@ -547,9 +559,12 @@ async function deleteClientByUser(clientId) {
  */
 async function createClientAsAdmin(clientData) {
   const { name, email, phone, password, planId, customMessage } = clientData;
-  if (!name || !phone || !password || !planId) {
-    throw { statusCode: 400, message: 'Nome, telefone, senha e plano são obrigatórios.' };
+  if (!name || !phone || !planId) {
+    throw { statusCode: 400, message: 'Nome, telefone e plano são obrigatórios.' };
   }
+  // Senha: usa a fornecida (se houver) ou gera uma aleatória. Em ambos os casos
+  // a senha em texto é enviada ao cliente por WhatsApp logo após a criação.
+  const plainPassword = (password && String(password).trim()) ? String(password).trim() : generateRandomPassword();
   const t = await sequelize.transaction();
   try {
     const normalizedPhone = normalizePhoneNumberToCanonical(phone);
@@ -569,7 +584,7 @@ async function createClientAsAdmin(clientData) {
 
     const newAffiliateCode = await clientAuthService.generateUniqueAffiliateCode(name);
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(plainPassword, 10);
 
     const newClient = await Client.create({
       name,
@@ -601,7 +616,7 @@ async function createClientAsAdmin(clientData) {
       const loginMessage = `Para acessar o painel web, utilize:\n` +
         `🔗 *Link:* ${dashboardUrl}\n` +
         `📧 *E-mail:* ${lowerEmail || 'Não fornecido'}\n` +
-        `🔑 *Senha:* ${password}\n\n` +
+        `🔑 *Senha:* ${plainPassword}\n\n` +
         `*Dica de segurança:* Recomendamos que você acesse o painel e troque sua senha.`;
 
       await sendWhatsappMessage(newClient.phone, welcomeMessage);
