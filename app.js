@@ -107,19 +107,28 @@ function createApp() {
     'https://www.map-nocontrole.com.br',
     'https://map-nocontrole.com.br',
     'http://localhost:3000',
-    'https://api.z-api.io' // ✅ adicionado para permitir webhooks da Z-API
+    'http://localhost:5173', // Vite dev
+    'https://api.z-api.io' // ✅ webhooks da Z-API
+  ];
+
+  // Libera o domínio principal e QUALQUER subdomínio dele (www, app, etc.),
+  // além de previews da Vercel — evita bloqueio por variação de origem.
+  const allowedOriginRegexes = [
+    /^https:\/\/([a-z0-9-]+\.)*map-nocontrole\.com\.br$/i,
+    /^https:\/\/[a-z0-9-]+\.vercel\.app$/i
   ];
 
   app.use(cors({
     origin: function (origin, callback) {
       if (!origin) return callback(null, true); // permite Postman e requests internas
-      if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.warn(`🚫 CORS bloqueado para origem não autorizada: ${origin}`);
-        callback(new Error('CORS não permitido para esta origem.'));
+      if (allowedOrigins.includes(origin) || allowedOriginRegexes.some((re) => re.test(origin))) {
+        return callback(null, true);
       }
+      console.warn(`🚫 CORS bloqueado para origem não autorizada: ${origin}`);
+      // Não lança erro (evita 500 sem headers CORS); apenas não autoriza a origem.
+      return callback(null, false);
     },
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   }));
