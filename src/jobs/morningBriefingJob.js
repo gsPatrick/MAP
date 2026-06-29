@@ -83,14 +83,15 @@ async function processAndSendBriefings() {
         // Recorrências com vencimento HOJE (baseado na própria regra, não na
         // transação gerada) — assim o briefing menciona a recorrência de forma
         // confiável no dia do vencimento, independe do job de geração já ter rodado.
+        // Recorrências devidas: vencimento hoje OU atrasado (nextDueDate <= hoje).
         const recurringItems = await RecurringTransactionRule.findAll({
           where: {
             financialAccountId: { [Op.in]: accountIds },
             isActive: true,
-            nextDueDate: todayDateString,
+            nextDueDate: { [Op.lte]: todayDateString },
           },
           include: [{ model: FinancialAccount, as: 'financialAccount', attributes: ['accountName'] }],
-          order: [['value', 'DESC']],
+          order: [['nextDueDate', 'ASC']],
         });
 
         // --- VISÃO DO MÊS: itens que vencem ainda neste mês (depois de hoje) ---
