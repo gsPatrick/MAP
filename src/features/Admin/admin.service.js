@@ -665,4 +665,5 @@ module.exports = {
   changeClientPhoneNumber,
   deleteClientByUser,
   createClientAsAdmin,
+  getAdminStats,
 };

@@ -20,27 +20,51 @@ const { initializeBasePlans } = require('./src/scripts/initializePlans'); // <<<
  */
 async function ensureCriticalSchema() {
   const qi = sequelize.getQueryInterface();
-  try {
-    const cols = await qi.describeTable('user_preferences');
-    const ensures = [
-      ['areAutomatedJobsEnabled', { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true }],
-      ['cardClosingAlertLeadDays', { type: DataTypes.INTEGER, allowNull: false, defaultValue: 2 }],
-      ['cardPaymentAlertLeadDays', { type: DataTypes.INTEGER, allowNull: false, defaultValue: 3 }],
-    ];
-    for (const [name, def] of ensures) {
-      if (!cols[name]) {
-        await qi.addColumn('user_preferences', name, def);
-        console.log(`[SCHEMA] Coluna user_preferences.${name} criada (estava faltando).`);
+
+  // Colunas que o código usa mas cujas migrations podem não ter rodado em produção.
+  // É seguro: só adiciona o que falta, por tabela, sem derrubar o boot.
+  const plan = {
+    user_preferences: {
+      areAutomatedJobsEnabled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+      cardClosingAlertLeadDays: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 2 },
+      cardPaymentAlertLeadDays: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 3 },
+    },
+    clients: {
+      lastLoginAt: { type: DataTypes.DATE, allowNull: true },
+      lastActiveAt: { type: DataTypes.DATE, allowNull: true },
+    },
+    financial_transactions: {
+      originalPurchaseTotalValue: { type: DataTypes.DECIMAL(12, 2), allowNull: true },
+    },
+    credit_cards: {
+      dominantColor: { type: DataTypes.STRING(20), allowNull: true },
+      flagIconUrl: { type: DataTypes.STRING(2048), allowNull: true },
+    },
+  };
+
+  for (const [table, columns] of Object.entries(plan)) {
+    try {
+      const existing = await qi.describeTable(table);
+      for (const [name, def] of Object.entries(columns)) {
+        if (!existing[name]) {
+          await qi.addColumn(table, name, def);
+          console.log(`[SCHEMA] Coluna ${table}.${name} criada (estava faltando).`);
+        }
       }
+    } catch (err) {
+      console.error(`[SCHEMA] Falha ao garantir colunas de "${table}" (não crítico):`, err.message);
     }
-    // Garante que exista pelo menos uma linha de preferências com automações ligadas.
+  }
+
+  // Garante que exista pelo menos uma linha de preferências com automações ligadas.
+  try {
     const [rows] = await sequelize.query('SELECT COUNT(*)::int AS c FROM user_preferences');
     if (rows && rows[0] && rows[0].c === 0) {
       await qi.bulkInsert('user_preferences', [{ areAutomatedJobsEnabled: true, createdAt: new Date(), updatedAt: new Date() }]);
       console.log('[SCHEMA] Linha inicial de user_preferences criada.');
     }
   } catch (err) {
-    console.error('[SCHEMA] ensureCriticalSchema falhou (não crítico, app continua):', err.message);
+    console.error('[SCHEMA] Falha ao garantir linha de user_preferences (não crítico):', err.message);
   }
 }
 
