@@ -98,7 +98,7 @@ async function ensureCriticalSchema() {
  * vencimento e o plano do cliente, para investigar por que não disparam.
  * REMOVER depois de diagnosticar.
  */
-async function debugRecorrencias() {
+async function debugRecorrencias(label = '') {
   try {
     const [rows] = await sequelize.query(`
       SELECT r.id, r.description, r."isActive", r."autoCreateTransaction",
@@ -110,7 +110,7 @@ async function debugRecorrencias() {
       WHERE r."isActive" = true
       ORDER BY r."nextDueDate"
       LIMIT 100`);
-    console.log('================= [DIAG RECORRÊNCIAS ATIVAS] =================');
+    console.log(`================= [DIAG RECORRÊNCIAS ATIVAS ${label}] =================`);
     console.log(`Hoje: ${new Date().toISOString().split('T')[0]} | Total de regras ativas: ${rows.length}`);
     rows.forEach((r) => {
       console.log(`#${r.id} | "${r.description}" | next=${r.nextDueDate} | lastGen=${r.lastGeneratedDate} | autoCreate=${r.autoCreateTransaction} | cliente=${r.client_name} (${r.phone}) | plano=${r.accessLevel} | status=${r.status}`);
@@ -184,7 +184,7 @@ async function initializeDatabaseAndJobs() {
     // query a user_preferences, evitando quebra caso a migration não tenha rodado.
     await ensureCriticalSchema();
     await ensureBootstrapAdmin();
-    await debugRecorrencias(); // TEMPORÁRIO: remover após diagnóstico
+    await debugRecorrencias('ANTES'); // TEMPORÁRIO: remover após diagnóstico
 
     // Realinha recorrências atrasadas (datas no passado por causa do switch que
     // ficou off): ajusta para a próxima ocorrência futura, sem gerar backlog.
@@ -194,6 +194,8 @@ async function initializeDatabaseAndJobs() {
     } catch (e) {
       console.error('[BOOT] Falha ao realinhar recorrências (não crítico):', e.message);
     }
+
+    await debugRecorrencias('DEPOIS'); // TEMPORÁRIO: confirma que as datas avançaram
 
     await initializeBasePlans();
 

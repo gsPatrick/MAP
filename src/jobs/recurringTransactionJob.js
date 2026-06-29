@@ -198,7 +198,9 @@ async function realignOverdueRecurringRules() {
         }
         if (!nd) { errors++; continue; }
         if (rule.endDate && new Date(nd) > new Date(rule.endDate)) {
-          await rule.update({ isActive: false, nextDueDate: null });
+          // Passou da data final: desativa. nextDueDate é NOT NULL, então mantém
+          // a data calculada (regra inativa de qualquer forma).
+          await rule.update({ isActive: false, nextDueDate: nd });
           deactivated++;
         } else {
           await rule.update({ nextDueDate: nd });
