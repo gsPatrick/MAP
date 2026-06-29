@@ -1,6 +1,6 @@
 // src/jobs/morningBriefingJob.js
 const cron = require('node-cron');
-const { Client, FinancialAccount, FinancialTransaction, Appointment, DailyChecklist, ChecklistItem } = require('../database');
+const { Client, FinancialAccount, FinancialTransaction, RecurringTransactionRule, Appointment, DailyChecklist, ChecklistItem } = require('../database');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
@@ -80,14 +80,17 @@ async function processAndSendBriefings() {
           order: [['eventDateTime', 'ASC']],
         });
 
-        const recurringItems = await FinancialTransaction.findAll({
+        // Recorrências com vencimento HOJE (baseado na própria regra, não na
+        // transação gerada) — assim o briefing menciona a recorrência de forma
+        // confiável no dia do vencimento, independe do job de geração já ter rodado.
+        const recurringItems = await RecurringTransactionRule.findAll({
           where: {
             financialAccountId: { [Op.in]: accountIds },
-            recurringTransactionRuleId: { [Op.ne]: null },
-            transactionDate: todayDateString,
+            isActive: true,
+            nextDueDate: todayDateString,
           },
           include: [{ model: FinancialAccount, as: 'financialAccount', attributes: ['accountName'] }],
-          order: [['createdAt', 'DESC']],
+          order: [['value', 'DESC']],
         });
 
         // --- LÓGICA DE CHECKLIST MODIFICADA ---
