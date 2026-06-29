@@ -141,4 +141,60 @@ router.get('/send-briefing', async (req, res) => {
     }
 });
 
+/**
+ * [TEMPORÁRIO] Diagnóstico do limite do cartão: mostra de onde vem o "usado".
+ * Uso: GET /api/dev-tools/card-debug?ownerPhone=557182862912&cardName=Nubank
+ */
+router.get('/card-debug', async (req, res) => {
+    const { ownerPhone, cardName } = req.query;
+    if (!ownerPhone) return res.status(400).json({ error: "Parâmetro 'ownerPhone' é obrigatório." });
+    try {
+        const { Op, col } = require('sequelize');
+        const { Client, CreditCard, FinancialTransaction } = require('../../database');
+
+        const client = await Client.findOne({ where: { phone: ownerPhone } });
+        if (!client) return res.status(404).json({ error: `Cliente ${ownerPhone} não encontrado.` });
+        const accounts = await client.getFinancialAccounts();
+        const accountIds = accounts.map(a => a.id);
+
+        const cardWhere = { financialAccountId: { [Op.in]: accountIds } };
+        if (cardName) cardWhere.name = { [Op.iLike]: `%${cardName}%` };
+        const cards = await CreditCard.findAll({ where: cardWhere });
+
+        const out = [];
+        for (const card of cards) {
+            const fa = card.financialAccountId;
+            const parcelMothers = await FinancialTransaction.findAll({
+                where: { creditCardId: card.id, financialAccountId: fa, type: 'Saída', isParcel: true, originalAccountId: { [Op.eq]: col('id') } },
+                attributes: ['id', 'description', 'value', 'originalPurchaseTotalValue', 'transactionDate'],
+            });
+            const singles = await FinancialTransaction.findAll({
+                where: { creditCardId: card.id, financialAccountId: fa, type: 'Saída', isParcel: false },
+                attributes: ['id', 'description', 'value', 'transactionDate'],
+            });
+            const credits = await FinancialTransaction.sum('value', { where: { creditCardId: card.id, financialAccountId: fa, type: 'Entrada' } }) || 0;
+            const payments = await FinancialTransaction.findAll({
+                where: { financialAccountId: fa, type: 'Saída', creditCardId: null, description: { [Op.iLike]: `Pagamento Fatura ${card.name}%` } },
+                attributes: ['id', 'description', 'value', 'transactionDate'],
+            });
+            const sumMothers = parcelMothers.reduce((s, m) => s + parseFloat(m.originalPurchaseTotalValue || m.value), 0);
+            const sumSingles = singles.reduce((s, t) => s + parseFloat(t.value), 0);
+            const sumPayments = payments.reduce((s, p) => s + parseFloat(p.value), 0);
+            const used = Math.max(0, sumMothers + sumSingles - parseFloat(credits) - sumPayments);
+            out.push({
+                cardId: card.id, cardName: card.name, financialAccountId: fa,
+                limit: parseFloat(card.limit), blockedLimit: parseFloat(card.blockedLimit || 0),
+                totals: { sumMothers, sumSingles, credits: parseFloat(credits), sumPayments, used, available: parseFloat(card.limit) - used - parseFloat(card.blockedLimit || 0) },
+                parcelMothers: parcelMothers.map(m => ({ id: m.id, desc: m.description, value: parseFloat(m.value), totalValue: parseFloat(m.originalPurchaseTotalValue || m.value), date: m.transactionDate })),
+                singles: singles.map(t => ({ id: t.id, desc: t.description, value: parseFloat(t.value), date: t.transactionDate })),
+                payments: payments.map(p => ({ id: p.id, desc: p.description, value: parseFloat(p.value), date: p.transactionDate })),
+            });
+        }
+        res.status(200).json({ status: 'success', cards: out });
+    } catch (error) {
+        logger.error(`[DEVTOOLS card-debug] ${error.message}`, { stack: error.stack });
+        res.status(500).json({ error: error.message });
+    }
+});
+
 module.exports = router;
