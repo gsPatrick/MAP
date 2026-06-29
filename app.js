@@ -94,34 +94,6 @@ async function ensureCriticalSchema() {
 }
 
 /**
- * [TEMPORÁRIO/DIAGNÓSTICO] Imprime no log as recorrências ativas com a data de
- * vencimento e o plano do cliente, para investigar por que não disparam.
- * REMOVER depois de diagnosticar.
- */
-async function debugRecorrencias(label = '') {
-  try {
-    const [rows] = await sequelize.query(`
-      SELECT r.id, r.description, r."isActive", r."autoCreateTransaction",
-             r."nextDueDate", r."lastGeneratedDate",
-             c.name AS client_name, c."accessLevel", c.status, c.phone
-      FROM recurring_transaction_rules r
-      JOIN financial_accounts fa ON fa.id = r."financialAccountId"
-      JOIN clients c ON c.id = fa."clientId"
-      WHERE r."isActive" = true
-      ORDER BY r."nextDueDate"
-      LIMIT 100`);
-    console.log(`================= [DIAG RECORRÊNCIAS ATIVAS ${label}] =================`);
-    console.log(`Hoje: ${new Date().toISOString().split('T')[0]} | Total de regras ativas: ${rows.length}`);
-    rows.forEach((r) => {
-      console.log(`#${r.id} | "${r.description}" | next=${r.nextDueDate} | lastGen=${r.lastGeneratedDate} | autoCreate=${r.autoCreateTransaction} | cliente=${r.client_name} (${r.phone}) | plano=${r.accessLevel} | status=${r.status}`);
-    });
-    console.log('================= [/DIAG RECORRÊNCIAS] =================');
-  } catch (err) {
-    console.error('[DIAG RECORRÊNCIAS] Falhou:', err.message);
-  }
-}
-
-/**
  * Garante a existência de um usuário admin (bootstrap). Idempotente: só cria se
  * ainda não existir um usuário com o e-mail configurado. A senha é hasheada pelo
  * hook beforeCreate do model User.
@@ -184,18 +156,6 @@ async function initializeDatabaseAndJobs() {
     // query a user_preferences, evitando quebra caso a migration não tenha rodado.
     await ensureCriticalSchema();
     await ensureBootstrapAdmin();
-    await debugRecorrencias('ANTES'); // TEMPORÁRIO: remover após diagnóstico
-
-    // Realinha recorrências atrasadas (datas no passado por causa do switch que
-    // ficou off): ajusta para a próxima ocorrência futura, sem gerar backlog.
-    try {
-      const recurringJob = require('./src/jobs/recurringTransactionJob');
-      await recurringJob.realignOverdueRecurringRules();
-    } catch (e) {
-      console.error('[BOOT] Falha ao realinhar recorrências (não crítico):', e.message);
-    }
-
-    await debugRecorrencias('DEPOIS'); // TEMPORÁRIO: confirma que as datas avançaram
 
     await initializeBasePlans();
 
