@@ -6,7 +6,7 @@ const path = require('path');
 const punycode = require('punycode/');
 
 // Caminhos para os módulos
-const { sequelize } = require('./src/database');
+const { sequelize, User } = require('./src/database');
 const { DataTypes } = require('sequelize');
 const errorHandler = require('./src/middlewares/errorHandler');
 const { startJobs } = require('./src/jobs');
@@ -41,6 +41,31 @@ async function ensureCriticalSchema() {
     }
   } catch (err) {
     console.error('[SCHEMA] ensureCriticalSchema falhou (não crítico, app continua):', err.message);
+  }
+}
+
+/**
+ * Garante a existência de um usuário admin (bootstrap). Idempotente: só cria se
+ * ainda não existir um usuário com o e-mail configurado. A senha é hasheada pelo
+ * hook beforeCreate do model User.
+ * Configurável por env (BOOTSTRAP_ADMIN_EMAIL / _PASSWORD / _NAME).
+ * SEGURANÇA: troque a senha após o primeiro login e/ou defina as vars de ambiente.
+ */
+async function ensureBootstrapAdmin() {
+  try {
+    const email = process.env.BOOTSTRAP_ADMIN_EMAIL || 'partickadmindev@gmail.com';
+    const password = process.env.BOOTSTRAP_ADMIN_PASSWORD || 'patrickadmindev';
+    const name = process.env.BOOTSTRAP_ADMIN_NAME || 'Patrick Admin';
+
+    const existing = await User.findOne({ where: { email } });
+    if (existing) {
+      console.log(`[ADMIN] Admin "${email}" já existe (id ${existing.id}). Nada a fazer.`);
+      return;
+    }
+    const created = await User.create({ name, email, passwordHash: password, role: 'admin', isActive: true });
+    console.log(`[ADMIN] Admin bootstrap criado: ${email} (id ${created.id}).`);
+  } catch (err) {
+    console.error('[ADMIN] ensureBootstrapAdmin falhou (não crítico, app continua):', err.message);
   }
 }
 
@@ -81,6 +106,7 @@ async function initializeDatabaseAndJobs() {
     // Garante colunas críticas (ex.: areAutomatedJobsEnabled) antes de qualquer
     // query a user_preferences, evitando quebra caso a migration não tenha rodado.
     await ensureCriticalSchema();
+    await ensureBootstrapAdmin();
 
     await initializeBasePlans();
 
