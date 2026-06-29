@@ -83,14 +83,7 @@ async function handleScheduleUpdate(state, messageText, actorClient) {
                     
                     if (scheduleInfo.startTime && scheduleInfo.endTime) {
                          // Caso ultra-flexível: dias e horários na primeira mensagem
-                         const ruleData = {
-                            title: 'Horário de Trabalho',
-                            type: 'work',
-                            startTime: scheduleInfo.startTime,
-                            endTime: scheduleInfo.endTime,
-                            rrule: `FREQ=WEEKLY;BYDAY=${state.data.tempWorkDays}`
-                        };
-                        await availabilityService.createDefaultWorkRule(effectiveAccountId, ruleData);
+                        await availabilityService.createDefaultWorkRule(effectiveAccountId, scheduleInfo.startTime, scheduleInfo.endTime, state.data.tempWorkDays);
                         await sendWhatsappMessage(actorClient.phone, `✅ *Super Flexível!* Consegui pegar os dias (*${scheduleInfo.rruleDays.replace(/,/g, ', ')}*) e o horário (*${scheduleInfo.startTime} às ${scheduleInfo.endTime}*) na sua primeira mensagem e já atualizei seu horário de trabalho! Mandou bem! 😉`);
                         state.currentAction = null;
                         delete state.data.tempWorkDays;
@@ -118,14 +111,7 @@ async function handleScheduleUpdate(state, messageText, actorClient) {
         case 'awaiting_schedule_times': {
             const scheduleInfo = await onboardingAIService.interpretWorkSchedule(lowerMessageText);
             if (scheduleInfo && scheduleInfo.startTime && scheduleInfo.endTime) {
-                const ruleData = {
-                    title: 'Horário de Trabalho',
-                    type: 'work',
-                    startTime: scheduleInfo.startTime,
-                    endTime: scheduleInfo.endTime,
-                    rrule: `FREQ=WEEKLY;BYDAY=${state.data.tempWorkDays}`
-                };
-                await availabilityService.createDefaultWorkRule(effectiveAccountId, ruleData);
+                await availabilityService.createDefaultWorkRule(effectiveAccountId, scheduleInfo.startTime, scheduleInfo.endTime, state.data.tempWorkDays);
                 await sendWhatsappMessage(actorClient.phone, `✅ Horário atualizado com sucesso! Sua agenda agora reflete sua nova disponibilidade.`);
                 state.currentAction = null;
                 delete state.data.tempWorkDays;
@@ -141,14 +127,7 @@ async function handleScheduleUpdate(state, messageText, actorClient) {
         case 'awaiting_schedule_custom': {
             const scheduleInfo = await onboardingAIService.interpretWorkSchedule(lowerMessageText);
             if (scheduleInfo && scheduleInfo.startTime && scheduleInfo.endTime && scheduleInfo.rruleDays) {
-                const ruleData = {
-                    title: 'Horário de Trabalho',
-                    type: 'work',
-                    startTime: scheduleInfo.startTime,
-                    endTime: scheduleInfo.endTime,
-                    rrule: `FREQ=WEEKLY;BYDAY=${scheduleInfo.rruleDays}`
-                };
-                await availabilityService.createDefaultWorkRule(effectiveAccountId, ruleData);
+                await availabilityService.createDefaultWorkRule(effectiveAccountId, scheduleInfo.startTime, scheduleInfo.endTime, scheduleInfo.rruleDays);
                 await sendWhatsappMessage(actorClient.phone, `✅ Horário personalizado atualizado com sucesso!`);
                 state.currentAction = null;
             } else {

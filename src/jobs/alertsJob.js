@@ -49,6 +49,7 @@ async function checkAndSendAlerts() {
     }
 
     for (const account of activeFinancialAccounts) {
+     try {
       const client = account.ownerClient;
       const clientPhone = client?.phone;
       const clientFirstName = client?.name ? client.name.split(' ')[0] : 'você';
@@ -187,6 +188,9 @@ async function checkAndSendAlerts() {
           logger.warn(`[JOB ALERTAS] Alertas gerados para conta ${account.accountName} mas sem destinatário (cliente sem tel e admin não configurado).`);
         }
       }
+     } catch (accErr) {
+       logger.error(`[JOB ALERTAS] Erro ao processar alertas da conta ${account?.accountName} (ID ${account?.id}); continuando: ${accErr.message}`);
+     }
     } // End of the for loop
 
     // The extra '}' was here, it has been removed.

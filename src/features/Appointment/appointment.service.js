@@ -623,18 +623,38 @@ async function markReminderAsSent(appointmentId) {
 
 // --- Funções de Lembrete para Contas PJ/MEI (Sistema Novo) ---
 
+// Filtro: só donos (prestadores) com assinatura ativa recebem o disparo, e
+// inclui agendamentos do fluxo público (origin 'public_booking'), que antes
+// ficavam de fora dos lembretes.
+function getPaidOwnerInclude() {
+    const todayStr = new Date().toISOString().split('T')[0];
+    return {
+        model: FinancialAccount, as: 'financialAccount', required: true,
+        include: [{
+            model: Client, as: 'ownerClient', required: true,
+            where: {
+                status: 'Ativo',
+                [Op.or]: [
+                    { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+                    { accessExpiresAt: { [Op.gte]: todayStr } }
+                ]
+            }
+        }]
+    };
+}
+
 async function getPJAppointmentsNeeding24hReminder() {
     const now = new Date();
-    const threshold = new Date(now.getTime() + 24 * 60 * 60 * 1000); 
+    const threshold = new Date(now.getTime() + 24 * 60 * 60 * 1000);
     return Appointment.findAll({
         where: {
             status: 'Confirmed',
-            origin: 'system_pj_mei',
+            origin: { [Op.in]: ['system_pj_mei', 'public_booking'] },
             reminder24hSentAt: null,
             eventDateTime: { [Op.lte]: threshold, [Op.gt]: now }
         },
         include: [
-            { model: FinancialAccount, as: 'financialAccount', include: [{ model: Client, as: 'ownerClient' }] },
+            getPaidOwnerInclude(),
             { model: BusinessClient, as: 'businessClients', attributes: ['name', 'phone'], required: true }
         ]
     });
@@ -642,16 +662,16 @@ async function getPJAppointmentsNeeding24hReminder() {
 
 async function getPJAppointmentsNeeding30minReminder() {
     const now = new Date();
-    const threshold = new Date(now.getTime() + 30 * 60 * 1000); 
+    const threshold = new Date(now.getTime() + 30 * 60 * 1000);
      return Appointment.findAll({
         where: {
             status: 'Confirmed',
-            origin: 'system_pj_mei',
+            origin: { [Op.in]: ['system_pj_mei', 'public_booking'] },
             reminder30minSentAt: null,
             eventDateTime: { [Op.lte]: threshold, [Op.gt]: now }
         },
         include: [
-            { model: FinancialAccount, as: 'financialAccount', include: [{ model: Client, as: 'ownerClient' }] },
+            getPaidOwnerInclude(),
             { model: BusinessClient, as: 'businessClients', attributes: ['name', 'phone'], required: true }
         ]
     });

@@ -134,8 +134,12 @@ async function processAndSendBriefings() {
           };
         }
 
-        // Ação proativa de hidratação
-        await hydrationService.logWaterIntake(client.id, 250, 'Registrado automaticamente pelo briefing matinal');
+        // Ação proativa de hidratação (isolada: não pode abortar o envio do briefing)
+        try {
+          await hydrationService.logWaterIntake(client.id, 250, 'Registrado automaticamente pelo briefing matinal');
+        } catch (hydErr) {
+          logger.warn(`[JOB BRIEFING MATINAL] Falha ao registrar hidratação do cliente ${client.id} (briefing segue): ${hydErr.message}`);
+        }
 
         const clientFirstName = client.name ? client.name.split(' ')[0] : 'você';
 

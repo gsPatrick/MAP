@@ -42,8 +42,9 @@ async function renewExpiringGoogleCalendarWatches() {
     logger.info(`[JOB RENOVAÇÃO WATCH] ${clientsToRenew.length} canais encontrados para renovação.`);
 
     for (const client of clientsToRenew) {
+     try {
       logger.info(`[JOB RENOVAÇÃO WATCH] Tentando renovar canal para Cliente ID: ${client.id}, Calendário: ${client.googleCalendarIdPrincipal}, Canal Atual: ${client.googleChannelId}, Expira em: ${client.googleChannelExpiryDate}`);
-      
+
       // Primeiro, tenta parar o canal antigo (opcional, mas boa prática se o Google não fizer automaticamente)
       if (client.googleChannelId && client.googleChannelResourceId) {
         await googleCalendarService.stopWatchingCalendar(client.id, client.googleChannelId, client.googleChannelResourceId)
@@ -66,6 +67,9 @@ async function renewExpiringGoogleCalendarWatches() {
         // Pode ser que o token de acesso/refresh do cliente tenha sido revogado.
         // O getAuthenticatedClient dentro de watchCalendar deve tratar isso e desconectar se necessário.
       }
+     } catch (clientErr) {
+       logger.error(`[JOB RENOVAÇÃO WATCH] Erro ao renovar canal do Cliente ID ${client.id} (continuando com os demais): ${clientErr.message}`);
+     }
     }
     logger.info('[JOB RENOVAÇÃO WATCH] Verificação de renovação de canais concluída.');
   } catch (error) {

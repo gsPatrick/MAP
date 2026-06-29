@@ -21,7 +21,10 @@ async function sendChecklistSummaries() {
   // ---------------------------
 
   try {
-    const today = new Date().toISOString().split('T')[0];
+    // Data de HOJE no fuso de Brasília (o job roda 22h BRT; usar UTC pegava o dia seguinte).
+    const nowBrt = new Date(new Date().toLocaleString('en-US', { timeZone: process.env.TZ || 'America/Sao_Paulo' }));
+    const pad = (n) => String(n).padStart(2, '0');
+    const today = `${nowBrt.getFullYear()}-${pad(nowBrt.getMonth() + 1)}-${pad(nowBrt.getDate())}`;
 
     // <<< INÍCIO DA MODIFICAÇÃO >>>
     // A query agora junta com Client e filtra por assinatura ativa.

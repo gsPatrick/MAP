@@ -116,8 +116,14 @@ async function sendDailyRenewalRemindersToExpiredUsers() {
                 `${CHECKOUT_URL}\n\n` +
                 `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
 
-            await sendWhatsappMessage(client.phone, message);
-            logger.info(`[JOB LEMBRETE EXPIRADOS] Mensagem de renovação enviada para ${client.phone}.`);
+            // force: true — mensagem de win-back PRECISA chegar a quem está expirado
+            // (o validateMessageRecipient bloquearia, pois o plano já venceu).
+            const sent = await sendWhatsappMessage(client.phone, message, { force: true });
+            if (sent) {
+                logger.info(`[JOB LEMBRETE EXPIRADOS] Mensagem de renovação enviada para ${client.phone}.`);
+            } else {
+                logger.warn(`[JOB LEMBRETE EXPIRADOS] Falha ao enviar renovação para ${client.phone}.`);
+            }
         }
 
     } catch (error) {

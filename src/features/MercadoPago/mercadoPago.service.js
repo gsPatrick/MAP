@@ -1,6 +1,7 @@
 // src/features/MercadoPago/mercadoPago.service.js
 const mercadopago = require('../../config/mercadoPago'); // Importa a SDK configurada
 const { Subscription, Plan, Client } = require('../../database');
+const { Op } = require('sequelize');
 const subscriptionService = require('../Subscription/subscription.service');
 const logger = require('../../utils/logger');
 const crypto = require('crypto');
@@ -200,7 +201,22 @@ const mercadoPagoService = {
       const successStatuses = ['approved', 'accredited'];
       const failureStatuses = ['rejected', 'cancelled', 'refunded', 'charged_back'];
 
-      if (successStatuses.includes(status) && subscription.status !== 'Ativa') {
+      if (successStatuses.includes(status)) {
+        // IDEMPOTÊNCIA: o Mercado Pago dispara 'payment' E 'merchant_order' para a
+        // mesma aprovação (mais retentativas). Garantimos via UPDATE condicional
+        // ATÔMICO que apenas UM processamento efetive a ativação. Se 0 linhas forem
+        // afetadas, outra notificação já ativou -> não duplicamos comissão de
+        // afiliado nem mensagens. (Renovação que cria nova Subscription 'Pendente'
+        // continua funcionando, pois a transição Pendente->Ativa ocorre 1x.)
+        const [claimed] = await Subscription.update(
+          { status: 'Ativa' },
+          { where: { id: subscription.id, status: { [Op.ne]: 'Ativa' } } }
+        );
+        if (claimed === 0) {
+          logger.info(`[Webhook MP] Assinatura ${subscription.id} já estava ativa. Duplicata ignorada (idempotência).`);
+          return;
+        }
+
         const client = subscription.client;
         const plan = subscription.plan;
 
