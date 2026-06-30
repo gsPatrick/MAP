@@ -725,7 +725,17 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 'SWITCH_FINANCIAL_ACCOUNT'
             ]);
 
-            for (const detectedAction of aiResponse.detected_actions) {
+            // Deduplica ações IDÊNTICAS que a IA às vezes repete (evita a resposta
+            // sair duplicada, ex.: a lista de recorrências aparecendo 2x).
+            const _seenActions = new Set();
+            const dedupedActions = aiResponse.detected_actions.filter(a => {
+                const key = JSON.stringify(a);
+                if (_seenActions.has(key)) return false;
+                _seenActions.add(key);
+                return true;
+            });
+
+            for (const detectedAction of dedupedActions) {
                 const actionName = detectedAction.action || detectedAction.action_type;
                 if (mutatingActions.has(actionName)) {
                     contextWasMutated = true;
