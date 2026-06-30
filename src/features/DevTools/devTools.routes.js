@@ -197,4 +197,59 @@ router.get('/card-debug', async (req, res) => {
     }
 });
 
+/**
+ * [TEMPORÁRIO] Diagnóstico do ONBOARDING de um cliente (derivado dos dados).
+ * Uso: GET /api/dev-tools/onboarding-status?phone=5571983141335
+ */
+router.get('/onboarding-status', async (req, res) => {
+    const { phone } = req.query;
+    if (!phone) return res.status(400).json({ error: "Parâmetro 'phone' é obrigatório." });
+    try {
+        const { Op } = require('sequelize');
+        const { Client } = require('../../database');
+        const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
+
+        const canonical = normalizePhoneNumberToCanonical(phone);
+        const client = await Client.scope('withPassword').findOne({ where: { phone: { [Op.in]: [canonical, phone] } } });
+        if (!client) return res.status(404).json({ error: `Cliente ${phone} (canon ${canonical}) não encontrado.` });
+
+        const accounts = await client.getFinancialAccounts({ where: { isActive: true } });
+        const today = new Date().toISOString().split('T')[0];
+        const lvl = client.accessLevel || '';
+        const isVitalicio = ['vitalicio_basico', 'vitalicio_avancado'].includes(lvl);
+        const hasPaidAccess = client.status === 'Ativo' && (isVitalicio || (client.accessExpiresAt && String(client.accessExpiresAt) >= today));
+        const hasPjMei = accounts.some(a => a.accountType === 'PJ' || a.accountType === 'MEI');
+        const tier = (lvl.startsWith('avancado') || lvl.startsWith('vitalicio_avancado')) ? 'avancado' : 'basico';
+
+        let stage;
+        if (!hasPaidAccess) stage = 'awaiting_plan_confirmation';
+        else if (!client.email || !client.passwordHash) stage = 'setting_up_credentials_email';
+        else if (accounts.length === 0) stage = 'setting_up_pf_account_name';
+        else if (tier === 'avancado' && !hasPjMei) stage = 'confirming_pj_mei_setup';
+        else stage = 'onboarding_complete';
+
+        res.status(200).json({
+            phone: client.phone,
+            name: client.name,
+            status: client.status,
+            accessLevel: lvl,
+            accessExpiresAt: client.accessExpiresAt,
+            checklist: {
+                temAcessoPago: hasPaidAccess,
+                temEmail: !!client.email,
+                temSenha: !!client.passwordHash,
+                qtdContas: accounts.length,
+                contas: accounts.map(a => ({ id: a.id, nome: a.accountName, tipo: a.accountType, isDefault: a.isDefault })),
+                planoTier: tier,
+                temContaPjMei: hasPjMei,
+            },
+            onboardingStage: stage,
+            onboardingFinalizado: stage === 'onboarding_complete',
+        });
+    } catch (error) {
+        logger.error(`[DEVTOOLS onboarding-status] ${error.message}`, { stack: error.stack });
+        res.status(500).json({ error: error.message });
+    }
+});
+
 module.exports = router;
