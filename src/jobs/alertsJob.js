@@ -75,7 +75,7 @@ async function checkAndSendAlerts() {
           isPayableOrReceivable: true,
           isPaidOrReceived: false,
           dueDate: {
-            [Op.gte]: today.toISOString().split('T')[0],
+            [Op.gt]: today.toISOString().split('T')[0], // só FUTURAS; o dia do vencimento e as atrasadas ficam com a cobrança interativa (remindUnpaidBills)
             [Op.lte]: NdaysFromNow.toISOString().split('T')[0],
           }
         },

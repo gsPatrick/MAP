@@ -455,6 +455,31 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 }
             }
 
+            // --- Cobrança de conta: "✅ Paguei" (billpaid:<accountId>:<txId>) ---
+            if (buttonId.startsWith('billpaid:')) {
+                const parts = buttonId.split(':');
+                const accId = parseInt(parts[1], 10);
+                const txId = parseInt(parts[2], 10);
+                try {
+                    await financialService.markAsPaidOrReceived(accId, txId);
+                    await sendWhatsappMessage(senderPhone, `✅ Boa! Marquei essa conta como *paga*. Não te aviso mais sobre ela. 😉`, { immediate: true });
+                } catch (e) {
+                    logger.error(`[MAESTRO] Erro ao marcar conta ${txId} como paga: ${e.message}`);
+                    await sendWhatsappMessage(senderPhone, "Ops, não consegui marcar como paga agora. Tente pelo painel ou me chame.", { immediate: true });
+                }
+                conversationState.set(senderPhone, state);
+                pushNameFromPayload = null;
+                return;
+            }
+
+            // --- Cobrança de conta: "⏳ Ainda não" (billnot:<txId>) ---
+            if (buttonId.startsWith('billnot:')) {
+                await sendWhatsappMessage(senderPhone, `Tudo bem! 👍 Quando pagar, é só me avisar ou marcar no painel. Te lembro de novo daqui a alguns dias.`, { immediate: true });
+                conversationState.set(senderPhone, state);
+                pushNameFromPayload = null;
+                return;
+            }
+
             // --- Seleção de PERFIL via botão (profile:<accountId>) ---
             if (buttonId.startsWith('profile:')) {
                 const accId = parseInt(buttonId.split(':')[1], 10);

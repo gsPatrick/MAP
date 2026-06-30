@@ -1,11 +1,11 @@
 // src/jobs/recurringTransactionJob.js
 const cron = require('node-cron');
-const { RecurringTransactionRule, FinancialAccount, UserPreference, Client, sequelize } = require('../database');
+const { RecurringTransactionRule, FinancialAccount, FinancialTransaction, UserPreference, Client, sequelize } = require('../database');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const { calculateNextDueDate } = require('../utils/dateUtils');
 const financialService = require('../features/Financial/financial.service');
-const { sendWhatsappMessage } = require('../services/whatsappService');
+const { sendWhatsappMessage, sendButtonListMessage } = require('../services/whatsappService');
 // Importando formatadores para consistência
 const { formatCurrency, formatDate } = require('../utils/formatters');
 
@@ -89,54 +89,24 @@ async function processRecurringTransactions() {
         const financialAccount = currentRule.financialAccount;
         const clientFirstName = client?.name ? client.name.split(' ')[0] : 'você';
 
-        if (currentRule.autoCreateTransaction) {
-          await financialService.createTransaction(currentRule.financialAccountId, {
-            description: currentRule.description,
-            type: currentRule.type,
-            value: currentRule.value,
-            financialCategoryId: currentRule.financialCategoryId,
-            transactionDate: currentRule.nextDueDate,
-            isPayableOrReceivable: currentRule.isPayableOrReceivable,
-            dueDate: currentRule.nextDueDate,
-            isPaidOrReceived: false,
-            paymentMethod: currentRule.paymentMethod || 'Pix',
-            notes: `Gerado automaticamente: ${currentRule.notes || ''} (Regra ID ${currentRule.id})`,
-            recurringTransactionRuleId: currentRule.id,
-          }, { transaction: ruleProcessingTransaction });
-
-          logger.info(`[JOB RECORRÊNCIA] Transação criada para regra ID ${currentRule.id} ("${currentRule.description}") na FinancialAccount "${financialAccount.accountName}" em ${currentRule.nextDueDate}.`);
-
-          // Mesmo com lançamento automático, avisamos o cliente — antes este ramo
-          // não enviava nada, então recorrências com "Cria Transação" ligada ficavam
-          // totalmente silenciosas ("não vem lembrete de nada").
-          if (client && client.phone) {
-            const intro = `Oi, ${clientFirstName}! Sua conta recorrente foi lançada automaticamente hoje. 🤖`;
-            const body = `📜 *Descrição:* ${currentRule.description}\n` +
-              `💰 *Valor:* ${formatCurrency(currentRule.value)} (${currentRule.type})\n` +
-              `🗓️ *Vencimento:* ${formatDate(currentRule.nextDueDate)}\n` +
-              `🏦 *Conta:* ${financialAccount.accountName}`;
-            const footer = "Já registrei pra você. Quando pagar, é só marcar como pago no painel, ok? 😉";
-            await sendWhatsappMessage(client.phone, `${intro}\n\n${body}\n\n${footer}`);
-            logger.info(`[JOB RECORRÊNCIA] Aviso de lançamento automático enviado para regra ID ${currentRule.id} (Cliente ${client.name}).`);
-          } else {
-            logger.warn(`[JOB RECORRÊNCIA] Cliente ou telefone não encontrado para aviso da regra ID ${currentRule.id}.`);
-          }
-        } else {
-          if (client && client.phone) {
-            const intro = `Oi, ${clientFirstName}! Passando pra te lembrar da sua conta recorrente que vence hoje! 🤓`;
-            const body = `📜 *Descrição:* ${currentRule.description}\n` +
-              `💰 *Valor:* ${formatCurrency(currentRule.value)} (${currentRule.type})\n` +
-              `🗓️ *Vencimento:* ${formatDate(currentRule.nextDueDate)}\n` +
-              `🏦 *Conta:* ${financialAccount.accountName}`;
-            const footer = "Não se esqueça de registrar o pagamento quando fizer, ok? 😉";
-            const message = `${intro}\n\n${body}\n\n${footer}`;
-
-            await sendWhatsappMessage(client.phone, message);
-            logger.info(`[JOB RECORRÊNCIA] Lembrete enviado para regra ID ${currentRule.id} para Cliente ${client.name} (${client.phone}).`);
-          } else {
-            logger.warn(`[JOB RECORRÊNCIA] Cliente ou telefone não encontrado para lembrete da regra ID ${currentRule.id}.`);
-          }
-        }
+        // TODAS as recorrências agora GERAM a conta (a pagar/receber). Para contas
+        // a pagar/receber ela nasce PENDENTE (isPaidOrReceived=false) e o lembrete
+        // interativo "pagou? / ainda não" é enviado pelo job de cobrança
+        // (remindUnpaidBills) — no vencimento e a cada X dias até ser quitada.
+        await financialService.createTransaction(currentRule.financialAccountId, {
+          description: currentRule.description,
+          type: currentRule.type,
+          value: currentRule.value,
+          financialCategoryId: currentRule.financialCategoryId,
+          transactionDate: currentRule.nextDueDate,
+          isPayableOrReceivable: currentRule.isPayableOrReceivable,
+          dueDate: currentRule.nextDueDate,
+          isPaidOrReceived: currentRule.isPayableOrReceivable ? false : true,
+          paymentMethod: currentRule.paymentMethod || 'Pix',
+          notes: `Gerado automaticamente: ${currentRule.notes || ''} (Regra ID ${currentRule.id})`,
+          recurringTransactionRuleId: currentRule.id,
+        }, { transaction: ruleProcessingTransaction });
+        logger.info(`[JOB RECORRÊNCIA] Conta gerada para regra ID ${currentRule.id} ("${currentRule.description}") em ${currentRule.nextDueDate} (cliente ${client?.name || 'N/A'}).`);
 
         const oldNextDueDate = currentRule.nextDueDate;
         const newNextDueDate = calculateNextDueDate(
@@ -218,6 +188,83 @@ async function realignOverdueRecurringRules() {
   return { realigned, deactivated, errors };
 }
 
+// A cada quantos dias re-perguntamos "pagou?" para uma conta ainda em aberto.
+const PAYMENT_REMINDER_INTERVAL_DAYS = 3;
+
+/**
+ * Cobrança interativa de contas a pagar no vencimento e a cada N dias DEPOIS,
+ * até serem marcadas como pagas. Envia botões "✅ Paguei" / "⏳ Ainda não".
+ */
+async function remindUnpaidBills() {
+  logger.info('[JOB COBRANÇA] Verificando contas a pagar no vencimento/atrasadas...');
+  const todayStr = new Date().toISOString().split('T')[0];
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - PAYMENT_REMINDER_INTERVAL_DAYS);
+  const cutoffStr = cutoff.toISOString().split('T')[0];
+
+  try {
+    const bills = await FinancialTransaction.findAll({
+      where: {
+        isPayableOrReceivable: true,
+        isPaidOrReceived: false,
+        type: 'Saída',
+        dueDate: { [Op.lte]: todayStr }, // vence hoje ou já venceu
+        [Op.or]: [
+          { lastPaymentReminderAt: null },
+          { lastPaymentReminderAt: { [Op.lte]: cutoffStr } },
+        ],
+      },
+      include: [{
+        model: FinancialAccount, as: 'financialAccount', required: true,
+        include: [{
+          model: Client, as: 'ownerClient', required: true,
+          where: {
+            status: 'Ativo',
+            [Op.or]: [
+              { accessLevel: { [Op.in]: ['vitalicio_basico', 'vitalicio_avancado'] } },
+              { accessExpiresAt: { [Op.gte]: todayStr } },
+            ],
+          },
+        }],
+      }],
+      limit: 500,
+    });
+
+    if (bills.length === 0) {
+      logger.info('[JOB COBRANÇA] Nenhuma conta a cobrar hoje.');
+      return;
+    }
+    logger.info(`[JOB COBRANÇA] ${bills.length} conta(s) a cobrar.`);
+
+    for (const bill of bills) {
+      try {
+        const client = bill.financialAccount.ownerClient;
+        if (!client || !client.phone) continue;
+        const firstName = client.name ? client.name.split(' ')[0] : 'você';
+        const venceu = String(bill.dueDate) < todayStr;
+        const quando = venceu ? `venceu em *${formatDate(bill.dueDate)}*` : `vence *hoje*`;
+        const message =
+          `Oi, ${firstName}! 🧾\n\n` +
+          `A conta *${bill.description}* (${formatCurrency(bill.value)}) ${quando}.\n` +
+          `🏦 Conta: ${bill.financialAccount.accountName}\n\n` +
+          `Já pagou?`;
+
+        await sendButtonListMessage(client.phone, message, [
+          { id: `billpaid:${bill.financialAccountId}:${bill.id}`, label: '✅ Paguei' },
+          { id: `billnot:${bill.id}`, label: '⏳ Ainda não' },
+        ], 'Conta a pagar', 'Responder', { immediate: true });
+
+        await bill.update({ lastPaymentReminderAt: todayStr });
+        logger.info(`[JOB COBRANÇA] Cobrança enviada (tx ${bill.id}) para ${client.phone}.`);
+      } catch (e) {
+        logger.error(`[JOB COBRANÇA] Erro na conta ${bill.id}: ${e.message}`);
+      }
+    }
+  } catch (error) {
+    logger.error(`[JOB COBRANÇA] Erro geral: ${error.message}`, { error });
+  }
+}
+
 function startRecurringTransactionJob(preferences, models) { // Mudança aqui para receber prefs e models
   const schedule = preferences?.recurringJobSchedule || '0 4 * * *';
   if (cron.validate(schedule)) {
@@ -229,10 +276,17 @@ function startRecurringTransactionJob(preferences, models) { // Mudança aqui pa
     logger.error(`[JOB RECORRÊNCIA] Schedule cron inválido nas preferências: ${schedule}. Usando default '0 4 * * *'.`);
     cron.schedule('0 4 * * *', processRecurringTransactions, { timezone: process.env.TZ || "America/Sao_Paulo" });
   }
+
+  // Cobrança interativa de contas (no vencimento e a cada N dias depois). 7h, após
+  // o job de recorrência (4h) ter gerado as contas do dia.
+  const billSchedule = '0 7 * * *';
+  logger.info(`[JOB COBRANÇA] Agendado para: ${billSchedule}`);
+  cron.schedule(billSchedule, remindUnpaidBills, { timezone: process.env.TZ || "America/Sao_Paulo" });
 }
 
 // Removida a lógica de busca de preferências daqui, pois ela é passada como argumento.
 // A função agora recebe as preferências para configurar o job.
 startRecurringTransactionJob.realignOverdueRecurringRules = realignOverdueRecurringRules;
 startRecurringTransactionJob.processRecurringTransactions = processRecurringTransactions;
+startRecurringTransactionJob.remindUnpaidBills = remindUnpaidBills;
 module.exports = startRecurringTransactionJob;

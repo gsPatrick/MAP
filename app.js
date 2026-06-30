@@ -35,6 +35,7 @@ async function ensureCriticalSchema() {
     },
     financial_transactions: {
       originalPurchaseTotalValue: { type: DataTypes.DECIMAL(12, 2), allowNull: true },
+      lastPaymentReminderAt: { type: DataTypes.DATEONLY, allowNull: true },
     },
     credit_cards: {
       dominantColor: { type: DataTypes.STRING(20), allowNull: true },

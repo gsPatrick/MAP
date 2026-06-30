@@ -63,6 +63,10 @@ const FinancialTransaction = sequelize.define('FinancialTransaction', {
     defaultValue: false, // Para isPayableOrReceivable=true, começa como não pago/recebido
     allowNull: false,
   },
+  lastPaymentReminderAt: { // Última vez que enviamos o lembrete "pagou?" desta conta (cadência da cobrança)
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+  },
   paymentDate: { // Data em que a conta foi efetivamente paga/recebida
     type: DataTypes.DATEONLY,
     allowNull: true,
