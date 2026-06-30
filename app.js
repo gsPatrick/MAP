@@ -6,7 +6,7 @@ const path = require('path');
 const punycode = require('punycode/');
 
 // Caminhos para os módulos
-const { sequelize, User } = require('./src/database');
+const { sequelize, User, RecurringTransactionRule } = require('./src/database');
 const { DataTypes } = require('sequelize');
 const errorHandler = require('./src/middlewares/errorHandler');
 const { startJobs } = require('./src/jobs');
@@ -96,6 +96,28 @@ async function ensureCriticalSchema() {
 }
 
 /**
+ * Normaliza recorrências antigas para o novo padrão: TODA recorrência gera uma
+ * conta a pagar/receber. Migra os registros que estavam como "apenas lembrete"
+ * (autoCreateTransaction=false) ou "lançamento simples" (isPayableOrReceivable=false).
+ * Idempotente: após a 1ª execução, nenhuma linha casa o filtro.
+ */
+async function normalizeRecurringRules() {
+  try {
+    const [n1] = await RecurringTransactionRule.update(
+      { autoCreateTransaction: true },
+      { where: { autoCreateTransaction: false } }
+    );
+    const [n2] = await RecurringTransactionRule.update(
+      { isPayableOrReceivable: true },
+      { where: { isPayableOrReceivable: false } }
+    );
+    if (n1 || n2) console.log(`[NORMALIZE] Recorrências normalizadas: autoCreate=${n1}, payable=${n2}.`);
+  } catch (err) {
+    console.error('[NORMALIZE] Falha ao normalizar recorrências (não crítico):', err.message);
+  }
+}
+
+/**
  * Garante a existência de um usuário admin (bootstrap). Idempotente: só cria se
  * ainda não existir um usuário com o e-mail configurado. A senha é hasheada pelo
  * hook beforeCreate do model User.
@@ -157,6 +179,7 @@ async function initializeDatabaseAndJobs() {
     // Garante colunas críticas (ex.: areAutomatedJobsEnabled) antes de qualquer
     // query a user_preferences, evitando quebra caso a migration não tenha rodado.
     await ensureCriticalSchema();
+    await normalizeRecurringRules();
     await ensureBootstrapAdmin();
 
     await initializeBasePlans();
