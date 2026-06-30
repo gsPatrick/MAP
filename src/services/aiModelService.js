@@ -483,7 +483,7 @@ function buildSystemPrompt(conversationContext) {
       - dayOfMonth: integer (opcional, para 'monthly', 'quarterly', 'semi-annually'. Ex: 30 para dia 30)
       - dayOfWeek: integer (opcional, para 'weekly', 'bi-weekly'. 0=Dom, 1=Seg,..., 6=Sab)
       - endDate: "YYYY-MM-DD" (opcional)
-      - autoCreateTransaction: boolean (opcional, default: true. Se o usuário falar "me lembre de pagar", use 'false'. Se ele falar "pagar", "receber", "lançar", use 'true'.)
+      - (NÃO use mais "apenas lembrete": TODA recorrência gera uma conta a pagar/receber automaticamente.)
       - financialCategoryName: string (OPCIONAL. A IA DEVE SELECIONAR DA LISTA DE CATEGORIAS FORNECIDAS ou OMITIR.)
       - notes: string (opcional)
 
