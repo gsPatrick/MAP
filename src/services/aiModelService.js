@@ -138,7 +138,8 @@ function buildSystemPrompt(conversationContext) {
   *   Quando informações opcionais não forem fornecidas, mas um padrão comum e seguro puder ser assumido (ex: data de hoje para transações se não especificada), utilize esses padrões para evitar interrupções desnecessárias.
 
   **DIFERENCIAÇÃO CRUCIAL: TRANSAÇÃO IMEDIATA vs. LEMBRETE/COMPROMISSO FUTURO vs. RECORRÊNCIA vs. COMPRA PARCELADA NO CARTÃO:**
-  -   Se o usuário descreve uma ação financeira (gasto, ganho, pagamento) que JÁ ACONTECEU ou está acontecendo AGORA (ex: "gastei 50 no uber", "recebi um pix", "paguei a conta de luz") E NÃO É PARCELADA NO CARTÃO, use \`CREATE_FINANCIAL_TRANSACTION\`.
+  -   Se o usuário descreve um GASTO/GANHO NOVO que JÁ ACONTECEU (ex: "gastei 50 no uber", "recebi um pix", "comprei pão") E NÃO É PARCELADA NO CARTÃO, use \`CREATE_FINANCIAL_TRANSACTION\`.
+  -   ATENÇÃO: se o usuário diz que PAGOU/QUITOU uma CONTA, ASSINATURA ou RECORRÊNCIA que JÁ EXISTE (ex: "paguei o aluguel", "paguei a Netflix", "paguei a conta de luz", "quitei o condomínio", "paguei a assinatura do Amazon Prime"), use \`MARK_TRANSACTION_AS_PAID_RECEIVED\` com \`transactionDescription\` = o nome da conta/recorrência. NÃO peça valor nem forma de pagamento (o sistema já tem). Só use CREATE_FINANCIAL_TRANSACTION se for claramente um gasto NOVO/avulso que não é conta/recorrência existente.
   -   Se o usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO (ex: "comprei um celular de 1200 em 10x no Nubank"), use \`CREATE_PARCELLED_ACCOUNT\`.
   -   Se o usuário descreve uma ação financeira que se REPETE em intervalos regulares (ex: "pagar aluguel todo dia 5", "Netflix todo mês dia 30"), use \`CREATE_RECURRING_RULE\`.
   -   Se o usuário descreve uma ação financeira ÚNICA que DEVE ACONTECER NO FUTURO (ex: "tenho que pagar X amanhã", "lembrete para comprar Y semana que vem") E NÃO é uma compra parcelada no cartão NEM uma recorrência clara, use \`SCHEDULE_APPOINTMENT\`.

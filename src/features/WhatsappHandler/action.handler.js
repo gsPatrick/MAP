@@ -1605,16 +1605,38 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         : null;
                     const categoryIdForMark = categoryObjectForMark ? categoryObjectForMark.id : null;
 
-                    const result = await financialService.markTransactionAsPaidOrReceived(
-                        effectiveAccountId,
-                        params.transactionDescription,
-                        params.transactionValue ? parseFloat(params.transactionValue) : null,
-                        paymentDate,
-                        categoryIdForMark,
-                        actorId
-                    );
+                    let result = null;
+                    let handledByRecurrence = false;
+                    try {
+                        result = await financialService.markTransactionAsPaidOrReceived(
+                            effectiveAccountId,
+                            params.transactionDescription,
+                            params.transactionValue ? parseFloat(params.transactionValue) : null,
+                            paymentDate,
+                            categoryIdForMark,
+                            actorId
+                        );
+                    } catch (markErr) {
+                        // Não havia CONTA pendente com esse nome -> pode ser uma RECORRÊNCIA
+                        // ainda não gerada. Paga adiantado a regra (gera a conta já paga).
+                        if (markErr.statusCode === 404) {
+                            const { rules } = await recurringTransactionService.getAllRecurringRules(effectiveAccountId, { isActive: true, descriptionSearch: params.transactionDescription });
+                            const rule = (rules || [])[0];
+                            if (rule) {
+                                const tx = await recurringTransactionService.payRecurringRuleInAdvance(effectiveAccountId, rule.id, paymentDate);
+                                formattedData = `✅ Prontinho, ${clientNameToUse}! Registrei o pagamento da recorrência *"${rule.description}"* (${formatter.formatCurrency(tx.value)}) em ${formatter.formatDate(paymentDate)}. Te aviso de novo no próximo vencimento. 😉`;
+                                handledByRecurrence = true;
+                            } else {
+                                throw markErr;
+                            }
+                        } else {
+                            throw markErr;
+                        }
+                    }
 
-                    formattedData = `Transação "${result.description}" (${formatter.formatCurrency(result.value)}) foi marcada como ${result.type === 'Entrada' ? 'recebida' : 'paga'} em ${formatter.formatDate(result.paymentDate)}.`;
+                    if (!handledByRecurrence) {
+                        formattedData = `Transação "${result.description}" (${formatter.formatCurrency(result.value)}) foi marcada como ${result.type === 'Entrada' ? 'recebida' : 'paga'} em ${formatter.formatDate(result.paymentDate)}.`;
+                    }
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em MARK_TRANSACTION_AS_PAID_RECEIVED: ${e.message}`, { error: e, paramsUsed: params });
                     let intro = `Ops, ${clientNameToUse}! 😬 Não consegui marcar a transação como paga.`;
