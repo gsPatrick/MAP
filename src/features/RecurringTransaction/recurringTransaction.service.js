@@ -146,8 +146,34 @@ async function getAllRecurringRules(financialAccountId, queryParams = {}) {
 
     logger.info(`Listadas ${rows.length} de um total de ${count} regras de recorrência para FA ID ${financialAccountId}. Filtros: ${JSON.stringify(whereConditions)}`);
 
+    const rulesJson = rows.map(r => r.toJSON());
+
+    // Anexa a data da última ocorrência PAGA de cada recorrência (para exibir "Pago DD/MM").
+    try {
+      const ids = rulesJson.map(r => r.id);
+      if (ids.length > 0) {
+        const paid = await FinancialTransaction.findAll({
+          attributes: [
+            'recurringTransactionRuleId',
+            [sequelize.fn('MAX', sequelize.col('dueDate')), 'lastPaid'],
+          ],
+          where: {
+            recurringTransactionRuleId: { [Op.in]: ids },
+            isPaidOrReceived: true,
+          },
+          group: ['recurringTransactionRuleId'],
+          raw: true,
+        });
+        const byRule = {};
+        paid.forEach(p => { byRule[p.recurringTransactionRuleId] = p.lastPaid; });
+        rulesJson.forEach(r => { r.lastPaidDate = byRule[r.id] || null; });
+      }
+    } catch (e) {
+      logger.warn(`[RECORRÊNCIA] Falha ao anexar lastPaidDate: ${e.message}`);
+    }
+
     return {
-      rules: rows.map(r => r.toJSON()),
+      rules: rulesJson,
       totalItems: count
     };
 
