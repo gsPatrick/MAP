@@ -353,6 +353,19 @@ async function getClientProfile(loggedInClientData, sharedAccessContext = null) 
       clientDataForFinalResponse.accessExpiresAt = selfClientData.accessExpiresAt;
     }
 
+    // Computa o status de assinatura (fresco) para o front decidir o acesso ao painel.
+    {
+      const lvl = sharedAccessContext ? clientDataForFinalResponse.effectiveAccessLevel : clientDataForFinalResponse.accessLevel;
+      const exp = sharedAccessContext ? clientDataForFinalResponse.effectiveAccessExpiresAt : clientDataForFinalResponse.accessExpiresAt;
+      let subStatus;
+      if (!lvl || lvl === 'gratuito') subStatus = 'free_tier';
+      else if (lvl === 'inadimplente') subStatus = 'expired';
+      else if (lvl.startsWith('vitalicio_')) subStatus = 'active';
+      else if (exp) subStatus = (new Date(exp + 'T23:59:59Z') < new Date()) ? 'expired' : 'active';
+      else subStatus = 'expired';
+      clientDataForFinalResponse.subscriptionStatus = subStatus;
+    }
+
     const allOwnerOrOwnAccounts = await FinancialAccount.findAll({
       where: { clientId: clientToFetchIdForAccountsAndSubscription, isActive: true },
       attributes: ['id', 'accountName', 'accountType', 'isDefault'],
