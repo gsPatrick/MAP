@@ -1,5 +1,5 @@
 // src/features/ClientAuth/clientAuth.service.js
-const { Client, FinancialAccount, FinancialCategory, Subscription, Plan, SharedAccess, sequelize } = require('../../database');
+const { Client, FinancialAccount, FinancialCategory, Subscription, Plan, SharedAccess, WaterIntakeLog, sequelize } = require('../../database');
 const logger = require('../../utils/logger');
 const { generateToken } = require('../../utils/authUtils');
 const { Op } = require('sequelize');
@@ -94,30 +94,77 @@ function normalizePhoneForDelivery(phone) {
  * @param {object} registerData - Dados do formulário de cadastro.
  * @returns {Promise<object>} Objeto com cliente, token e contas financeiras.
  */
-async function registerClient(registerData) {
+/**
+ * Remove DEFINITIVAMENTE um cliente que estava soft-deleted (status 'Inativo'),
+ * liberando telefone/e-mail para um novo cadastro (conta NOVA, sem reaproveitar).
+ * A maior parte das dependências cai por ON DELETE CASCADE (FinancialAccount e
+ * filhos, Subscription, SharedAccess, SupportTicket, InteractionLog). Aqui
+ * tratamos as FKs SEM cascade (WaterIntakeLog e a auto-referência de indicações).
+ * Roda em transação própria. Se o hard delete falhar por alguma FK inesperada,
+ * faz FALLBACK liberando as chaves únicas (telefone/e-mail) para o cadastro
+ * nunca travar.
+ */
+async function purgeSoftDeletedClient(clientId) {
   const t = await sequelize.transaction();
   try {
-    const { name, email, phone, password, affiliateCode } = registerData;
-
-    if (!name || !email || !phone || !password) {
-      throw { statusCode: 400, message: 'Nome, email, telefone e senha são obrigatórios.' };
+    // FKs sem cascade:
+    await Client.update({ referredByClientId: null }, { where: { referredByClientId: clientId }, transaction: t });
+    if (WaterIntakeLog) await WaterIntakeLog.destroy({ where: { clientId }, transaction: t });
+    // O restante cai por CASCADE.
+    await Client.destroy({ where: { id: clientId }, transaction: t });
+    await t.commit();
+    logger.info(`[Register] Conta inativa (soft-deleted) ID ${clientId} removida definitivamente para liberar novo cadastro.`);
+    return;
+  } catch (err) {
+    await t.rollback();
+    logger.warn(`[Register] Hard delete da conta inativa ${clientId} falhou (${err.message}). Aplicando fallback de liberação de chaves.`);
+  }
+  // Fallback: libera telefone/e-mail (mantém o registro arquivado, mas inutilizável).
+  const t2 = await sequelize.transaction();
+  try {
+    const dead = await Client.findByPk(clientId, { transaction: t2 });
+    if (dead) {
+      const newPhone = `DEL${Date.now()}_${(dead.phone || '').slice(-8)}`.slice(0, 30);
+      await dead.update({ phone: newPhone, email: null }, { transaction: t2 });
     }
-    if (password.trim().length < 6) {
-      throw { statusCode: 400, message: 'A senha deve ter no mínimo 6 caracteres.' };
-    }
+    await t2.commit();
+    logger.info(`[Register] Chaves (telefone/e-mail) da conta inativa ${clientId} liberadas via fallback.`);
+  } catch (err2) {
+    await t2.rollback();
+    logger.error(`[Register] Fallback de liberação de chaves falhou para ${clientId}: ${err2.message}`);
+    throw err2;
+  }
+}
 
-    const normalizedPhone = normalizePhoneNumberToCanonical(phone);
-    const lowerEmail = email.toLowerCase().trim();
+async function registerClient(registerData) {
+  const { name, email, phone, password, affiliateCode } = registerData;
 
-    const existingClient = await Client.findOne({
-      where: { [Op.or]: [{ phone: normalizedPhone }, { email: lowerEmail }] },
-      transaction: t,
-    });
+  if (!name || !email || !phone || !password) {
+    throw { statusCode: 400, message: 'Nome, email, telefone e senha são obrigatórios.' };
+  }
+  if (password.trim().length < 6) {
+    throw { statusCode: 400, message: 'A senha deve ter no mínimo 6 caracteres.' };
+  }
 
-    if (existingClient) {
-      const conflictField = existingClient.phone === normalizedPhone ? 'Telefone' : 'E-mail';
+  const normalizedPhone = normalizePhoneNumberToCanonical(phone);
+  const lowerEmail = email.toLowerCase().trim();
+
+  // Telefone/e-mail são únicos. Se o conflito for com uma conta SOFT-DELETED
+  // (status 'Inativo'), removemos a antiga definitivamente para que o novo
+  // cadastro seja uma conta NOVA (não reativa/reaproveita). Conflito com conta
+  // ativa/outra continua barrado.
+  const conflicts = await Client.findAll({ where: { [Op.or]: [{ phone: normalizedPhone }, { email: lowerEmail }] } });
+  for (const c of conflicts) {
+    if (c.status === 'Inativo') {
+      await purgeSoftDeletedClient(c.id);
+    } else {
+      const conflictField = c.phone === normalizedPhone ? 'Telefone' : 'E-mail';
       throw { statusCode: 409, message: `${conflictField} já cadastrado.` };
     }
+  }
+
+  const t = await sequelize.transaction();
+  try {
 
     const newAffiliateCode = await generateUniqueAffiliateCode(name);
 
