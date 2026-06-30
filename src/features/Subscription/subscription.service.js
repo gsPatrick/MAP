@@ -196,8 +196,15 @@ async function updateSubscriptionStatusByExternalId(externalId, newStatus, optio
 
             try {
                 await sendWhatsappMessage(clientInstance.phone, welcomeMessage);
+                // Ativação NOVA (não renovação): dispara em seguida a 1ª etapa do
+                // onboarding (perfil pessoal / credenciais). require tardio p/ evitar
+                // dependência circular.
+                if (!isRenewal) {
+                    const onboardingHandler = require('../WhatsappHandler/onboarding.handler');
+                    await onboardingHandler.triggerOnboarding(clientInstance.phone);
+                }
             } catch (whatsappError) {
-                logger.error(`[SUBSCRIPTION SERVICE] FALHA AO ENVIAR MENSAGEM: ${whatsappError.message}`);
+                logger.error(`[SUBSCRIPTION SERVICE] FALHA AO ENVIAR MENSAGEM/ONBOARDING: ${whatsappError.message}`);
             }
         }
 
@@ -286,8 +293,15 @@ async function updateSubscriptionStatusById(id, newStatus, options = {}) {
 
             try {
                 await sendWhatsappMessage(clientInstance.phone, welcomeMessage);
+                // Ativação NOVA (não renovação): dispara em seguida a 1ª etapa do
+                // onboarding (perfil pessoal / credenciais). require tardio p/ evitar
+                // dependência circular.
+                if (!isRenewal) {
+                    const onboardingHandler = require('../WhatsappHandler/onboarding.handler');
+                    await onboardingHandler.triggerOnboarding(clientInstance.phone);
+                }
             } catch (whatsappError) {
-                logger.error(`[SUBSCRIPTION SERVICE] FALHA AO ENVIAR MENSAGEM: ${whatsappError.message}`);
+                logger.error(`[SUBSCRIPTION SERVICE] FALHA AO ENVIAR MENSAGEM/ONBOARDING: ${whatsappError.message}`);
             }
         }
 

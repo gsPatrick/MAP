@@ -286,6 +286,16 @@ async function changeUserPlan(clientId, planId, customMessage) {
 
       await sendWhatsappMessage(client.phone, messageToSend);
       logger.info(`[AdminService] Mensagem de confirmação de mudança de plano enviada para ${client.phone}.`);
+
+      // Se for uma ATIVAÇÃO nova (não renovação), dispara em seguida a 1ª etapa
+      // do onboarding (nome/e-mail ou nome do perfil pessoal).
+      if (!wasActiveBefore) {
+        try {
+          await onboardingHandler.triggerOnboarding(client.phone);
+        } catch (obErr) {
+          logger.warn(`[AdminService] Falha ao iniciar onboarding proativo para ${client.phone}: ${obErr.message}`);
+        }
+      }
     }
 
     return {

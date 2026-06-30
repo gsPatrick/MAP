@@ -254,9 +254,11 @@ const mercadoPagoService = {
           await affiliateService.processNewSubscriptionForAffiliate(subscription);
           await affiliateService.sendAffiliateLinkNotification(client);
 
-          const isAdvancedPlan = plan.tier && (plan.tier.includes('avancado') || plan.tier.includes('vitalicio'));
-          if (isAdvancedPlan && !wasActiveBefore) {
-            await onboardingHandler.triggerOnboarding(client.phone, "Agora, vamos configurar sua conta empresarial rapidamente!");
+          // Ativação nova (não renovação): dispara a 1ª etapa do onboarding
+          // (perfil pessoal e, se avançado, depois o empresarial). Vale para
+          // TODOS os planos, pois a conta pessoal agora é criada no onboarding.
+          if (!wasActiveBefore) {
+            await onboardingHandler.triggerOnboarding(client.phone, "Agora vamos configurar sua conta rapidinho! 🚀");
           }
         }
 

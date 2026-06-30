@@ -203,6 +203,13 @@ async function handleOnboardingStep(state, messageText, actorClient) {
     }
     
     if (state.data.onboardingStage === 'setting_up_pf_account_name') {
+        // Pergunta PRIMEIRO (e não consome a mensagem que entrou nessa etapa, ex.: um "Olá").
+        if (state.currentAction !== 'awaiting_input_pf_name') {
+            onboardingReply = getOnboardingAskForPFAccountNameMessage(clientNameForMessages);
+            state.currentAction = 'awaiting_input_pf_name';
+            await sendWhatsappMessage(actorClient.phone, onboardingReply);
+            return { onboardingReply: 'Aguardando nome do perfil pessoal...', updatedState: state, updatedActorClient: actorClient };
+        }
         const pfAccountName = messageText.trim();
         if (pfAccountName.length >= 3 && pfAccountName.length <= 50) {
             try {
