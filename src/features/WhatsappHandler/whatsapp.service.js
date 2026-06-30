@@ -508,6 +508,51 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
         }
         // --- FIM DA MODIFICAÇÃO ---
 
+        // --- Atalho determinístico: falar de PERFIL (para trocar) -> mostra os BOTÕES dos perfis ---
+        // Não depende da IA: garante que "trocar perfil", "mudar de perfil", "perfil", etc. sempre
+        // exibam os dois perfis em botões.
+        {
+            const msgLower = (messageText || '').toLowerCase().trim();
+            const switchWord = /(troc|mud|altern|selecion|escolh)/i;
+            const isProfileSwitch =
+                (/\bperfil(s|es)?\b/i.test(msgLower) && (switchWord.test(msgLower) || msgLower.split(/\s+/).length <= 3))
+                || /(troc|mud|altern)\w*\s+(de\s+)?conta\b/i.test(msgLower);
+            if (isProfileSwitch) {
+                try {
+                    const ownerId = state.ownerClientIdForContext || actorClient.id;
+                    let accessible = await clientService.getClientFinancialAccounts(ownerId, { isActive: true });
+                    if (state.isSharedAccessContext) {
+                        accessible = accessible.filter(acc => {
+                            if (acc.accountType === 'PF') return state.sharedAccessPermissions?.canAccessPersonalProfile;
+                            if (acc.accountType === 'PJ' || acc.accountType === 'MEI') return state.sharedAccessPermissions?.canAccessBusinessProfileId === acc.id;
+                            return false;
+                        });
+                    }
+                    if (accessible.length === 0) {
+                        await sendWhatsappMessage(senderPhone, "Você ainda não tem perfis cadastrados.", { immediate: true });
+                    } else if (accessible.length === 1) {
+                        const a = accessible[0];
+                        state.activeFinancialAccountId = a.id;
+                        state.activeFinancialAccountName = a.accountName;
+                        state.activeFinancialAccountType = a.accountType;
+                        await sendWhatsappMessage(senderPhone, `Você só tem um perfil ativo: ${a.accountType === 'PF' ? '👤' : '🏢'} *${a.accountName}* (${a.accountType}). Já está selecionado! 😉`, { immediate: true });
+                    } else {
+                        const buttons = accessible.slice(0, 3).map(a => ({
+                            id: `profile:${a.id}`,
+                            label: `${a.accountType === 'PF' ? '👤' : '🏢'} ${a.accountName} (${a.accountType})`,
+                        }));
+                        await sendButtonListMessage(senderPhone, `Qual perfil você quer usar, ${state.clientName || 'você'}? 👇`, buttons, "Perfis", "Selecionar perfil", { immediate: true });
+                    }
+                } catch (e) {
+                    logger.error(`[MAESTRO] Erro no atalho de troca de perfil: ${e.message}`);
+                    await sendWhatsappMessage(senderPhone, "Ops, não consegui listar seus perfis agora. Tente de novo.", { immediate: true });
+                }
+                conversationState.set(senderPhone, state);
+                pushNameFromPayload = null;
+                return;
+            }
+        }
+
         if (state.currentAction === 'awaiting_confirmation' && state.pendingConfirmation) {
             const pendingAction = state.pendingConfirmation;
             if (pendingAction.action === 'AWAITING_DELETION_CHOICE') {
