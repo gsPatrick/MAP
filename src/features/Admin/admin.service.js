@@ -76,12 +76,40 @@ async function getAdminClientList(queryParams = {}) {
       distinct: true,
     });
 
+    const clientsJson = rows.map(client => client.toJSON());
+
+    // Anexa o PLANO PENDENTE (escolhido no cadastro, ainda não pago) para exibição:
+    // enquanto não paga, o accessLevel fica 'inadimplente'/sem plano, mas o plano
+    // escolhido vive numa assinatura 'Pendente'.
+    try {
+      const ids = clientsJson.map(c => c.id);
+      if (ids.length > 0) {
+        const pendings = await Subscription.findAll({
+          where: { clientId: { [Op.in]: ids }, status: 'Pendente' },
+          include: ['plan'],
+          order: [['createdAt', 'DESC']],
+        });
+        const byClient = {};
+        for (const s of pendings) {
+          if (!byClient[s.clientId] && s.plan) byClient[s.clientId] = { id: s.plan.id, name: s.plan.name };
+        }
+        clientsJson.forEach(c => {
+          if (byClient[c.id]) {
+            c.pendingPlanId = byClient[c.id].id;
+            c.pendingPlanName = byClient[c.id].name;
+          }
+        });
+      }
+    } catch (e) {
+      logger.warn(`[AdminService] Falha ao anexar plano pendente na listagem: ${e.message}`);
+    }
+
     logger.info(`[AdminService] Listados ${rows.length} clientes para o painel de admin com filtro '${filter}'.`);
     return {
       totalItems: count,
       totalPages: Math.ceil(count / parseInt(limit, 10)),
       currentPage: parseInt(page, 10),
-      clients: rows.map(client => client.toJSON()),
+      clients: clientsJson,
     };
   } catch (error) {
     logger.error(`Erro ao listar clientes para o painel de admin: ${error.message}`, { error });
