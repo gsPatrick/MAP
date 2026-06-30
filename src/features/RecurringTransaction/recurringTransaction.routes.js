@@ -17,5 +17,8 @@ router.delete('/:ruleId', recurringTransactionController.deleteRecurringRule);
 // NOVA ROTA
 router.get('/:ruleId/history', recurringTransactionController.getRecurringRuleHistory);
 
+// Pagar adiantado a ocorrência atual da recorrência (gera a conta já paga e avança a regra).
+router.post('/:ruleId/pay-advance', recurringTransactionController.payRecurringRuleInAdvance);
+
 
 module.exports = router;

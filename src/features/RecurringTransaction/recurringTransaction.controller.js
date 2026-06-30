@@ -105,6 +105,21 @@ async function getRecurringRuleHistory(req, res, next) {
   }
 }
 
+async function payRecurringRuleInAdvance(req, res, next) {
+  try {
+    const financialAccountId = getFinancialAccountIdFromRequest(req);
+    const ruleId = parseInt(req.params.ruleId, 10);
+    if (isNaN(ruleId)) {
+      const error = new Error('ID da Regra de Recorrência inválido.');
+      error.statusCode = 400; error.status = 'fail'; return next(error);
+    }
+    const result = await recurringTransactionService.payRecurringRuleInAdvance(financialAccountId, ruleId, req.body?.paymentDate);
+    res.status(200).json({ status: 'success', data: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createRecurringRule,
   getAllRecurringRules,
@@ -112,4 +127,5 @@ module.exports = {
   updateRecurringRule,
   deleteRecurringRule,
   getRecurringRuleHistory, // <<< EXPORTADO
+  payRecurringRuleInAdvance,
 };

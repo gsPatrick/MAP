@@ -393,6 +393,70 @@ async function getRecurringRuleHistory(financialAccountId, ruleId, queryParams =
 }
 
 
+/**
+ * Paga ADIANTADO a ocorrência atual de uma recorrência: gera a transação já
+ * marcada como paga/recebida e avança o nextDueDate da regra para a próxima
+ * ocorrência (assim o job não duplica). Útil quando o usuário paga antes do
+ * vencimento direto pelo painel.
+ */
+async function payRecurringRuleInAdvance(financialAccountId, ruleId, paymentDate = null) {
+  const t = await sequelize.transaction();
+  try {
+    await validateOwningFinancialAccount(financialAccountId, t);
+    const rule = await RecurringTransactionRule.findOne({
+      where: { id: ruleId, financialAccountId },
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+    if (!rule) {
+      const error = new Error(`Regra de recorrência ID ${ruleId} não encontrada nesta conta.`);
+      error.statusCode = 404; error.status = 'fail'; throw error;
+    }
+    if (!rule.isActive || !rule.nextDueDate) {
+      const error = new Error('Esta recorrência não está ativa ou não tem próxima data.');
+      error.statusCode = 400; error.status = 'fail'; throw error;
+    }
+
+    const today = paymentDate || new Date().toISOString().split('T')[0];
+    const occurrenceDueDate = rule.nextDueDate;
+
+    const createdTx = await FinancialTransaction.create({
+      financialAccountId,
+      description: rule.description,
+      type: rule.type,
+      value: rule.value,
+      financialCategoryId: rule.financialCategoryId,
+      transactionDate: today,
+      dueDate: occurrenceDueDate,
+      isPayableOrReceivable: rule.isPayableOrReceivable,
+      isPaidOrReceived: true, // pago adiantado
+      paymentDate: today,
+      paymentMethod: rule.paymentMethod || 'Pix',
+      notes: `Pagamento adiantado da recorrência (Regra ID ${rule.id})`,
+      recurringTransactionRuleId: rule.id,
+    }, { transaction: t });
+
+    // Avança a regra para a próxima ocorrência.
+    const newNextDueDate = calculateNextDueDate(
+      rule.startDate, rule.frequency, rule.interval, rule.dayOfMonth, rule.dayOfWeek, occurrenceDueDate
+    );
+    if (newNextDueDate && (!rule.endDate || new Date(newNextDueDate) <= new Date(rule.endDate))) {
+      await rule.update({ lastGeneratedDate: occurrenceDueDate, nextDueDate: newNextDueDate }, { transaction: t });
+    } else {
+      await rule.update({ isActive: false, lastGeneratedDate: occurrenceDueDate, nextDueDate: null }, { transaction: t });
+    }
+
+    await t.commit();
+    logger.info(`[RECORRÊNCIA] Pagamento adiantado da regra ${ruleId} registrado (tx ${createdTx.id}).`);
+    return createdTx.toJSON();
+  } catch (error) {
+    if (t && !t.finished) await t.rollback();
+    logger.error(`Erro ao pagar adiantado a recorrência ID ${ruleId}: ${error.message}`, { error });
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
+}
+
 module.exports = {
   createRecurringRule,
   getAllRecurringRules,
@@ -400,4 +464,5 @@ module.exports = {
   updateRecurringRule,
   deleteRecurringRule,
   getRecurringRuleHistory, // <<< EXPORTADO
+  payRecurringRuleInAdvance,
 };
