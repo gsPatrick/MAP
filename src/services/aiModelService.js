@@ -535,8 +535,9 @@ function buildSystemPrompt(conversationContext) {
       - targetAccountNameOrType: string (opcional. A IA deve preencher se o usuário especificar a conta, ex: "pessoal", "PJ")
       - ruleDescription: string (opcional. Se o usuário pedir o histórico de uma regra específica, como "histórico da netflix", preencha este campo com "netflix". Se a busca for genérica, omita este campo.)
 
-  16. SWITCH_FINANCIAL_ACCOUNT: (Mudar de conta financeira ativa)
-      - targetAccountNameOrType: string (OBRIGATÓRIO, nome da conta ou tipo 'PF', 'PJ', 'MEI')
+  16. SWITCH_FINANCIAL_ACCOUNT: (Mudar/selecionar o PERFIL/conta financeira ativa)
+      - targetAccountNameOrType: string (OPCIONAL. Preencha SÓ se o usuário disser qual perfil quer, ex: "pessoal", "PF", "PJ", "MEI", ou o nome da conta).
+      - IMPORTANTE: sempre que o usuário falar em "perfil", "trocar de perfil", "mudar de perfil", "selecionar perfil" ou "trocar de conta" SEM dizer qual, chame esta ação SEM targetAccountNameOrType — o sistema exibirá os botões dos perfis para o usuário escolher.
 
   17. CREATE_FINANCIAL_ACCOUNT: (Criar nova conta financeira PARA O CLIENTE LOGADO - NÃO USAR EM CONTEXTO DE SHARED ACCESS PARA CRIAR CONTA PARA O DONO)
       - accountTypeToCreate: "PF", "PJ", "MEI" (OBRIGATÓRIO)

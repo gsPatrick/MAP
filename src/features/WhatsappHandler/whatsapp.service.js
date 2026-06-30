@@ -433,6 +433,33 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 }
             }
 
+            // --- Seleção de PERFIL via botão (profile:<accountId>) ---
+            if (buttonId.startsWith('profile:')) {
+                const accId = parseInt(buttonId.split(':')[1], 10);
+                try {
+                    const ownerId = state.ownerClientIdForContext || actorClient.id;
+                    const accounts = await clientService.getClientFinancialAccounts(ownerId, { isActive: true });
+                    const acc = accounts.find(a => a.id === accId);
+                    if (acc) {
+                        appContextCache.del(`context:${state.activeFinancialAccountId}`);
+                        state.activeFinancialAccountId = acc.id;
+                        state.activeFinancialAccountName = acc.accountName;
+                        state.activeFinancialAccountType = acc.accountType;
+                        appContextCache.del(`context:${acc.id}`);
+                        const emoji = acc.accountType === 'PF' ? '👤' : '🏢';
+                        await sendWhatsappMessage(senderPhone, `✅ Pronto! Agora você está no perfil ${emoji} *${acc.accountName}* (${acc.accountType}). O que vamos fazer? 😊`, { immediate: true });
+                    } else {
+                        await sendWhatsappMessage(senderPhone, "Não encontrei esse perfil. Pode tentar de novo?", { immediate: true });
+                    }
+                } catch (e) {
+                    logger.error(`[MAESTRO] Erro ao trocar de perfil via botão: ${e.message}`);
+                    await sendWhatsappMessage(senderPhone, "Ops, não consegui trocar de perfil agora. Tente novamente.", { immediate: true });
+                }
+                conversationState.set(senderPhone, state);
+                pushNameFromPayload = null;
+                return;
+            }
+
             logger.info(`[MAESTRO] Roteando botão de ação para o Action Handler.`);
             const buttonResult = await actionHandler.handleButtonInteraction(state, buttonId, senderPhone);
             if (buttonResult.stateUpdated) {
@@ -706,6 +733,20 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
 
             if (finalMessageToSend) {
                 state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
+
+                // Seleção de PERFIL: manda a lista de botões dos perfis (PF e PJ/MEI).
+                const profileCtx = mainActionResult?.resourceForButtonsContext;
+                if (profileCtx?.id === 'awaiting_profile_selection' && Array.isArray(profileCtx.profiles) && profileCtx.profiles.length > 0) {
+                    const profileButtons = profileCtx.profiles.slice(0, 3).map(p => ({
+                        id: `profile:${p.id}`,
+                        label: `${p.type === 'PF' ? '👤' : '🏢'} ${p.name} (${p.type})`,
+                    }));
+                    await sendButtonListMessage(senderPhone, finalMessageToSend, profileButtons, "Perfis", "Selecionar perfil", { immediate: true });
+                    conversationState.set(senderPhone, state);
+                    pushNameFromPayload = null;
+                    return;
+                }
+
                 const resourcesForButtons = mainActionResult?.resourceForButtonsContext?.resources || [];
                 const hasMultipleResources = resourcesForButtons.length > 1;
                 if (hasMultipleResources) {

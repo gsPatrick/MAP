@@ -193,17 +193,13 @@ async function registerClient(registerData) {
 
     const newClient = await Client.create(newClientPayload, { transaction: t });
 
-    const pfAccount = await FinancialAccount.create({
-      clientId: newClient.id,
-      accountName: 'Pessoal',
-      accountType: 'PF',
-      isDefault: true,
-    }, { transaction: t });
-
-    await createDefaultCategoriesForAccount(pfAccount.id, 'PF', t);
+    // NÃO criamos mais a conta PF "Pessoal" automaticamente aqui. A criação do
+    // perfil pessoal passa a ser feita no ONBOARDING (WhatsApp), onde o usuário
+    // dá o nome da conta. Sem conta no cadastro, o onboarding cai na etapa
+    // 'setting_up_pf_account_name' (accounts.length === 0).
 
     await t.commit();
-    logger.info(`Novo Cliente registrado com sucesso: ID ${newClient.id}, Email: ${newClient.email}`);
+    logger.info(`Novo Cliente registrado com sucesso: ID ${newClient.id}, Email: ${newClient.email} (conta PF será criada no onboarding).`);
 
     const tokenPayload = { id: newClient.id, phone: newClient.phone, email: newClient.email };
     const token = generateToken(tokenPayload, 'client');
@@ -214,7 +210,7 @@ async function registerClient(registerData) {
     return {
       client: clientResponse,
       token,
-      financialAccounts: [pfAccount.toJSON()],
+      financialAccounts: [],
     };
 
   } catch (error) {

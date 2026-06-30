@@ -2463,11 +2463,6 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
             // AÇÕES DE SISTEMA, ESTADO E PREFERÊNCIAS
             case 'SWITCH_FINANCIAL_ACCOUNT': {
                 try {
-                    const targetAccountIdentifier = params.targetAccountNameOrType;
-                    if (!targetAccountIdentifier) {
-                        throw { statusCode: 400, message: "Para qual conta você gostaria de mudar? Me diga o nome ou o tipo (PF, PJ, MEI)." };
-                    }
-
                     const ownerAccounts = await clientService.getClientFinancialAccounts(state.ownerClientIdForContext, { isActive: true });
 
                     let accessibleAccounts = ownerAccounts;
@@ -2480,7 +2475,27 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     if (accessibleAccounts.length === 0) {
-                        throw { statusCode: 404, message: `Você não tem nenhuma conta ${state.isSharedAccessContext ? `de ${state.ownerClientNameForContext} ` : ''}acessível no momento.` };
+                        throw { statusCode: 404, message: `Você não tem nenhum perfil ${state.isSharedAccessContext ? `de ${state.ownerClientNameForContext} ` : ''}acessível no momento.` };
+                    }
+
+                    // Sempre que precisar PERGUNTAR/SELECIONAR perfil, mandamos os BOTÕES
+                    // dos perfis (a whatsapp.service envia a lista de botões 'profile:<id>').
+                    const askProfileButtons = (intro) => {
+                        formattedData = intro;
+                        resourceForButtonsContext = {
+                            type: 'system_action',
+                            id: 'awaiting_profile_selection',
+                            description: 'Aguardando seleção de perfil pelo usuário',
+                            profiles: accessibleAccounts.map(a => ({ id: a.id, name: a.accountName || a.name, type: a.accountType || a.type })),
+                        };
+                    };
+
+                    const targetAccountIdentifier = params.targetAccountNameOrType;
+
+                    // Sem alvo (usuário só falou "perfil"/"trocar perfil") -> mostra os botões.
+                    if (!targetAccountIdentifier) {
+                        askProfileButtons(`Qual perfil você quer usar, ${clientNameToUse}? 👇`);
+                        break;
                     }
 
                     const targetLower = targetAccountIdentifier.toLowerCase();
@@ -2493,36 +2508,19 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                             ((targetLower.includes('empresa') || targetLower.includes('negócio') || targetLower.includes('pj') || targetLower.includes('mei')) && (typeLower === 'pj' || typeLower === 'mei'));
                     });
 
-                    let foundAccount = null;
-                    if (potentialMatches.length === 1) {
-                        foundAccount = potentialMatches[0];
-                    }
+                    const foundAccount = potentialMatches.length === 1 ? potentialMatches[0] : null;
 
                     if (foundAccount && foundAccount.id !== state.activeFinancialAccountId) {
-                        formattedData = `Prontinho! Mudei para a conta *"${foundAccount.accountName}"* (${foundAccount.accountType}).\n\nO que vamos fazer por aqui agora?`;
+                        formattedData = `Prontinho! Mudei para o perfil *"${foundAccount.accountName}"* (${foundAccount.accountType}).\n\nO que vamos fazer por aqui agora?`;
                         resourceForButtonsContext = { type: 'system_action', id: 'account_switched', description: 'Troca de conta realizada', data: foundAccount };
                     } else if (foundAccount && foundAccount.id === state.activeFinancialAccountId) {
-                        formattedData = `Você já está na conta "${state.activeFinancialAccountName}", ${clientNameToUse}! 😉`;
+                        formattedData = `Você já está no perfil "${state.activeFinancialAccountName}", ${clientNameToUse}! 😉`;
                     } else {
-                        const ownerNameForMsg = state.isSharedAccessContext ? state.ownerClientNameForContext : null;
-                        const accountOptionsText = formatter.formatListClientAccountsDataStructure(accessibleAccounts, null, ownerNameForMsg);
-
-                        let introMessage = "Não encontrei uma conta exata com esse nome. ";
-                        if (potentialMatches.length > 1) {
-                            introMessage = "Encontrei algumas opções! ";
-                        }
-
-                        formattedData = `${introMessage}Para qual das seguintes contas você gostaria de mudar?\n\n${accountOptionsText}`;
-
-                        resourceForButtonsContext = {
-                            type: 'system_action',
-                            id: 'awaiting_account_selection',
-                            description: 'Aguardando seleção de conta pelo usuário'
-                        };
+                        askProfileButtons(potentialMatches.length > 1 ? `Encontrei mais de um perfil, ${clientNameToUse}. Qual você quer? 👇` : `Não encontrei esse perfil exato. Escolha um: 👇`);
                     }
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em SWITCH_FINANCIAL_ACCOUNT: ${e.message}`, { error: e, paramsUsed: params });
-                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui trocar de conta.\nDetalhe: ${e.message}`;
+                    formattedData = `❌ Ops, ${clientNameToUse}! Não consegui trocar de perfil.\nDetalhe: ${e.message}`;
                 }
                 break;
             }
