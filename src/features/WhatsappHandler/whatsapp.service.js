@@ -356,8 +356,11 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             state.justReactivated = false;
         }
 
-        if (!state.isSharedAccessContext && state.data.onboardingStage === 'onboarding_complete' && !state.hasPaidAccess) {
-            logger.info(`[WHATSAPP HANDLER] Bloqueando ação para ${senderPhone} devido à assinatura expirada.`);
+        // Usuário que JÁ se configurou (tem conta) mas está SEM acesso pago (expirado/inadimplente):
+        // responde com o link de pagamento. Independe do onboardingStage (que para não-pago vira
+        // 'awaiting_plan_confirmation').
+        if (!state.isSharedAccessContext && !state.hasPaidAccess && Array.isArray(clientAccountsForOnboarding) && clientAccountsForOnboarding.length > 0) {
+            logger.info(`[WHATSAPP HANDLER] Respondendo ${senderPhone} com link de pagamento (assinatura expirada/inadimplente).`);
 
             const checkoutBaseUrl = process.env.CHECKOUT_BASE_URL || "https://www.map-nocontrole.com.br";
             const expiredMessage =
@@ -371,7 +374,8 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 `- Anual (R$ 789,90): ${checkoutBaseUrl}/checkout/10\n\n` +
                 `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
 
-            await sendWhatsappMessage(senderPhone, expiredMessage, { immediate: true });
+            // force: true — o validateMessageRecipient bloquearia (plano vencido); aqui PRECISA chegar.
+            await sendWhatsappMessage(senderPhone, expiredMessage, { immediate: true, force: true });
             conversationState.set(senderPhone, state);
             pushNameFromPayload = null;
             return;
