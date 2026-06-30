@@ -683,11 +683,33 @@ async function getAdminStats() {
     throw new Error('Falha ao buscar estatísticas do painel admin.');
   }
 }
+/**
+ * Confirma o pagamento de um cliente ATIVANDO o plano que ele JÁ escolheu no
+ * cadastro (assinatura 'Pendente'). Não recebe planId — usa o plano pendente.
+ * Reaproveita changeUserPlan (cria assinatura Ativa, libera acesso, envia WhatsApp
+ * e dispara onboarding).
+ */
+async function confirmClientPayment(clientId) {
+  const { Subscription } = require('../../database');
+  const pending = await Subscription.findOne({
+    where: { clientId, status: 'Pendente' },
+    order: [['createdAt', 'DESC']],
+  });
+  if (!pending) {
+    throw { statusCode: 400, status: 'fail', message: 'Este cliente não tem um plano pendente (escolhido no cadastro) para confirmar. Use "Alterar plano" para definir um manualmente.' };
+  }
+  const result = await changeUserPlan(clientId, pending.planId);
+  // Encerra eventuais pendências remanescentes (já ativamos uma nova assinatura).
+  await Subscription.update({ status: 'Cancelada' }, { where: { clientId, status: 'Pendente' } });
+  return result;
+}
+
 module.exports = {
   getAdminClientList,
   getDashboardMetrics,
   createCustomPlan,
   changeUserPlan,
+  confirmClientPayment,
   sendBroadcastMessage,
   getAffiliatesDashboard,
   getAllPlans,

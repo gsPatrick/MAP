@@ -64,6 +64,17 @@ const changeUserPlan = (req, res, next) => {
         .catch(next);
 };
 
+// Confirma o pagamento ativando o plano que o cliente já escolheu (Pendente).
+const confirmClientPayment = (req, res, next) => {
+    const { clientId } = req.params;
+    if (!clientId) {
+        return res.status(400).json({ status: 'fail', message: 'clientId é obrigatório.' });
+    }
+    adminService.confirmClientPayment(clientId)
+        .then(result => res.status(200).json({ status: 'success', data: result }))
+        .catch(next);
+};
+
 // <<< CONTROLLER ALTERADO >>>
 const sendBroadcastMessage = (req, res, next) => {
     const { message, targetGroup } = req.body;
@@ -157,6 +168,7 @@ module.exports = {
     getDashboardMetrics,
     createCustomPlan,
     changeUserPlan,
+    confirmClientPayment,
     sendBroadcastMessage,
     getAffiliatesDashboard,
     getAllPlans,

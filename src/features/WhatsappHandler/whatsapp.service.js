@@ -363,16 +363,34 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             logger.info(`[WHATSAPP HANDLER] Respondendo ${senderPhone} com link de pagamento (assinatura expirada/inadimplente).`);
 
             const checkoutBaseUrl = process.env.CHECKOUT_BASE_URL || "https://www.map-nocontrole.com.br";
-            const expiredMessage =
-                `Olá, ${state.clientName}! 👋\n\n` +
-                `Sua assinatura do MAP no Controle não está ativa. Para reativar seu acesso completo e continuar no controle, escolha um dos planos abaixo:\n\n` +
-                `*Plano Básico*\n` +
-                `- Mensal (R$ 39,90): ${checkoutBaseUrl}/checkout/7\n` +
-                `- Anual (R$ 389,90): ${checkoutBaseUrl}/checkout/8\n\n` +
-                `*Plano Avançado (com Módulo de Negócios)*\n` +
-                `- Mensal (R$ 79,90): ${checkoutBaseUrl}/checkout/9\n` +
-                `- Anual (R$ 789,90): ${checkoutBaseUrl}/checkout/10\n\n` +
-                `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
+            // Manda APENAS o link do plano ATUAL do cliente (sem oferecer downgrade).
+            let expiredMessage = null;
+            try {
+                const { Subscription } = require('../../database');
+                const lastSub = await Subscription.findOne({
+                    where: { clientId: actorClient.id },
+                    include: ['plan'],
+                    order: [['createdAt', 'DESC']],
+                });
+                const plan = lastSub && lastSub.plan;
+                if (plan) {
+                    const priceTxt = plan.price ? ` (R$ ${parseFloat(plan.price).toFixed(2)})` : '';
+                    expiredMessage =
+                        `Olá, ${state.clientName}! 👋\n\n` +
+                        `Sua assinatura do MAP no Controle não está ativa. Para reativar o seu plano *${plan.name}*${priceTxt}, é só pagar por aqui:\n` +
+                        `${checkoutBaseUrl}/checkout/${plan.id}\n\n` +
+                        `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
+                }
+            } catch (subErr) {
+                logger.warn(`[WHATSAPP HANDLER] Falha ao buscar plano atual de ${senderPhone}: ${subErr.message}`);
+            }
+            if (!expiredMessage) {
+                expiredMessage =
+                    `Olá, ${state.clientName}! 👋\n\n` +
+                    `Sua assinatura do MAP no Controle não está ativa. Para reativar seu acesso, renove em:\n` +
+                    `${checkoutBaseUrl}/#planos\n\n` +
+                    `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
+            }
 
             // force: true — o validateMessageRecipient bloquearia (plano vencido); aqui PRECISA chegar.
             await sendWhatsappMessage(senderPhone, expiredMessage, { immediate: true, force: true });

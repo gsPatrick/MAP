@@ -159,6 +159,13 @@ async function markExpiredSubscriptionsAsInadimplente() {
 
         for (const client of expired) {
             try {
+                // Pega o plano ATUAL (assinatura ativa que está vencendo) ANTES de marcar.
+                const activeSub = await Subscription.findOne({
+                    where: { clientId: client.id, status: 'Ativa' },
+                    include: ['plan'],
+                    order: [['endDate', 'DESC']],
+                });
+
                 // Mantém status 'Ativo' (login permitido -> tela de pagamento); só rebaixa o nível.
                 await client.update({ accessLevel: 'inadimplente' });
                 await Subscription.update(
@@ -167,20 +174,27 @@ async function markExpiredSubscriptionsAsInadimplente() {
                 );
 
                 const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
-                const message =
-                    `Olá, ${clientName}. ⚠️\n\n` +
-                    `Sua assinatura do MAP no Controle *venceu* e sua conta ficou como *inadimplente*. Seus dados estão guardados, mas os recursos foram pausados.\n\n` +
-                    `Para reativar agora, escolha um plano:\n\n` +
-                    `*Plano Básico*\n` +
-                    `- Mensal: ${checkoutBaseUrl}/checkout/7\n` +
-                    `- Anual: ${checkoutBaseUrl}/checkout/8\n\n` +
-                    `*Plano Avançado*\n` +
-                    `- Mensal: ${checkoutBaseUrl}/checkout/9\n` +
-                    `- Anual: ${checkoutBaseUrl}/checkout/10\n\n` +
-                    `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
+                const plan = activeSub && activeSub.plan;
+                let message;
+                if (plan) {
+                    // Apenas o link do PLANO ATUAL (sem oferecer downgrade).
+                    const priceTxt = plan.price ? ` (R$ ${parseFloat(plan.price).toFixed(2)})` : '';
+                    message =
+                        `Olá, ${clientName}. ⚠️\n\n` +
+                        `Sua assinatura do MAP no Controle *venceu* e sua conta ficou como *inadimplente*. Seus dados estão guardados, mas os recursos foram pausados.\n\n` +
+                        `Para reativar o seu plano *${plan.name}*${priceTxt}, é só pagar por aqui:\n` +
+                        `${checkoutBaseUrl}/checkout/${plan.id}\n\n` +
+                        `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
+                } else {
+                    message =
+                        `Olá, ${clientName}. ⚠️\n\n` +
+                        `Sua assinatura do MAP no Controle *venceu* e sua conta ficou como *inadimplente*. Para reativar, renove em:\n` +
+                        `${CHECKOUT_URL}\n\n` +
+                        `Assim que o pagamento for confirmado, seu acesso é liberado na hora! ✨`;
+                }
 
                 await sendWhatsappMessage(client.phone, message, { force: true });
-                logger.info(`[JOB EXPIRACAO->INADIMPLENTE] Cliente ${client.id} marcado inadimplente + link enviado.`);
+                logger.info(`[JOB EXPIRACAO->INADIMPLENTE] Cliente ${client.id} marcado inadimplente + link do plano enviado.`);
             } catch (e) {
                 logger.error(`[JOB EXPIRACAO->INADIMPLENTE] Erro no cliente ${client.id}: ${e.message}`);
             }

@@ -24,6 +24,7 @@ router.post('/admin/clients', adminController.createClient);
 router.put('/admin/clients/:clientId', adminController.updateClient);
 router.put('/admin/clients/:clientId/change-phone', adminController.changeClientPhone);
 router.post('/admin/clients/change-plan', adminController.changeUserPlan);
+router.post('/admin/clients/:clientId/confirm-payment', adminController.confirmClientPayment);
 router.put('/admin/clients/:clientId/clear-balance', adminController.clearClientBalance);
 router.delete('/admin/clients/:clientId', adminController.deleteClientAsAdmin);
 
