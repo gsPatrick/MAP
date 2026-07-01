@@ -32,6 +32,7 @@ require('../models/ChecklistItem');  // <<< ADICIONE ESTA LINHA
 require('../models/SupportTicket');
 require('../models/AffiliateCommission');
 require('../models/AffiliatePayout');
+require('../models/AffiliateClick');
 
 
 const models = sequelize.models;

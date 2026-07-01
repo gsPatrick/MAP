@@ -32,6 +32,15 @@ async function getAffiliateCommissions(req, res, next) {
     }
 }
 
+async function getOpenCommissions(req, res, next) {
+    try {
+        const data = await affiliateService.getOpenCommissions(req.client.id);
+        res.status(200).json({ status: 'success', data });
+    } catch (error) {
+        next(error);
+    }
+}
+
 async function requestPayout(req, res, next) {
     try {
         const affiliateClientId = req.client.id;
@@ -86,6 +95,7 @@ module.exports = {
     getAffiliateDashboard,
     getAffiliateReferrals,
     getAffiliateCommissions,
+    getOpenCommissions,
     requestPayout,
     getPayouts,
     trackClick,

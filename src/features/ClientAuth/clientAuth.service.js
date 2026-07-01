@@ -193,6 +193,20 @@ async function registerClient(registerData) {
 
     const newClient = await Client.create(newClientPayload, { transaction: t });
 
+    // Se veio por indicação, liga a última abertura do link (clique) do afiliado
+    // a este novo cliente (melhor esforço) — permite o admin ver "abriu -> converteu".
+    if (newClient.referredByClientId) {
+      try {
+        const { AffiliateClick } = require('../../database');
+        const lastClick = await AffiliateClick.findOne({
+          where: { affiliateClientId: newClient.referredByClientId, convertedClientId: null },
+          order: [['createdAt', 'DESC']],
+          transaction: t,
+        });
+        if (lastClick) await lastClick.update({ convertedClientId: newClient.id }, { transaction: t });
+      } catch (e) { logger.warn(`[Register] Falha ao vincular clique de afiliado: ${e.message}`); }
+    }
+
     // NÃO criamos mais a conta PF "Pessoal" automaticamente aqui. A criação do
     // perfil pessoal passa a ser feita no ONBOARDING (WhatsApp), onde o usuário
     // dá o nome da conta. Sem conta no cadastro, o onboarding cai na etapa

@@ -20,6 +20,11 @@ const payAffiliatePayout = (req, res, next) => {
         .then(data => res.status(200).json({ status: 'success', data }))
         .catch(next);
 };
+const getAffiliateDetail = (req, res, next) => {
+    affiliateService.getAffiliateDetailForAdmin(parseInt(req.params.clientId, 10))
+        .then(data => res.status(200).json({ status: 'success', data }))
+        .catch(next);
+};
 
 // <<< CONTROLLER ALTERADO >>>
 // Lista todos os clientes com dados detalhados para o painel de admin.
@@ -190,6 +195,7 @@ module.exports = {
     getPendingAffiliatePayouts,
     getAffiliatePayoutsByClient,
     payAffiliatePayout,
+    getAffiliateDetail,
     sendBroadcastMessage,
     getAffiliatesDashboard,
     getAllPlans,

@@ -13,6 +13,9 @@ router.get('/referrals', affiliateController.getAffiliateReferrals);
 // Histórico de comissões por período (hoje/semana/mês/ano)
 router.get('/commissions', affiliateController.getAffiliateCommissions);
 
+// Comissões em aberto (ainda não sacadas)
+router.get('/open-commissions', affiliateController.getOpenCommissions);
+
 // Saque: solicitar (zera saldo -> vai pro histórico) e listar histórico de saques
 router.post('/request-payout', affiliateController.requestPayout);
 router.get('/payouts', affiliateController.getPayouts);

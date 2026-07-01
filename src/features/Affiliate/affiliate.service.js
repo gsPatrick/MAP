@@ -1,5 +1,5 @@
 // src/features/Affiliate/affiliate.service.js
-const { Client, Subscription, Plan, AffiliateCommission, AffiliatePayout, sequelize } = require('../../database');
+const { Client, Subscription, Plan, AffiliateCommission, AffiliatePayout, AffiliateClick, sequelize } = require('../../database');
 
 const MIN_WITHDRAWAL = 50; // saque mínimo em R$
 const logger = require('../../utils/logger');
@@ -149,6 +149,8 @@ async function trackClick(identifier) {
     const affiliate = await findAffiliateByIdentifier(identifier);
     if (affiliate) {
       await affiliate.increment('affiliateLinkClicks');
+      // Registra a abertura individual (para o admin ver horário e conversão).
+      try { await AffiliateClick.create({ affiliateClientId: affiliate.id }); } catch (e) { /* não crítico */ }
       logger.info(`[AffiliateService] Clique registrado para o afiliado ID ${affiliate.id} (${identifier}).`);
     }
   } catch (error) {
@@ -458,6 +460,11 @@ async function requestPayout(affiliateClientId) {
       pixKey: affiliate.asaasPayoutPixKey || null,
       status: 'Solicitado',
     }, { transaction: t });
+    // "Fecha" as comissões em aberto (payoutId null) neste saque -> vão pro histórico agrupadas.
+    await AffiliateCommission.update(
+      { payoutId: payout.id },
+      { where: { affiliateClientId, status: 'Creditada', payoutId: null }, transaction: t }
+    );
     await affiliate.update({ balance: 0 }, { transaction: t });
     await t.commit();
     logger.info(`[AffiliateService] Saque solicitado pelo afiliado ${affiliateClientId}: R$ ${balance.toFixed(2)} (payout ${payout.id}).`);
@@ -479,13 +486,83 @@ async function requestPayout(affiliateClientId) {
   }
 }
 
-/** Histórico de saques do afiliado. */
+/** Histórico de saques do afiliado, cada um COM as comissões que ele fechou. */
 async function getAffiliatePayouts(affiliateClientId) {
   const payouts = await AffiliatePayout.findAll({
     where: { affiliateClientId },
     order: [['createdAt', 'DESC']],
   });
-  return payouts.map(p => p.toJSON());
+  const result = [];
+  for (const p of payouts) {
+    const comms = await AffiliateCommission.findAll({
+      where: { payoutId: p.id },
+      include: [{ model: Client, as: 'referred', attributes: ['id', 'name'] }],
+      order: [['createdAt', 'ASC']],
+    });
+    result.push({
+      ...p.toJSON(),
+      commissions: comms.map(c => ({
+        id: c.id, referredName: c.referred?.name || 'Cliente', planName: c.planName,
+        amount: parseFloat(c.amount), date: c.createdAt,
+      })),
+    });
+  }
+  return result;
+}
+
+/** Comissões EM ABERTO (ainda não sacadas) do afiliado. */
+async function getOpenCommissions(affiliateClientId) {
+  const comms = await AffiliateCommission.findAll({
+    where: { affiliateClientId, status: 'Creditada', payoutId: null },
+    include: [{ model: Client, as: 'referred', attributes: ['id', 'name'] }],
+    order: [['createdAt', 'DESC']],
+  });
+  const total = comms.reduce((s, c) => s + parseFloat(c.amount || 0), 0);
+  return {
+    total: parseFloat(total.toFixed(2)),
+    count: comms.length,
+    commissions: comms.map(c => ({
+      id: c.id, referredName: c.referred?.name || 'Cliente', planName: c.planName,
+      amount: parseFloat(c.amount), date: c.createdAt,
+    })),
+  };
+}
+
+/** (Admin) Detalhe de 1 afiliado: cada abertura do link (possível cliente),
+ * com horário, e se converteu (plano, valor do plano e comissão). */
+async function getAffiliateDetailForAdmin(affiliateClientId) {
+  const affiliate = await Client.findByPk(affiliateClientId, {
+    attributes: ['id', 'name', 'phone', 'email', 'balance', 'affiliateCode', 'affiliateSlug', 'affiliateLinkClicks', 'asaasPayoutPixKey'],
+  });
+  if (!affiliate) throw { statusCode: 404, message: 'Afiliado não encontrado.' };
+
+  const clicks = await AffiliateClick.findAll({
+    where: { affiliateClientId },
+    include: [{ model: Client, as: 'converted', attributes: ['id', 'name', 'phone'] }],
+    order: [['createdAt', 'DESC']],
+    limit: 500,
+  });
+
+  const rows = [];
+  for (const click of clicks) {
+    let plano = null, planValue = null, commission = null, converteu = false, clientName = null;
+    if (click.convertedClientId && click.converted) {
+      clientName = click.converted.name;
+      const sub = await Subscription.findOne({
+        where: { clientId: click.convertedClientId, status: 'Ativa' },
+        include: [{ model: Plan, as: 'plan' }],
+        order: [['createdAt', 'DESC']],
+      });
+      if (sub && sub.plan) {
+        converteu = true;
+        plano = sub.plan.name;
+        planValue = parseFloat(sub.plan.price);
+        commission = parseFloat(sub.plan.affiliateCommissionValue);
+      }
+    }
+    rows.push({ id: click.id, openedAt: click.createdAt, clientName, plano, planValue, commission, converteu });
+  }
+  return { affiliate: affiliate.toJSON(), rows };
 }
 
 /** (Admin) Lista TODOS os saques pendentes (Solicitado) de todos os afiliados. */
@@ -517,6 +594,8 @@ module.exports = {
   reverseAffiliateCommission,
   requestPayout,
   getAffiliatePayouts,
+  getOpenCommissions,
+  getAffiliateDetailForAdmin,
   getPendingPayouts,
   markPayoutPaid,
   trackClick,

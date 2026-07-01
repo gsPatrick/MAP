@@ -6,7 +6,7 @@ const path = require('path');
 const punycode = require('punycode/');
 
 // Caminhos para os módulos
-const { sequelize, User, RecurringTransactionRule, AffiliateCommission, AffiliatePayout } = require('./src/database');
+const { sequelize, User, RecurringTransactionRule, AffiliateCommission, AffiliatePayout, AffiliateClick } = require('./src/database');
 const { DataTypes } = require('sequelize');
 const errorHandler = require('./src/middlewares/errorHandler');
 const { startJobs } = require('./src/jobs');
@@ -41,6 +41,9 @@ async function ensureCriticalSchema() {
       dominantColor: { type: DataTypes.STRING(20), allowNull: true },
       flagIconUrl: { type: DataTypes.STRING(2048), allowNull: true },
       blockedLimit: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+    },
+    affiliate_commissions: {
+      payoutId: { type: DataTypes.INTEGER, allowNull: true },
     },
   };
 
@@ -183,6 +186,7 @@ async function initializeDatabaseAndJobs() {
     try {
       await AffiliateCommission.sync();
       await AffiliatePayout.sync();
+      await AffiliateClick.sync();
     } catch (err) {
       console.error('[SCHEMA] Falha ao garantir tabelas de afiliado (não crítico):', err.message);
     }

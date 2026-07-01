@@ -45,6 +45,7 @@ router.put('/admin/clients/:clientId/clear-balance', adminController.clearClient
 
 // --- Saques de afiliado (admin) ---
 router.get('/admin/affiliates/pending-payouts', adminController.getPendingAffiliatePayouts);
+router.get('/admin/affiliates/:clientId/detail', adminController.getAffiliateDetail);
 router.get('/admin/affiliates/:clientId/payouts', adminController.getAffiliatePayoutsByClient);
 router.post('/admin/affiliates/payouts/:payoutId/pay', adminController.payAffiliatePayout);
 

@@ -41,6 +41,10 @@ const AffiliateCommission = sequelize.define('AffiliateCommission', {
     defaultValue: 'Creditada',
     allowNull: false,
   },
+  payoutId: { // Saque que "fechou" esta comissão (null = ainda em aberto)
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
 }, {
   tableName: 'affiliate_commissions',
   timestamps: true,
