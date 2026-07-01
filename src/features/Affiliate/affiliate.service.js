@@ -574,7 +574,7 @@ async function getOpenCommissions(affiliateClientId) {
 async function buildAffiliateLeads(affiliateClientId) {
   const clicks = await AffiliateClick.findAll({
     where: { affiliateClientId },
-    include: [{ model: Client, as: 'converted', attributes: ['id', 'name', 'phone'] }],
+    include: [{ model: Client, as: 'converted', attributes: ['id', 'name', 'phone', 'email'] }],
     order: [['createdAt', 'DESC']],
     limit: 500,
   });
@@ -589,10 +589,12 @@ async function buildAffiliateLeads(affiliateClientId) {
   };
   const rows = [];
   for (const click of clicks) {
-    let plano = null, planValue = null, commission = null, clientName = null, status = 'aberto';
+    let plano = null, planValue = null, commission = null, clientName = null, clientEmail = null, clientPhone = null, status = 'aberto';
     const age = now - new Date(click.createdAt).getTime();
     if (click.convertedClientId && click.converted) {
       clientName = click.converted.name;
+      clientEmail = click.converted.email;
+      clientPhone = click.converted.phone;
       const sub = await Subscription.findOne({
         where: { clientId: click.convertedClientId, status: 'Ativa' },
         include: [{ model: Plan, as: 'plan' }],
@@ -620,7 +622,7 @@ async function buildAffiliateLeads(affiliateClientId) {
         commission = parseFloat(vp.affiliateCommissionValue);
       }
     }
-    rows.push({ id: click.id, openedAt: click.createdAt, clientName, plano, planValue, commission, status, stage: click.lastStage });
+    rows.push({ id: click.id, openedAt: click.createdAt, clientName, clientEmail, clientPhone, plano, planValue, commission, status, stage: click.lastStage });
   }
   return rows;
 }
