@@ -43,6 +43,61 @@ class SupportController {
     }
 
     /**
+     * Cliente abre 1 chamado com o chat (mensagens).
+     */
+    async getMyTicket(req, res) {
+        try {
+            const ticket = await supportService.getTicketWithMessages(req.params.id, req.client.id);
+            return res.status(200).json({ status: 'success', data: ticket });
+        } catch (error) {
+            return res.status(error.statusCode || 500).json({ status: 'error', message: error.message || 'Erro ao abrir chamado.' });
+        }
+    }
+
+    /**
+     * Cliente envia mensagem no chat do seu chamado.
+     */
+    async postMyMessage(req, res) {
+        try {
+            const msg = await supportService.addMessage(
+                req.params.id,
+                { senderType: 'client', senderName: req.client.name, message: req.body.message },
+                req.client.id
+            );
+            return res.status(201).json({ status: 'success', data: msg });
+        } catch (error) {
+            return res.status(error.statusCode || 500).json({ status: 'error', message: error.message || 'Erro ao enviar mensagem.' });
+        }
+    }
+
+    /**
+     * Admin abre 1 chamado com o chat.
+     */
+    async adminGetTicket(req, res) {
+        try {
+            const ticket = await supportService.getTicketWithMessages(req.params.id);
+            return res.status(200).json({ status: 'success', data: ticket });
+        } catch (error) {
+            return res.status(error.statusCode || 500).json({ status: 'error', message: error.message || 'Erro ao abrir chamado.' });
+        }
+    }
+
+    /**
+     * Admin envia mensagem no chat.
+     */
+    async adminPostMessage(req, res) {
+        try {
+            const msg = await supportService.addMessage(
+                req.params.id,
+                { senderType: 'admin', senderName: req.user?.name || 'Suporte', message: req.body.message }
+            );
+            return res.status(201).json({ status: 'success', data: msg });
+        } catch (error) {
+            return res.status(error.statusCode || 500).json({ status: 'error', message: error.message || 'Erro ao enviar mensagem.' });
+        }
+    }
+
+    /**
      * Admin lista todos os chamados
      */
     async adminListTickets(req, res) {

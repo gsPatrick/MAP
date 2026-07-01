@@ -30,6 +30,7 @@ require('../models/AvailabilityRule')
 require('../models/DailyChecklist'); // <<< ADICIONE ESTA LINHA
 require('../models/ChecklistItem');  // <<< ADICIONE ESTA LINHA
 require('../models/SupportTicket');
+require('../models/SupportMessage');
 require('../models/AffiliateCommission');
 require('../models/AffiliatePayout');
 require('../models/AffiliateClick');

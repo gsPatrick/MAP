@@ -6,7 +6,7 @@ const path = require('path');
 const punycode = require('punycode/');
 
 // Caminhos para os módulos
-const { sequelize, User, RecurringTransactionRule, AffiliateCommission, AffiliatePayout, AffiliateClick } = require('./src/database');
+const { sequelize, User, RecurringTransactionRule, AffiliateCommission, AffiliatePayout, AffiliateClick, SupportMessage } = require('./src/database');
 const { DataTypes } = require('sequelize');
 const errorHandler = require('./src/middlewares/errorHandler');
 const { startJobs } = require('./src/jobs');
@@ -195,6 +195,14 @@ async function initializeDatabaseAndJobs() {
       await AffiliateClick.sync();
     } catch (err) {
       console.error('[SCHEMA] Falha ao garantir tabelas de afiliado (não crítico):', err.message);
+    }
+
+    // Suporte: garante 'Cancelado' no enum de status e a tabela de mensagens do chat.
+    try {
+      await sequelize.query(`ALTER TYPE "enum_support_tickets_status" ADD VALUE IF NOT EXISTS 'Cancelado';`).catch(() => {});
+      await SupportMessage.sync();
+    } catch (err) {
+      console.error('[SCHEMA] Falha ao garantir schema de suporte (não crítico):', err.message);
     }
     await normalizeRecurringRules();
     await ensureBootstrapAdmin();

@@ -32,7 +32,7 @@ const SupportTicket = sequelize.define('SupportTicket', {
         allowNull: false,
     },
     status: {
-        type: DataTypes.ENUM('Aberto', 'Em andamento', 'Resolvido'),
+        type: DataTypes.ENUM('Aberto', 'Em andamento', 'Resolvido', 'Cancelado'),
         allowNull: false,
         defaultValue: 'Aberto',
     },
