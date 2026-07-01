@@ -44,6 +44,7 @@ async function ensureCriticalSchema() {
     },
     affiliate_commissions: {
       payoutId: { type: DataTypes.INTEGER, allowNull: true },
+      planPrice: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
     },
     affiliate_clicks: {
       ip: { type: DataTypes.STRING, allowNull: true },

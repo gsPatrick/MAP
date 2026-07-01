@@ -31,6 +31,10 @@ const AffiliateCommission = sequelize.define('AffiliateCommission', {
     type: DataTypes.STRING,
     allowNull: true,
   },
+  planPrice: { // snapshot do valor do plano na hora da venda
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true,
+  },
   amount: { // valor da comissão (snapshot)
     type: DataTypes.DECIMAL(10, 2),
     allowNull: false,

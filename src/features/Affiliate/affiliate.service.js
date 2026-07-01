@@ -84,6 +84,7 @@ async function processNewSubscriptionForAffiliate(subscription, transaction) {
         subscriptionId: subscription.id,
         planId: plan.id,
         planName: plan.name,
+        planPrice: plan.price != null ? parseFloat(plan.price) : null,
         amount: commissionValue,
         status: 'Creditada',
       },
@@ -425,6 +426,7 @@ async function getAffiliateCommissions(affiliateClientId, { period = 'mes', date
         id: c.id,
         referredName: c.referred?.name || 'Cliente',
         planName: c.planName,
+        planPrice: c.planPrice != null ? parseFloat(c.planPrice) : null,
         amount: parseFloat(c.amount),
         date: c.createdAt,
         status: c.status,
@@ -523,6 +525,7 @@ async function getAffiliatePayouts(affiliateClientId) {
       ...p.toJSON(),
       commissions: comms.map(c => ({
         id: c.id, referredName: c.referred?.name || 'Cliente', planName: c.planName,
+        planPrice: c.planPrice != null ? parseFloat(c.planPrice) : null,
         amount: parseFloat(c.amount), date: c.createdAt,
       })),
     });
@@ -543,6 +546,7 @@ async function getOpenCommissions(affiliateClientId) {
     count: comms.length,
     commissions: comms.map(c => ({
       id: c.id, referredName: c.referred?.name || 'Cliente', planName: c.planName,
+      planPrice: c.planPrice != null ? parseFloat(c.planPrice) : null,
       amount: parseFloat(c.amount), date: c.createdAt,
     })),
   };
