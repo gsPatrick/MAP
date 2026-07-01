@@ -204,6 +204,7 @@ async function registerClient(registerData) {
           transaction: t,
         });
         if (lastClick) await lastClick.update({ convertedClientId: newClient.id }, { transaction: t });
+        try { require('../../socket').emitAffiliateUpdate(newClient.referredByClientId, { type: 'conversion' }); } catch (e2) { /* não crítico */ }
       } catch (e) { logger.warn(`[Register] Falha ao vincular clique de afiliado: ${e.message}`); }
     }
 

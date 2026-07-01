@@ -285,9 +285,14 @@ if (require.main === module) {
   const app = createApp();
   const PORT = process.env.PORT || 3000;
 
+  const http = require('http');
+  const { initSocket } = require('./src/socket');
+  const server = http.createServer(app);
+  initSocket(server);
+
   initializeDatabaseAndJobs()
     .then(() => {
-      app.listen(PORT, () => {
+      server.listen(PORT, () => {
         console.log(`🚀 Servidor rodando na porta ${PORT}`);
         console.log(`   Health Check: http://localhost:${PORT}/health`);
         console.log(`   API Principal: http://localhost:${PORT}/api`);

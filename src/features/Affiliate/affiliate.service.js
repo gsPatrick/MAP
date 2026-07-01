@@ -1,5 +1,6 @@
 // src/features/Affiliate/affiliate.service.js
 const { Client, Subscription, Plan, AffiliateCommission, AffiliatePayout, AffiliateClick, sequelize } = require('../../database');
+const { emitAffiliateUpdate } = require('../../socket');
 
 const MIN_WITHDRAWAL = 50; // saque mínimo em R$
 const LEAD_WINDOW_MS = 4 * 60 * 60 * 1000; // janela de 4h (dedup por IP + abandono)
@@ -98,6 +99,7 @@ async function processNewSubscriptionForAffiliate(subscription, transaction) {
 
     const newBalance = parseFloat(referrer.balance || 0) + commissionValue;
     await referrer.update({ balance: newBalance }, { transaction });
+    emitAffiliateUpdate(referrer.id, { type: 'commission' });
 
     logger.info(`[AffiliateService] Comissão de R$${commissionValue} creditada ao afiliado ID ${referrer.id} pela assinatura ${subscription.id} do cliente ID ${client.id}.`);
 
@@ -171,6 +173,7 @@ async function trackClick(identifier, ip, planId = null, stage = null) {
         if (planIdNum) upd.lastPlanId = planIdNum;
         if (stage) upd.lastStage = stage;
         if (Object.keys(upd).length) await recent.update(upd);
+        emitAffiliateUpdate(affiliate.id, { type: 'lead' });
         logger.info(`[AffiliateService] Reabertura/navegação do mesmo IP em <4h (afiliado ${affiliate.id}) — última página atualizada.`);
         return;
       }
@@ -179,6 +182,7 @@ async function trackClick(identifier, ip, planId = null, stage = null) {
     // Nova abertura -> registra e incrementa o contador.
     try { await AffiliateClick.create({ affiliateClientId: affiliate.id, ip: ip || null, lastPlanId: planIdNum, lastStage: stage || 'link' }); } catch (e) { /* não crítico */ }
     await affiliate.increment('affiliateLinkClicks');
+    emitAffiliateUpdate(affiliate.id, { type: 'lead' });
     logger.info(`[AffiliateService] Abertura registrada para o afiliado ID ${affiliate.id} (${identifier}).`);
   } catch (error) {
     logger.error(`[AffiliateService] Erro ao registrar clique para "${identifier}": ${error.message}`);
@@ -461,6 +465,7 @@ async function reverseAffiliateCommission(subscriptionId) {
       await referrer.update({ balance: newBalance }, { transaction: t });
     }
     await t.commit();
+    emitAffiliateUpdate(commission.affiliateClientId, { type: 'reversal' });
     logger.info(`[AffiliateService] Comissão da assinatura ${subscriptionId} estornada (afiliado ${commission.affiliateClientId}).`);
   } catch (error) {
     if (t && !t.finished) await t.rollback();
@@ -495,6 +500,7 @@ async function requestPayout(affiliateClientId) {
     );
     await affiliate.update({ balance: 0 }, { transaction: t });
     await t.commit();
+    emitAffiliateUpdate(affiliateClientId, { type: 'payout' });
     logger.info(`[AffiliateService] Saque solicitado pelo afiliado ${affiliateClientId}: R$ ${balance.toFixed(2)} (payout ${payout.id}).`);
 
     // Avisa o suporte/admin (não crítico).
@@ -674,6 +680,7 @@ async function markPayoutPaid(payoutId) {
   if (!payout) throw { statusCode: 404, message: 'Saque não encontrado.' };
   if (payout.status === 'Pago') return payout.toJSON();
   await payout.update({ status: 'Pago', paidAt: new Date() });
+  emitAffiliateUpdate(payout.affiliateClientId, { type: 'payout' });
   logger.info(`[AffiliateService] Saque ${payoutId} marcado como PAGO.`);
   return payout.toJSON();
 }

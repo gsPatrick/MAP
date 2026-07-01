@@ -547,6 +547,7 @@ async function clearClientBalance(clientId) {
     await client.update({ balance: 0.00 }, { transaction: t });
 
     await t.commit();
+    try { require('../../socket').emitAffiliateUpdate(clientId, { type: 'payout' }); } catch (e) { /* não crítico */ }
 
     logger.info(`[AdminService] Saque de afiliado pago: R$${oldBalance.toFixed(2)} para o cliente ID ${clientId} (saldo zerado, indicados preservados).`);
 
