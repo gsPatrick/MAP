@@ -23,6 +23,14 @@ const AffiliateClick = sequelize.define('AffiliateClick', {
     type: DataTypes.STRING,
     allowNull: true,
   },
+  lastPlanId: { // último plano que o visitante abriu (mesmo sem converter)
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
+  lastStage: { // última etapa/página: 'link' | 'planos' | 'checkout'
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
 }, {
   tableName: 'affiliate_clicks',
   timestamps: true,

@@ -48,6 +48,8 @@ async function ensureCriticalSchema() {
     },
     affiliate_clicks: {
       ip: { type: DataTypes.STRING, allowNull: true },
+      lastPlanId: { type: DataTypes.INTEGER, allowNull: true },
+      lastStage: { type: DataTypes.STRING, allowNull: true },
     },
   };
 

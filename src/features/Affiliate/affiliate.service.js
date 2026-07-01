@@ -146,13 +146,15 @@ async function findAffiliateByIdentifier(identifier, options = {}) {
  * Registra um clique no link de um afiliado.
  * @param {string} identifier - Código ou Slug do afiliado.
  */
-async function trackClick(identifier, ip) {
+async function trackClick(identifier, ip, planId = null, stage = null) {
   try {
     const affiliate = await findAffiliateByIdentifier(identifier);
     if (!affiliate) return;
+    const planIdNum = planId ? parseInt(planId, 10) : null;
 
-    // DEDUP POR IP: se o mesmo visitante (mesmo IP) reabrir o link dentro da
-    // janela de 4h, conta como a MESMA abertura. Depois de 4h, é uma nova.
+    // DEDUP POR IP: se o mesmo visitante (mesmo IP) reabrir/navegar dentro da
+    // janela de 4h, é a MESMA abertura -> apenas ATUALIZA a última página/plano
+    // que ele viu (não cria nova, não incrementa). Depois de 4h, é uma nova.
     if (ip) {
       const windowStart = new Date(Date.now() - LEAD_WINDOW_MS);
       const recent = await AffiliateClick.findOne({
@@ -165,13 +167,17 @@ async function trackClick(identifier, ip) {
         order: [['createdAt', 'DESC']],
       });
       if (recent) {
-        logger.info(`[AffiliateService] Reabertura do mesmo IP em <4h (afiliado ${affiliate.id}) — não conta como nova.`);
+        const upd = {};
+        if (planIdNum) upd.lastPlanId = planIdNum;
+        if (stage) upd.lastStage = stage;
+        if (Object.keys(upd).length) await recent.update(upd);
+        logger.info(`[AffiliateService] Reabertura/navegação do mesmo IP em <4h (afiliado ${affiliate.id}) — última página atualizada.`);
         return;
       }
     }
 
     // Nova abertura -> registra e incrementa o contador.
-    try { await AffiliateClick.create({ affiliateClientId: affiliate.id, ip: ip || null }); } catch (e) { /* não crítico */ }
+    try { await AffiliateClick.create({ affiliateClientId: affiliate.id, ip: ip || null, lastPlanId: planIdNum, lastStage: stage || 'link' }); } catch (e) { /* não crítico */ }
     await affiliate.increment('affiliateLinkClicks');
     logger.info(`[AffiliateService] Abertura registrada para o afiliado ID ${affiliate.id} (${identifier}).`);
   } catch (error) {
@@ -567,9 +573,18 @@ async function buildAffiliateLeads(affiliateClientId) {
     limit: 500,
   });
   const now = Date.now();
+  // Cache de planos (para mostrar o plano que o visitante VIU, mesmo sem converter).
+  const planCache = {};
+  const getPlan = async (id) => {
+    if (!id) return null;
+    if (planCache[id] !== undefined) return planCache[id];
+    planCache[id] = await Plan.findByPk(id, { attributes: ['id', 'name', 'price', 'affiliateCommissionValue'] });
+    return planCache[id];
+  };
   const rows = [];
   for (const click of clicks) {
     let plano = null, planValue = null, commission = null, clientName = null, status = 'aberto';
+    const age = now - new Date(click.createdAt).getTime();
     if (click.convertedClientId && click.converted) {
       clientName = click.converted.name;
       const sub = await Subscription.findOne({
@@ -577,7 +592,6 @@ async function buildAffiliateLeads(affiliateClientId) {
         include: [{ model: Plan, as: 'plan' }],
         order: [['createdAt', 'DESC']],
       });
-      const age = now - new Date(click.createdAt).getTime();
       if (sub && sub.plan) {
         plano = sub.plan.name;
         planValue = parseFloat(sub.plan.price);
@@ -589,10 +603,18 @@ async function buildAffiliateLeads(affiliateClientId) {
         status = age > LEAD_WINDOW_MS ? 'abandonado' : 'cadastrou';
       }
     } else {
-      const age = now - new Date(click.createdAt).getTime();
       status = age > LEAD_WINDOW_MS ? 'abandonado' : 'aberto';
     }
-    rows.push({ id: click.id, openedAt: click.createdAt, clientName, plano, planValue, commission, status });
+    // Se ainda não pagou, mostra o ÚLTIMO plano que ele abriu (se houver).
+    if (status !== 'pago' && click.lastPlanId) {
+      const vp = await getPlan(click.lastPlanId);
+      if (vp) {
+        plano = vp.name;
+        planValue = parseFloat(vp.price);
+        commission = parseFloat(vp.affiliateCommissionValue);
+      }
+    }
+    rows.push({ id: click.id, openedAt: click.createdAt, clientName, plano, planValue, commission, status, stage: click.lastStage });
   }
   return rows;
 }

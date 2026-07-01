@@ -74,7 +74,9 @@ async function trackClick(req, res, next) {
     try {
         const { identifier } = req.params;
         const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip || req.connection?.remoteAddress || null;
-        await affiliateService.trackClick(identifier, ip);
+        const planId = req.body?.planId || req.query?.planId || null;
+        const stage = req.body?.stage || req.query?.stage || null;
+        await affiliateService.trackClick(identifier, ip, planId, stage);
         res.status(200).json({ status: 'success', message: 'Clique registrado.' });
     } catch (error) {
         next(error);
