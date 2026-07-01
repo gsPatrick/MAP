@@ -566,11 +566,9 @@ async function getOpenCommissions(affiliateClientId) {
 
 /**
  * Monta a lista de LEADS (aberturas do link) de um afiliado com o STATUS de cada um:
- * - 'pago'        -> Efetuou pagamento (converteu e tem assinatura ativa)
- * - 'pendente'    -> Gerou o link de pagamento (assinatura Pendente), aguardando pagamento
- * - 'cadastrou'   -> Criou a conta (registrou) mas ainda não gerou pagamento (dentro da janela)
- * - 'abandonado'  -> não avançou em 4h, ou pagamento falhou
- * - 'aberto'      -> Abriu o link (ainda pode converter, dentro da janela de 4h)
+ * Retorna DOIS status por lead:
+ *  leadStatus: 'aberto' (abriu o link) | 'cadastrou' (criou a conta) | 'abandonado' (frio +4h)
+ *  paymentStatus: 'pendente' (gerou link de pagamento) | 'pago' (efetuado) | null (sem pagamento)
  */
 async function buildAffiliateLeads(affiliateClientId) {
   const clicks = await AffiliateClick.findAll({
@@ -590,12 +588,17 @@ async function buildAffiliateLeads(affiliateClientId) {
   };
   const rows = [];
   for (const click of clicks) {
-    let plano = null, planValue = null, commission = null, clientName = null, clientEmail = null, clientPhone = null, status = 'aberto';
+    let plano = null, planValue = null, commission = null, clientName = null, clientEmail = null, clientPhone = null;
+    // DOIS status independentes:
+    // leadStatus: 'aberto' | 'cadastrou' | 'abandonado'
+    // paymentStatus: 'pendente' | 'pago' | null (só quando há atividade de pagamento)
+    let leadStatus = 'aberto', paymentStatus = null;
     const age = now - new Date(click.createdAt).getTime();
     if (click.convertedClientId && click.converted) {
       clientName = click.converted.name;
       clientEmail = click.converted.email;
       clientPhone = click.converted.phone;
+      leadStatus = 'cadastrou';
       const activeSub = await Subscription.findOne({
         where: { clientId: click.convertedClientId, status: 'Ativa' },
         include: [{ model: Plan, as: 'plan' }],
@@ -605,10 +608,10 @@ async function buildAffiliateLeads(affiliateClientId) {
         plano = activeSub.plan.name;
         planValue = parseFloat(activeSub.plan.price);
         commission = parseFloat(activeSub.plan.affiliateCommissionValue);
-        status = 'pago';
+        paymentStatus = 'pago';
       } else {
         // Sem assinatura ativa: olha a última assinatura pra saber se gerou o
-        // link de pagamento (Pendente) ou se apenas cadastrou.
+        // link de pagamento (Pendente/Falhou = aguardando pagamento).
         const latestSub = await Subscription.findOne({
           where: { clientId: click.convertedClientId },
           include: [{ model: Plan, as: 'plan' }],
@@ -619,17 +622,16 @@ async function buildAffiliateLeads(affiliateClientId) {
           planValue = parseFloat(latestSub.plan.price);
           commission = parseFloat(latestSub.plan.affiliateCommissionValue);
         }
-        if (latestSub && latestSub.status === 'Pendente') {
-          status = 'pendente'; // gerou o link de pagamento, aguardando pagamento
-        } else if (latestSub && latestSub.status === 'Pagamento Falhou') {
-          status = 'abandonado';
-        } else {
-          // Só criou a conta (sem checkout): dentro de 4h "Criou a conta", depois "Abandonado".
-          status = age > LEAD_WINDOW_MS ? 'abandonado' : 'cadastrou';
+        if (latestSub && (latestSub.status === 'Pendente' || latestSub.status === 'Pagamento Falhou')) {
+          paymentStatus = 'pendente'; // gerou o link de pagamento, aguardando pagamento
+        }
+        // Criou a conta e ficou frio (sem pagar) por +4h -> lead abandonado.
+        if (age > LEAD_WINDOW_MS && paymentStatus !== 'pago') {
+          leadStatus = 'abandonado';
         }
       }
     } else {
-      status = age > LEAD_WINDOW_MS ? 'abandonado' : 'aberto';
+      leadStatus = age > LEAD_WINDOW_MS ? 'abandonado' : 'aberto';
     }
     // Se ainda não temos o plano, mostra o ÚLTIMO plano que ele abriu (se houver).
     if (!plano && click.lastPlanId) {
@@ -640,7 +642,7 @@ async function buildAffiliateLeads(affiliateClientId) {
         commission = parseFloat(vp.affiliateCommissionValue);
       }
     }
-    rows.push({ id: click.id, openedAt: click.createdAt, clientName, clientEmail, clientPhone, plano, planValue, commission, status, stage: click.lastStage });
+    rows.push({ id: click.id, openedAt: click.createdAt, clientName, clientEmail, clientPhone, plano, planValue, commission, leadStatus, paymentStatus, stage: click.lastStage });
   }
   return rows;
 }
