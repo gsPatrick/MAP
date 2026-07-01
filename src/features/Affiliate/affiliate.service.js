@@ -608,6 +608,30 @@ async function getAffiliateDetailForAdmin(affiliateClientId) {
   return { affiliate: affiliate.toJSON(), rows };
 }
 
+/**
+ * (Admin) TUDO de 1 afiliado, no mesmo formato da página do próprio usuário:
+ * summary+metrics, indicados, comissões em aberto, saques (com comissões) e leads.
+ */
+async function getAffiliateFullForAdmin(affiliateClientId) {
+  const client = await Client.findByPk(affiliateClientId, { attributes: ['id'] });
+  if (!client) throw { statusCode: 404, message: 'Afiliado não encontrado.' };
+  const [dashboard, referrals, openCommissions, payouts, leads] = await Promise.all([
+    getAffiliateDashboard(affiliateClientId),
+    getAffiliateReferralsHistory(affiliateClientId),
+    getOpenCommissions(affiliateClientId),
+    getAffiliatePayouts(affiliateClientId),
+    buildAffiliateLeads(affiliateClientId),
+  ]);
+  return {
+    summary: dashboard.summary,
+    metrics: dashboard.metrics,
+    referrals,
+    openCommissions,
+    payouts,
+    leads,
+  };
+}
+
 /** (Admin) Lista TODOS os saques pendentes (Solicitado) de todos os afiliados. */
 async function getPendingPayouts() {
   const payouts = await AffiliatePayout.findAll({
@@ -640,6 +664,7 @@ module.exports = {
   getOpenCommissions,
   getAffiliateLeads,
   getAffiliateDetailForAdmin,
+  getAffiliateFullForAdmin,
   getPendingPayouts,
   markPayoutPaid,
   trackClick,
