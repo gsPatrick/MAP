@@ -45,6 +45,9 @@ async function ensureCriticalSchema() {
     affiliate_commissions: {
       payoutId: { type: DataTypes.INTEGER, allowNull: true },
     },
+    affiliate_clicks: {
+      ip: { type: DataTypes.STRING, allowNull: true },
+    },
   };
 
   for (const [table, columns] of Object.entries(plan)) {

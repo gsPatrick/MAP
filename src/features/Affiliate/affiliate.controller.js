@@ -73,7 +73,8 @@ async function getPayouts(req, res, next) {
 async function trackClick(req, res, next) {
     try {
         const { identifier } = req.params;
-        await affiliateService.trackClick(identifier);
+        const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip || req.connection?.remoteAddress || null;
+        await affiliateService.trackClick(identifier, ip);
         res.status(200).json({ status: 'success', message: 'Clique registrado.' });
     } catch (error) {
         next(error);

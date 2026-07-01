@@ -2,6 +2,7 @@
 const { Client, Subscription, Plan, AffiliateCommission, AffiliatePayout, AffiliateClick, sequelize } = require('../../database');
 
 const MIN_WITHDRAWAL = 50; // saque mínimo em R$
+const LEAD_WINDOW_MS = 4 * 60 * 60 * 1000; // janela de 4h (dedup por IP + abandono)
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
 
@@ -144,15 +145,34 @@ async function findAffiliateByIdentifier(identifier, options = {}) {
  * Registra um clique no link de um afiliado.
  * @param {string} identifier - Código ou Slug do afiliado.
  */
-async function trackClick(identifier) {
+async function trackClick(identifier, ip) {
   try {
     const affiliate = await findAffiliateByIdentifier(identifier);
-    if (affiliate) {
-      await affiliate.increment('affiliateLinkClicks');
-      // Registra a abertura individual (para o admin ver horário e conversão).
-      try { await AffiliateClick.create({ affiliateClientId: affiliate.id }); } catch (e) { /* não crítico */ }
-      logger.info(`[AffiliateService] Clique registrado para o afiliado ID ${affiliate.id} (${identifier}).`);
+    if (!affiliate) return;
+
+    // DEDUP POR IP: se o mesmo visitante (mesmo IP) reabrir o link dentro da
+    // janela de 4h, conta como a MESMA abertura. Depois de 4h, é uma nova.
+    if (ip) {
+      const windowStart = new Date(Date.now() - LEAD_WINDOW_MS);
+      const recent = await AffiliateClick.findOne({
+        where: {
+          affiliateClientId: affiliate.id,
+          ip,
+          convertedClientId: null,
+          createdAt: { [Op.gte]: windowStart },
+        },
+        order: [['createdAt', 'DESC']],
+      });
+      if (recent) {
+        logger.info(`[AffiliateService] Reabertura do mesmo IP em <4h (afiliado ${affiliate.id}) — não conta como nova.`);
+        return;
+      }
     }
+
+    // Nova abertura -> registra e incrementa o contador.
+    try { await AffiliateClick.create({ affiliateClientId: affiliate.id, ip: ip || null }); } catch (e) { /* não crítico */ }
+    await affiliate.increment('affiliateLinkClicks');
+    logger.info(`[AffiliateService] Abertura registrada para o afiliado ID ${affiliate.id} (${identifier}).`);
   } catch (error) {
     logger.error(`[AffiliateService] Erro ao registrar clique para "${identifier}": ${error.message}`);
   }
@@ -528,14 +548,12 @@ async function getOpenCommissions(affiliateClientId) {
   };
 }
 
-// Dias sem converter para considerar o lead "Abandonado".
-const LEAD_ABANDON_DAYS = 3;
-
 /**
  * Monta a lista de LEADS (aberturas do link) de um afiliado com o STATUS de cada um:
  * - 'pago'        -> Efetuou pagamento (converteu e tem assinatura ativa)
- * - 'abandonado'  -> cadastrou e não pagou, OU abriu e passou de N dias sem converter
- * - 'aberto'      -> Abriu o link (ainda pode converter)
+ * - 'cadastrou'   -> Criou a conta (registrou) mas ainda não pagou (dentro da janela)
+ * - 'abandonado'  -> criou a conta e não pagou em 4h, OU abriu e passou 4h sem converter
+ * - 'aberto'      -> Abriu o link (ainda pode converter, dentro da janela de 4h)
  */
 async function buildAffiliateLeads(affiliateClientId) {
   const clicks = await AffiliateClick.findAll({
@@ -555,17 +573,20 @@ async function buildAffiliateLeads(affiliateClientId) {
         include: [{ model: Plan, as: 'plan' }],
         order: [['createdAt', 'DESC']],
       });
+      const age = now - new Date(click.createdAt).getTime();
       if (sub && sub.plan) {
         plano = sub.plan.name;
         planValue = parseFloat(sub.plan.price);
         commission = parseFloat(sub.plan.affiliateCommissionValue);
         status = 'pago';
       } else {
-        status = 'abandonado'; // cadastrou mas não pagou
+        // Criou a conta mas não pagou: dentro de 4h ainda é "Criou a conta";
+        // depois de 4h vira "Abandonado".
+        status = age > LEAD_WINDOW_MS ? 'abandonado' : 'cadastrou';
       }
     } else {
-      const ageDays = (now - new Date(click.createdAt).getTime()) / 86400000;
-      status = ageDays > LEAD_ABANDON_DAYS ? 'abandonado' : 'aberto';
+      const age = now - new Date(click.createdAt).getTime();
+      status = age > LEAD_WINDOW_MS ? 'abandonado' : 'aberto';
     }
     rows.push({ id: click.id, openedAt: click.createdAt, clientName, plano, planValue, commission, status });
   }

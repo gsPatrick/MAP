@@ -19,6 +19,10 @@ const AffiliateClick = sequelize.define('AffiliateClick', {
     type: DataTypes.INTEGER,
     allowNull: true,
   },
+  ip: { // IP de quem abriu (para deduplicar aberturas do mesmo visitante na janela)
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
 }, {
   tableName: 'affiliate_clicks',
   timestamps: true,
@@ -26,6 +30,7 @@ const AffiliateClick = sequelize.define('AffiliateClick', {
   indexes: [
     { fields: ['affiliateClientId'] },
     { fields: ['convertedClientId'] },
+    { fields: ['ip'] },
   ],
 });
 
