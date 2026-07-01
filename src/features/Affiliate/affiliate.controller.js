@@ -21,6 +21,17 @@ async function getAffiliateReferrals(req, res, next) {
     }
 }
 
+async function getAffiliateCommissions(req, res, next) {
+    try {
+        const affiliateClientId = req.client.id;
+        const { period, dateStart, dateEnd } = req.query;
+        const data = await affiliateService.getAffiliateCommissions(affiliateClientId, { period, dateStart, dateEnd });
+        res.status(200).json({ status: 'success', data });
+    } catch (error) {
+        next(error);
+    }
+}
+
 async function trackClick(req, res, next) {
     try {
         const { identifier } = req.params;
@@ -54,6 +65,7 @@ async function updateSlug(req, res, next) {
 module.exports = {
     getAffiliateDashboard,
     getAffiliateReferrals,
+    getAffiliateCommissions,
     trackClick,
     getRanking,
     updateSlug

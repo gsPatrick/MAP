@@ -6,7 +6,7 @@ const path = require('path');
 const punycode = require('punycode/');
 
 // Caminhos para os módulos
-const { sequelize, User, RecurringTransactionRule } = require('./src/database');
+const { sequelize, User, RecurringTransactionRule, AffiliateCommission } = require('./src/database');
 const { DataTypes } = require('sequelize');
 const errorHandler = require('./src/middlewares/errorHandler');
 const { startJobs } = require('./src/jobs');
@@ -179,6 +179,12 @@ async function initializeDatabaseAndJobs() {
     // Garante colunas críticas (ex.: areAutomatedJobsEnabled) antes de qualquer
     // query a user_preferences, evitando quebra caso a migration não tenha rodado.
     await ensureCriticalSchema();
+    // Cria a tabela do ledger de comissões de afiliado se ainda não existir (seguro em produção).
+    try {
+      await AffiliateCommission.sync();
+    } catch (err) {
+      console.error('[SCHEMA] Falha ao garantir tabela affiliate_commissions (não crítico):', err.message);
+    }
     await normalizeRecurringRules();
     await ensureBootstrapAdmin();
 

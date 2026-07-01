@@ -1,5 +1,5 @@
 // src/features/Affiliate/affiliate.service.js
-const { Client, Subscription, Plan, sequelize } = require('../../database');
+const { Client, Subscription, Plan, AffiliateCommission, sequelize } = require('../../database');
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
 
@@ -70,11 +70,32 @@ async function processNewSubscriptionForAffiliate(subscription, transaction) {
     }
 
     const commissionValue = parseFloat(plan.affiliateCommissionValue);
-    const newBalance = parseFloat(referrer.balance || 0) + commissionValue;
 
+    // IDEMPOTÊNCIA: uma comissão por assinatura. Se o webhook do Mercado Pago for
+    // reentregue, não credita de novo (findOrCreate na coluna única subscriptionId).
+    const [commissionRecord, created] = await AffiliateCommission.findOrCreate({
+      where: { subscriptionId: subscription.id },
+      defaults: {
+        affiliateClientId: referrer.id,
+        referredClientId: client.id,
+        subscriptionId: subscription.id,
+        planId: plan.id,
+        planName: plan.name,
+        amount: commissionValue,
+        status: 'Creditada',
+      },
+      transaction,
+    });
+
+    if (!created) {
+      logger.info(`[AffiliateService] Comissão da assinatura ${subscription.id} já registrada. Ignorando (idempotência).`);
+      return;
+    }
+
+    const newBalance = parseFloat(referrer.balance || 0) + commissionValue;
     await referrer.update({ balance: newBalance }, { transaction });
 
-    logger.info(`[AffiliateService] Comissão de R$${commissionValue} creditada ao afiliado ID ${referrer.id} pela assinatura do cliente ID ${client.id}.`);
+    logger.info(`[AffiliateService] Comissão de R$${commissionValue} creditada ao afiliado ID ${referrer.id} pela assinatura ${subscription.id} do cliente ID ${client.id}.`);
 
     // Notificar o indicador via WhatsApp
     try {
@@ -193,7 +214,12 @@ async function getAffiliateDashboard(affiliateClientId) {
       where: { referredByClientId: affiliateClientId }
     });
 
-    const totalEarned = parseFloat(affiliate.balance) || 0;
+    // Total GANHO (histórico bruto) vem do ledger de comissões creditadas.
+    // O saldo atual (para saque) continua em affiliate.balance.
+    const totalEarnedLedger = await AffiliateCommission.sum('amount', {
+      where: { affiliateClientId, status: 'Creditada' }
+    });
+    const totalEarned = parseFloat(totalEarnedLedger || affiliate.balance || 0);
 
     const activeReferralsCount = await Client.count({
       distinct: true,
@@ -328,11 +354,95 @@ async function getAffiliateRanking() {
   }
 }
 
+/**
+ * Histórico de comissões do afiliado por PERÍODO (hoje/semana/mês/ano ou datas).
+ * Lê do ledger (AffiliateCommission), então mostra cada venda com data e valor.
+ */
+async function getAffiliateCommissions(affiliateClientId, { period = 'mes', dateStart, dateEnd } = {}) {
+  try {
+    const now = new Date();
+    let start, end;
+    if (dateStart && dateEnd) {
+      start = new Date(`${dateStart}T00:00:00`);
+      end = new Date(`${dateEnd}T23:59:59.999`);
+    } else {
+      end = new Date(now); end.setHours(23, 59, 59, 999);
+      start = new Date(now);
+      if (period === 'hoje') {
+        start.setHours(0, 0, 0, 0);
+      } else if (period === 'semana') {
+        start.setDate(now.getDate() - 6); start.setHours(0, 0, 0, 0);
+      } else if (period === 'ano') {
+        start = new Date(now.getFullYear(), 0, 1);
+      } else { // mes (default)
+        start = new Date(now.getFullYear(), now.getMonth(), 1);
+      }
+    }
+
+    const commissions = await AffiliateCommission.findAll({
+      where: {
+        affiliateClientId,
+        status: 'Creditada',
+        createdAt: { [Op.between]: [start, end] },
+      },
+      include: [{ model: Client, as: 'referred', attributes: ['id', 'name', 'phone'] }],
+      order: [['createdAt', 'DESC']],
+    });
+
+    const total = commissions.reduce((s, c) => s + parseFloat(c.amount || 0), 0);
+
+    return {
+      period,
+      dateStart: start.toISOString().split('T')[0],
+      dateEnd: end.toISOString().split('T')[0],
+      total: parseFloat(total.toFixed(2)),
+      count: commissions.length,
+      commissions: commissions.map(c => ({
+        id: c.id,
+        referredName: c.referred?.name || 'Cliente',
+        planName: c.planName,
+        amount: parseFloat(c.amount),
+        date: c.createdAt,
+        status: c.status,
+      })),
+    };
+  } catch (error) {
+    logger.error(`[AffiliateService] Erro ao buscar comissões (período) do afiliado ID ${affiliateClientId}: ${error.message}`, error);
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
+}
+
+/**
+ * Estorna a comissão de uma assinatura (ex.: reembolso/cancelamento no Mercado Pago):
+ * marca como 'Estornada' e desconta do saldo do afiliado. Idempotente.
+ */
+async function reverseAffiliateCommission(subscriptionId) {
+  const t = await sequelize.transaction();
+  try {
+    const commission = await AffiliateCommission.findOne({ where: { subscriptionId, status: 'Creditada' }, transaction: t });
+    if (!commission) { await t.commit(); return; }
+    await commission.update({ status: 'Estornada' }, { transaction: t });
+    const referrer = await Client.findByPk(commission.affiliateClientId, { transaction: t });
+    if (referrer) {
+      const newBalance = Math.max(0, parseFloat(referrer.balance || 0) - parseFloat(commission.amount || 0));
+      await referrer.update({ balance: newBalance }, { transaction: t });
+    }
+    await t.commit();
+    logger.info(`[AffiliateService] Comissão da assinatura ${subscriptionId} estornada (afiliado ${commission.affiliateClientId}).`);
+  } catch (error) {
+    if (t && !t.finished) await t.rollback();
+    logger.error(`[AffiliateService] Erro ao estornar comissão da assinatura ${subscriptionId}: ${error.message}`);
+  }
+}
+
 module.exports = {
   getAffiliateDashboard,
   sendAffiliateLinkNotification,
   processNewSubscriptionForAffiliate,
   getAffiliateReferralsHistory,
+  getAffiliateCommissions,
+  reverseAffiliateCommission,
   trackClick,
   getAffiliateRanking,
   findAffiliateByIdentifier,

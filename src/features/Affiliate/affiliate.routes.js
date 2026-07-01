@@ -10,6 +10,9 @@ router.get('/dashboard', affiliateController.getAffiliateDashboard);
 // Rota para o histórico de indicações
 router.get('/referrals', affiliateController.getAffiliateReferrals);
 
+// Histórico de comissões por período (hoje/semana/mês/ano)
+router.get('/commissions', affiliateController.getAffiliateCommissions);
+
 // Rota para o ranking de afiliados
 router.get('/ranking', affiliateController.getRanking);
 

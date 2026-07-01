@@ -262,9 +262,16 @@ const mercadoPagoService = {
           }
         }
 
-      } else if (failureStatuses.includes(status) && subscription.status === 'Pendente') {
-        await subscriptionService.updateSubscriptionStatusById(subscription.id, 'Pagamento Falhou', { skipMessages: true });
-        logger.info(`[Webhook MP] ❌ FALHA - Assinatura ${subscription.id} marcada como falha.`);
+      } else if (failureStatuses.includes(status)) {
+        if (subscription.status === 'Pendente') {
+          await subscriptionService.updateSubscriptionStatusById(subscription.id, 'Pagamento Falhou', { skipMessages: true });
+          logger.info(`[Webhook MP] ❌ FALHA - Assinatura ${subscription.id} marcada como falha.`);
+        }
+        // Reembolso/chargeback: estorna a comissão de afiliado (se já tinha sido creditada).
+        if (status === 'refunded' || status === 'charged_back') {
+          try { await affiliateService.reverseAffiliateCommission(subscription.id); }
+          catch (revErr) { logger.error(`[Webhook MP] Erro ao estornar comissão da assinatura ${subscription.id}: ${revErr.message}`); }
+        }
       } else {
         logger.info(`[Webhook MP] Status '${status}' para assinatura ${subscription.id}. Nenhuma ação.`);
       }
