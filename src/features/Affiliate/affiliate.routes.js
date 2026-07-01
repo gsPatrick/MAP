@@ -16,6 +16,9 @@ router.get('/commissions', affiliateController.getAffiliateCommissions);
 // Comissões em aberto (ainda não sacadas)
 router.get('/open-commissions', affiliateController.getOpenCommissions);
 
+// Leads (aberturas do link) com status: abriu / pagou / abandonado
+router.get('/leads', affiliateController.getLeads);
+
 // Saque: solicitar (zera saldo -> vai pro histórico) e listar histórico de saques
 router.post('/request-payout', affiliateController.requestPayout);
 router.get('/payouts', affiliateController.getPayouts);

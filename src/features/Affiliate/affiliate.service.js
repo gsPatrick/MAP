@@ -528,24 +528,26 @@ async function getOpenCommissions(affiliateClientId) {
   };
 }
 
-/** (Admin) Detalhe de 1 afiliado: cada abertura do link (possível cliente),
- * com horário, e se converteu (plano, valor do plano e comissão). */
-async function getAffiliateDetailForAdmin(affiliateClientId) {
-  const affiliate = await Client.findByPk(affiliateClientId, {
-    attributes: ['id', 'name', 'phone', 'email', 'balance', 'affiliateCode', 'affiliateSlug', 'affiliateLinkClicks', 'asaasPayoutPixKey'],
-  });
-  if (!affiliate) throw { statusCode: 404, message: 'Afiliado não encontrado.' };
+// Dias sem converter para considerar o lead "Abandonado".
+const LEAD_ABANDON_DAYS = 3;
 
+/**
+ * Monta a lista de LEADS (aberturas do link) de um afiliado com o STATUS de cada um:
+ * - 'pago'        -> Efetuou pagamento (converteu e tem assinatura ativa)
+ * - 'abandonado'  -> cadastrou e não pagou, OU abriu e passou de N dias sem converter
+ * - 'aberto'      -> Abriu o link (ainda pode converter)
+ */
+async function buildAffiliateLeads(affiliateClientId) {
   const clicks = await AffiliateClick.findAll({
     where: { affiliateClientId },
     include: [{ model: Client, as: 'converted', attributes: ['id', 'name', 'phone'] }],
     order: [['createdAt', 'DESC']],
     limit: 500,
   });
-
+  const now = Date.now();
   const rows = [];
   for (const click of clicks) {
-    let plano = null, planValue = null, commission = null, converteu = false, clientName = null;
+    let plano = null, planValue = null, commission = null, clientName = null, status = 'aberto';
     if (click.convertedClientId && click.converted) {
       clientName = click.converted.name;
       const sub = await Subscription.findOne({
@@ -554,14 +556,34 @@ async function getAffiliateDetailForAdmin(affiliateClientId) {
         order: [['createdAt', 'DESC']],
       });
       if (sub && sub.plan) {
-        converteu = true;
         plano = sub.plan.name;
         planValue = parseFloat(sub.plan.price);
         commission = parseFloat(sub.plan.affiliateCommissionValue);
+        status = 'pago';
+      } else {
+        status = 'abandonado'; // cadastrou mas não pagou
       }
+    } else {
+      const ageDays = (now - new Date(click.createdAt).getTime()) / 86400000;
+      status = ageDays > LEAD_ABANDON_DAYS ? 'abandonado' : 'aberto';
     }
-    rows.push({ id: click.id, openedAt: click.createdAt, clientName, plano, planValue, commission, converteu });
+    rows.push({ id: click.id, openedAt: click.createdAt, clientName, plano, planValue, commission, status });
   }
+  return rows;
+}
+
+/** (Cliente afiliado) Lista de aberturas do próprio link, com status. */
+async function getAffiliateLeads(affiliateClientId) {
+  return await buildAffiliateLeads(affiliateClientId);
+}
+
+/** (Admin) Detalhe de 1 afiliado: dados + lista de leads (aberturas) com status. */
+async function getAffiliateDetailForAdmin(affiliateClientId) {
+  const affiliate = await Client.findByPk(affiliateClientId, {
+    attributes: ['id', 'name', 'phone', 'email', 'balance', 'affiliateCode', 'affiliateSlug', 'affiliateLinkClicks', 'asaasPayoutPixKey'],
+  });
+  if (!affiliate) throw { statusCode: 404, message: 'Afiliado não encontrado.' };
+  const rows = await buildAffiliateLeads(affiliateClientId);
   return { affiliate: affiliate.toJSON(), rows };
 }
 
@@ -595,6 +617,7 @@ module.exports = {
   requestPayout,
   getAffiliatePayouts,
   getOpenCommissions,
+  getAffiliateLeads,
   getAffiliateDetailForAdmin,
   getPendingPayouts,
   markPayoutPaid,
