@@ -31,6 +31,7 @@ require('../models/DailyChecklist'); // <<< ADICIONE ESTA LINHA
 require('../models/ChecklistItem');  // <<< ADICIONE ESTA LINHA
 require('../models/SupportTicket');
 require('../models/AffiliateCommission');
+require('../models/AffiliatePayout');
 
 
 const models = sequelize.models;

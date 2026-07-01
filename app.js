@@ -6,7 +6,7 @@ const path = require('path');
 const punycode = require('punycode/');
 
 // Caminhos para os módulos
-const { sequelize, User, RecurringTransactionRule, AffiliateCommission } = require('./src/database');
+const { sequelize, User, RecurringTransactionRule, AffiliateCommission, AffiliatePayout } = require('./src/database');
 const { DataTypes } = require('sequelize');
 const errorHandler = require('./src/middlewares/errorHandler');
 const { startJobs } = require('./src/jobs');
@@ -182,8 +182,9 @@ async function initializeDatabaseAndJobs() {
     // Cria a tabela do ledger de comissões de afiliado se ainda não existir (seguro em produção).
     try {
       await AffiliateCommission.sync();
+      await AffiliatePayout.sync();
     } catch (err) {
-      console.error('[SCHEMA] Falha ao garantir tabela affiliate_commissions (não crítico):', err.message);
+      console.error('[SCHEMA] Falha ao garantir tabelas de afiliado (não crítico):', err.message);
     }
     await normalizeRecurringRules();
     await ensureBootstrapAdmin();

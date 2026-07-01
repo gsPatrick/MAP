@@ -32,6 +32,26 @@ async function getAffiliateCommissions(req, res, next) {
     }
 }
 
+async function requestPayout(req, res, next) {
+    try {
+        const affiliateClientId = req.client.id;
+        const payout = await affiliateService.requestPayout(affiliateClientId);
+        res.status(200).json({ status: 'success', data: payout });
+    } catch (error) {
+        next(error);
+    }
+}
+
+async function getPayouts(req, res, next) {
+    try {
+        const affiliateClientId = req.client.id;
+        const payouts = await affiliateService.getAffiliatePayouts(affiliateClientId);
+        res.status(200).json({ status: 'success', data: payouts });
+    } catch (error) {
+        next(error);
+    }
+}
+
 async function trackClick(req, res, next) {
     try {
         const { identifier } = req.params;
@@ -66,6 +86,8 @@ module.exports = {
     getAffiliateDashboard,
     getAffiliateReferrals,
     getAffiliateCommissions,
+    requestPayout,
+    getPayouts,
     trackClick,
     getRanking,
     updateSlug

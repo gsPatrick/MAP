@@ -1,5 +1,5 @@
 // src/features/Admin/admin.service.js
-const { Client, Plan, Subscription, FinancialAccount, sequelize } = require('../../database');
+const { Client, Plan, Subscription, FinancialAccount, AffiliatePayout, sequelize } = require('../../database');
 const { Op } = require('sequelize');
 const logger = require('../../utils/logger');
 const subscriptionService = require('../Subscription/subscription.service');
@@ -531,29 +531,31 @@ async function clearClientBalance(clientId) {
     }
 
     const oldBalance = parseFloat(client.balance);
-    const oldReferralCount = await Client.count({ where: { referredByClientId: clientId }, transaction: t });
 
-    // 1. AÇÃO DE RESET DO HISTÓRICO:
-    // Encontra todos os clientes que foram indicados por este afiliado e desvincula-os.
-    await Client.update(
-      { referredByClientId: null },
-      { where: { referredByClientId: clientId }, transaction: t }
-    );
-
-    // 2. AÇÃO DE ZERAR O SALDO:
+    // Registra o SAQUE no histórico (status 'Pago') e zera o saldo.
+    // NÃO desvincula os indicados (o histórico de indicações é preservado).
+    if (oldBalance > 0) {
+      await AffiliatePayout.create({
+        affiliateClientId: clientId,
+        amount: oldBalance,
+        pixKey: client.asaasPayoutPixKey || null,
+        status: 'Pago',
+        paidAt: new Date(),
+        notes: 'Pagamento registrado pelo admin',
+      }, { transaction: t });
+    }
     await client.update({ balance: 0.00 }, { transaction: t });
 
     await t.commit();
 
-    logger.info(`[AdminService] AÇÃO DE RESET DE AFILIADO: Saldo (de R$${oldBalance.toFixed(2)}) e Histórico de ${oldReferralCount} indicado(s) para o cliente ID ${clientId} foram ZERADOS por um administrador.`);
+    logger.info(`[AdminService] Saque de afiliado pago: R$${oldBalance.toFixed(2)} para o cliente ID ${clientId} (saldo zerado, indicados preservados).`);
 
-    if (client.phone) {
+    if (client.phone && oldBalance > 0) {
       const clientName = client.name ? client.name.split(' ')[0] : 'Olá';
-      const message = `💰 *Seu ciclo de afiliação foi finalizado!* 💰\n\n` +
-        `Olá, ${clientName}! Informamos que o pagamento de comissão no valor de *R$${oldBalance.toFixed(2).replace('.', ',')}* foi processado.\n\n` +
-        `Seu painel de afiliados foi zerado para o início de um novo ciclo. Seu saldo atual é R$0,00 e seu contador de indicados foi reiniciado.\n\n` +
-        `Continue indicando e ganhando no próximo período! 🚀`;
-      await sendWhatsappMessage(client.phone, message).catch(err => logger.error(`[AdminService] Falha ao notificar reset de afiliado para ${client.phone}: ${err.message}`));
+      const message = `💰 *Comissão paga!* 💰\n\n` +
+        `Olá, ${clientName}! Informamos que o pagamento da sua comissão no valor de *R$${oldBalance.toFixed(2).replace('.', ',')}* foi processado.\n\n` +
+        `Seu saldo foi zerado e esse saque está registrado no seu histórico. Continue indicando e ganhando! 🚀`;
+      await sendWhatsappMessage(client.phone, message).catch(err => logger.error(`[AdminService] Falha ao notificar pagamento de afiliado para ${client.phone}: ${err.message}`));
     }
 
   } catch (error) {

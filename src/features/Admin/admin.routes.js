@@ -43,5 +43,10 @@ router.post('/admin/clients/create-as-admin', adminController.createClientAsAdmi
 
 router.put('/admin/clients/:clientId/clear-balance', adminController.clearClientBalance);
 
+// --- Saques de afiliado (admin) ---
+router.get('/admin/affiliates/pending-payouts', adminController.getPendingAffiliatePayouts);
+router.get('/admin/affiliates/:clientId/payouts', adminController.getAffiliatePayoutsByClient);
+router.post('/admin/affiliates/payouts/:payoutId/pay', adminController.payAffiliatePayout);
+
 
 module.exports = router;

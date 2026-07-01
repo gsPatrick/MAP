@@ -1,5 +1,7 @@
 // src/features/Affiliate/affiliate.service.js
-const { Client, Subscription, Plan, AffiliateCommission, sequelize } = require('../../database');
+const { Client, Subscription, Plan, AffiliateCommission, AffiliatePayout, sequelize } = require('../../database');
+
+const MIN_WITHDRAWAL = 50; // saque mínimo em R$
 const logger = require('../../utils/logger');
 const { Op } = require('sequelize');
 
@@ -436,6 +438,76 @@ async function reverseAffiliateCommission(subscriptionId) {
   }
 }
 
+/**
+ * Solicita SAQUE do saldo atual: cria o registro no histórico (status 'Solicitado')
+ * e ZERA o saldo do afiliado. O pagamento é feito manualmente pelo admin, que
+ * depois marca como 'Pago'.
+ */
+async function requestPayout(affiliateClientId) {
+  const t = await sequelize.transaction();
+  try {
+    const affiliate = await Client.findByPk(affiliateClientId, { transaction: t, lock: t.LOCK.UPDATE });
+    if (!affiliate) { throw { statusCode: 404, message: 'Afiliado não encontrado.' }; }
+    const balance = parseFloat(affiliate.balance || 0);
+    if (balance < MIN_WITHDRAWAL) {
+      throw { statusCode: 400, message: `Saldo mínimo para saque é R$ ${MIN_WITHDRAWAL.toFixed(2)}. Seu saldo é R$ ${balance.toFixed(2)}.` };
+    }
+    const payout = await AffiliatePayout.create({
+      affiliateClientId,
+      amount: balance,
+      pixKey: affiliate.asaasPayoutPixKey || null,
+      status: 'Solicitado',
+    }, { transaction: t });
+    await affiliate.update({ balance: 0 }, { transaction: t });
+    await t.commit();
+    logger.info(`[AffiliateService] Saque solicitado pelo afiliado ${affiliateClientId}: R$ ${balance.toFixed(2)} (payout ${payout.id}).`);
+
+    // Avisa o suporte/admin (não crítico).
+    try {
+      const { sendWhatsappMessage } = require('../../services/whatsappService');
+      const adminPhone = process.env.ADMIN_PHONE_FOR_ALERTS || process.env.ADMIN_PHONE_FOR_SUMMARIES;
+      if (adminPhone) {
+        await sendWhatsappMessage(adminPhone, `💸 *Novo pedido de saque de afiliado*\nAfiliado: ${affiliate.name} (${affiliate.phone})\nValor: R$ ${balance.toFixed(2)}\nPIX: ${affiliate.asaasPayoutPixKey || 'não informada'}`, { force: true });
+      }
+    } catch (e) { logger.warn(`[AffiliateService] Falha ao avisar admin do saque: ${e.message}`); }
+
+    return payout.toJSON();
+  } catch (error) {
+    if (t && !t.finished) await t.rollback();
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
+}
+
+/** Histórico de saques do afiliado. */
+async function getAffiliatePayouts(affiliateClientId) {
+  const payouts = await AffiliatePayout.findAll({
+    where: { affiliateClientId },
+    order: [['createdAt', 'DESC']],
+  });
+  return payouts.map(p => p.toJSON());
+}
+
+/** (Admin) Lista TODOS os saques pendentes (Solicitado) de todos os afiliados. */
+async function getPendingPayouts() {
+  const payouts = await AffiliatePayout.findAll({
+    where: { status: 'Solicitado' },
+    include: [{ model: Client, as: 'affiliate', attributes: ['id', 'name', 'phone', 'asaasPayoutPixKey'] }],
+    order: [['createdAt', 'ASC']],
+  });
+  return payouts.map(p => p.toJSON());
+}
+
+/** (Admin) Marca um saque como pago. Não mexe no saldo (já foi zerado no pedido). */
+async function markPayoutPaid(payoutId) {
+  const payout = await AffiliatePayout.findByPk(payoutId);
+  if (!payout) throw { statusCode: 404, message: 'Saque não encontrado.' };
+  if (payout.status === 'Pago') return payout.toJSON();
+  await payout.update({ status: 'Pago', paidAt: new Date() });
+  logger.info(`[AffiliateService] Saque ${payoutId} marcado como PAGO.`);
+  return payout.toJSON();
+}
+
 module.exports = {
   getAffiliateDashboard,
   sendAffiliateLinkNotification,
@@ -443,6 +515,10 @@ module.exports = {
   getAffiliateReferralsHistory,
   getAffiliateCommissions,
   reverseAffiliateCommission,
+  requestPayout,
+  getAffiliatePayouts,
+  getPendingPayouts,
+  markPayoutPaid,
   trackClick,
   getAffiliateRanking,
   findAffiliateByIdentifier,

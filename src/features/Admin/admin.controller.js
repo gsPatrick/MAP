@@ -2,6 +2,24 @@
 const adminService = require('./admin.service');
 const clientService = require('../Client/client.service');
 const whatsappService = require('../../services/whatsappService');
+const affiliateService = require('../Affiliate/affiliate.service');
+
+// --- Saques de afiliado (admin) ---
+const getPendingAffiliatePayouts = (req, res, next) => {
+    affiliateService.getPendingPayouts()
+        .then(data => res.status(200).json({ status: 'success', data }))
+        .catch(next);
+};
+const getAffiliatePayoutsByClient = (req, res, next) => {
+    affiliateService.getAffiliatePayouts(parseInt(req.params.clientId, 10))
+        .then(data => res.status(200).json({ status: 'success', data }))
+        .catch(next);
+};
+const payAffiliatePayout = (req, res, next) => {
+    affiliateService.markPayoutPaid(parseInt(req.params.payoutId, 10))
+        .then(data => res.status(200).json({ status: 'success', data }))
+        .catch(next);
+};
 
 // <<< CONTROLLER ALTERADO >>>
 // Lista todos os clientes com dados detalhados para o painel de admin.
@@ -169,6 +187,9 @@ module.exports = {
     createCustomPlan,
     changeUserPlan,
     confirmClientPayment,
+    getPendingAffiliatePayouts,
+    getAffiliatePayoutsByClient,
+    payAffiliatePayout,
     sendBroadcastMessage,
     getAffiliatesDashboard,
     getAllPlans,
