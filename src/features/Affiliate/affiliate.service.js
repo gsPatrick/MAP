@@ -592,7 +592,7 @@ async function buildAffiliateLeads(affiliateClientId) {
     // DOIS status independentes:
     // leadStatus: 'aberto' | 'cadastrou' | 'abandonado'
     // paymentStatus: 'pendente' | 'pago' | null (só quando há atividade de pagamento)
-    let leadStatus = 'aberto', paymentStatus = null;
+    let leadStatus = 'aberto', paymentStatus = null, createdPaymentLink = false;
     const age = now - new Date(click.createdAt).getTime();
     if (click.convertedClientId && click.converted) {
       clientName = click.converted.name;
@@ -609,6 +609,7 @@ async function buildAffiliateLeads(affiliateClientId) {
         planValue = parseFloat(activeSub.plan.price);
         commission = parseFloat(activeSub.plan.affiliateCommissionValue);
         paymentStatus = 'pago';
+        createdPaymentLink = true;
       } else {
         // Sem assinatura ativa: olha a última assinatura pra saber se gerou o
         // link de pagamento (Pendente/Falhou = aguardando pagamento).
@@ -617,13 +618,16 @@ async function buildAffiliateLeads(affiliateClientId) {
           include: [{ model: Plan, as: 'plan' }],
           order: [['createdAt', 'DESC']],
         });
-        if (latestSub && latestSub.plan) {
-          plano = latestSub.plan.name;
-          planValue = parseFloat(latestSub.plan.price);
-          commission = parseFloat(latestSub.plan.affiliateCommissionValue);
-        }
-        if (latestSub && (latestSub.status === 'Pendente' || latestSub.status === 'Pagamento Falhou')) {
-          paymentStatus = 'pendente'; // gerou o link de pagamento, aguardando pagamento
+        if (latestSub) {
+          createdPaymentLink = true; // existe assinatura -> chegou a gerar o pagamento
+          if (latestSub.plan) {
+            plano = latestSub.plan.name;
+            planValue = parseFloat(latestSub.plan.price);
+            commission = parseFloat(latestSub.plan.affiliateCommissionValue);
+          }
+          if (latestSub.status === 'Pendente' || latestSub.status === 'Pagamento Falhou') {
+            paymentStatus = 'pendente'; // gerou o link de pagamento, aguardando pagamento
+          }
         }
         // Criou a conta e ficou frio (sem pagar) por +4h -> lead abandonado.
         if (age > LEAD_WINDOW_MS && paymentStatus !== 'pago') {
@@ -642,7 +646,7 @@ async function buildAffiliateLeads(affiliateClientId) {
         commission = parseFloat(vp.affiliateCommissionValue);
       }
     }
-    rows.push({ id: click.id, openedAt: click.createdAt, clientName, clientEmail, clientPhone, plano, planValue, commission, leadStatus, paymentStatus, stage: click.lastStage });
+    rows.push({ id: click.id, openedAt: click.createdAt, clientName, clientEmail, clientPhone, plano, planValue, commission, leadStatus, paymentStatus, createdPaymentLink, stage: click.lastStage });
   }
   return rows;
 }
