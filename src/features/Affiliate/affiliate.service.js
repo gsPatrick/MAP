@@ -567,8 +567,9 @@ async function getOpenCommissions(affiliateClientId) {
 /**
  * Monta a lista de LEADS (aberturas do link) de um afiliado com o STATUS de cada um:
  * - 'pago'        -> Efetuou pagamento (converteu e tem assinatura ativa)
- * - 'cadastrou'   -> Criou a conta (registrou) mas ainda não pagou (dentro da janela)
- * - 'abandonado'  -> criou a conta e não pagou em 4h, OU abriu e passou 4h sem converter
+ * - 'pendente'    -> Gerou o link de pagamento (assinatura Pendente), aguardando pagamento
+ * - 'cadastrou'   -> Criou a conta (registrou) mas ainda não gerou pagamento (dentro da janela)
+ * - 'abandonado'  -> não avançou em 4h, ou pagamento falhou
  * - 'aberto'      -> Abriu o link (ainda pode converter, dentro da janela de 4h)
  */
 async function buildAffiliateLeads(affiliateClientId) {
@@ -595,26 +596,43 @@ async function buildAffiliateLeads(affiliateClientId) {
       clientName = click.converted.name;
       clientEmail = click.converted.email;
       clientPhone = click.converted.phone;
-      const sub = await Subscription.findOne({
+      const activeSub = await Subscription.findOne({
         where: { clientId: click.convertedClientId, status: 'Ativa' },
         include: [{ model: Plan, as: 'plan' }],
         order: [['createdAt', 'DESC']],
       });
-      if (sub && sub.plan) {
-        plano = sub.plan.name;
-        planValue = parseFloat(sub.plan.price);
-        commission = parseFloat(sub.plan.affiliateCommissionValue);
+      if (activeSub && activeSub.plan) {
+        plano = activeSub.plan.name;
+        planValue = parseFloat(activeSub.plan.price);
+        commission = parseFloat(activeSub.plan.affiliateCommissionValue);
         status = 'pago';
       } else {
-        // Criou a conta mas não pagou: dentro de 4h ainda é "Criou a conta";
-        // depois de 4h vira "Abandonado".
-        status = age > LEAD_WINDOW_MS ? 'abandonado' : 'cadastrou';
+        // Sem assinatura ativa: olha a última assinatura pra saber se gerou o
+        // link de pagamento (Pendente) ou se apenas cadastrou.
+        const latestSub = await Subscription.findOne({
+          where: { clientId: click.convertedClientId },
+          include: [{ model: Plan, as: 'plan' }],
+          order: [['createdAt', 'DESC']],
+        });
+        if (latestSub && latestSub.plan) {
+          plano = latestSub.plan.name;
+          planValue = parseFloat(latestSub.plan.price);
+          commission = parseFloat(latestSub.plan.affiliateCommissionValue);
+        }
+        if (latestSub && latestSub.status === 'Pendente') {
+          status = 'pendente'; // gerou o link de pagamento, aguardando pagamento
+        } else if (latestSub && latestSub.status === 'Pagamento Falhou') {
+          status = 'abandonado';
+        } else {
+          // Só criou a conta (sem checkout): dentro de 4h "Criou a conta", depois "Abandonado".
+          status = age > LEAD_WINDOW_MS ? 'abandonado' : 'cadastrou';
+        }
       }
     } else {
       status = age > LEAD_WINDOW_MS ? 'abandonado' : 'aberto';
     }
-    // Se ainda não pagou, mostra o ÚLTIMO plano que ele abriu (se houver).
-    if (status !== 'pago' && click.lastPlanId) {
+    // Se ainda não temos o plano, mostra o ÚLTIMO plano que ele abriu (se houver).
+    if (!plano && click.lastPlanId) {
       const vp = await getPlan(click.lastPlanId);
       if (vp) {
         plano = vp.name;
