@@ -69,7 +69,7 @@ async function getAdminClientList(queryParams = {}) {
 
     const { count, rows } = await Client.findAndCountAll({
       where: whereConditions,
-      attributes: ['id', 'name', 'phone', 'email', 'status', 'accessLevel', 'accessExpiresAt', 'createdAt', 'lastActiveAt', 'lastLoginAt', 'referredByClientId'],
+      attributes: ['id', 'name', 'phone', 'email', 'status', 'accessLevel', 'accessExpiresAt', 'createdAt', 'lastActiveAt', 'lastLoginAt', 'referredByClientId', 'subscriptionCancelAt'],
       limit: parseInt(limit, 10),
       offset: offset,
       order: [['createdAt', 'DESC']],
