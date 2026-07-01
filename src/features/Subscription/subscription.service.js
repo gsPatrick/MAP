@@ -313,10 +313,42 @@ async function updateSubscriptionStatusById(id, newStatus, options = {}) {
     }
 }
 
+/**
+ * Agenda o cancelamento da assinatura para o dia do vencimento.
+ * O acesso continua até lá; salvamos a data para exibir "cancelado (efetivo em ...)".
+ */
+async function cancelAtPeriodEnd(clientId) {
+    const client = await Client.findByPk(clientId);
+    if (!client) throw { statusCode: 404, message: 'Cliente não encontrado.' };
+    const lvl = client.accessLevel;
+    const isVitalicio = !!lvl && lvl.startsWith('vitalicio');
+    const isFreeOrInad = !lvl || ['gratuito', 'inadimplente'].includes(lvl);
+    if (isFreeOrInad) throw { statusCode: 400, message: 'Você não tem uma assinatura ativa para cancelar.' };
+    if (isVitalicio) throw { statusCode: 400, message: 'O plano vitalício não expira e não precisa ser cancelado.' };
+    if (!client.accessExpiresAt) throw { statusCode: 400, message: 'Sua assinatura não tem data de vencimento definida.' };
+
+    await client.update({ subscriptionCancelAt: client.accessExpiresAt });
+    logger.info(`[Subscription] Cliente ${clientId} agendou cancelamento para ${client.accessExpiresAt}.`);
+    return { cancelAt: client.accessExpiresAt };
+}
+
+/**
+ * Desfaz o cancelamento agendado (reativa a renovação/assinatura).
+ */
+async function reactivateSubscription(clientId) {
+    const client = await Client.findByPk(clientId);
+    if (!client) throw { statusCode: 404, message: 'Cliente não encontrado.' };
+    await client.update({ subscriptionCancelAt: null });
+    logger.info(`[Subscription] Cliente ${clientId} reativou a assinatura (cancelamento desfeito).`);
+    return { ok: true };
+}
+
 module.exports = {
     createSubscription,
     getActiveSubscription,
     getClientSubscriptions,
     updateSubscriptionStatusByExternalId,
     updateSubscriptionStatusById,
+    cancelAtPeriodEnd,
+    reactivateSubscription,
 };

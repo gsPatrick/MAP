@@ -366,6 +366,8 @@ async function getClientProfile(loggedInClientData, sharedAccessContext = null) 
       clientDataForFinalResponse.status = selfClientData.status;
       clientDataForFinalResponse.accessLevel = selfClientData.accessLevel;
       clientDataForFinalResponse.accessExpiresAt = selfClientData.accessExpiresAt;
+      clientDataForFinalResponse.subscriptionCancelAt = selfClientData.subscriptionCancelAt;
+      clientDataForFinalResponse.createdAt = selfClientData.createdAt;
     }
 
     // Computa o status de assinatura (fresco) para o front decidir o acesso ao painel.

@@ -224,6 +224,8 @@ const mercadoPagoService = {
         const wasActiveBefore = client.status === 'Ativo' && client.accessExpiresAt && new Date(client.accessExpiresAt) >= new Date();
 
         await subscriptionService.updateSubscriptionStatusById(subscription.id, 'Ativa', { skipMessages: true });
+        // Nova assinatura/renovação paga -> limpa qualquer cancelamento agendado.
+        try { await Client.update({ subscriptionCancelAt: null }, { where: { id: client.id } }); } catch (e) { /* não crítico */ }
         logger.info(`[Webhook MP] ✅ SUCESSO - Assinatura ${subscription.id} ativada.`);
 
         // --- Lógica de Negócio Pós-Ativação (Copiada do original corrigida) ---

@@ -25,6 +25,26 @@ const subscriptionController = {
     } catch (error) {
         next(error);
     }
+  },
+
+  // Agenda cancelamento para o vencimento
+  async cancelMySubscription(req, res, next) {
+    try {
+        const data = await subscriptionService.cancelAtPeriodEnd(req.client.id);
+        res.status(200).json({ status: 'success', data });
+    } catch (error) {
+        next(error);
+    }
+  },
+
+  // Desfaz o cancelamento agendado
+  async reactivateMySubscription(req, res, next) {
+    try {
+        const data = await subscriptionService.reactivateSubscription(req.client.id);
+        res.status(200).json({ status: 'success', data });
+    } catch (error) {
+        next(error);
+    }
   }
 };
 

@@ -14,4 +14,8 @@ router.get('/me/active', subscriptionController.getMyActiveSubscription);
 // Rota para obter TODAS as assinaturas (histórico) do cliente logado
 router.get('/me', subscriptionController.getMySubscriptions);
 
+// Cancelar (agendado p/ vencimento) e reativar
+router.post('/cancel', subscriptionController.cancelMySubscription);
+router.post('/reactivate', subscriptionController.reactivateMySubscription);
+
 module.exports = router;

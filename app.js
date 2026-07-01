@@ -32,6 +32,7 @@ async function ensureCriticalSchema() {
     clients: {
       lastLoginAt: { type: DataTypes.DATE, allowNull: true },
       lastActiveAt: { type: DataTypes.DATE, allowNull: true },
+      subscriptionCancelAt: { type: DataTypes.DATEONLY, allowNull: true },
     },
     financial_transactions: {
       originalPurchaseTotalValue: { type: DataTypes.DECIMAL(12, 2), allowNull: true },

@@ -83,6 +83,11 @@ const Client = sequelize.define('Client', {
     allowNull: true,
     comment: 'Data em que o nível de acesso pago expira (para planos temporários)',
   },
+  subscriptionCancelAt: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+    comment: 'Cancelamento agendado: data em que a assinatura será encerrada (vencimento).',
+  },
   // --- Campos para Integração Google Calendar ---
   googleAccessToken: {
     type: DataTypes.STRING(1024),
