@@ -59,24 +59,6 @@ const mercadoPagoService = {
         throw { statusCode: 404, message: 'Cliente ou Plano não encontrado.' };
       }
 
-      // REGRA DE TROCA DE PLANO: só é permitido trocar/assinar quando o plano atual
-      // já expirou (ou no dia do vencimento). Se o cliente tem acesso pago vigente
-      // com vencimento no futuro, bloqueia — evita perder tempo pago / cobrança dupla.
-      const accessLevel = client.accessLevel;
-      const isVitalicio = !!accessLevel && accessLevel.startsWith('vitalicio');
-      const isFreeOrInadimplente = !accessLevel || ['gratuito', 'inadimplente'].includes(accessLevel);
-      if (client.accessExpiresAt && !isVitalicio && !isFreeOrInadimplente) {
-        const exp = new Date(client.accessExpiresAt);
-        const now = new Date();
-        const expDay = new Date(exp.getFullYear(), exp.getMonth(), exp.getDate());
-        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        if (expDay > today) {
-          const dataBR = exp.toLocaleDateString('pt-BR');
-          logger.info(`[MP Checkout Pro] Bloqueado: cliente ${clientId} tem plano vigente até ${dataBR}.`);
-          throw { statusCode: 403, message: `Você só poderá trocar de plano a partir de ${dataBR}, quando seu plano atual expira.` };
-        }
-      }
-
       // Cria a assinatura no banco de dados com status 'Pendente' antes de gerar o pagamento
       const createdSubscriptionData = await subscriptionService.createSubscription(
         clientId, planId, new Date().toISOString().split('T')[0], 'Pendente', null, affiliateCode
