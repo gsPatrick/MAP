@@ -69,7 +69,7 @@ async function getAdminClientList(queryParams = {}) {
 
     const { count, rows } = await Client.findAndCountAll({
       where: whereConditions,
-      attributes: ['id', 'name', 'phone', 'email', 'status', 'accessLevel', 'accessExpiresAt', 'createdAt', 'lastActiveAt', 'lastLoginAt'],
+      attributes: ['id', 'name', 'phone', 'email', 'status', 'accessLevel', 'accessExpiresAt', 'createdAt', 'lastActiveAt', 'lastLoginAt', 'referredByClientId'],
       limit: parseInt(limit, 10),
       offset: offset,
       order: [['createdAt', 'DESC']],
@@ -102,6 +102,26 @@ async function getAdminClientList(queryParams = {}) {
       }
     } catch (e) {
       logger.warn(`[AdminService] Falha ao anexar plano pendente na listagem: ${e.message}`);
+    }
+
+    // Anexa o AFILIADO que indicou o cliente (nome + código), se houver.
+    try {
+      const referrerIds = [...new Set(clientsJson.map(c => c.referredByClientId).filter(Boolean))];
+      if (referrerIds.length > 0) {
+        const referrers = await Client.findAll({
+          where: { id: { [Op.in]: referrerIds } },
+          attributes: ['id', 'name', 'affiliateCode'],
+        });
+        const byId = {};
+        referrers.forEach(r => { byId[r.id] = { id: r.id, name: r.name, affiliateCode: r.affiliateCode }; });
+        clientsJson.forEach(c => {
+          if (c.referredByClientId && byId[c.referredByClientId]) {
+            c.referredBy = byId[c.referredByClientId];
+          }
+        });
+      }
+    } catch (e) {
+      logger.warn(`[AdminService] Falha ao anexar afiliado indicador na listagem: ${e.message}`);
     }
 
     logger.info(`[AdminService] Listados ${rows.length} clientes para o painel de admin com filtro '${filter}'.`);
