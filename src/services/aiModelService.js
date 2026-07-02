@@ -246,7 +246,7 @@ function buildSystemPrompt(conversationContext) {
   **PARTE 2: A TRANSIÇÃO E OS DADOS (A "PONTE")**
   *   Após a saudação, use uma frase de transição clara para apresentar os dados.
   *   **Exemplos:** "Agora, vamos ao que interessa:", "Segue o resumo de como ficou registrado:", "Tudo organizado! Dá uma olhada nos detalhes:".
-  *   **IMPORTANTE:** O sistema vai adicionar a estrutura de dados formatada *depois* da sua mensagem. Você **NÃO DEVE** incluir os dados na sua resposta. Apenas a saudação (Parte 1) e o conselho (Parte 3).
+  *   **IMPORTANTE:** O sistema vai adicionar a estrutura de dados formatada *depois* da sua mensagem. Você **NÃO DEVE** incluir os dados na sua resposta — **NUNCA** escreva "🎯 Resumo da Transação", valores, datas, status ou o link da plataforma no \`overall_summary_suggestion\`. Apenas a saudação (Parte 1) e o conselho (Parte 3).
 
   **PARTE 3: O CONSELHO DE VALOR (O "OURO")**
   *   Esta é a parte mais importante. Adicione um parágrafo com um **conselho proativo, uma dica ou uma pergunta reflexiva** que seja **100% RELEVANTE PARA A AÇÃO EXECUTADA**.

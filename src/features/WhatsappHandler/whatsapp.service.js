@@ -725,11 +725,21 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 'SWITCH_FINANCIAL_ACCOUNT'
             ]);
 
-            // Deduplica ações IDÊNTICAS que a IA às vezes repete (evita a resposta
-            // sair duplicada, ex.: a lista de recorrências aparecendo 2x).
+            // Deduplica ações que a IA às vezes repete (JSON idêntico ou mesma intenção).
             const _seenActions = new Set();
+            const actionDedupeKey = (a) => {
+                const action = a.action || a.action_type;
+                const p = a.parameters || a;
+                if (action === 'CREATE_FINANCIAL_TRANSACTION') {
+                    return `${action}:${p.description}:${p.value}:${p.type}:${p.paymentMethod || ''}`;
+                }
+                if (action === 'MARK_TRANSACTION_AS_PAID_RECEIVED') {
+                    return `${action}:${p.transactionDescription}:${p.transactionValue || ''}`;
+                }
+                return JSON.stringify(a);
+            };
             const dedupedActions = aiResponse.detected_actions.filter(a => {
-                const key = JSON.stringify(a);
+                const key = actionDedupeKey(a);
                 if (_seenActions.has(key)) return false;
                 _seenActions.add(key);
                 return true;
@@ -820,7 +830,21 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             // === FIM DA CORREÇÃO: LÓGICA DE FALLBACK PARA MENSAGEM DE SUCESSO COMPLETA ===
             // ================================================================================
 
-            let structuredDataBody = multipleActionBodiesList.join("\n\n---\n\n");
+            const uniqueActionBodies = [];
+            const seenBodies = new Set();
+            for (const body of multipleActionBodiesList) {
+                const normalized = body.trim();
+                if (normalized && !seenBodies.has(normalized)) {
+                    seenBodies.add(normalized);
+                    uniqueActionBodies.push(body);
+                }
+            }
+
+            let structuredDataBody = uniqueActionBodies.join("\n\n---\n\n");
+            aiMessageIntro = formatter.stripEmbeddedStructuredBlocks(aiMessageIntro, structuredDataBody);
+            if (!aiMessageIntro.trim() && structuredDataBody.trim()) {
+                aiMessageIntro = `Prontinho, ${state.clientName}! ✅ Registro feito com sucesso.`;
+            }
             finalMessageToSend = aiMessageIntro.trim();
             if (structuredDataBody && structuredDataBody.trim() !== "") {
                 finalMessageToSend += `\n\n${structuredDataBody.trim()}`;

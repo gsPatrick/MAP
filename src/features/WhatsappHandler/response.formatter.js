@@ -1164,6 +1164,42 @@ function formatProviderPublicInfoDataStructure(publicInfo, publicUrl) {
     return data.trim();
 }
 
+/** Marcadores de blocos estruturados que o action handler já anexa à resposta. */
+const STRUCTURED_RESPONSE_MARKERS = [
+    '🎯 Resumo da Transação:',
+    '📅 Resumo do Compromisso',
+    '🔄 Regra de Recorrência',
+    '📦 Compra Parcelada',
+    '💳 Resumo do Cartão',
+    '🎯 Detalhamento das Transações:',
+    '🎯 Detalhamento dos Compromissos:',
+];
+
+/**
+ * Remove blocos de dados estruturados (e rodapé da plataforma) que a IA
+ * às vezes inclui no overall_summary_suggestion, evitando duplicação.
+ */
+function stripEmbeddedStructuredBlocks(intro, structuredBody) {
+    if (!intro || !structuredBody?.trim()) return (intro || '').trim();
+
+    let cleaned = intro;
+    for (const marker of STRUCTURED_RESPONSE_MARKERS) {
+        if (!structuredBody.includes(marker) || !cleaned.includes(marker)) continue;
+        const idx = cleaned.indexOf(marker);
+        cleaned = cleaned.substring(0, idx).trim();
+    }
+
+    const platformUrl = process.env.PLATFORM_URL || 'map-nocontrole.com.br/painel';
+    const escapedUrl = platformUrl.replace(/\./g, '\\.');
+    cleaned = cleaned
+        .replace(new RegExp(`\\n---\\n+[\\s\\S]*${escapedUrl}[\\s\\S]*$`, 'i'), '')
+        .replace(/\n---\n+\s*📊[\s\S]*$/i, '')
+        .replace(/\n+\s*📊 Para visualizar[\s\S]*$/i, '')
+        .trim();
+
+    return cleaned.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // Exporta todas as funções em um único objeto
 module.exports = {
     formatDate,
@@ -1212,5 +1248,6 @@ module.exports = {
     formatAvailableTimeSlotsDataStructure,
     formatBusinessClientDetailsDataStructure,
     formatAppointmentHistoryForClientDataStructure,
-    formatProviderPublicInfoDataStructure
+    formatProviderPublicInfoDataStructure,
+    stripEmbeddedStructuredBlocks,
 };
