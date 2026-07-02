@@ -70,6 +70,27 @@ async function findBusinessClientIdByName(name, financialAccountId) {
     return null;
 }
 
+/** "gastei 200 na conta de luz" deve criar despesa, não marcar conta pendente/recorrência. */
+function looksLikeNewExpenseRegistration(message, params) {
+    const msg = (message || '').toLowerCase();
+    const hasNewExpenseVerb = /\b(gastei|gasto|comprei|recebi|ganhei)\b/.test(msg);
+    const hasMonetaryValue = /\b\d+([.,]\d+)?\b/.test(msg)
+        || (params.value != null && parseFloat(params.value) > 0)
+        || (params.transactionValue != null && parseFloat(params.transactionValue) > 0);
+    const paidWithAmount = /\b(paguei|pago)\b/.test(msg) && hasMonetaryValue;
+    return (hasNewExpenseVerb && hasMonetaryValue) || paidWithAmount;
+}
+
+function getLastUserMessageFromState(state) {
+    const history = state.messageHistory || [];
+    for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].role === 'user' && history[i].content && history[i].content !== '[ÁUDIO ENVIADO]') {
+            return history[i].content;
+        }
+    }
+    return '';
+}
+
 /**
  * Executa uma ação detectada pela IA.
  * @param {object} state - O estado da conversa.
@@ -1595,6 +1616,25 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
             case 'MARK_TRANSACTION_AS_PAID_RECEIVED': {
                 try {
+                    const lastUserMessage = getLastUserMessageFromState(state);
+                    if (looksLikeNewExpenseRegistration(lastUserMessage, params)) {
+                        logger.info(`[ACTION HANDLER] MARK redirecionado para CREATE (lançamento novo detectado): "${lastUserMessage}"`);
+                        return handleAction(state, {
+                            action: 'CREATE_FINANCIAL_TRANSACTION',
+                            parameters: {
+                                description: params.description || params.transactionDescription,
+                                type: params.type || 'Saída',
+                                value: params.value ?? params.transactionValue,
+                                paymentMethod: params.paymentMethod,
+                                financialCategoryName: params.financialCategoryName,
+                                transactionDate: params.paymentDate || params.transactionDate,
+                                creditCardName: params.creditCardName,
+                                notes: params.notes,
+                                targetAccountNameOrType: params.targetAccountNameOrType
+                            }
+                        }, clientNameToUse, isOwnerActingOnOwnBehalfGlobal, actorId);
+                    }
+
                     if (!params.transactionDescription) {
                         throw { statusCode: 400, message: "Descrição da transação é obrigatória para marcar como paga/recebida." };
                     }
@@ -1619,7 +1659,8 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     } catch (markErr) {
                         // Não havia CONTA pendente com esse nome -> pode ser uma RECORRÊNCIA
                         // ainda não gerada. Paga adiantado a regra (gera a conta já paga).
-                        if (markErr.statusCode === 404) {
+                        // Só faz isso se o usuário NÃO informou valor novo (ex.: "paguei a Netflix").
+                        if (markErr.statusCode === 404 && !looksLikeNewExpenseRegistration(lastUserMessage, params)) {
                             const { rules } = await recurringTransactionService.getAllRecurringRules(effectiveAccountId, { isActive: true, descriptionSearch: params.transactionDescription });
                             const rule = (rules || [])[0];
                             if (rule) {

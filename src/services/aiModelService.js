@@ -137,9 +137,11 @@ function buildSystemPrompt(conversationContext) {
   *   Para valores financeiros (como em transações, orçamentos, produtos), se o usuário não especificar uma moeda (ex: "gastei 50 no mercado"), ASSUMA que a moeda é Real Brasileiro (BRL). Você não precisa mencionar a moeda na sua resposta, apenas use o valor numérico.
   *   Quando informações opcionais não forem fornecidas, mas um padrão comum e seguro puder ser assumido (ex: data de hoje para transações se não especificada), utilize esses padrões para evitar interrupções desnecessárias.
 
-  **DIFERENCIAÇÃO CRUCIAL: TRANSAÇÃO IMEDIATA vs. LEMBRETE/COMPROMISSO FUTURO vs. RECORRÊNCIA vs. COMPRA PARCELADA NO CARTÃO:**
+  **DIFERENCIAÇÃO CRUCIAL: TRANSAÇÃO IMEDIATA vs. LIQUIDAR CONTA EXISTENTE vs. LEMBRETE/COMPROMISSO FUTURO vs. RECORRÊNCIA vs. COMPRA PARCELADA NO CARTÃO:**
+  -   **REGRA DE PRIORIDADE (LANÇAMENTO NOVO):** Se o usuário informa um **VALOR** junto com verbos como "gastei", "gasto", "comprei", "recebi", "ganhei" (ex: "gastei 50 no uber", "gastei 200 na conta de luz", "comprei pão por 8 reais", "recebi 500 de pix"), use **SEMPRE** \`CREATE_FINANCIAL_TRANSACTION\` — mesmo que mencione "conta de luz", "aluguel", "Netflix" ou qualquer outra conta conhecida. Isso é um registro de despesa/receita nova, NÃO liquidação de conta pendente.
   -   Se o usuário descreve um GASTO/GANHO NOVO que JÁ ACONTECEU (ex: "gastei 50 no uber", "recebi um pix", "comprei pão") E NÃO É PARCELADA NO CARTÃO, use \`CREATE_FINANCIAL_TRANSACTION\`.
-  -   ATENÇÃO: se o usuário diz que PAGOU/QUITOU uma CONTA, ASSINATURA ou RECORRÊNCIA que JÁ EXISTE (ex: "paguei o aluguel", "paguei a Netflix", "paguei a conta de luz", "quitei o condomínio", "paguei a assinatura do Amazon Prime"), use \`MARK_TRANSACTION_AS_PAID_RECEIVED\` com \`transactionDescription\` = o nome da conta/recorrência. NÃO peça valor nem forma de pagamento (o sistema já tem). Só use CREATE_FINANCIAL_TRANSACTION se for claramente um gasto NOVO/avulso que não é conta/recorrência existente.
+  -   **LIQUIDAR CONTA/RECORRÊNCIA EXISTENTE (sem valor novo):** Use \`MARK_TRANSACTION_AS_PAID_RECEIVED\` **SOMENTE** quando o usuário diz "paguei/quitei" uma conta, assinatura ou recorrência **SEM informar um valor novo** (ex: "paguei o aluguel", "paguei a Netflix", "paguei a conta de luz", "quitei o condomínio"). NÃO peça valor nem forma de pagamento (o sistema já tem). **NUNCA** use MARK se a mensagem contiver "gastei/comprei/recebi" + valor, ou "paguei [valor] reais/em/de...".
+  -   Exemplos: "gastei 180 na conta de luz" → \`CREATE_FINANCIAL_TRANSACTION\` | "paguei a conta de luz" (sem valor) → \`MARK_TRANSACTION_AS_PAID_RECEIVED\` | "paguei 180 reais de luz" → \`CREATE_FINANCIAL_TRANSACTION\` (valor informado = lançamento novo).
   -   Se o usuário descreve uma COMPRA PARCELADA NO CARTÃO DE CRÉDITO (ex: "comprei um celular de 1200 em 10x no Nubank"), use \`CREATE_PARCELLED_ACCOUNT\`.
   -   Se o usuário descreve uma ação financeira que se REPETE em intervalos regulares (ex: "pagar aluguel todo dia 5", "Netflix todo mês dia 30"), use \`CREATE_RECURRING_RULE\`.
   -   Se o usuário descreve uma ação financeira ÚNICA que DEVE ACONTECER NO FUTURO (ex: "tenho que pagar X amanhã", "lembrete para comprar Y semana que vem") E NÃO é uma compra parcelada no cartão NEM uma recorrência clara, use \`SCHEDULE_APPOINTMENT\`.
@@ -899,10 +901,15 @@ function buildSystemPrompt(conversationContext) {
       a. **Ações de Edição:** Se o contexto de edição (\`editingResource.id\`) estiver presente, priorize a detecção da ação \`UPDATE_*\` correspondente.
       
       b. **Ações de Criação Específicas:**
+          - **PRIORIDADE MÁXIMA:** A mensagem contém "gastei/gasto/comprei/recebi/ganhei" **com um valor monetário**? Use \`CREATE_FINANCIAL_TRANSACTION\` (mesmo que cite "conta de luz", "aluguel", etc.). NÃO use \`MARK_TRANSACTION_AS_PAID_RECEIVED\` nestes casos.
           - A mensagem descreve uma **COMPRA PARCELADA NO CARTÃO**? Priorize \`CREATE_PARCELLED_ACCOUNT\`.
           - A mensagem indica uma **AÇÃO FINANCEIRA RECORRENTE** (usando palavras como "todo mês", "semanalmente", "assinatura")? Priorize \`CREATE_RECURRING_RULE\`.
           - A mensagem indica uma **AÇÃO FINANCEIRA FUTURA ÚNICA** (e não é parcelada nem recorrente)? Priorize \`SCHEDULE_APPOINTMENT\`.
           - A mensagem é uma configuração de **PREFERÊNCIA DO SISTEMA** (motivação, água)? Detecte \`SET_MOTIVATIONAL_MESSAGE_PREFERENCE\` ou \`SET_WATER_REMINDER_PREFERENCE\`.
+
+      b2. **Liquidar conta/recorrência existente:**
+          - O usuário diz "paguei/quitei" uma conta ou assinatura **sem informar valor novo** (ex: "paguei a Netflix", "quitei o aluguel")? Use \`MARK_TRANSACTION_AS_PAID_RECEIVED\`.
+          - Se houver valor monetário na mensagem junto com "paguei", trate como \`CREATE_FINANCIAL_TRANSACTION\`, não como MARK.
 
       c. **Ações de Acesso Compartilhado:**
           - A mensagem se refere a **CONCEDER, LISTAR, ATUALIZAR, REVOGAR ou RESPONDER** a um convite de acesso? Detecte a ação de \`SharedAccess\` apropriada (GRANT_ACCESS, LIST_*, etc.).
