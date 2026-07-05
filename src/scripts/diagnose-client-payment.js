@@ -207,12 +207,14 @@ async function main() {
 
     const clientIds = clients.map((c) => c.id);
     const accounts = await FinancialAccount.findAll({
-      where: { ownerClientId: { [Op.in]: clientIds }, isActive: true },
-      order: [['id', 'ASC']],
+      where: { clientId: { [Op.in]: clientIds }, isActive: true },
+      order: [['clientId', 'ASC'], ['id', 'ASC']],
     });
 
     report.accounts = accounts.map((a) => ({
       id: a.id,
+      clientId: a.clientId,
+      clientName: clients.find((c) => c.id === a.clientId)?.name?.trim(),
       accountName: a.accountName,
       accountType: a.accountType,
       isDefault: a.isDefault,
@@ -348,8 +350,13 @@ function printReport(report) {
 
   console.log('\nContas ativas:', report.accounts.length);
   report.accounts.forEach((a) => {
-    console.log(`  - [${a.id}] ${a.accountName} (${a.accountType})${a.isDefault ? ' [default]' : ''}`);
+    console.log(`  - [${a.id}] cliente#${a.clientId} ${a.clientName || '?'} | ${a.accountName} (${a.accountType})${a.isDefault ? ' [default]' : ''}`);
   });
+
+  if (report.clients.length > 1) {
+    console.log('\nDica: várias clientes batem na busca. Se o resultado misturar contas, refine com:');
+    console.log('  --client-id <id>   (ex.: --client-id 33 para Daniele Aguiar assinante avancado_anual)');
+  }
 
   const term = (report.search.term || '').toLowerCase();
   const filteredRules = report.recurringRules.filter((r) => r.description.toLowerCase().includes(term));
