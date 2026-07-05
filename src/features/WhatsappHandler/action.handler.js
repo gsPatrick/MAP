@@ -10,6 +10,7 @@ const sharedAccessService = require('../SharedAccess/sharedAccess.service');
 const systemService = require('../System/system.service');
 const clientService = require('../Client/client.service');
 const financialCategoryService = require('../FinancialCategory/financialCategory.service');
+const paymentResolutionService = require('../Financial/paymentResolution.service');
 const affiliateService = require('../Affiliate/affiliate.service');
 const hydrationService = require('../Hydration/hydration.service');
 const subscriptionService = require('../Subscription/subscription.service');
@@ -235,7 +236,21 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     const newTx = await financialService.createTransaction(effectiveAccountId, txData, actorId);
                     const reloadedTx = await financialService.getTransactionById(effectiveAccountId, newTx.id);
 
-                    formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx, effectiveAccountName);
+                    let settlementNote = '';
+                    try {
+                        const settlement = await paymentResolutionService.trySettleAfterCreate({
+                            clientId: state.ownerClientIdForContext,
+                            preferredAccountId: effectiveAccountId,
+                            transaction: reloadedTx,
+                        });
+                        if (settlement) {
+                            settlementNote = `\n\n✅ Também dei baixa em *"${settlement.target.description}"* (${formatter.formatCurrency(settlement.target.value)}). Não te lembro mais desse compromisso neste mês. 😉`;
+                        }
+                    } catch (settleErr) {
+                        logger.warn(`[ACTION HANDLER] Baixa automática pós-CREATE falhou: ${settleErr.message}`);
+                    }
+
+                    formattedData = formatter.formatFinancialTransactionDataStructure(reloadedTx, effectiveAccountName) + settlementNote;
                     resourceForButtonsContext.resources.push({ type: 'transaction', id: newTx.id, description: newTx.description });
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em CREATE_FINANCIAL_TRANSACTION: ${e.message}`, { error: e, paramsUsed: params });
@@ -1640,42 +1655,18 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     }
 
                     const paymentDate = params.paymentDate || new Date(new Date().toLocaleString("en-US", { timeZone: process.env.TZ || "America/Sao_Paulo" })).toISOString().split('T')[0];
-                    const categoryObjectForMark = params.financialCategoryName
-                        ? await financialCategoryService.findFinancialCategoryByNameForAccount(params.financialCategoryName, effectiveAccountId)
-                        : null;
-                    const categoryIdForMark = categoryObjectForMark ? categoryObjectForMark.id : null;
 
-                    let result = null;
-                    let handledByRecurrence = false;
-                    try {
-                        result = await financialService.markTransactionAsPaidOrReceived(
-                            effectiveAccountId,
-                            params.transactionDescription,
-                            params.transactionValue ? parseFloat(params.transactionValue) : null,
-                            paymentDate,
-                            categoryIdForMark,
-                            actorId
-                        );
-                    } catch (markErr) {
-                        // Não havia CONTA pendente com esse nome -> pode ser uma RECORRÊNCIA
-                        // ainda não gerada. Paga adiantado a regra (gera a conta já paga).
-                        // Só faz isso se o usuário NÃO informou valor novo (ex.: "paguei a Netflix").
-                        if (markErr.statusCode === 404 && !looksLikeNewExpenseRegistration(lastUserMessage, params)) {
-                            const { rules } = await recurringTransactionService.getAllRecurringRules(effectiveAccountId, { isActive: true, descriptionSearch: params.transactionDescription });
-                            const rule = (rules || [])[0];
-                            if (rule) {
-                                const tx = await recurringTransactionService.payRecurringRuleInAdvance(effectiveAccountId, rule.id, paymentDate);
-                                formattedData = `✅ Prontinho, ${clientNameToUse}! Registrei o pagamento da recorrência *"${rule.description}"* (${formatter.formatCurrency(tx.value)}) em ${formatter.formatDate(paymentDate)}. Te aviso de novo no próximo vencimento. 😉`;
-                                handledByRecurrence = true;
-                            } else {
-                                throw markErr;
-                            }
-                        } else {
-                            throw markErr;
-                        }
-                    }
+                    const { target, result } = await paymentResolutionService.settleByDescription({
+                        clientId: state.ownerClientIdForContext,
+                        preferredAccountId: effectiveAccountId,
+                        description: params.transactionDescription,
+                        value: params.transactionValue ? parseFloat(params.transactionValue) : null,
+                        paymentDate,
+                    });
 
-                    if (!handledByRecurrence) {
+                    if (target.kind === 'recurrence') {
+                        formattedData = `✅ Prontinho, ${clientNameToUse}! Registrei o pagamento da recorrência *"${target.description}"* (${formatter.formatCurrency(target.value)}) em ${formatter.formatDate(paymentDate)}. Te aviso de novo no próximo vencimento. 😉`;
+                    } else {
                         formattedData = `Transação "${result.description}" (${formatter.formatCurrency(result.value)}) foi marcada como ${result.type === 'Entrada' ? 'recebida' : 'paga'} em ${formatter.formatDate(result.paymentDate)}.`;
                     }
                 } catch (e) {

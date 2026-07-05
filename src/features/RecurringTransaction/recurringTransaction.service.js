@@ -483,6 +483,67 @@ async function payRecurringRuleInAdvance(financialAccountId, ruleId, paymentDate
   }
 }
 
+/**
+ * Avança a recorrência após pagamento já registrado em outro lançamento (sem duplicar tx).
+ * Opcionalmente vincula a transação existente à regra.
+ */
+async function advanceRecurringRuleAfterExternalPayment(
+  financialAccountId,
+  ruleId,
+  paymentDate = null,
+  options = {}
+) {
+  const { existingTransactionId = null, linkExistingTx = true } = options;
+  const t = await sequelize.transaction();
+  try {
+    await validateOwningFinancialAccount(financialAccountId, t);
+    const rule = await RecurringTransactionRule.findOne({
+      where: { id: ruleId, financialAccountId },
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+    if (!rule) {
+      const error = new Error(`Regra de recorrência ID ${ruleId} não encontrada nesta conta.`);
+      error.statusCode = 404; error.status = 'fail'; throw error;
+    }
+    if (!rule.isActive || !rule.nextDueDate) {
+      const error = new Error('Esta recorrência não está ativa ou não tem próxima data.');
+      error.statusCode = 400; error.status = 'fail'; throw error;
+    }
+
+    const payDate = paymentDate || new Date().toISOString().split('T')[0];
+    const occurrenceDueDate = rule.nextDueDate;
+
+    if (linkExistingTx && existingTransactionId) {
+      const existingTx = await FinancialTransaction.findOne({
+        where: { id: existingTransactionId },
+        transaction: t,
+      });
+      if (existingTx) {
+        await existingTx.update({ recurringTransactionRuleId: rule.id }, { transaction: t });
+      }
+    }
+
+    const newNextDueDate = calculateNextDueDate(
+      rule.startDate, rule.frequency, rule.interval, rule.dayOfMonth, rule.dayOfWeek, occurrenceDueDate
+    );
+    if (newNextDueDate && (!rule.endDate || new Date(newNextDueDate) <= new Date(rule.endDate))) {
+      await rule.update({ lastGeneratedDate: occurrenceDueDate, nextDueDate: newNextDueDate }, { transaction: t });
+    } else {
+      await rule.update({ isActive: false, lastGeneratedDate: occurrenceDueDate, nextDueDate: null }, { transaction: t });
+    }
+
+    await t.commit();
+    logger.info(`[RECORRÊNCIA] Regra ${ruleId} avançada após pagamento externo (tx existente: ${existingTransactionId || 'n/a'}).`);
+    return rule.reload().then((r) => r.toJSON());
+  } catch (error) {
+    if (t && !t.finished) await t.rollback();
+    logger.error(`Erro ao avançar recorrência ID ${ruleId} após pagamento externo: ${error.message}`, { error });
+    if (!error.statusCode) error.statusCode = 500;
+    throw error;
+  }
+}
+
 module.exports = {
   createRecurringRule,
   getAllRecurringRules,
@@ -491,4 +552,5 @@ module.exports = {
   deleteRecurringRule,
   getRecurringRuleHistory, // <<< EXPORTADO
   payRecurringRuleInAdvance,
+  advanceRecurringRuleAfterExternalPayment,
 };

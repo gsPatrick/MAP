@@ -5,9 +5,10 @@
   "main": "app.js",
   "scripts": {
     "dev": "nodemon app.js",
-    "start": "npx sequelize-cli db:migrate --env production && node app.js",
+    "start": "npx sequelize-cli db:migrate --env production && node src/scripts/repair-orphan-recurrence-payments.js && node app.js",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "diagnose:payment": "node src/scripts/diagnose-client-payment.js"
+    "diagnose:payment": "node src/scripts/diagnose-client-payment.js",
+    "repair:recurrences": "node src/scripts/repair-orphan-recurrence-payments.js"
   },
   "keywords": [],
   "author": "",

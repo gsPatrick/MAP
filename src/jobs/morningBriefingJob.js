@@ -6,6 +6,7 @@ const logger = require('../utils/logger');
 const { sendWhatsappMessage } = require('../services/whatsappService');
 const hydrationService = require('../features/Hydration/hydration.service');
 const aiModelService = require('../services/aiModelService');
+const paymentResolutionService = require('../features/Financial/paymentResolution.service');
 
 /**
  * Busca dados e envia o resumo matinal para todos os clientes elegíveis.
@@ -84,7 +85,7 @@ async function processAndSendBriefings() {
         // transação gerada) — assim o briefing menciona a recorrência de forma
         // confiável no dia do vencimento, independe do job de geração já ter rodado.
         // Recorrências devidas: vencimento hoje OU atrasado (nextDueDate <= hoje).
-        const recurringItems = await RecurringTransactionRule.findAll({
+        const recurringItemsRaw = await RecurringTransactionRule.findAll({
           where: {
             financialAccountId: { [Op.in]: accountIds },
             isActive: true,
@@ -93,6 +94,7 @@ async function processAndSendBriefings() {
           include: [{ model: FinancialAccount, as: 'financialAccount', attributes: ['accountName'] }],
           order: [['nextDueDate', 'ASC']],
         });
+        const recurringItems = await paymentResolutionService.filterRecurrencesAlreadyPaid(recurringItemsRaw, accountIds);
 
         // --- VISÃO DO MÊS: itens que vencem ainda neste mês (depois de hoje) ---
         const pad = (n) => String(n).padStart(2, '0');
@@ -100,7 +102,7 @@ async function processAndSendBriefings() {
         const mo = startOfDay.getMonth();
         const endOfMonthStr = `${y}-${pad(mo + 1)}-${pad(new Date(y, mo + 1, 0).getDate())}`;
 
-        const monthlyRecurringItems = await RecurringTransactionRule.findAll({
+        const monthlyRecurringItemsRaw = await RecurringTransactionRule.findAll({
           where: {
             financialAccountId: { [Op.in]: accountIds },
             isActive: true,
@@ -109,6 +111,7 @@ async function processAndSendBriefings() {
           include: [{ model: FinancialAccount, as: 'financialAccount', attributes: ['accountName'] }],
           order: [['nextDueDate', 'ASC']],
         });
+        const monthlyRecurringItems = await paymentResolutionService.filterRecurrencesAlreadyPaid(monthlyRecurringItemsRaw, accountIds);
 
         const monthlyPendingTransactions = await FinancialTransaction.findAll({
           where: {
