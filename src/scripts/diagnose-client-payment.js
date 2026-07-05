@@ -6,6 +6,8 @@
  *   NODE_ENV=production node src/scripts/diagnose-client-payment.js --client Daniele
  *   NODE_ENV=production node src/scripts/diagnose-client-payment.js --client Daniele --term amanda
  *   NODE_ENV=production node src/scripts/diagnose-client-payment.js --client-id 42 --term amanda
+ *   NODE_ENV=production node src/scripts/diagnose-client-payment.js --account "Gastos puro luxo" --term amanda
+ *   NODE_ENV=production node src/scripts/diagnose-client-payment.js --global-term amanda --value 1700
  *
  * Cole a saída JSON (bloco DIAGNOSTIC_JSON) no chat para análise.
  */
@@ -21,16 +23,28 @@ const {
 } = require('../database');
 
 function parseArgs(argv) {
-  const args = { client: null, clientId: null, term: 'amanda', markDescription: 'Pagamento da Amanda' };
+  const args = {
+    client: null,
+    clientId: null,
+    account: null,
+    phone: null,
+    term: 'amanda',
+    markDescription: 'Pagamento da Amanda',
+    globalTerm: null,
+    value: null,
+  };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--client' && argv[i + 1]) { args.client = argv[++i]; continue; }
     if (a === '--client-id' && argv[i + 1]) { args.clientId = parseInt(argv[++i], 10); continue; }
+    if (a === '--account' && argv[i + 1]) { args.account = argv[++i]; continue; }
+    if (a === '--phone' && argv[i + 1]) { args.phone = argv[++i]; continue; }
     if (a === '--term' && argv[i + 1]) { args.term = argv[++i]; continue; }
+    if (a === '--global-term' && argv[i + 1]) { args.globalTerm = argv[++i]; continue; }
     if (a === '--mark-description' && argv[i + 1]) { args.markDescription = argv[++i]; continue; }
+    if (a === '--value' && argv[i + 1]) { args.value = parseFloat(argv[++i]); continue; }
     if (!a.startsWith('--') && !args.client) args.client = a;
   }
-  if (!args.client && !args.clientId) args.client = 'Daniele';
   return args;
 }
 
@@ -152,6 +166,77 @@ function analyzeIssue({ rules, transactions, markDescription, term, today }) {
   };
 }
 
+async function runGlobalDiscovery(args, today) {
+  const term = args.globalTerm;
+  const txWhere = { description: { [Op.iLike]: `%${term}%` } };
+  const ruleWhere = { description: { [Op.iLike]: `%${term}%` } };
+  if (args.value != null && !Number.isNaN(args.value)) {
+    txWhere.value = args.value;
+    ruleWhere.value = args.value;
+  }
+
+  const [txs, rules] = await Promise.all([
+    FinancialTransaction.findAll({
+      where: txWhere,
+      order: [['transactionDate', 'DESC']],
+      limit: 30,
+    }),
+    RecurringTransactionRule.findAll({
+      where: ruleWhere,
+      order: [['nextDueDate', 'ASC']],
+      limit: 30,
+    }),
+  ]);
+
+  const accountIds = [...new Set([
+    ...txs.map((t) => t.financialAccountId),
+    ...rules.map((r) => r.financialAccountId),
+  ])];
+  const accounts = accountIds.length
+    ? await FinancialAccount.findAll({
+      where: { id: { [Op.in]: accountIds } },
+      include: [{ model: Client, as: 'ownerClient', attributes: ['id', 'name', 'phone'] }],
+    })
+    : [];
+
+  const accountById = Object.fromEntries(accounts.map((a) => [a.id, a]));
+
+  const matches = [];
+  for (const t of txs) {
+    const acc = accountById[t.financialAccountId];
+    matches.push({
+      kind: 'transaction',
+      id: t.id,
+      description: t.description,
+      value: fmtMoney(t.value),
+      transactionDate: fmtDate(t.transactionDate),
+      clientId: acc?.clientId,
+      clientName: acc?.ownerClient?.name,
+      accountName: acc?.accountName,
+      isPayableOrReceivable: t.isPayableOrReceivable,
+      isPaidOrReceived: t.isPaidOrReceived,
+      recurringTransactionRuleId: t.recurringTransactionRuleId,
+    });
+  }
+  for (const r of rules) {
+    const acc = accountById[r.financialAccountId];
+    matches.push({
+      kind: 'recurrence',
+      id: r.id,
+      description: r.description,
+      value: fmtMoney(r.value),
+      nextDueDate: fmtDate(r.nextDueDate),
+      clientId: acc?.clientId,
+      clientName: acc?.ownerClient?.name,
+      accountName: acc?.accountName,
+      isActive: r.isActive,
+      overdue: r.isActive && fmtDate(r.nextDueDate) <= today,
+    });
+  }
+
+  return { term, value: args.value, matches };
+}
+
 async function main() {
   const args = parseArgs(process.argv);
   const today = todayStr();
@@ -165,6 +250,7 @@ async function main() {
     accounts: [],
     recurringRules: [],
     transactions: [],
+    globalDiscovery: null,
     markSimulation: null,
     fuzzyMatchSimulation: null,
     analysis: null,
@@ -175,10 +261,37 @@ async function main() {
     await sequelize.authenticate();
     console.log(`[diagnose] Conectado ao banco (${report.environment}). Hoje: ${today}\n`);
 
-    let clients;
-    if (args.clientId) {
+    // Modo descoberta global (acha cliente/conta pelo termo ou valor no banco inteiro)
+    if (args.globalTerm) {
+      report.globalDiscovery = await runGlobalDiscovery(args, today);
+      printReport(report);
+      process.exit(report.globalDiscovery.matches.length ? 0 : 1);
+    }
+
+    let clients = [];
+    let accounts = [];
+
+    if (args.account) {
+      accounts = await FinancialAccount.findAll({
+        where: { accountName: { [Op.iLike]: `%${args.account}%` }, isActive: true },
+        order: [['id', 'ASC']],
+        limit: 20,
+      });
+      if (!accounts.length) {
+        report.error = `Nenhuma conta ativa encontrada com nome parecido a "${args.account}".`;
+        printReport(report);
+        process.exit(1);
+      }
+      const ownerIds = [...new Set(accounts.map((a) => a.clientId))];
+      clients = await Client.findAll({ where: { id: { [Op.in]: ownerIds } } });
+    } else if (args.clientId) {
       clients = await Client.findAll({ where: { id: args.clientId } });
-    } else {
+    } else if (args.phone) {
+      clients = await Client.findAll({
+        where: { phone: { [Op.iLike]: `%${args.phone.replace(/\D/g, '')}%` } },
+        limit: 5,
+      });
+    } else if (args.client) {
       clients = await Client.findAll({
         where: {
           [Op.or]: [
@@ -186,12 +299,16 @@ async function main() {
             { phone: { [Op.iLike]: `%${args.client}%` } },
           ],
         },
-        limit: 5,
+        limit: 10,
       });
+    } else {
+      report.error = 'Informe --client, --client-id, --phone, --account ou --global-term.';
+      printReport(report);
+      process.exit(1);
     }
 
     if (!clients.length) {
-      report.error = `Nenhum cliente encontrado para "${args.client || args.clientId}".`;
+      report.error = `Nenhum cliente encontrado (${JSON.stringify(args)}).`;
       printReport(report);
       process.exit(1);
     }
@@ -203,13 +320,16 @@ async function main() {
       status: c.status,
       accessLevel: c.accessLevel,
       accessExpiresAt: fmtDate(c.accessExpiresAt),
+      firstName: (c.name || '').trim().split(/\s+/)[0] || null,
     }));
 
     const clientIds = clients.map((c) => c.id);
-    const accounts = await FinancialAccount.findAll({
-      where: { clientId: { [Op.in]: clientIds }, isActive: true },
-      order: [['clientId', 'ASC'], ['id', 'ASC']],
-    });
+    if (!accounts.length) {
+      accounts = await FinancialAccount.findAll({
+        where: { clientId: { [Op.in]: clientIds }, isActive: true },
+        order: [['clientId', 'ASC'], ['id', 'ASC']],
+      });
+    }
 
     report.accounts = accounts.map((a) => ({
       id: a.id,
@@ -345,8 +465,17 @@ function printReport(report) {
 
   console.log('Clientes:', report.clients.length);
   report.clients.forEach((c) => {
-    console.log(`  - [${c.id}] ${c.name} | ${c.phone || 'sem telefone'} | ${c.status}`);
+    const fn = c.firstName ? ` (bot chama: "${c.firstName}")` : '';
+    console.log(`  - [${c.id}] ${c.name}${fn} | ${c.phone || 'sem telefone'} | ${c.status}`);
   });
+
+  if (report.globalDiscovery) {
+    console.log('\n--- DESCOBERTA GLOBAL ---');
+    console.log(`Termo: "${report.globalDiscovery.term}" | matches: ${report.globalDiscovery.matches.length}`);
+    report.globalDiscovery.matches.slice(0, 20).forEach((m) => {
+      console.log(`  - [${m.kind}] cliente#${m.clientId} ${m.clientName} | conta "${m.accountName}" | ${m.description} | R$ ${m.value}`);
+    });
+  }
 
   console.log('\nContas ativas:', report.accounts.length);
   report.accounts.forEach((a) => {
