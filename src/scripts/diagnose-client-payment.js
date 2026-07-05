@@ -18,7 +18,7 @@ const {
   FinancialAccount,
   RecurringTransactionRule,
   FinancialTransaction,
-} = require('../../database');
+} = require('../database');
 
 function parseArgs(argv) {
   const args = { client: null, clientId: null, term: 'amanda', markDescription: 'Pagamento da Amanda' };
