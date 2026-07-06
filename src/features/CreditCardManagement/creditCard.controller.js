@@ -71,8 +71,20 @@ async function deleteCreditCard(req, res, next) {
   try {
     const financialAccountId = getFinancialAccountIdFromRequest(req);
     const cardId = getCardIdFromRequest(req);
-    await creditCardService.deleteCreditCard(financialAccountId, cardId); // Service já lança erro se não sucesso
+    const cascade = req.query.cascade === 'true';
+    await creditCardService.deleteCreditCard(financialAccountId, cardId, { cascade });
     res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getCreditCardDeletionImpact(req, res, next) {
+  try {
+    const financialAccountId = getFinancialAccountIdFromRequest(req);
+    const cardId = getCardIdFromRequest(req);
+    const impact = await creditCardService.getCreditCardDeletionImpact(financialAccountId, cardId);
+    res.status(200).json({ status: 'success', data: impact });
   } catch (error) {
     next(error);
   }
@@ -182,6 +194,7 @@ module.exports = {
   getCreditCardById,
   updateCreditCard,
   deleteCreditCard,
+  getCreditCardDeletionImpact,
   getCreditCardInvoiceDetails,
   getAvailableInvoicePeriods,
   getAvailableCreditLimit,

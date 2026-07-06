@@ -409,7 +409,107 @@ async function updateCreditCard(financialAccountId, cardId, updateData) {
     }
 }
 
-async function deleteCreditCard(financialAccountId, cardId) {
+async function getCreditCardDeletionImpact(financialAccountId, cardId) {
+    await validateOwningFinancialAccount(financialAccountId);
+    const card = await CreditCard.findOne({ where: { id: cardId, financialAccountId } });
+    if (!card) {
+        const error = new Error(`Cartão de crédito ID ${cardId} não encontrado.`);
+        error.statusCode = 404; error.status = 'fail'; throw error;
+    }
+
+    const cardTransactions = await FinancialTransaction.findAll({
+        where: { financialAccountId, creditCardId: cardId },
+        order: [['transactionDate', 'DESC'], ['id', 'DESC']],
+        attributes: ['id', 'description', 'value', 'type', 'transactionDate', 'isParcel', 'parcelNumber', 'totalParcels', 'originalAccountId'],
+    });
+
+    const invoicePayments = await FinancialTransaction.findAll({
+        where: {
+            financialAccountId,
+            type: 'Saída',
+            creditCardId: null,
+            description: { [Op.iLike]: `Pagamento Fatura ${card.name}%` },
+        },
+        order: [['transactionDate', 'DESC']],
+        attributes: ['id', 'description', 'value', 'type', 'transactionDate'],
+    });
+
+    const formatItem = (tx, kind) => ({
+        id: tx.id,
+        kind,
+        description: tx.description,
+        value: parseFloat(tx.value),
+        transactionDate: tx.transactionDate,
+        isParcel: tx.isParcel || false,
+        parcelNumber: tx.parcelNumber,
+        totalParcels: tx.totalParcels,
+    });
+
+    const items = [
+        ...cardTransactions.map((tx) => formatItem(tx, tx.isParcel ? 'parcel_expense' : 'card_expense')),
+        ...invoicePayments.map((tx) => formatItem(tx, 'invoice_payment')),
+    ];
+
+    const parcelGroups = new Set(
+        cardTransactions.filter((t) => t.isParcel && t.originalAccountId).map((t) => t.originalAccountId)
+    );
+
+    return {
+        cardId: card.id,
+        cardName: card.name,
+        canDeleteWithoutCascade: items.length === 0,
+        summary: {
+            cardExpenses: cardTransactions.filter((t) => !t.isParcel).length,
+            parcelInstallments: cardTransactions.filter((t) => t.isParcel).length,
+            parcelGroups: parcelGroups.size,
+            invoicePayments: invoicePayments.length,
+            total: items.length,
+        },
+        items: items.slice(0, 40),
+        hasMore: items.length > 40,
+        extraCount: Math.max(0, items.length - 40),
+    };
+}
+
+async function deleteCreditCardRelatedData(financialAccountId, cardId, cardName) {
+    const financialService = require('../Financial/financial.service');
+
+    const cardTransactions = await FinancialTransaction.findAll({
+        where: { financialAccountId, creditCardId: cardId },
+        attributes: ['id', 'isParcel', 'originalAccountId'],
+    });
+
+    const invoicePayments = await FinancialTransaction.findAll({
+        where: {
+            financialAccountId,
+            type: 'Saída',
+            creditCardId: null,
+            description: { [Op.iLike]: `Pagamento Fatura ${cardName}%` },
+        },
+        attributes: ['id'],
+    });
+
+    const parcelChildren = cardTransactions.filter(
+        (t) => t.isParcel && t.originalAccountId && t.originalAccountId !== t.id
+    );
+    const remainingCardTxs = cardTransactions.filter(
+        (t) => !parcelChildren.some((c) => c.id === t.id)
+    );
+    const orderedIds = [
+        ...parcelChildren.map((t) => t.id),
+        ...remainingCardTxs.map((t) => t.id),
+        ...invoicePayments.map((t) => t.id),
+    ];
+
+    for (const txId of orderedIds) {
+        await financialService.deleteTransaction(financialAccountId, txId);
+    }
+
+    return orderedIds.length;
+}
+
+async function deleteCreditCard(financialAccountId, cardId, options = {}) {
+    const { cascade = false } = options;
     const t = await sequelize.transaction();
     try {
         await validateOwningFinancialAccount(financialAccountId, t);
@@ -424,29 +524,55 @@ async function deleteCreditCard(financialAccountId, cardId) {
         }
 
         const transactionsCount = await FinancialTransaction.count({ where: { creditCardId: cardId }, transaction: t });
-        if (transactionsCount > 0) {
+        const invoicePaymentsCount = await FinancialTransaction.count({
+            where: {
+                financialAccountId,
+                type: 'Saída',
+                creditCardId: null,
+                description: { [Op.iLike]: `Pagamento Fatura ${card.name}%` },
+            },
+            transaction: t,
+        });
+        const totalRelated = transactionsCount + invoicePaymentsCount;
+
+        if (totalRelated > 0 && cascade) {
+            await t.commit();
+            await deleteCreditCardRelatedData(financialAccountId, cardId, card.name);
+            logger.info(`Lançamentos do cartão ID ${cardId} removidos. Prosseguindo com exclusão do cartão.`);
+        } else if (totalRelated > 0) {
             await t.rollback();
-            const error = new Error(`Não é possível excluir o cartão "${card.name}" pois está associado a ${transactionsCount} transações. Considere marcá-lo como inativo.`);
-            error.statusCode = 409; error.status = 'fail'; throw error;
+            const error = new Error(`Não é possível excluir o cartão "${card.name}" pois está associado a ${totalRelated} lançamento(s). Confirme a exclusão em cascata para remover tudo.`);
+            error.statusCode = 409;
+            error.status = 'fail';
+            error.code = 'CREDIT_CARD_HAS_DEPENDENCIES';
+            throw error;
         }
 
-        if (card.isDefault) {
+        const destroyTx = totalRelated > 0 && cascade ? null : t;
+        const cardToDestroy = totalRelated > 0 && cascade
+            ? await CreditCard.findOne({ where: { id: cardId, financialAccountId } })
+            : card;
+
+        if (!cardToDestroy) {
+            const error = new Error(`Cartão de crédito ID ${cardId} não encontrado.`);
+            error.statusCode = 404; error.status = 'fail'; throw error;
+        }
+
+        if (cardToDestroy.isDefault) {
             const otherCard = await CreditCard.findOne({
-                where: { financialAccountId, isActive: true, id: { [Op.ne]: cardId } }, // Procura outro ATIVO
+                where: { financialAccountId, isActive: true, id: { [Op.ne]: cardId } },
                 order: [['createdAt', 'ASC']],
-                transaction: t,
+                transaction: destroyTx,
             });
             if (otherCard) {
-                await otherCard.update({ isDefault: true }, { transaction: t });
+                await otherCard.update({ isDefault: true }, { transaction: destroyTx });
                 logger.info(`Cartão ID ${otherCard.id} promovido a default para Conta ID ${financialAccountId}.`);
-            } else {
-                logger.info(`Cartão default ID ${cardId} excluído. Nenhum outro cartão ativo para ser promovido a default na conta ${financialAccountId}.`);
             }
         }
 
-        await card.destroy({ transaction: t });
-        await t.commit();
-        logger.info(`Cartão ID ${cardId} ("${card.name}") excluído da FA ID ${financialAccountId}.`);
+        await cardToDestroy.destroy({ transaction: destroyTx });
+        if (destroyTx) await destroyTx.commit();
+        logger.info(`Cartão ID ${cardId} ("${cardToDestroy.name}") excluído da FA ID ${financialAccountId}.`);
         return true;
     } catch (error) {
         if (t && !t.finished && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
@@ -920,6 +1046,7 @@ module.exports = {
     getCreditCardById,
     updateCreditCard,
     deleteCreditCard,
+    getCreditCardDeletionImpact,
     findCreditCardByName,
     getAvailableCreditLimit,
     getCreditCardInvoiceDetails,

@@ -12,6 +12,7 @@ router.post('/', creditCardController.createCreditCard);
 router.get('/', creditCardController.getAllCreditCards);
 
 // Rotas específicas para um cartão
+router.get('/:cardId/deletion-impact', creditCardController.getCreditCardDeletionImpact);
 router.get('/:cardId', creditCardController.getCreditCardById);
 router.put('/:cardId', creditCardController.updateCreditCard);
 router.delete('/:cardId', creditCardController.deleteCreditCard);
