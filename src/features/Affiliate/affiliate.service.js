@@ -5,6 +5,7 @@ const { emitAffiliateUpdate } = require('../../socket');
 const MIN_WITHDRAWAL = 50; // saque mínimo em R$
 const LEAD_WINDOW_MS = 4 * 60 * 60 * 1000; // janela de 4h (dedup por IP + abandono)
 const logger = require('../../utils/logger');
+const clientAuthService = require('../ClientAuth/clientAuth.service');
 const { Op } = require('sequelize');
 
 /**
@@ -238,8 +239,7 @@ async function getAffiliateDashboard(affiliateClientId) {
 
     // Se o afiliado não tiver código, vamos gerar um agora para evitar 'undefined' no front
     if (!affiliate.affiliateCode) {
-      const { generateUniqueAffiliateCode } = require('../ClientAuth/authUtils');
-      const newCode = await generateUniqueAffiliateCode();
+      const newCode = await clientAuthService.generateUniqueAffiliateCode(affiliate.name);
       await Client.update({ affiliateCode: newCode }, { where: { id: affiliate.id } });
       affiliate.affiliateCode = newCode;
       logger.info(`[AffiliateService] Código de afiliado gerado retroativamente para ID ${affiliate.id}: ${newCode}`);
