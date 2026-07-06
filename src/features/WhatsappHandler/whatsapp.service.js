@@ -13,6 +13,7 @@ const scheduleHandler = require('./schedule.handler');
 // --- Imports dos Novos Especialistas e Utilitários ---
 const onboardingHandler = require('./onboarding.handler');
 const actionHandler = require('./action.handler');
+const expenseIntent = require('./expenseIntent.utils');
 const formatter = require('./response.formatter');
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 const { sendWhatsappMessage, sendButtonListMessage, downloadZapiMedia } = require('../../services/whatsappService');
@@ -703,6 +704,61 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             audioPayload: audioPayload // Passar payload de áudio se existir
         };
 
+        // Atalho: resposta só com forma de pagamento após esclarecimento pendente
+        if (state.currentAction === 'awaiting_clarification_response' && state.pendingConfirmation) {
+            const pending = state.pendingConfirmation;
+            const pendingParams = { ...(pending.parameters || {}) };
+            const cards = contextData.availableCreditCards || [];
+            const extracted = expenseIntent.extractPaymentMethodFromText(messageText, cards);
+
+            if (extracted?.paymentMethod) {
+                pendingParams.paymentMethod = extracted.paymentMethod;
+                if (extracted.creditCardName) pendingParams.creditCardName = extracted.creditCardName;
+            }
+
+            let actionName = pending.action;
+            if (actionName === 'MARK_TRANSACTION_AS_PAID_RECEIVED'
+                && expenseIntent.looksLikeNewExpenseInConversation(state, pendingParams)) {
+                actionName = 'CREATE_FINANCIAL_TRANSACTION';
+                pendingParams.description = pendingParams.description || pendingParams.transactionDescription;
+                pendingParams.value = pendingParams.value ?? pendingParams.transactionValue;
+                pendingParams.type = pendingParams.type || 'Saída';
+            }
+
+            const hasCreateData = actionName === 'CREATE_FINANCIAL_TRANSACTION'
+                && pendingParams.description
+                && pendingParams.value
+                && parseFloat(pendingParams.value) > 0
+                && pendingParams.paymentMethod;
+
+            if (hasCreateData) {
+                const isOwnerActingOnOwnBehalfGlobal = !state.isSharedAccessContext || state.ownerClientIdForContext === actorClient.id;
+                const mainActionResult = await actionHandler.handleAction(
+                    state,
+                    { action: actionName, parameters: pendingParams },
+                    state.clientName,
+                    isOwnerActingOnOwnBehalfGlobal,
+                    actorClient.id
+                );
+                state.pendingConfirmation = null;
+                state.currentAction = null;
+
+                if (mainActionResult?.formattedData) {
+                    let finalMessageToSend = mainActionResult.formattedData;
+                    const platformLinkFooter = formatter.formatPlatformLink();
+                    const platformBaseUrl = process.env.PLATFORM_URL || 'map-nocontrole.com.br/painel';
+                    if (!finalMessageToSend.includes(platformBaseUrl)) {
+                        finalMessageToSend += `\n\n---\n\n${platformLinkFooter.trim()}`;
+                    }
+                    state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
+                    await sendWhatsappMessage(senderPhone, finalMessageToSend, { immediate: true });
+                }
+                conversationState.set(senderPhone, state);
+                pushNameFromPayload = null;
+                return;
+            }
+        }
+
         const aiResponse = await aiModelService.interpretUserMessage(messageText, aiContext);
         state.lastAiResponse = aiResponse;
 
@@ -904,9 +960,60 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
                 state.pendingChainedAction = clarification.parameters_so_far.chained_action_context;
                 clarification.parameters_so_far = {};
             }
+
+            const paramsSoFar = { ...(clarification.parameters_so_far || {}) };
+            const cards = contextData.availableCreditCards || [];
+            if (!paramsSoFar.paymentMethod) {
+                const resolved = expenseIntent.resolvePaymentMethodFromConversation(state, cards)
+                    || expenseIntent.extractPaymentMethodFromText(messageText, cards);
+                if (resolved?.paymentMethod) {
+                    paramsSoFar.paymentMethod = resolved.paymentMethod;
+                    if (resolved.creditCardName) paramsSoFar.creditCardName = resolved.creditCardName;
+                }
+            }
+
+            let intentAction = clarification.original_intent_action_suggestion;
+            if (intentAction === 'MARK_TRANSACTION_AS_PAID_RECEIVED'
+                && expenseIntent.looksLikeNewExpenseInConversation(state, paramsSoFar)) {
+                intentAction = 'CREATE_FINANCIAL_TRANSACTION';
+                paramsSoFar.description = paramsSoFar.description || paramsSoFar.transactionDescription;
+                paramsSoFar.value = paramsSoFar.value ?? paramsSoFar.transactionValue;
+                paramsSoFar.type = paramsSoFar.type || 'Saída';
+            }
+
+            const canExecuteNow = intentAction === 'CREATE_FINANCIAL_TRANSACTION'
+                && paramsSoFar.description
+                && paramsSoFar.value
+                && parseFloat(paramsSoFar.value) > 0
+                && paramsSoFar.paymentMethod;
+
+            if (canExecuteNow) {
+                const isOwnerActingOnOwnBehalfGlobal = !state.isSharedAccessContext || state.ownerClientIdForContext === actorClient.id;
+                const mainActionResult = await actionHandler.handleAction(
+                    state,
+                    { action: intentAction, parameters: paramsSoFar },
+                    state.clientName,
+                    isOwnerActingOnOwnBehalfGlobal,
+                    actorClient.id
+                );
+                if (mainActionResult?.formattedData) {
+                    let finalMessageToSend = mainActionResult.formattedData;
+                    const platformLinkFooter = formatter.formatPlatformLink();
+                    const platformBaseUrl = process.env.PLATFORM_URL || 'map-nocontrole.com.br/painel';
+                    if (!finalMessageToSend.includes(platformBaseUrl)) {
+                        finalMessageToSend += `\n\n---\n\n${platformLinkFooter.trim()}`;
+                    }
+                    state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
+                    await sendWhatsappMessage(senderPhone, finalMessageToSend, { immediate: true });
+                    conversationState.set(senderPhone, state);
+                    pushNameFromPayload = null;
+                    return;
+                }
+            }
+
             state.pendingConfirmation = {
-                action: clarification.original_intent_action_suggestion,
-                parameters: clarification.parameters_so_far,
+                action: intentAction,
+                parameters: paramsSoFar,
                 timestamp: Date.now()
             };
             state.currentAction = 'awaiting_clarification_response';

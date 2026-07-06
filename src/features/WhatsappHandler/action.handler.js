@@ -23,6 +23,7 @@ const { sendWhatsappMessage, sendButtonListMessage } = require('../../services/w
 const aiModelService = require('../../services/aiModelService');
 const checklistService = require('../Checklist/checklist.service');
 const onboardingAIService = require('./onboarding.ai.service'); // <<< ADICIONAR ESTE IMPORT
+const expenseIntent = require('./expenseIntent.utils');
 
 // <<< INÍCIO DA CORREÇÃO: Lista de Ações Exclusivas de PJ/MEI >>>
 const PJ_EXCLUSIVE_ACTIONS = [
@@ -73,23 +74,11 @@ async function findBusinessClientIdByName(name, financialAccountId) {
 
 /** "gastei 200 na conta de luz" deve criar despesa, não marcar conta pendente/recorrência. */
 function looksLikeNewExpenseRegistration(message, params) {
-    const msg = (message || '').toLowerCase();
-    const hasNewExpenseVerb = /\b(gastei|gasto|comprei|recebi|ganhei)\b/.test(msg);
-    const hasMonetaryValue = /\b\d+([.,]\d+)?\b/.test(msg)
-        || (params.value != null && parseFloat(params.value) > 0)
-        || (params.transactionValue != null && parseFloat(params.transactionValue) > 0);
-    const paidWithAmount = /\b(paguei|pago)\b/.test(msg) && hasMonetaryValue;
-    return (hasNewExpenseVerb && hasMonetaryValue) || paidWithAmount;
+    return expenseIntent.looksLikeNewExpenseRegistration(message, params);
 }
 
 function getLastUserMessageFromState(state) {
-    const history = state.messageHistory || [];
-    for (let i = history.length - 1; i >= 0; i--) {
-        if (history[i].role === 'user' && history[i].content && history[i].content !== '[ÁUDIO ENVIADO]') {
-            return history[i].content;
-        }
-    }
-    return '';
+    return expenseIntent.getLastUserMessageFromState(state);
 }
 
 /**
@@ -224,6 +213,18 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     if (!txData.description || !txData.type || isNaN(txData.value) || txData.value <= 0) {
                         throw { statusCode: 400, message: "Dados insuficientes ou inválidos (descrição, tipo, valor) para criar transação." };
+                    }
+
+                    if (!txData.paymentMethod) {
+                        const { cards } = await creditCardService.getAllCreditCards(effectiveAccountId, { isActive: true });
+                        const resolved = expenseIntent.resolvePaymentMethodFromConversation(state, cards);
+                        if (resolved) {
+                            txData.paymentMethod = resolved.paymentMethod;
+                            if (resolved.creditCardName && !cardId) {
+                                cardId = await findCreditCardIdByName(resolved.creditCardName, effectiveAccountId);
+                                txData.creditCardId = cardId;
+                            }
+                        }
                     }
 
                     if (!txData.paymentMethod) {
@@ -1631,19 +1632,30 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
             case 'MARK_TRANSACTION_AS_PAID_RECEIVED': {
                 try {
-                    const lastUserMessage = getLastUserMessageFromState(state);
-                    if (looksLikeNewExpenseRegistration(lastUserMessage, params)) {
-                        logger.info(`[ACTION HANDLER] MARK redirecionado para CREATE (lançamento novo detectado): "${lastUserMessage}"`);
+                    const recentMessages = expenseIntent.getRecentUserMessagesFromState(state, 5);
+                    const isNewExpense = expenseIntent.looksLikeNewExpenseInConversation(state, params)
+                        || recentMessages.some((m) => looksLikeNewExpenseRegistration(m, params))
+                        || (params.transactionValue != null && parseFloat(params.transactionValue) > 0);
+
+                    if (isNewExpense) {
+                        const sourceMsg = recentMessages.find((m) => looksLikeNewExpenseRegistration(m, params)) || recentMessages[0] || '';
+                        const { cards } = await creditCardService.getAllCreditCards(effectiveAccountId, { isActive: true });
+                        const resolvedPayment = params.paymentMethod
+                            ? { paymentMethod: params.paymentMethod, creditCardName: params.creditCardName }
+                            : expenseIntent.resolvePaymentMethodFromConversation(state, cards)
+                            || expenseIntent.extractPaymentMethodFromText(sourceMsg, cards);
+
+                        logger.info(`[ACTION HANDLER] MARK redirecionado para CREATE (lançamento novo detectado): "${sourceMsg || params.transactionDescription}"`);
                         return handleAction(state, {
                             action: 'CREATE_FINANCIAL_TRANSACTION',
                             parameters: {
                                 description: params.description || params.transactionDescription,
                                 type: params.type || 'Saída',
                                 value: params.value ?? params.transactionValue,
-                                paymentMethod: params.paymentMethod,
+                                paymentMethod: resolvedPayment?.paymentMethod,
                                 financialCategoryName: params.financialCategoryName,
                                 transactionDate: params.paymentDate || params.transactionDate,
-                                creditCardName: params.creditCardName,
+                                creditCardName: resolvedPayment?.creditCardName || params.creditCardName,
                                 notes: params.notes,
                                 targetAccountNameOrType: params.targetAccountNameOrType
                             }
