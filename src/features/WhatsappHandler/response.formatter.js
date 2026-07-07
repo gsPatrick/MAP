@@ -370,6 +370,101 @@ function formatAvailableLimitDataStructure(limitInfo) {
     return data.trim();
 }
 
+/**
+ * Confirmação rica após pagamento/liquidação de fatura de cartão (WhatsApp).
+ * Espelha o painel web: pagamento, limites, fatura aberta e próximos vencimentos.
+ */
+function formatCreditCardInvoicePaymentSuccess({
+    clientName,
+    cardName,
+    payment,
+    limitInfo,
+    openInvoice,
+}) {
+    const used = parseFloat(limitInfo?.usedLimit ?? limitInfo?.totalDebtOnCard ?? 0);
+    const blocked = parseFloat(limitInfo?.blockedLimit || 0);
+    const available = parseFloat(limitInfo?.availableLimit || 0);
+    const total = parseFloat(limitInfo?.totalLimit || 0);
+    const openDue = parseFloat(openInvoice?.totalAmount || 0);
+    const openSpends = parseFloat(openInvoice?.totalSpendsOriginal || 0);
+    const openPaid = parseFloat(openInvoice?.totalPaidForThisInvoice || 0);
+    const openTxCount = openInvoice?.transactions?.length || 0;
+
+    let msg = `✅ *Fatura paga com sucesso, ${clientName}!*\n\n`;
+    msg += `💳 *${cardName}*\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    msg += `📋 *PAGAMENTO REGISTRADO*\n`;
+    msg += `💰 Valor pago: *${formatCurrency(payment.amount)}*\n`;
+    msg += `📅 Data: ${formatDate(payment.date)}\n`;
+    msg += `💎 Forma: ${payment.method || 'Pix'}\n`;
+    if (payment.reference) {
+        msg += `🗓️ Referência: *${payment.reference}*\n`;
+    }
+
+    msg += `\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+    msg += `📊 *SITUAÇÃO DO CARTÃO*\n`;
+    msg += `▫️ Limite total: ${formatCurrency(total)}\n`;
+    msg += `▫️ Utilizado: ${formatCurrency(used)}\n`;
+    if (blocked > 0) {
+        msg += `▫️ Bloqueado: ${formatCurrency(blocked)}\n`;
+    }
+    msg += `▫️ Disponível: *${formatCurrency(available)}* ✅\n`;
+    if (limitInfo?.closingDay && limitInfo?.paymentDay) {
+        msg += `🗓️ Fecha dia *${limitInfo.closingDay}* · Vence dia *${limitInfo.paymentDay}*\n`;
+    }
+
+    const pctUsed = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
+    const barLen = 10;
+    const filled = Math.round((pctUsed / 100) * barLen);
+    msg += `📈 Uso: \`${'█'.repeat(filled)}${'░'.repeat(barLen - filled)}\` ${pctUsed}%\n`;
+
+    msg += `\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+    msg += `📂 *PRÓXIMA FATURA (aberta)*\n`;
+
+    if (openDue <= 0 && openTxCount === 0) {
+        msg += `✨ *Tudo limpo!* Nenhum gasto neste ciclo ainda.\n`;
+        msg += `💰 A pagar: *${formatCurrency(0)}*\n`;
+    } else if (openDue <= 0) {
+        msg += `✨ *Em dia!* Adiantamentos cobriram os gastos do ciclo.\n`;
+        msg += `💰 A pagar: *${formatCurrency(0)}*\n`;
+        msg += `📦 ${openTxCount} lançamento(s) no ciclo · Total: ${formatCurrency(openSpends)}\n`;
+    } else {
+        msg += `💰 A pagar: *${formatCurrency(openDue)}*\n`;
+        msg += `📦 Gastos no ciclo: ${formatCurrency(openSpends)}\n`;
+        if (openPaid > 0) {
+            msg += `✅ Já adiantado: ${formatCurrency(openPaid)}\n`;
+        }
+        if (openTxCount > 0) {
+            msg += `\n*Lançamentos recentes:*\n`;
+            openInvoice.transactions.slice(0, 4).forEach((tx, index) => {
+                const parcel = tx.isParcel && tx.parcelNumber && tx.totalParcels
+                    ? ` (${tx.parcelNumber}/${tx.totalParcels})`
+                    : '';
+                msg += `  ${index + 1}. ${tx.description} — ${formatCurrency(tx.value)}${parcel}\n`;
+            });
+            if (openTxCount > 4) {
+                msg += `  _...e mais ${openTxCount - 4} lançamento(s)_\n`;
+            }
+        }
+    }
+
+    if (openInvoice?.invoiceCycleEndDate) {
+        msg += `🗓️ Fechamento previsto: ${formatDate(openInvoice.invoiceCycleEndDate)}\n`;
+    }
+    if (openInvoice?.paymentDueDate) {
+        msg += `⏰ Próximo vencimento: ${formatDate(openInvoice.paymentDueDate)}\n`;
+    }
+
+    if (openInvoice?.invoiceReferenceMonthYear) {
+        msg += `📅 Ciclo: ${openInvoice.invoiceReferenceMonthYear}\n`;
+    }
+
+    msg += `\n_Cartão liberado para novas compras!_ 🚀`;
+
+    return msg.trim();
+}
+
 function formatParcelledAccountDataStructure(parcelParams, parcelResult, accountName = null) {
     if (!parcelResult || !parcelResult.parcels || parcelResult.parcels.length === 0) return "🎯 Resumo da Compra Parcelada:\n\nDados não disponíveis.";
     const firstParcel = parcelResult.parcels[0];
@@ -1214,6 +1309,7 @@ module.exports = {
     formatCreditCardDataStructure,
     formatCreditCardListDataStructure,
     formatCreditCardInvoiceDataStructure,
+    formatCreditCardInvoicePaymentSuccess,
     formatAvailableLimitDataStructure,
     formatParcelledAccountDataStructure,
     formatListClientAccountsDataStructure,

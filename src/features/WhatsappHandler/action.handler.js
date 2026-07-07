@@ -110,6 +110,32 @@ async function resolveCreditCardNameForInvoicePayment(state, params, financialAc
     return null;
 }
 
+function extractInvoiceReferenceFromPaymentDescription(description) {
+    if (!description) return null;
+    const match = String(description).match(/\(([^)]+)\)/);
+    return match ? match[1] : null;
+}
+
+async function buildInvoicePaymentSuccessMessage(financialAccountId, cardId, cardName, paymentTransaction, clientNameToUse, paymentMethod) {
+    const [limitInfo, openInvoice] = await Promise.all([
+        creditCardService.getAvailableCreditLimit(financialAccountId, cardId),
+        creditCardService.getCreditCardInvoiceDetails(financialAccountId, cardId, { type: 'aberta' }),
+    ]);
+
+    return formatter.formatCreditCardInvoicePaymentSuccess({
+        clientName: clientNameToUse,
+        cardName,
+        payment: {
+            amount: paymentTransaction.value,
+            date: paymentTransaction.paymentDate || paymentTransaction.transactionDate,
+            method: paymentMethod || paymentTransaction.paymentMethod || 'Pix',
+            reference: extractInvoiceReferenceFromPaymentDescription(paymentTransaction.description),
+        },
+        limitInfo,
+        openInvoice,
+    });
+}
+
 /**
  * Executa uma ação detectada pela IA.
  * @param {object} state - O estado da conversa.
@@ -509,8 +535,14 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         params.paymentMethod || 'Pix'
                     );
 
-                    formattedData = `🎉 A fatura aberta do cartão "${cardNameToSettle}" foi liquidada com sucesso! ` +
-                        `Um pagamento de *${formatter.formatCurrency(paymentTransaction.value)}* foi registrado.`;
+                    formattedData = await buildInvoicePaymentSuccessMessage(
+                        effectiveAccountId,
+                        cardIdToSettle,
+                        cardNameToSettle,
+                        paymentTransaction,
+                        clientNameToUse,
+                        params.paymentMethod || 'Pix'
+                    );
 
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em SETTLE_OPEN_CREDIT_CARD_INVOICE: ${e.message}`, { error: e, paramsUsed: params });
@@ -930,10 +962,15 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                         actorId
                     );
 
-                    formattedData = `✅ Pagamento de ${formatter.formatCurrency(paymentAmount)} para o cartão "${cardNameToPay}" registrado em ${formatter.formatDate(paymentDateCard)}.`;
-                    if (paymentTransaction.category) {
-                        formattedData += `\nCategoria: ${paymentTransaction.category.name}.`;
-                    }
+                    const card = await creditCardService.getCreditCardById(effectiveAccountId, cardIdToPay);
+                    formattedData = await buildInvoicePaymentSuccessMessage(
+                        effectiveAccountId,
+                        cardIdToPay,
+                        card?.name || cardNameToPay,
+                        paymentTransaction,
+                        clientNameToUse,
+                        params.paymentMethod || paymentTransaction.paymentMethod || 'Pix'
+                    );
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em PAY_CREDIT_CARD_INVOICE: ${e.message}`, { error: e, paramsUsed: params });
                     let intro = `Ops, ${clientNameToUse}! 😬 Não consegui registrar o pagamento da fatura.`;
