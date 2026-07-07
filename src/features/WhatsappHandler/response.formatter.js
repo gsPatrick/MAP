@@ -307,52 +307,155 @@ function formatCreditCardDataStructure(card, accountName = null) {
     return data.trim();
 }
 
-function formatCreditCardListDataStructure(cards) {
-    if (!cards || cards.length === 0) return "📋 Resumo dos Cartões:\n\nNenhum cartão de crédito cadastrado.";
-    let data = `📋 Seus Cartões de Crédito:\n`;
+function formatLimitUsageBar(used, total, barLen = 10) {
+    const usedNum = parseFloat(used) || 0;
+    const totalNum = parseFloat(total) || 0;
+    const pctUsed = totalNum > 0 ? Math.min(100, Math.round((usedNum / totalNum) * 100)) : 0;
+    const filled = Math.round((pctUsed / 100) * barLen);
+    return {
+        bar: `${'█'.repeat(filled)}${'░'.repeat(barLen - filled)}`,
+        pctUsed,
+    };
+}
+
+function formatCreditCardListDataStructure(cards, clientName = null) {
+    if (!cards || cards.length === 0) {
+        return '📋 *Cartões de crédito*\n\nNenhum cartão cadastrado ainda.\n\n💡 Diga: _"cadastrar cartão Renner com limite 5000"_';
+    }
+
+    const greeting = clientName ? `💳 *Seus cartões, ${clientName}!*` : '💳 *Seus cartões de crédito*';
+    let data = `${greeting}\n`;
+    data += `━━━━━━━━━━━━━━━━━━━━\n`;
+    data += `📊 *${cards.length}* cartão(ões) encontrado(s)\n`;
+
     cards.forEach((card, index) => {
-        data += `\n${index + 1}️⃣ Cartão: *${card.name || 'N/A'}*\n`;
-        if (card.flag) data += `   🏷️ Bandeira: ${card.flag}\n`;
-        if (card.lastFourDigits) data += `   💳 Final: ${card.lastFourDigits}\n`;
-        if (card.availableLimit !== undefined) {
-            data += `   💰 Limite disponível: ${formatCurrency(card.availableLimit)}\n`;
-        } else {
-            data += `   💰 Limite Total: ${formatCurrency(card.limit)}\n`;
+        const total = parseFloat(card.limit || 0);
+        const used = parseFloat(card.usedLimit ?? (card.availableLimit != null ? total - card.availableLimit : 0));
+        const available = card.availableLimit != null ? parseFloat(card.availableLimit) : null;
+        const blocked = parseFloat(card.blockedLimit || 0);
+        const { bar, pctUsed } = formatLimitUsageBar(used, total);
+        const defaultBadge = card.isDefault ? ' ⭐' : '';
+
+        data += `\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+        data += `*${index + 1}.* ${card.name || 'N/A'}${defaultBadge}\n`;
+
+        if (card.flag) data += `🏷️ ${card.flag}`;
+        if (card.lastFourDigits) data += `${card.flag ? ' · ' : ''}Final *${card.lastFourDigits}*`;
+        if (card.flag || card.lastFourDigits) data += '\n';
+
+        data += `▫️ Limite total: ${formatCurrency(total)}\n`;
+        if (available != null) {
+            data += `▫️ Utilizado: ${formatCurrency(used)}\n`;
+            if (blocked > 0) data += `▫️ Bloqueado: ${formatCurrency(blocked)}\n`;
+            data += `▫️ Disponível: *${formatCurrency(available)}* ✅\n`;
+            data += `📈 Uso: \`${bar}\` ${pctUsed}%\n`;
         }
-        if (card.isDefault) data += `   ⭐ Cartão Padrão\n`;
-        data += `   🚦 Status: ${translateStatus(card.isActive ? 'Active' : 'Inactive')}\n`;
+        if (card.closingDay && card.paymentDay) {
+            data += `🗓️ Fecha dia *${card.closingDay}* · Vence dia *${card.paymentDay}*\n`;
+        }
+        data += `🚦 ${card.isActive ? 'Ativo ✅' : 'Inativo ❌'}\n`;
     });
+
+    data += `\n━━━━━━━━━━━━━━━━━━━━\n`;
+    data += `💡 *Dicas:*\n`;
+    data += `• _"como está minha fatura do Renner"_\n`;
+    data += `• _"paguei a fatura do cartão Visa"_\n`;
+    data += `• _"limite disponível do Renner"_`;
+
     return data.trim();
 }
 
-function formatCreditCardInvoiceDataStructure(invoiceDetails, listTransactions = true) {
-    if (!invoiceDetails) return "🎯 Resumo da Fatura:\n\nDados da fatura não disponíveis.";
-    let data = `🎯 Resumo da Fatura - Cartão *${invoiceDetails.cardName || 'N/A'}*\n\n`;
-    data += `📅 Mês de Referência: ${invoiceDetails.invoiceReferenceMonthYear || 'N/A'}\n`;
-    data += `💰 Total da fatura: ${formatCurrency(invoiceDetails.totalAmount)}\n`;
-    if (invoiceDetails.availableLimitAfterInvoice !== undefined) {
-        data += `💳 Limite disponível (após esta fatura): ${formatCurrency(invoiceDetails.availableLimitAfterInvoice)}\n`;
-    } else if (invoiceDetails.cardTotalLimit !== undefined) {
-        const available = parseFloat(invoiceDetails.cardTotalLimit) - parseFloat(invoiceDetails.totalAmount);
-        data += `💳 Limite Total do Cartão: ${formatCurrency(invoiceDetails.cardTotalLimit)}\n`;
-        data += `💳 Saldo Estimado Pós-Fatura: ${formatCurrency(available)}\n`;
+function formatCreditCardInvoiceDataStructure(invoiceDetails, listTransactions = true, clientName = null, limitInfo = null) {
+    if (!invoiceDetails) return '📂 *Fatura do cartão*\n\nDados da fatura não disponíveis.';
+
+    const cardName = invoiceDetails.cardName || 'N/A';
+    const totalSpends = parseFloat(invoiceDetails.totalSpendsOriginal || 0);
+    const totalPaid = parseFloat(invoiceDetails.totalPaidForThisInvoice || 0);
+    const amountDue = parseFloat(invoiceDetails.totalAmount || 0);
+    const txCount = invoiceDetails.transactions?.length || 0;
+    const isOpen = (invoiceDetails.invoicePeriodDescription || '').toLowerCase().includes('aberta')
+        || (invoiceDetails.invoicePeriodDescription || '').toLowerCase().includes('atual');
+
+    const greeting = clientName
+        ? `📂 *Fatura do cartão — ${cardName}*\n👋 ${clientName}, aqui está o resumo:`
+        : `📂 *Fatura do cartão — ${cardName}*`;
+
+    let data = `${greeting}\n`;
+    data += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    const periodLabel = isOpen ? '📂 *FATURA ABERTA*' : '📂 *FATURA*';
+    data += `${periodLabel}\n`;
+    if (invoiceDetails.invoiceReferenceMonthYear) {
+        data += `📅 Referência: *${invoiceDetails.invoiceReferenceMonthYear}*\n`;
     }
-    data += `🗓️ Fechamento: ${formatDate(invoiceDetails.invoiceCycleEndDate)}\n`;
-    data += `🗓️ Vencimento: ${formatDate(invoiceDetails.paymentDueDate)}\n`;
-    if (listTransactions && invoiceDetails.transactions && invoiceDetails.transactions.length > 0) {
-        data += `\n📄 Detalhamento das Compras:\n`;
-        invoiceDetails.transactions.forEach((tx, index) => {
-            let parcelInfo = "";
-            if (tx.isParcel && tx.parcelNumber && tx.totalParcels) {
-                parcelInfo = ` (Pcl ${tx.parcelNumber}/${tx.totalParcels})`;
-            } else {
-                parcelInfo = ` — à vista`;
-            }
-            data += `\n${index + 1}️⃣ ${tx.description} — ${formatCurrency(tx.value)}${parcelInfo}`;
+    if (invoiceDetails.invoicePeriodDescription && !invoiceDetails.invoiceReferenceMonthYear) {
+        data += `📅 ${invoiceDetails.invoicePeriodDescription}\n`;
+    }
+    if (invoiceDetails.invoiceCycleStartDate && invoiceDetails.invoiceCycleEndDate) {
+        data += `🗓️ Ciclo: ${formatDate(invoiceDetails.invoiceCycleStartDate)} → ${formatDate(invoiceDetails.invoiceCycleEndDate)}\n`;
+    }
+    if (invoiceDetails.paymentDueDate) {
+        data += `⏰ Vencimento: *${formatDate(invoiceDetails.paymentDueDate)}*\n`;
+    }
+
+    data += `\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+    data += `💰 *VALORES*\n`;
+    data += `▫️ Total de gastos: ${formatCurrency(totalSpends)}\n`;
+    if (totalPaid > 0) {
+        data += `▫️ Já pago/adiantado: ${formatCurrency(totalPaid)} ✅\n`;
+    }
+
+    if (amountDue <= 0 && txCount === 0) {
+        data += `▫️ A pagar: *${formatCurrency(0)}*\n`;
+        data += `\n✨ *Tudo limpo!* Nenhum gasto neste período.\n`;
+    } else if (amountDue <= 0) {
+        data += `▫️ A pagar: *${formatCurrency(0)}*\n`;
+        data += `\n✨ *Em dia!* Pagamentos cobriram os gastos do período.\n`;
+    } else {
+        data += `▫️ *A pagar: ${formatCurrency(amountDue)}* 🔴\n`;
+    }
+
+    const limitTotal = parseFloat(limitInfo?.totalLimit ?? invoiceDetails.cardTotalLimit ?? 0);
+    const limitAvailable = parseFloat(
+        limitInfo?.availableLimit ?? invoiceDetails.availableLimitAfterInvoice ?? 0
+    );
+    const limitUsed = parseFloat(limitInfo?.usedLimit ?? limitInfo?.totalDebtOnCard ?? (limitTotal - limitAvailable));
+
+    if (limitTotal > 0) {
+        data += `\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+        data += `📊 *LIMITE DO CARTÃO*\n`;
+        data += `▫️ Limite total: ${formatCurrency(limitTotal)}\n`;
+        data += `▫️ Utilizado: ${formatCurrency(limitUsed)}\n`;
+        data += `▫️ Disponível: *${formatCurrency(limitAvailable)}*\n`;
+        const { bar, pctUsed } = formatLimitUsageBar(limitUsed, limitTotal);
+        data += `📈 Uso: \`${bar}\` ${pctUsed}%\n`;
+    }
+
+    if (listTransactions && txCount > 0) {
+        data += `\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+        data += `📄 *LANÇAMENTOS (${txCount})*\n`;
+        invoiceDetails.transactions.slice(0, 8).forEach((tx, index) => {
+            const parcelInfo = tx.isParcel && tx.parcelNumber && tx.totalParcels
+                ? ` · ${tx.parcelNumber}/${tx.totalParcels}`
+                : '';
+            data += `\n${index + 1}. ${tx.description}\n`;
+            data += `   ${formatCurrency(tx.value)} · ${formatDate(tx.transactionDate)}${parcelInfo}\n`;
         });
-    } else if (listTransactions && (!invoiceDetails.transactions || invoiceDetails.transactions.length === 0)) {
-        data += `\n📄 Nenhuma transação encontrada para esta fatura.\n`;
+        if (txCount > 8) {
+            data += `\n_...e mais ${txCount - 8} lançamento(s)_\n`;
+        }
+    } else if (listTransactions) {
+        data += `\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+        data += `📄 *LANÇAMENTOS*\n✨ Nenhum gasto neste período.\n`;
     }
+
+    data += `\n━━━━━━━━━━━━━━━━━━━━\n`;
+    if (amountDue > 0) {
+        data += `💡 Para pagar: _"paguei a fatura do ${cardName.split(' ').pop()}"_`;
+    } else {
+        data += `💡 Ver outro período: _"fatura fechada do ${cardName.split(' ').pop()}"_`;
+    }
+
     return data.trim();
 }
 
@@ -414,10 +517,8 @@ function formatCreditCardInvoicePaymentSuccess({
         msg += `🗓️ Fecha dia *${limitInfo.closingDay}* · Vence dia *${limitInfo.paymentDay}*\n`;
     }
 
-    const pctUsed = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
-    const barLen = 10;
-    const filled = Math.round((pctUsed / 100) * barLen);
-    msg += `📈 Uso: \`${'█'.repeat(filled)}${'░'.repeat(barLen - filled)}\` ${pctUsed}%\n`;
+    const usage = formatLimitUsageBar(used, total);
+    msg += `📈 Uso: \`${usage.bar}\` ${usage.pctUsed}%\n`;
 
     msg += `\n━━━━━━━━━━━━━━━━━━━━\n\n`;
     msg += `📂 *PRÓXIMA FATURA (aberta)*\n`;

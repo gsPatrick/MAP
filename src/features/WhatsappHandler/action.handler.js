@@ -1221,7 +1221,7 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     if (totalCards === 0) {
                         formattedData = "Você ainda não tem cartões cadastrados. Que tal adicionar um? Diga, por exemplo: \"cadastrar cartão Nubank com limite de 2000, fechamento dia 20 e pagamento dia 28\".";
                     } else {
-                        formattedData = formatter.formatCreditCardListDataStructure(cards);
+                        formattedData = formatter.formatCreditCardListDataStructure(cards, clientNameToUse);
                     }
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em LIST_CREDIT_CARDS: ${e.message}`, { error: e, paramsUsed: params });
@@ -1305,14 +1305,22 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
 
                     const periodOpts = { type: params.invoicePeriodType || 'aberta', month: params.invoiceMonth, year: params.invoiceYear };
                     const cardForDetails = await creditCardService.getCreditCardById(effectiveAccountId, cardIdForInvoice);
-                    const invoiceDetails = await creditCardService.getCreditCardInvoiceDetails(effectiveAccountId, cardIdForInvoice, periodOpts);
+                    const [invoiceDetails, limitInfo] = await Promise.all([
+                        creditCardService.getCreditCardInvoiceDetails(effectiveAccountId, cardIdForInvoice, periodOpts),
+                        creditCardService.getAvailableCreditLimit(effectiveAccountId, cardIdForInvoice),
+                    ]);
 
                     if (cardForDetails) {
                         invoiceDetails.cardName = cardForDetails.name;
                         invoiceDetails.cardTotalLimit = cardForDetails.limit;
                     }
 
-                    formattedData = formatter.formatCreditCardInvoiceDataStructure(invoiceDetails, params.listTransactions !== false, effectiveAccountName);
+                    formattedData = formatter.formatCreditCardInvoiceDataStructure(
+                        invoiceDetails,
+                        params.listTransactions !== false,
+                        clientNameToUse,
+                        limitInfo
+                    );
                 } catch (e) {
                     logger.error(`[ACTION HANDLER] Erro em GET_CREDIT_CARD_INVOICE: ${e.message}`, { error: e, paramsUsed: params });
                     formattedData = `❌ Ops, ${clientNameToUse}! Não consegui buscar a fatura.\nDetalhe: ${e.message}`;
