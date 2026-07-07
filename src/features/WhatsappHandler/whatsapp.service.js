@@ -14,6 +14,7 @@ const scheduleHandler = require('./schedule.handler');
 const onboardingHandler = require('./onboarding.handler');
 const actionHandler = require('./action.handler');
 const expenseIntent = require('./expenseIntent.utils');
+const creditCardIntent = require('./creditCardIntent.utils');
 const formatter = require('./response.formatter');
 const { normalizePhoneNumberToCanonical } = require('../../utils/phoneUtils');
 const { sendWhatsappMessage, sendButtonListMessage, downloadZapiMedia } = require('../../services/whatsappService');
@@ -703,6 +704,45 @@ async function processIncomingMessage(senderPhoneRaw, messageText, pushName, raw
             pendingAction: state.currentAction === 'awaiting_clarification_response' ? state.pendingConfirmation : null,
             audioPayload: audioPayload // Passar payload de áudio se existir
         };
+
+        // Atalho: pagamento de fatura de cartão (antes da IA, que às vezes usa MARK incorretamente)
+        if (creditCardIntent.looksLikeCreditCardInvoicePayment(
+            messageText,
+            ...expenseIntent.getRecentUserMessagesFromState(state, 2)
+        )) {
+            const cards = contextData.availableCreditCards || [];
+            let cardName = creditCardIntent.matchCardFromAvailableList(messageText, cards);
+            if (!cardName) {
+                const terms = creditCardIntent.extractCreditCardSearchTerms(messageText);
+                for (const term of terms) {
+                    const card = await creditCardService.findCreditCardByName(state.activeFinancialAccountId, term);
+                    if (card) { cardName = card.name; break; }
+                }
+            }
+            if (cardName) {
+                const isOwnerActingOnOwnBehalfGlobal = !state.isSharedAccessContext || state.ownerClientIdForContext === actorClient.id;
+                const mainActionResult = await actionHandler.handleAction(
+                    state,
+                    { action: 'SETTLE_OPEN_CREDIT_CARD_INVOICE', parameters: { creditCardName: cardName } },
+                    state.clientName,
+                    isOwnerActingOnOwnBehalfGlobal,
+                    actorClient.id
+                );
+                if (mainActionResult?.formattedData) {
+                    let finalMessageToSend = mainActionResult.formattedData;
+                    const platformLinkFooter = formatter.formatPlatformLink();
+                    const platformBaseUrl = process.env.PLATFORM_URL || 'map-nocontrole.com.br/painel';
+                    if (!finalMessageToSend.includes(platformBaseUrl)) {
+                        finalMessageToSend += `\n\n---\n\n${platformLinkFooter.trim()}`;
+                    }
+                    state.messageHistory.push({ role: 'assistant', content: finalMessageToSend });
+                    await sendWhatsappMessage(senderPhone, finalMessageToSend, { immediate: true });
+                    conversationState.set(senderPhone, state);
+                    pushNameFromPayload = null;
+                    return;
+                }
+            }
+        }
 
         // Atalho: resposta só com forma de pagamento após esclarecimento pendente
         if (state.currentAction === 'awaiting_clarification_response' && state.pendingConfirmation) {

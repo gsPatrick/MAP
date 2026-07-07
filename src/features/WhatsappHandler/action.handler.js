@@ -24,6 +24,7 @@ const aiModelService = require('../../services/aiModelService');
 const checklistService = require('../Checklist/checklist.service');
 const onboardingAIService = require('./onboarding.ai.service'); // <<< ADICIONAR ESTE IMPORT
 const expenseIntent = require('./expenseIntent.utils');
+const creditCardIntent = require('./creditCardIntent.utils');
 
 // <<< INÍCIO DA CORREÇÃO: Lista de Ações Exclusivas de PJ/MEI >>>
 const PJ_EXCLUSIVE_ACTIONS = [
@@ -79,6 +80,34 @@ function looksLikeNewExpenseRegistration(message, params) {
 
 function getLastUserMessageFromState(state) {
     return expenseIntent.getLastUserMessageFromState(state);
+}
+
+async function resolveCreditCardNameForInvoicePayment(state, params, financialAccountId) {
+    if (params.creditCardName) {
+        const cardId = await findCreditCardIdByName(params.creditCardName, financialAccountId);
+        if (cardId) return params.creditCardName;
+    }
+
+    const recentMessages = expenseIntent.getRecentUserMessagesFromState(state, 5);
+    const sources = [...recentMessages, params.transactionDescription, params.description].filter(Boolean);
+    const searchTerms = creditCardIntent.extractCreditCardSearchTerms(...sources);
+
+    for (const term of searchTerms) {
+        try {
+            const card = await creditCardService.findCreditCardByName(financialAccountId, term);
+            if (card) return card.name;
+        } catch (_) { /* tenta próximo termo */ }
+    }
+
+    for (const msg of sources) {
+        const fromList = creditCardIntent.matchCardFromAvailableList(
+            msg,
+            (await creditCardService.getAllCreditCards(financialAccountId, { isActive: true })).cards || []
+        );
+        if (fromList) return fromList;
+    }
+
+    return null;
 }
 
 /**
@@ -1633,6 +1662,23 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
             case 'MARK_TRANSACTION_AS_PAID_RECEIVED': {
                 try {
                     const recentMessages = expenseIntent.getRecentUserMessagesFromState(state, 5);
+                    const invoiceSources = [...recentMessages, params.transactionDescription, params.description].filter(Boolean);
+
+                    if (creditCardIntent.looksLikeCreditCardInvoicePayment(...invoiceSources)) {
+                        const cardName = await resolveCreditCardNameForInvoicePayment(state, params, effectiveAccountId);
+                        if (cardName) {
+                            logger.info(`[ACTION HANDLER] MARK redirecionado para SETTLE_OPEN_CREDIT_CARD_INVOICE: cartão "${cardName}"`);
+                            return handleAction(state, {
+                                action: 'SETTLE_OPEN_CREDIT_CARD_INVOICE',
+                                parameters: {
+                                    creditCardName: cardName,
+                                    paymentMethod: params.paymentMethod,
+                                    targetAccountNameOrType: params.targetAccountNameOrType,
+                                },
+                            }, clientNameToUse, isOwnerActingOnOwnBehalfGlobal, actorId);
+                        }
+                    }
+
                     const isNewExpense = expenseIntent.looksLikeNewExpenseInConversation(state, params)
                         || recentMessages.some((m) => looksLikeNewExpenseRegistration(m, params))
                         || (params.transactionValue != null && parseFloat(params.transactionValue) > 0);
@@ -1687,13 +1733,28 @@ async function handleAction(state, detectedAction, clientNameToUse, isOwnerActin
                     let body = `Detalhe: ${e.message}`;
 
                     if (e.statusCode === 404) {
-                        intro = `Hum, não encontrei uma conta pendente com a descrição "${params.transactionDescription}", ${clientNameToUse}.`;
-                        const { transactions: pendingTxs } = await financialService.getAllTransactions(effectiveAccountId, { isPaidOrReceived: false, limit: 5 });
-                        if (pendingTxs && pendingTxs.length > 0) {
-                            body = `Suas contas pendentes mais recentes são:\n` + pendingTxs.map(tx => `- ${tx.description} (${formatter.formatCurrency(tx.value)})`).join('\n');
-                            body += `\n\nQual delas você pagou?`;
+                        if (creditCardIntent.looksLikeCreditCardInvoicePayment(params.transactionDescription, ...recentMessages)) {
+                            intro = `Hum, ${clientNameToUse}! Parece que você pagou a *fatura de um cartão*, não uma conta pendente comum.`;
+                            const cardName = await resolveCreditCardNameForInvoicePayment(state, params, effectiveAccountId);
+                            if (cardName) {
+                                return handleAction(state, {
+                                    action: 'SETTLE_OPEN_CREDIT_CARD_INVOICE',
+                                    parameters: { creditCardName: cardName, paymentMethod: params.paymentMethod },
+                                }, clientNameToUse, isOwnerActingOnOwnBehalfGlobal, actorId);
+                            }
+                            const { cards } = await creditCardService.getAllCreditCards(effectiveAccountId, { isActive: true });
+                            body = cards?.length
+                                ? `Para registrar pagamento de fatura, diga por exemplo: *"paguei a fatura do cartão ${cards[0].name}"*.\n\nSeus cartões: ${cards.map((c) => c.name).join(', ')}.`
+                                : 'Você ainda não tem cartões cadastrados.';
                         } else {
-                            body = `Você não tem nenhuma conta pendente no momento.`;
+                            intro = `Hum, não encontrei uma conta pendente com a descrição "${params.transactionDescription}", ${clientNameToUse}.`;
+                            const { transactions: pendingTxs } = await financialService.getAllTransactions(effectiveAccountId, { isPaidOrReceived: false, limit: 5 });
+                            if (pendingTxs && pendingTxs.length > 0) {
+                                body = `Suas contas pendentes mais recentes são:\n` + pendingTxs.map(tx => `- ${tx.description} (${formatter.formatCurrency(tx.value)})`).join('\n');
+                                body += `\n\nQual delas você pagou?`;
+                            } else {
+                                body = `Você não tem nenhuma conta pendente no momento.`;
+                            }
                         }
                     }
                     formattedData = `❌ ${intro}\n${body}`;
