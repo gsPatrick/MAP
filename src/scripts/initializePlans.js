@@ -8,7 +8,7 @@ const basePlansData = [
   {
     name: 'Básico Mensal',
     description: 'Acesso completo às funcionalidades do plano básico, com cobrança mensal.',
-    price: 39.90,
+    price: 29.90,
     currency: 'BRL',
     durationDays: 30,
     tier: 'basico',
@@ -18,7 +18,7 @@ const basePlansData = [
   {
     name: 'Básico Anual',
     description: 'Acesso completo às funcionalidades do plano básico por um ano, com desconto.',
-    price: 389.90, // <<< PREÇO CORRETO GARANTIDO PELO SCRIPT
+    price: 299.00, // <<< PREÇO CORRETO GARANTIDO PELO SCRIPT
     currency: 'BRL',
     durationDays: 365,
     tier: 'basico',
@@ -28,7 +28,7 @@ const basePlansData = [
   {
     name: 'Avançado Mensal',
     description: 'Acesso a todas as funcionalidades, incluindo recursos empresariais, com cobrança mensal.',
-    price: 79.90,
+    price: 39.90,
     currency: 'BRL',
     durationDays: 30,
     tier: 'avancado',
@@ -38,7 +38,7 @@ const basePlansData = [
   {
     name: 'Avançado Anual',
     description: 'Acesso a todas as funcionalidades, incluindo recursos empresariais, por um ano com desconto.',
-    price: 789.90, // <<< PREÇO CORRETO GARANTIDO PELO SCRIPT
+    price: 399.00, // <<< PREÇO CORRETO GARANTIDO PELO SCRIPT
     currency: 'BRL',
     durationDays: 365,
     tier: 'avancado',
